@@ -7,15 +7,15 @@
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
-  // CHECK-COMMON-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-COMMON-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-COMMON-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
-  // CHECK-COMMON-DAG:  [[WIDTH:%.*]] = llvm.sub %arg1, [[ONE]] : i32
-  // CHECK-COMMON-DAG:  [[HEIGHT:%.*]] = llvm.sub %arg2, [[ONE]] : i32
-  // CHECK-COMMON-DAG:  [[PITCH:%.*]] = llvm.sub %arg3, [[ONE]] : i32
-  // CHECK-COMMON-DAG:  [[C32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-  // CHECK-COMMON-DAG:  [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK-COMMON-DAG:  [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:  [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
+  // CHECK-DAG:  [[WIDTH:%.*]] = llvm.sub %arg1, [[ONE]] : i32
+  // CHECK-DAG:  [[HEIGHT:%.*]] = llvm.sub %arg2, [[ONE]] : i32
+  // CHECK-DAG:  [[PITCH:%.*]] = llvm.sub %arg3, [[ONE]] : i32
+  // CHECK-DAG:  [[C32:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK-DAG:  [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK-DAG:  [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK:      [[AP:%.*]] = llvm.call spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload([[PTR]], [[WIDTH]], [[HEIGHT]], [[PITCH]], [[ZERO]], [[ZERO]], [[C32]], [[C8]], [[C1]]) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr
   // CHECK:      llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX([[AP]], %arg4) {{.*}} : (!llvm.ptr, i32) -> ()
   // CHECK:      llvm.call spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockY([[AP]], %arg5) {{.*}} : (!llvm.ptr, i32) -> ()
