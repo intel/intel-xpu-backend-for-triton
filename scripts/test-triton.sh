@@ -188,7 +188,7 @@ run_core_tests() {
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    pytest --verbose --device xpu language/test_line_info.py
+    pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 }
 
 run_regression_tests() {
@@ -211,7 +211,7 @@ run_interpreter_tests() {
     pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
     language/test_random.py --device cpu
 
-  TRITON_DISABLE_LINE_INFO=0 TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
+  TRITON_DISABLE_LINE_INFO=0 TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter_line_info \
     pytest -vvv -n 4 -m interpreter language/test_line_info.py --device cpu
 }
 
