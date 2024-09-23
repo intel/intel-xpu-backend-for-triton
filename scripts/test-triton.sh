@@ -177,10 +177,10 @@ run_core_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -vvv -n 8 --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    pytest -vvv -n 8 --device xpu language/test_subprocess.py
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
@@ -198,7 +198,7 @@ run_regression_tests() {
   cd $TRITON_PROJ/python/test/regression
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-    pytest -vvv -s --device xpu . --reruns 10 --ignore=test_performance.py
+    pytest -vvv -s --device xpu . --ignore=test_performance.py
 }
 
 run_interpreter_tests() {
@@ -208,11 +208,11 @@ run_interpreter_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-    pytest -vvv -n 16 -m interpreter language/test_core.py language/test_standard.py \
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
     language/test_random.py --device cpu
 
   TRITON_DISABLE_LINE_INFO=0 TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter_line_info \
-    pytest -vvv -n 4 -m interpreter language/test_line_info.py --device cpu
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-4} -m interpreter language/test_line_info.py --device cpu
 }
 
 run_tutorial_tests() {
