@@ -1,9 +1,11 @@
 #include "triton/Analysis/Allocation.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Analysis/SliceAnalysis.h"
@@ -15,6 +17,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -24,6 +29,7 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
+using ::mlir::triton::gpu::MmaEncodingTrait;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -40,14 +46,14 @@ constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout);
+  auto srcMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(srcLayout);
   auto srcDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(srcLayout);
-  auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
+  auto dstMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(dstLayout);
   auto dstDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(dstLayout);
 
-  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere() &&
-           !srcMmaLayout.isHopper()) &&
-         "mma -> mma layout conversion is only supported on Ampere");
+  // assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere() &&
+  //          !srcMmaLayout.isHopper()) &&
+  //        "mma -> mma layout conversion is only supported on Ampere");
 
   // mma or dot layout does not have an order, so the order depends on the
   // layout of the other operand.
@@ -82,11 +88,36 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
+  printf("repShape: \n");
   for (unsigned d = 0; d < rank; ++d) {
+    printf("\t%ld, %u, %ld, %u - ", srcShapePerCTA[d], srcShapePerCTATile[d],
+           dstShapePerCTA[d], dstShapePerCTATile[d]);
     repShape[d] =
         std::max(std::min<unsigned>(srcShapePerCTA[d], srcShapePerCTATile[d]),
                  std::min<unsigned>(dstShapePerCTA[d], dstShapePerCTATile[d]));
+    printf("%u \n", repShape[d]);
   }
+  // SmallVector<unsigned> srcRepShape(rank);
+  // for (unsigned d = 0; d < rank; ++d) {
+  //   srcRepShape[d] = std::min<unsigned>(srcShapePerCTA[d],
+  //   srcShapePerCTATile[d]);
+  // }
+  // SmallVector<unsigned> dstRepShape(rank);
+  // for (unsigned d = 0; d < rank; ++d) {
+  //   dstRepShape[d] = std::min<unsigned>(dstShapePerCTA[d],
+  //   dstShapePerCTATile[d]);
+  // }
+
+  // repShape = mlir::product<unsigned>(srcRepShape) >
+  // product<unsigned>(dstRepShape)
+  //                ? srcRepShape
+  //                : dstRepShape;
+
+  // printf("repShape: ");
+  // for (unsigned d = 0; d < rank; ++d) {
+  //   printf("%u ", repShape[d]);
+  // }
+  // printf("\n");
   return repShape;
 }
 
@@ -122,6 +153,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
       getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
   unsigned dstContigPerThread =
       getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
+  printf("srcContigPerThread: %u, dstContigPerThread: %u\n", srcContigPerThread,
+         dstContigPerThread);
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
   unsigned innerDim = rank - 1;
@@ -129,6 +162,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                         : inOrd[0] != innerDim ? 1
                                                : srcContigPerThread;
   scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
+  printf("inVec: %u, outVec: %u\n", scratchConfig.inVec, scratchConfig.outVec);
 
   if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout)) {
     if (mma.getVersionMajor() == 1) {
@@ -150,6 +184,11 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
   scratchConfig.paddedRepShape[outOrd[0]] += paddedSize;
+  printf("paddedRepShape: ");
+  for (unsigned d = 0; d < rank; ++d) {
+    printf("%u, ", scratchConfig.paddedRepShape[d]);
+  }
+  printf("\n");
   return scratchConfig;
 }
 
@@ -193,6 +232,8 @@ private:
         auto alignment = alloc.getAlignmentOrDefault();
         allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
                                                              alignment);
+        result.dump();
+        printf("Explicit buffer bytes: %ld, alignment: %d\n", bytes, alignment);
       }
     }
   }
@@ -253,6 +294,8 @@ private:
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
+      printf("Scratch ConvertLayout buffer bytes: %u, alignment: %ld\n", bytes,
+             scratchAlignment);
     } else if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory
@@ -270,6 +313,8 @@ private:
                 : elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
         maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                             scratchAlignment);
+        printf("Scratch Atomic buffer bytes: %u, alignment: %ld\n", bytes,
+               scratchAlignment);
       }
     } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
       auto callable = callOp.resolveCallable();
@@ -567,15 +612,23 @@ private:
     // color2: [8, 12) -> [8 + 2 * 15, 12 + 2 * 15) -> [38, 42)
     // TODO(Keren): We are wasting memory here.
     // Nodes with color2 can actually start with 24.
+    printf("Allocation: \n");
     for (auto x : buffers) {
       size_t newOffset = 0;
+      printf("Buffer x, size: %ld, offset: %ld, color: %d\n", x->size,
+             x->offset, colors.lookup(x));
       for (auto y : interference.lookup(x)) {
+        printf("\tBuffer y, size: %ld, offset: %ld, color: %d\n", y->size,
+               y->offset, colors.lookup(y));
         newOffset = std::max(newOffset, y->offset + y->size);
       }
       if (colors.lookup(x) != 0)
         x->setOffsetAligned(newOffset);
+      printf("\tBuffer x, size: %ld, offset: %ld, color: %d\n", x->size,
+             x->offset, colors.lookup(x));
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
+      printf("\tShared memory size: %ld\n", allocation->sharedMemorySize);
     }
   }
 

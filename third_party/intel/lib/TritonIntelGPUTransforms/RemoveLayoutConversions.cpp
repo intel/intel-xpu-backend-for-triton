@@ -1,3 +1,4 @@
+#include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -13,6 +14,9 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir::triton::gpu::intel {
@@ -204,6 +208,7 @@ void LayoutRematerialization::cleanup() {
 // operations.
 bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
   SmallVector<Value> queue = {op->getResult(0)};
+  LDBG("Current Op: " << *op);
   SetVector<Operation *> forwardSlice;
   llvm::SmallDenseSet<Value> seen;
   while (!queue.empty()) {
@@ -211,6 +216,7 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
     queue.pop_back();
     getForwardSlice(currentValue, &forwardSlice);
     for (Operation *op : forwardSlice) {
+      LDBG("\tForward slice op " << *op);
       // HACK: Stop propagation if the ReduceOp is using mma layout but is
       // producing tensor smaller than the layout we would like to propagate.
       // This is to avoid stepping into the known bug.
@@ -237,9 +243,9 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
                                                    : mmaLayout == encoding;
         if (isa<ttgi::DpasEncodingAttr>(dstEncoding))
           return true;
-        if (isa<triton::gpu::AMDMfmaEncodingAttr,
-                triton::gpu::AMDWmmaEncodingAttr>(dstEncoding))
-          return true;
+        // if (isa<triton::gpu::AMDMfmaEncodingAttr,
+        //         triton::gpu::AMDWmmaEncodingAttr>(dstEncoding))
+        //   return true;
         if (isa<triton::gpu::DotOperandEncodingAttr>(dstEncoding)) {
           if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
             return mmaLayout.getVersionMajor() > 1;
@@ -252,11 +258,19 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
           }
         }
       }
-      bool isMMAV3 =
-          isa<NvidiaMmaEncodingAttr>(encoding) &&
-          cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
-      if (isMMAV3 && isa<LocalAllocOp>(op))
-        return true;
+
+      // HACK: we want to propagate mma layout to the atomic rmw op
+      if (auto atomicOp = dyn_cast<AtomicRMWOp>(op)) {
+        auto tensorType =
+            dyn_cast<RankedTensorType>(atomicOp.getResult().getType());
+        if (tensorType && isa<MmaEncodingTrait>(tensorType.getEncoding()))
+          return true;
+      }
+      // bool isMMAV3 =
+      //     isa<NvidiaMmaEncodingAttr>(encoding) &&
+      //     cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
+      // if (isMMAV3 && isa<LocalAllocOp>(op))
+      //   return true;
       auto yield = dyn_cast<scf::YieldOp>(op);
       if (!yield)
         continue;
@@ -288,8 +302,14 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
-  if (isa<DotOp, AtomicRMWOp, AtomicCASOp>(op))
+  if (isa<DotOp, AtomicCASOp>(op))
+    // if (isa<DotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
+  // If it's a Atomic_rmw op with mma layout, we don't want to propagate it
+  if (isa<AtomicRMWOp>(op))
+    if (auto tensorType =
+            dyn_cast<RankedTensorType>(op->getResult(0).getType()))
+      return isa<MmaEncodingTrait>(tensorType.getEncoding());
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
@@ -305,6 +325,12 @@ bool isLayoutAnchor(Operation *op) {
 void LayoutPropagation::initAnchorLayout() {
   auto maybeAddAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
+      if (isa<triton::DotOp>(v.getDefiningOp())) {
+        layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+        LDBG("initAnchorLayout " << v << " encoding "
+                                 << tensorType.getEncoding());
+        return;
+      }
       // Workaround, don't popagate MMA layout unless there is a convert
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
@@ -316,6 +342,8 @@ void LayoutPropagation::initAnchorLayout() {
         return;
       }
       layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+      LDBG("initAnchorLayout " << v << " encoding "
+                               << tensorType.getEncoding());
     }
   };
 

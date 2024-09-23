@@ -325,6 +325,7 @@ def make_launcher(constants, signature, ids):
     if (shared_memory) {{
       expected_num_params -= 1;
     }}
+    printf("num_params: %d, expected_num_params: %d\\n", num_params, expected_num_params);
     assert(num_params == expected_num_params && "number of kernel param not matched");
     // Submit the imported kernel.
     auto cgf = [&](sycl::handler &cgh) {{
