@@ -188,13 +188,19 @@ def forward(q, k, v, causal, sm_scale):
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD'],
         x_vals=[  #
+            [1, 16, 16384, 128],  #
             [1, 32, 16384, 64],  #
+            [2, 16, 8192, 128],  #
             [2, 32, 8192, 64],  #
+            [4, 16, 4096, 128],  #
             [4, 32, 4096, 64],  #
             [4, 48, 1024, 64],  #
+            [8, 16, 2048, 128],  #
             [8, 32, 2048, 64],  #
+            [16, 16, 1024, 128],  #
             [16, 32, 1024, 64],  #
-            [32, 32, 512, 64]  #
+            [32, 16, 512, 128],  #
+            [32, 32, 512, 64],  #
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
@@ -235,7 +241,8 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
                                                               fast_flush=False)
 
     elif provider == 'xetla':
-        func = getattr(xetla_kernel, 'flash_attn')
+        module_name = f'flash_attn_causal_{causal}'.lower()
+        func = getattr(xetla_kernel, module_name)
         out = torch.empty_like(q, device='xpu', dtype=dtype)
         size_score = Z * H * N_CTX * N_CTX
         size_attn_mask = Z * N_CTX * N_CTX
@@ -245,7 +252,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
-        xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX)
+        xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
                                                               fast_flush=False)
 
