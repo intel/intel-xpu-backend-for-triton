@@ -14,7 +14,7 @@ on:
       install_ipex:
         description: Install Intel PyTorch Extension
         type: boolean
-        default: true
+        default: false
   schedule:
     - cron: "5 23 * * *"
 
@@ -22,7 +22,7 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.install_ipex && '1' || '0' }}
+  USE_IPEX: ${{ github.event_name == 'schedule' && '0' || inputs.install_ipex && '1' || '0' }}
 
 jobs:
   build:
