@@ -317,6 +317,9 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verify2DBlockLoadHWRestriction(*this).failed())
     return failure();
 
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verifyMatrixInput(*this).failed())
     return failure();
 
@@ -380,6 +383,9 @@ verify2DBlockStoreHWRestriction(TritonGEN::Matrix2DBlockStoreOp op) {
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (verify2DBlockStoreHWRestriction(*this).failed())
     return failure();
+
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
 
   if (verifyMatrixInput(*this).failed())
     return failure();
