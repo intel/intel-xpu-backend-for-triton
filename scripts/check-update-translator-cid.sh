@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -uo pipefail
 
 # $1 is the latest commit id from SPIRV-LLVM-Translator
 # $2 is the commit id from Triton's spirv-llvm-translator.conf
 
-if [ "$#" -ne 2 ]; then
-    echo "Please provide commit id from Translator and from spirv-llvm-translator.conf. Usage: $0 cid1 cid2"
+if [ "$#" -ne 3 ]; then
+    echo "Please provide commit id from Translator and from spirv-llvm-translator.conf and the summary log. Usage: $0 cid1 cid2 log"
     exit 1
 fi
 
@@ -32,13 +32,15 @@ for cid in $COMMIT_IDS; do
     fi
 
     # execute default tests
-    if ./scripts/test-triton.sh --skip-pytorch-install; then
+    ./scripts/test-triton.sh --skip-pytorch-install --core 2>&1 | tee tmp.log
+    if [ ${PIPESTATUS[0]} -eq 0 ]; then
         echo "Tests passed for translator commit $cid"
         echo "A newer commit found: $cid"
         FOUND=true
         break
     else
-        echo "Tests failed for translator commit $cid"
+        echo -e "\nTests failed for translator commit $cid:" | tee -a "$3"
+        awk '/=+ FAILURES =+/, /=+ short test summary info =+/' tmp.log >> "$3"
     fi
 done
 

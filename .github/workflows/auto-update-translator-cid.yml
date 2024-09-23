@@ -86,12 +86,17 @@ jobs:
       - name: Search the latest valid Translator cid
         if: ${{ env.TARGET_PRID == null }}
         run: |
-          env
-          ./scripts/check-update-translator-cid.sh $CID_LATEST $CID_CURRENT
+          touch test_failed_summary.log
+          ./scripts/check-update-translator-cid.sh $CID_LATEST $CID_CURRENT test_failed_summary.log
           if git status --porcelain ./lib/Target/SPIRV/spirv-llvm-translator.conf | grep '^ M'; then
             echo "MODIFIED=true" >> $GITHUB_ENV
             echo "spirv-llvm-translator.conf has been modified"
           fi
+
+      - name: Show summary of failed commit id
+        if: ${{ env.TARGET_PRID == null }}
+        run: |
+          cat test_failed_summary.log
 
       # raise PR by bot
       - name: Create PR if config is updated
