@@ -16,6 +16,7 @@ add_triton_library(TritonIntelGPUTransforms
   RewriteStackPtr.cpp
   ScheduleLoad.cpp
   ScheduleOps.cpp
+  SpillTensorToSLM.cpp
   Utility.cpp
 
   DEPENDS
