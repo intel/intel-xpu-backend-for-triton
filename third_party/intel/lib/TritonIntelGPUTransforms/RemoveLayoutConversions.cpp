@@ -3,6 +3,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
@@ -286,6 +287,11 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
       auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
       if (!forOp)
         continue;
+      for (OpOperand &operand : forOp.getResult(0).getUses()) {
+        Operation *def = operand.get().getDefiningOp();
+        if (def && (seen.insert(operand.get()).second == true))
+          queue.push_back(operand.get());
+      }
       for (OpOperand &operand : yield->getOpOperands()) {
         Operation *def = operand.get().getDefiningOp();
         if (def && (forwardSlice.count(def) || operand.get() == currentValue) &&
@@ -325,12 +331,12 @@ bool isLayoutAnchor(Operation *op) {
 void LayoutPropagation::initAnchorLayout() {
   auto maybeAddAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
-      if (isa<triton::DotOp>(v.getDefiningOp())) {
-        layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
-        LDBG("initAnchorLayout " << v << " encoding "
-                                 << tensorType.getEncoding());
-        return;
-      }
+      // if (isa<triton::DotOp>(v.getDefiningOp())) {
+      //   layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
+      //   LDBG("initAnchorLayout " << v << " encoding "
+      //                            << tensorType.getEncoding());
+      //   return;
+      // }
       // Workaround, don't popagate MMA layout unless there is a convert
       // back to mma further down to avoid generating reduction with MMA
       // layout that may have lower performance.
