@@ -15,8 +15,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
-#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
-
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -26,7 +24,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getUniqueContigPerThread;
-using ::mlir::triton::gpu::MmaEncodingTrait;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -43,14 +40,15 @@ constexpr int kPtrBitWidth = 64;
 
 static std::pair<SmallVector<unsigned>, SmallVector<unsigned>>
 getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
-  auto srcMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(srcLayout);
+  // FIXME: Cannot get DPAS layout here.
+  auto srcMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(srcLayout);
   auto srcDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(srcLayout);
-  auto dstMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(dstLayout);
+  auto dstMmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dstLayout);
   auto dstDotLayout = mlir::dyn_cast<DotOperandEncodingAttr>(dstLayout);
 
-  // assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere() &&
-  //          !srcMmaLayout.isHopper()) &&
-  //        "mma -> mma layout conversion is only supported on Ampere");
+  assert(!(srcMmaLayout && dstMmaLayout && !srcMmaLayout.isAmpere() &&
+           !srcMmaLayout.isHopper()) &&
+         "mma -> mma layout conversion is only supported on Ampere");
 
   // mma or dot layout does not have an order, so the order depends on the
   // layout of the other operand.
