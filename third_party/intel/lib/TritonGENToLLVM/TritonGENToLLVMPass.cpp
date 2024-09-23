@@ -112,9 +112,39 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-[[maybe_unused]] static Value
-createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
-                        ConversionPatternRewriter &rewriter) {
+static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  VectorType resTy = op.getRes().getType();
+  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
+  bool needsResElemSizeEqualTo32 =
+      op.getElemSizeInBits() == 32 || op.getVnniTransform();
+  assert((!needsResElemSizeEqualTo32 || resElemTySize == 32) &&
+         "Expecting 32-bit element type");
+  if (!needsResElemSizeEqualTo32 && resElemTySize != 16)
+    return false;
+
+  if (op.getVnniTransform())
+    return true;
+
+  if (op.getTranspose() && op.getTileHeight() != 16)
+    return false;
+
+  uint32_t tileWidth = op.getTileWidth();
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    return (tileWidth == 32);
+  case 16:
+    return (tileWidth == 16);
+  case 32:
+    return (tileWidth == 8 || tileWidth == 16);
+  default:
+    llvm_unreachable("unexpected element size");
+  }
+
+  return false;
+}
+
+static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
+                                     ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
   VectorType resType = op.getRes().getType();
   Location loc = op->getLoc();
@@ -126,6 +156,14 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Value basePitch = op.getBasePitch();
   Value x = op.getX();
   Value y = op.getY();
+
+  // Components of the base address.
+  Value offset =
+      b.trunc(i32_ty, b.and_(b.ptrtoint(i64_ty, ptr), b.i64_val(0x3f)));
+  // In number of bytes.
+  baseWidth = b.add(baseWidth, offset);
+  // In number of scalar elements.
+  x = b.add(x, b.udiv(offset, b.i32_val(op.getElemSizeInBits() / 8)));
 
   std::string funcName =
       "llvm.genx.GenISA.LSC2DBlockRead." + getGenISATypeMangling(resType);
@@ -223,7 +261,7 @@ storeCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-[[maybe_unused]] static LLVM::CallOp
+static LLVM::CallOp
 createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                          ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -272,7 +310,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   return call;
 }
 
-[[maybe_unused]] static LLVM::CallOp
+static LLVM::CallOp
 createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                             ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -444,7 +482,8 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") ||
+        op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
         op.getVBlocks() != 4 && !op.getVnniTransform()) {
       // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
       // vBlock reads
@@ -526,6 +565,12 @@ struct TritonMatrix2DBlockStoreLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
+      rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -590,6 +635,13 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    bool useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
+    if (useGenISA) {
+      rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
