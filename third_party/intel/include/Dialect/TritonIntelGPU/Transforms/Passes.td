@@ -295,4 +295,16 @@ def TritonIntelGPUScheduleOps : Pass<"tritonintelgpu-schedule-ops", "mlir::Modul
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelSpillTensorToSLM: Pass<"tritonintelgpu-spill-tensor-slm", "mlir::ModuleOp"> {
+  let summary = "";
+
+  let description = [{
+    Spill the tensor of the dot layout to SLM to reduce the register pressure.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
