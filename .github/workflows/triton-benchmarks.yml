@@ -121,12 +121,26 @@ jobs:
         run: |
           cd benchmarks/triton_kernels_benchmark
           # Default path:
+          # Simply run the split-k benchmark to check correctness
+          TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -enableBCR -nolocalra" \
+          IGC_DisableLoopUnroll=1 \
+          python gemm_splitk_benchmark.py
+
+          TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
+          IGC_VISAOptions=" -enableBCR -nolocalra" \
+          IGC_DisableLoopUnroll=1 \
+          python gemm_streamk_benchmark.py --reports $REPORTS
+
           TRITON_INTEL_ADVANCED_PATH=0 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra" \
           IGC_DisableLoopUnroll=1 \
           python gemm_benchmark.py --reports $REPORTS
-          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-default-path.csv
+
+          cat $REPORTS/matmul-performance.csv <(sed '1d' $REPORTS/matmul-streamk-performance.csv) > $REPORTS/matmul-performance-default-path.csv
 
           TAG=${{ inputs.tag || 'ci' }}-dflt
           source ../../scripts/capture-hw-details.sh
