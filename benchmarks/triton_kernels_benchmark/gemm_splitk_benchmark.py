@@ -132,10 +132,10 @@ matmul = _matmul.apply
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N'],
         x_vals=[
-            # [512, 32768, 8192],
+            [512, 32768, 8192],
             [3072, 4096, 3072],
-            # [4096, 4096, 4096],
-            # [1024, 28672, 8192],
+            [4096, 4096, 4096],
+            [1024, 28672, 8192],
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot

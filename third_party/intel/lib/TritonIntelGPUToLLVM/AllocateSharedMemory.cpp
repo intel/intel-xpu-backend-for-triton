@@ -57,7 +57,6 @@ struct AllocateSharedMemory
                  IntegerAttr::get(IntegerType::get(ctx, 32),
                                   initialSharedMemorySize +
                                       allocation.getSharedMemorySize()));
-    printf("Shared memory size: %ld\n", allocation.getSharedMemorySize());
   }
 };
 

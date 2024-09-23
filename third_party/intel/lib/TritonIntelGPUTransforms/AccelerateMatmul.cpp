@@ -10,8 +10,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-#include "triton/Tools/Sys/GetEnv.hpp"
-
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
 #define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
 
@@ -154,8 +152,7 @@ public:
         dpasCap.executionSize, opsPerChan, warpsPerTile, {1, 1},
         threadsPerWarp);
 
-    if (dpasCap.executionSize == 16 /* PVC */ &&
-        mlir::triton::tools::getBoolEnv("TRITON_INTEL_LARGE_2D_LOAD")) {
+    if (dpasCap.executionSize == 16 /* PVC */) {
       // Enlarge the repCluster size to use the large 2D load for A and B
       // operands.
       unsigned maxRepClusterM =
