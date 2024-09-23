@@ -2741,6 +2741,11 @@ struct CanonicalizeConvertFromAlloc
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
+    // We don't fold alloc(cvt) with DotOperandEncodingAttr.
+    // Because the dot layout doesn't support LL yet.
+    if (auto dotEncoding = dyn_cast<DotOperandEncodingAttr>(
+            convert.getSrc().getType().getEncoding()))
+      return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
         op, op->getResult(0).getType(), convert.getSrc());
     return mlir::success();
