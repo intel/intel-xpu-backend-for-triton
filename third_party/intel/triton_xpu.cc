@@ -100,6 +100,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_schedule_ops",
                      gpu::intel::createTritonIntelGPUScheduleOps);
+  ADD_PASS_WRAPPER_0("add_spill_tensor_to_slm",
+                     gpu::intel::createTritonIntelSpillTensorToSLM);
 }
 
 void init_triton_intel(py::module &&m) {
