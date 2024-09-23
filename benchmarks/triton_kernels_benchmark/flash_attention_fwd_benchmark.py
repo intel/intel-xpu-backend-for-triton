@@ -217,7 +217,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     sm_scale = 0.125
     quantiles = [0.5, 0.0, 1.0]
-    warmup, rep = 300, 300
+    warmup, rep = 10, 300
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
