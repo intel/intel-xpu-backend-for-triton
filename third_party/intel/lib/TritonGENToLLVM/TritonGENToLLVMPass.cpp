@@ -117,12 +117,55 @@ static LLVM::CallOp createDeviceFunctionCall(
   return callOp;
 }
 
-[[maybe_unused]] static std::string getGenISATypeMangling(Type ty) {
+static std::string getGenISATypeMangling(Type ty) {
   if (auto vecTy = dyn_cast<VectorType>(ty))
     return "v" + std::to_string(vecTy.getNumElements()) +
            getGenISATypeMangling(vecTy.getElementType());
   return (ty.isInteger() ? "i" : "f") +
          std::to_string(ty.getIntOrFloatBitWidth());
+}
+
+static LLVM::CallOp
+createGenISASubGroupReduce(TritonGEN::SubGroupReduceOp op, Value val,
+                           ConversionPatternRewriter &rewriter) {
+  auto getKindVal = [](TritonGEN::ReduceKind kind) -> int {
+    switch (kind) {
+    case TritonGEN::ReduceKind::ADD:
+      return 0;
+    case TritonGEN::ReduceKind::MUL:
+      return 1;
+    case TritonGEN::ReduceKind::MIN:
+      return 2;
+    case TritonGEN::ReduceKind::MAX:
+      return 3;
+    case TritonGEN::ReduceKind::AND:
+      return 8;
+    case TritonGEN::ReduceKind::OR:
+      return 6;
+    case TritonGEN::ReduceKind::XOR:
+      return 7;
+    }
+    llvm_unreachable("unsupported reduce kind");
+  };
+
+  Location loc = op.getLoc();
+  auto kind =
+      rewriter.create<LLVM::ConstantOp>(loc, i8_ty, getKindVal(op.getKind()));
+
+  std::string funcName =
+      "llvm.genx.GenISA.WaveAll." + getGenISATypeMangling(val.getType());
+  SmallVector<Type> argTypes = {val.getType(), i8_ty, i32_ty};
+  SmallVector<Value> args = {val, kind, i32_val(0)};
+
+  auto inaccessibleMemOnly = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+      /*other=*/LLVM::ModRefInfo::NoModRef,
+      /*argMem=*/LLVM::ModRefInfo::NoModRef,
+      /*inaccessibleMem=*/LLVM::ModRefInfo::ModRef);
+  auto funcAttrs = convergentNoUnwindWillReturnAttrs;
+  funcAttrs.memEffectsAttr = inaccessibleMemOnly;
+
+  return createDeviceFunctionCall(rewriter, funcName, val.getType(), argTypes,
+                                  args, {}, funcAttrs);
 }
 
 static SmallVector<Attribute>
@@ -208,9 +251,8 @@ static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return false;
 }
 
-[[maybe_unused]] static Value
-createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
-                        ConversionPatternRewriter &rewriter) {
+static Value createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
+                                     ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
   VectorType resType = op.getRes().getType();
   Location loc = op->getLoc();
@@ -359,10 +401,55 @@ createBlock2DReadWithAddressPayloadUpdate(TritonGEN::Matrix2DBlockLoadOp op,
                                     paramAttrs, funcAttrs);
   };
 
+  auto createBlock2DReadGenISA = [&](Value ptr,
+                                     TritonGEN::Matrix2DBlockLoadOp op) {
+    assert(isa<LLVM::LLVMPointerType>(ptr.getType()) &&
+           "Expecting a pointer type");
+
+    auto vecType = dyn_cast<VectorType>(resType);
+    assert(vecType && vecType.getShape().size() == 1 &&
+           "Expecting a 1D vector");
+
+    std::string fnName = "llvm.genx.GenISA.LSC2DBlockReadAddrPayload." +
+                         getGenISATypeMangling(vecType) + ".p0i8";
+
+    Value zero = i32_val(0);
+    SmallVector<Type> argTypes{ptr.getType(), i32_ty, i32_ty, i32_ty, i32_ty,
+                               i32_ty,        i32_ty, i1_ty,  i1_ty,  i32_ty};
+    SmallVector<Value> args{ptr,
+                            zero, // x
+                            zero, // y
+                            i32_val(op.getElemSizeInBits()),
+                            i32_val(op.getTileWidth()),
+                            i32_val(op.getTileHeight()),
+                            i32_val(op.getVBlocks()),
+                            i1_val(op.getTranspose()),
+                            i1_val(op.getVnniTransform()),
+                            i32_val(4) /*cache*/};
+
+    // Function and parameters attributes.
+    std::array<std::pair<unsigned, mlir::StringRef>, 1> paramAttrs{
+        std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName())};
+
+    auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Ref,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+    auto funcAttrs = noUnwindAttrs;
+    funcAttrs.memEffectsAttr = memAttr;
+
+    return createDeviceFunctionCall(rewriter, fnName, resType, argTypes, args,
+                                    paramAttrs, funcAttrs);
+  };
+
   Value ptr = createBlock2DAddressPayload(op);
   setBlock2DAddressPayload(ptr, op);
 
-  return createBlock2DRead(ptr, op);
+  // TODO: Remove GenISA lowering after PoC productization is completed.
+  char *env = std::getenv("TRITONGEN_FORCE_GENISA");
+  const bool useGenISA = env ? (bool)std::atoi(env) : false;
+  return (useGenISA) ? createBlock2DReadGenISA(ptr, op)
+                     : createBlock2DRead(ptr, op);
 }
 
 static SmallVector<Attribute>
@@ -417,7 +504,7 @@ storeCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-[[maybe_unused]] static LLVM::CallOp
+static LLVM::CallOp
 createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                          ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -465,7 +552,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   return call;
 }
 
-[[maybe_unused]] static LLVM::CallOp
+static LLVM::CallOp
 createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                             ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -644,6 +731,13 @@ struct TritonSubGroupReduceLowering
     SmallVector<bool> argIsUnsigned{false};
     SmallVector<Value> args{val};
     bool useCluster = (getSubgroupSize(op) != op.getSize());
+
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") && !useCluster) {
+      Value result = createGenISASubGroupReduce(op, val, rewriter).getResult();
+      result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
 
     std::string fnName = "sub_group_";
     fnName += useCluster ? "clustered_" : "non_uniform_";
@@ -842,9 +936,9 @@ struct TritonMatrix2DBlockLoadLowering
       return success();
     }
 
-    if (!isOCLBuiltinAvailable(op)) {
-      op.emitWarning() << "OpenCL API not available for this operation. Got "
-                       << *op;
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") ||
+        !isOCLBuiltinAvailable(op)) {
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
@@ -909,6 +1003,12 @@ struct TritonMatrix2DBlockStoreLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
+      rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
 
@@ -971,6 +1071,13 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    bool useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
+    if (useGenISA) {
+      rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     std::string fnName = "intel_sub_group_2d_block_prefetch_";
