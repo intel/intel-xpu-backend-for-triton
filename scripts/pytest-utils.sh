@@ -65,8 +65,14 @@ run_tutorial_test() {
         fi
     fi
 
+    if [[ $TRITON_TEST_REPORTS = true ]]; then
+        RUN_TUTORIAL="python3 -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
+    else
+        RUN_TUTORIAL="python3 -u $1.py"
+    fi
+
     if [[ $TUTORIAL_RESULT = TODO ]]; then
-        if python3 -u "$1.py"; then
+        if $RUN_TUTORIAL; then
             TUTORIAL_RESULT=PASS
         else
             TUTORIAL_RESULT=FAIL

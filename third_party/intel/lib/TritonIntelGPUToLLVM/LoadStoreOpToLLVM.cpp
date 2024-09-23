@@ -276,25 +276,23 @@ struct PrefetchOpConversion
     unsigned tileWidthInElem = shapePerWarp[1];
     unsigned tileHeightInElem = shapePerWarp[0];
     unsigned vBlocks = 1;
-    if (!tools::getBoolEnv("TRITON_INTEL_ENABLE_FAST_PREFETCH")) {
-      switch (elemSizeInBits) {
-      case 8:
-        if (tileWidthInElem == 64) {
-          // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
-          // element.
-          vBlocks = 2;
-          tileWidthInElem = 32;
-        }
-        break;
-      case 16:
-        if (tileWidthInElem == 32) {
-          // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
-          // element.
-          vBlocks = 2;
-          tileWidthInElem = 16;
-        }
-        break;
+    switch (elemSizeInBits) {
+    case 8:
+      if (tileWidthInElem == 64) {
+        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 32;
       }
+      break;
+    case 16:
+      if (tileWidthInElem == 32) {
+        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 16;
+      }
+      break;
     }
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
@@ -564,6 +562,19 @@ struct LoadOpConversion
 
     unsigned numRepOuter = numReps[opIdx];
     unsigned numRepInner = numReps[!opIdx];
+
+    Value pitch;
+    if (memoryRowMajor) {
+      pitch = trunc(i32_ty, rowStride);
+    } else {
+      // Column major memory. We need to swap the width and height because HW
+      // only support row major memory layout.
+      pitch = trunc(i32_ty, colStride);
+      std::swap(baseWidth, baseHeight);
+    }
+    baseWidth = trunc(i32_ty, baseWidth);
+    baseHeight = trunc(i32_ty, baseHeight);
+
     unsigned originalElemBits = elemBits;
     if (isTransposeRequired) {
       // adjust the block io parameter to align HW's limitations on
@@ -571,6 +582,8 @@ struct LoadOpConversion
       tileWidth = tileWidth / (32 / originalElemBits);
       elemBits = 32;
     }
+    Value elemSizeInBytes = i32_val(originalElemBits / 8);
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
@@ -590,17 +603,11 @@ struct LoadOpConversion
 
           offsetX = add(offsetX, offsetBaseX);
           offsetY = add(offsetY, offsetBaseY);
-          baseWidth = trunc(i32_ty, baseWidth);
-          baseHeight = trunc(i32_ty, baseHeight);
-          Value pitch = trunc(i32_ty, rowStride);
-          Value elemSizeInBytes = i32_val(originalElemBits / 8);
 
           if (!memoryRowMajor) {
             // Column major memory. We need to swap the X and Y because HW only
             // support row major memory layout.
-            pitch = trunc(i32_ty, colStride);
             std::swap(offsetX, offsetY);
-            std::swap(baseWidth, baseHeight);
           }
 
           if (isTransposeRequired) {
