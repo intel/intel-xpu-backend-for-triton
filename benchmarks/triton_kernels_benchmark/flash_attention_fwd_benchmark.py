@@ -227,7 +227,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
                                                                      False, scale=sm_scale), warmup=10, rep=10,
-            quantiles=quantiles, fast_flush=False)
+            quantiles=quantiles)
 
     elif provider == 'triton':
         triton_fn = lambda: forward(q, k, v, causal, sm_scale)
@@ -240,8 +240,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
             ), attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale).to(torch.float32)
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles)
 
     elif provider == 'xetla':
         module_name = f'flash_attn_causal_{causal}'.lower()
@@ -256,8 +255,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
         xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles)
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
