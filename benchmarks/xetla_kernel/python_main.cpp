@@ -94,11 +94,11 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   return acc;
 }
 
-#define CALL_IMPL_ATTENTION_FUNC(P)                                            \
+#define CALL_IMPL_ATTENTION_FWD_FUNC(P)                                        \
   fmha::fmha_forward_impl<P, T, use_mask, IsCausal, use_dropout>(              \
       queue, q.data_ptr(), k.data_ptr(), v.data_ptr(), out.data_ptr(),         \
       dropout_mask.data_ptr(), bias.data_ptr(), m.data_ptr(), l.data_ptr(),    \
-      num_batches, num_heads, head_size, num_queries, num_keys)
+      num_batches, num_heads, head_size, num_queries, num_keys, head_scale)
 
 template <bool use_mask = false, bool IsCausal = false,
           bool use_dropout = false>
@@ -107,7 +107,8 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
                 const at::Tensor &bias, const at::Tensor &m,
                 const at::Tensor &l, const int64_t num_batches,
                 const int64_t num_heads, const int64_t head_size,
-                const int64_t num_queries, const int64_t num_keys) {
+                const int64_t num_queries, const int64_t num_keys,
+                float head_scale) {
 
   CHECK_INPUT(q);
   CHECK_INPUT(k);
@@ -126,14 +127,14 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
 
   sycl::event evt;
   if (head_size <= 64) {
-    evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_64x128x64);
+    evt = CALL_IMPL_ATTENTION_FWD_FUNC(fmha_policy_64x128x64);
   } else if (head_size <= 128) {
-    evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_64x128x128);
+    evt = CALL_IMPL_ATTENTION_FWD_FUNC(fmha_policy_64x128x128);
   } else if (head_size <= 25) {
     if (num_keys <= 256) {
-      evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_32x256x256);
+      evt = CALL_IMPL_ATTENTION_FWD_FUNC(fmha_policy_32x256x256);
     } else {
-      evt = CALL_IMPL_ATTENTION_FUNC(fmha_policy_64x512x256);
+      evt = CALL_IMPL_ATTENTION_FWD_FUNC(fmha_policy_64x512x256);
     }
   } else {
     std::cout << "No policy available for current head_size " << head_size
@@ -213,5 +214,8 @@ PYBIND11_MODULE(xetla_kernel, m) {
   m.def("gemm_shape_4096_8_16384_128",
         &bf16_gemm<Test_4096x8x16384x128_row_row>, "bf16_gemm (XeTLA)");
   // flash_attn
-  m.def("flash_attn", &flash_attn<false, false, false>, "flash attn (XeTLA)");
+  m.def("flash_attn_causal_false", &flash_attn<false, false, false>,
+        "flash attn fwd (XeTLA)");
+  m.def("flash_attn_causal_true", &flash_attn<false, true, false>,
+        "flash attn fwd (XeTLA)");
 }
