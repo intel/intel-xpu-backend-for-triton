@@ -171,11 +171,119 @@ def div_ru(arg0, arg1, _builder=None):
 
 
 @core.extern
+def rcp_rn(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_frcp_rn", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_drcp_rn", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def rcp_rz(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_frcp_rz", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_drcp_rz", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def rcp_rd(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_frcp_rd", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_drcp_rd", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def rcp_ru(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_frcp_ru", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_drcp_ru", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def sqrt(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_sqrtf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_sqrt", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def add_rn(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dadd_rn", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fadd_rn", core.dtype("fp32")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def add_rz(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dadd_rz", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fadd_rz", core.dtype("fp32")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def add_rd(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dadd_rd", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fadd_rd", core.dtype("fp32")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def add_ru(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dadd_ru", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fadd_ru", core.dtype("fp32")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def mul_rn(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dmul_rn", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fmul_rn", core.dtype("fp32")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def mul_rz(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dmul_rz", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fmul_rz", core.dtype("fp32")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def mul_rd(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dmul_rd", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fmul_rd", core.dtype("fp32")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def mul_ru(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dmul_ru", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fmul_ru", core.dtype("fp32")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -695,6 +803,42 @@ def rhadd(arg0, arg1, _builder=None):
 
 
 @core.extern
+def sub_rn(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fsub_rn", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dsub_rn", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def sub_rz(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fsub_rz", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dsub_rz", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def sub_rd(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fsub_rd", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dsub_rd", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def sub_ru(arg0, arg1, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0, arg1], {
+            (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fsub_ru", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("fp64")): ("__imf_dsub_ru", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def ffs(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [
@@ -1105,6 +1249,20 @@ def y1(arg0, _builder=None):
 
 
 @core.extern
+def yn(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("int32"), core.dtype("fp32")): ("__imf_ynf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def jn(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("int32"), core.dtype("fp32")): ("__imf_jnf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def cyl_bessel_i0(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
@@ -1155,6 +1313,15 @@ def erfcx(arg0, _builder=None):
         "", "", [arg0], {
             (core.dtype("fp32"), ): ("__imf_erfcxf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_erfcx", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def erfcinv(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_erfcinvf", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_erfcinv", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -1293,3 +1460,12 @@ def logb(arg0, _builder=None):
             (core.dtype("fp32"), ): ("__imf_logbf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_logb", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def isfinited(arg0, _builder=None):
+    return core.extern_elementwise(
+        "", "", [arg0], {
+            (core.dtype("fp32"), ): ("__imf_isfinitef", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_isfinite", core.dtype("fp64")),
+        }, is_pure=True, _builder=_builder).to(core.int1, _builder=_builder)
