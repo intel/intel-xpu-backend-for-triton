@@ -70,8 +70,7 @@ class _matmul(torch.autograd.Function):
     kernel = _kernel
 
     @staticmethod
-    def _call(a, b, acc_dtype, output_dtype):
-        device = a.device
+    def _call(a, b, c, acc_dtype):
         # handle non-contiguous inputs if necessary
         if a.stride(0) > 1 and a.stride(1) > 1:
             a = a.contiguous()
@@ -81,12 +80,6 @@ class _matmul(torch.autograd.Function):
         assert a.shape[1] == b.shape[0], 'incompatible dimensions'
         M, K = a.shape
         _, N = b.shape
-
-        # allocates output
-        if output_dtype is None:
-            output_dtype = torch.float32
-
-        c = torch.empty((M, N), device=device, dtype=output_dtype)
 
         # Allowed types for acc_type given the types of a and b.
         supported_acc_dtypes = {
@@ -105,7 +98,6 @@ class _matmul(torch.autograd.Function):
             return getattr(tl, str(ty).rsplit('.', maxsplit=1)[-1])
 
         acc_dtype = to_tl_type(acc_dtype)
-        output_dtype = to_tl_type(output_dtype)
 
         # launch kernel
         grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), META['SPLIT_K'])
@@ -119,8 +111,8 @@ class _matmul(torch.autograd.Function):
 
     # pylint: disable=unused-argument
     @staticmethod
-    def forward(ctx, a, b, acc_dtype=None, output_dtype=None):
-        return _matmul._call(a, b, acc_dtype=acc_dtype, output_dtype=output_dtype)
+    def forward(ctx, a, b, c, acc_dtype=None):
+        return _matmul._call(a, b, c, acc_dtype=acc_dtype)
 
 
 matmul = _matmul.apply
@@ -160,7 +152,8 @@ def benchmark(M, N, K, provider):
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
                                                               quantiles=quantiles, fast_flush=False)
     elif provider == 'triton':
-        triton_fn = lambda: matmul(a, b)
+        c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+        triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')

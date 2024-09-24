@@ -157,8 +157,8 @@ def matmul_kernel_with_block_pointers_batched(
 
 
 # We can now create a convenience wrapper function that only takes two input tensors,
-# and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
-def matmul(a, b):
+# and (1) checks any shape constraint; (2) launches the above kernel.
+def matmul(a, b, c):
     # Check constraints.
     if len(a.shape) == 3 and len(b.shape) == 3:
         assert a.shape[0] == b.shape[0], 'Incompatible Batch dimension'
@@ -167,8 +167,6 @@ def matmul(a, b):
         assert b.is_contiguous(), 'Matrix B must be contiguous'
         B, M, K = a.shape
         B, K, N = b.shape
-        # Allocates output.
-        c = torch.empty((B, M, N), device=a.device, dtype=torch.float32)
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (
             B,
@@ -186,8 +184,6 @@ def matmul(a, b):
         assert b.is_contiguous(), 'Matrix B must be contiguous'
         M, K = a.shape
         K, N = b.shape
-        # Allocates output.
-        c = torch.empty((M, N), device=a.device, dtype=torch.float32)
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel_with_block_pointers[grid](
             a, b, c,  #
@@ -256,7 +252,13 @@ def benchmark(B, M, N, K, provider):
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
                                                                  quantiles=quantiles, fast_flush=False)
     elif provider == 'triton':
-        triton_fn = lambda: matmul(a, b)
+        if len(a.shape) == 3 and len(b.shape) == 3:
+            c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+        elif len(a.shape) == 2 and len(b.shape) == 2:
+            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+        else:
+            c = None
+        triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
