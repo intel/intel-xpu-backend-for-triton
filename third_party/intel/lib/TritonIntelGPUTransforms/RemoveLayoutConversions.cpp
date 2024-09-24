@@ -420,6 +420,18 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding({afterArg, result}, info, changed, user);
       continue;
     }
+    if (auto atomic_rmw_op = dyn_cast<AtomicRMWOp>(user)) {
+      bool isBlockedOrMma = true;
+      for (Attribute encoding : info.encodings) {
+        if (!isa<BlockedEncodingAttr, MmaEncodingTrait>(encoding)) {
+          isBlockedOrMma = false;
+          break;
+        }
+      }
+      if (isBlockedOrMma)
+        setEncoding(user->getResults(), info, changed, user);
+      continue;
+    }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
