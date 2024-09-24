@@ -63,7 +63,7 @@ jobs:
         uses: ./.github/actions/get-commit-id
         with:
           repository: "pytorch/pytorch"
-          branch: ${{ inputs.pytorch_ref }}
+          branch: ${{ inputs.pytorch_ref || 'main' }}
 
       - name: Matrix
         id: matrix
@@ -126,6 +126,6 @@ jobs:
       mode: ${{ matrix.mode }}
       test_mode: accuracy
       dtype: ${{ matrix.dtype }}
-      models: subset
+      models: "subset"
       only_one_model: ""
       runner_label: "${{ matrix.runner_label }}"
