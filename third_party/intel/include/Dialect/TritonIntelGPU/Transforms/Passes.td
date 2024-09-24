@@ -284,4 +284,15 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonIntelGPUScheduleOps : Pass<"tritonintelgpu-schedule-ops", "mlir::ModuleOp"> {
+  let summary = "";
+
+  let description = [{
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
