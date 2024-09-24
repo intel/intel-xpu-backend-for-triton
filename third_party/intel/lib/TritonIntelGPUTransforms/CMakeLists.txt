@@ -10,6 +10,7 @@ add_triton_library(TritonIntelGPUTransforms
   ReduceVariableLiveness.cpp
   RemoveLayoutConversions.cpp
   RewriteStackPtr.cpp
+  ScheduleOps.cpp
   Utility.cpp
 
   DEPENDS
