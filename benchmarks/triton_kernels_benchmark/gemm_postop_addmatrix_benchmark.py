@@ -263,12 +263,12 @@ def benchmark(B, M, N, K, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'triton':
-        if len(a.shape) == 3 and len(b.shape) == 3:
+        assert len(a.shape) == len(b.shape), 'Incompatible sizes'
+        if len(a.shape) == 3:
             c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
-        elif len(a.shape) == 2 and len(b.shape) == 2:
-            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
         else:
-            c = None
+            assert len(a.shape) == 2, 'Expecting shape of length 2'
+            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, d, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32) + d
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
