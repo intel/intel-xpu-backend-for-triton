@@ -1880,29 +1880,6 @@ struct TruncFOpConversion
   }
 };
 
-struct ExpOpConversionApprox
-    : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
-  using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(math::ExpOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    // For non-FP32 input, call math library expf for higher-precision
-    // calculation
-    if (elemTy.getIntOrFloatBitWidth() != 32)
-      return {};
-
-    const double log2e = 1.4426950408889634;
-    Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
-
-    return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
-                                          adaptor.getAttributes().getValue())};
-  }
-};
-
 struct AbsIOpConversion
     : ElementwiseOpConversionBase<math::AbsIOp, AbsIOpConversion> {
   using Base = ElementwiseOpConversionBase<math::AbsIOp, AbsIOpConversion>;
@@ -2316,11 +2293,6 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
-  // ExpOpConversionApprox will try using ex2.approx if the input type is
-  // FP32. For other input types, ExpOpConversionApprox will return failure and
-  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // a vendor specific math library for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
