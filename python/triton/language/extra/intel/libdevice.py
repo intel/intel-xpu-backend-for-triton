@@ -677,6 +677,48 @@ def double_as_longlong(arg0, _builder=None):
 
 
 @core.extern
+def fast_log2f(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_log2f", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_logf(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_logf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_expf(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_expf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_exp10f(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_exp10f", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_log10f(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_log10f", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_powf(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fast_powf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def hadd(arg0, arg1, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1], {
