@@ -209,10 +209,7 @@ run_interpreter_tests() {
 
   TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
     pytest -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
-    language/test_random.py --device cpu
-
-  TRITON_DISABLE_LINE_INFO=0 TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter_line_info \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-4} -m interpreter language/test_line_info.py --device cpu
+    language/test_random.py language/test_line_info.py --device cpu
 }
 
 run_tutorial_tests() {
