@@ -3,15 +3,8 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "third_party/intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-
-namespace {
-static SmallVector<Value> identity_func(Location loc,
-                                        ConversionPatternRewriter &rewriter,
-                                        const SmallVector<Value> &v) {
-  return v;
-}
-} // namespace
 
 namespace {
 
@@ -1249,10 +1242,12 @@ struct FpToFpOpConversion
     auto F64TyID = TypeID::get<Float64Type>();
 
     if (srcTy.getTypeID() == dstTy.getTypeID()) {
-      if (srcTy.getTypeID() == F8E4M3TyID || dstTy.getTypeID() == F8E4M3TyID)
-        return {identity_func, 2};
-      else
-        return {identity_func, 4};
+      auto identityFn = [](Location loc, ConversionPatternRewriter &rewriter,
+                           const SmallVector<Value> &v) { return v; };
+      return {identityFn, (srcTy.getTypeID() == F8E4M3TyID ||
+                           dstTy.getTypeID() == F8E4M3TyID)
+                              ? 2
+                              : 4};
     }
 
     auto undefRounding = static_cast<RoundingMode>(-1);
@@ -1733,9 +1728,8 @@ struct FMulOpConversion
 
     bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
 
-    if (lhsAndRhsAreBF16) {
+    if (lhsAndRhsAreBF16)
       return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
-    }
 
     return {rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0][0],
                                           operands[0][1])};
@@ -1756,9 +1750,8 @@ struct FAddOpConversion
     auto rhsElemTy = getElementType(op.getRhs());
     bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
 
-    if (lhsAndRhsAreBF16) {
+    if (lhsAndRhsAreBF16)
       return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands)};
-    }
 
     return {rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0][0],
                                           operands[0][1])};
@@ -1779,9 +1772,9 @@ struct FSubOpConversion
     auto rhsElemTy = getElementType(op.getRhs());
     bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
 
-    if (lhsAndRhsAreBF16) {
+    if (lhsAndRhsAreBF16)
       return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands)};
-    }
+
     return {rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0][0],
                                           operands[0][1])};
   }
@@ -1810,9 +1803,9 @@ struct SIToFPOpConversion
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
-    } else {
-      return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
     }
+
+    return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
   }
 };
 
@@ -1830,9 +1823,9 @@ struct FPToSIOpConversion
     if (inElemTy.isBF16()) {
       auto value = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
       return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, value)};
-    } else {
-      return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
     }
+
+    return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
   }
 };
 
@@ -1851,9 +1844,9 @@ struct ExtFOpConversion
       auto outElemTy = getElementType(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
       return {intel::convertBf16ToFp32(loc, rewriter, operands[0][0])};
-    } else {
-      return {rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0][0])};
     }
+
+    return {rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0][0])};
   }
 };
 
@@ -2232,98 +2225,32 @@ void populateElementwiseOpToLLVMPatterns(
     PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
-#define POPULATE_BINARY_OP(SRC_OP, DST_OP)                                     \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
-      typeConverter, axisInfoAnalysis, benefit);
-  POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
-  POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
-  POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
-  POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
-  POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
-  POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %
-  POPULATE_BINARY_OP(arith::RemSIOp, LLVM::SRemOp)
-  POPULATE_BINARY_OP(arith::RemUIOp, LLVM::URemOp)
-  POPULATE_BINARY_OP(arith::AndIOp, LLVM::AndOp)   // &
-  POPULATE_BINARY_OP(arith::OrIOp, LLVM::OrOp)     // |
-  POPULATE_BINARY_OP(arith::XOrIOp, LLVM::XOrOp)   // ^
-  POPULATE_BINARY_OP(arith::ShLIOp, LLVM::ShlOp)   // <<
-  POPULATE_BINARY_OP(arith::ShRSIOp, LLVM::AShrOp) // >>
-  POPULATE_BINARY_OP(arith::ShRUIOp, LLVM::LShrOp) // >>
-  POPULATE_BINARY_OP(
-      arith::MinNumFOp,
-      LLVM::MinNumOp) // fmin (return non-NaN if either op is non-NaN)
-  POPULATE_BINARY_OP(
-      arith::MaxNumFOp,
-      LLVM::MaxNumOp) // fmax (return non-NaN if either op is non-NaN)
-  POPULATE_BINARY_OP(arith::MinSIOp, LLVM::SMinOp) // smin
-  POPULATE_BINARY_OP(arith::MaxSIOp, LLVM::SMaxOp) // smax
-  POPULATE_BINARY_OP(arith::MinUIOp, LLVM::UMinOp) // umin
-  POPULATE_BINARY_OP(arith::MaxUIOp, LLVM::UMaxOp) // umax
-#undef POPULATE_BINARY_OP
-
-#define POPULATE_UNARY_OP(SRC_OP, DST_OP)                                      \
-  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
-      typeConverter, axisInfoAnalysis, benefit);
-  POPULATE_UNARY_OP(arith::TruncIOp, LLVM::TruncOp)
-  POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
-  POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
-  POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
-  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
-  POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
-  POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
-  POPULATE_UNARY_OP(math::LogOp, math::LogOp)
-  POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
-  POPULATE_UNARY_OP(math::CosOp, math::CosOp)
-  POPULATE_UNARY_OP(math::SinOp, math::SinOp)
-  POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
-  POPULATE_UNARY_OP(math::RsqrtOp, math::RsqrtOp)
-  POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
-  POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
-  POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
-  POPULATE_UNARY_OP(triton::BitcastOp, LLVM::BitcastOp)
-  POPULATE_UNARY_OP(triton::IntToPtrOp, LLVM::IntToPtrOp)
-  POPULATE_UNARY_OP(triton::PtrToIntOp, LLVM::PtrToIntOp)
-#undef POPULATE_UNARY_OP
-
-  patterns.add<ElementwiseOpConversion<math::FmaOp, LLVM::FMAOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
-
   patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "__imf_sqrtf", benefit);
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "__imf_fdiv_rn", benefit);
 
-  patterns.add<AddPtrOpConversion>(typeConverter, benefit);
-  patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<CmpIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<CmpFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  mlir::triton::populateElementwiseOpToLLVMPatterns(
+      typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
-
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
-  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
-                                              benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+
   PatternBenefit benefitForPropNan = benefit;
   // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
   // nan propagation. Set these conversion benefit to the max benefit:
