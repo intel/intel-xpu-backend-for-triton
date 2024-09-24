@@ -375,4 +375,15 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPUScheduleOps : Pass<"tritonintelgpu-schedule-ops", "mlir::ModuleOp"> {
+  let summary = "";
+
+  let description = [{
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
