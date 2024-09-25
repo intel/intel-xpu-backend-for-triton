@@ -9,7 +9,7 @@ description: Build and install PyTorch wheels
 inputs:
   oneapi:
     description: Directory with oneAPI BaseKit
-    default: ~/intel/oneapi
+    default: /opt/intel/oneapi
   repository:
     description: Repository name with owner
     default: Stonepia/pytorch

@@ -25,7 +25,7 @@ jobs:
         python: ${{ github.ref_name == 'main' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -48,7 +48,7 @@ jobs:
         run: |
           conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
           conda env update -f scripts/triton.yml
-          find /home/runner/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
+          find /opt/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
           ln -snf /usr/include/level_zero $HOME/miniforge3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
           find /usr -name libze_\* -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
 
