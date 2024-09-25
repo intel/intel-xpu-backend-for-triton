@@ -196,7 +196,7 @@ def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, 
     # breakpoint()
     # print(prof.key_averages(group_by_stack_n=5).table(sort_by="xpu_time"))
     # print(prof.key_averages(group_by_stack_n=5).table)
-
+    breakpoint()
     function_events = prof.events()
     profiling_func_filter = filter(lambda x: x.name.endswith(kernel_name), function_events)
     #profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
