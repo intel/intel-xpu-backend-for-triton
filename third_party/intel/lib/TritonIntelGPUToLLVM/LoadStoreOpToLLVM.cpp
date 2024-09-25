@@ -195,6 +195,15 @@ struct LoadStoreConversionBase {
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     auto rank = tensorType.getRank();
+    // The block pointer struct is expected to have the following layout:
+    //    Struct {
+    //      Value offset[rank];
+    //      Value shape[rank];
+    //      Value stride[rank];
+    //      Value base;
+    //    }
+    // All the values are decomposed by `unpackLLElements` into a vector.
+    // Defines the indices for the block pointer struct.
     unsigned blockOffset = 0 * rank, blockShape = 1 * rank,
              blockStride = 2 * rank, blockBase = 3 * rank;
     const SmallVector<Value> &blockPtr =
