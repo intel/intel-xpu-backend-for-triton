@@ -70,6 +70,7 @@ def abs(arg0, _builder=None):
         "", "", [arg0], {
             (core.dtype("int32"), ): ("__imf_abs", core.dtype("int32")),
             (core.dtype("int64"), ): ("__imf_llabs", core.dtype("int64")),
+            (core.dtype("fp16"), ): ("__imf_fabsf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_fabsf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_fabs", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -79,6 +80,7 @@ def abs(arg0, _builder=None):
 def floor(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_floorf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_floorf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_floor", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -88,6 +90,7 @@ def floor(arg0, _builder=None):
 def rsqrt(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_rsqrtf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_rsqrtf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_rsqrt", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -97,8 +100,9 @@ def rsqrt(arg0, _builder=None):
 def ceil(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp64"), ): ("__imf_ceil", core.dtype("fp64")),
+            (core.dtype("fp16"), ): ("__imf_ceilf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_ceilf", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_ceil", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -106,8 +110,9 @@ def ceil(arg0, _builder=None):
 def trunc(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp64"), ): ("__imf_trunc", core.dtype("fp64")),
+            (core.dtype("fp16"), ): ("__imf_truncf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_truncf", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_trunc", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
 
 
@@ -115,6 +120,7 @@ def trunc(arg0, _builder=None):
 def exp2(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_exp2f16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_exp2f", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_exp2", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -174,6 +180,7 @@ def div_ru(arg0, arg1, _builder=None):
 def sqrt(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_sqrtf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_sqrtf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_sqrt", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -677,6 +684,48 @@ def double_as_longlong(arg0, _builder=None):
 
 
 @core.extern
+def fast_log2f(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_log2f", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_logf(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_logf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_expf(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_expf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_exp10f(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_exp10f", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_log10f(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_fast_log10f", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def fast_powf(arg0, arg1, _builder=None):
+    return core.extern_elementwise("", "", [arg0, arg1], {
+        (core.dtype("fp32"), core.dtype("fp32")): ("__imf_fast_powf", core.dtype("fp32")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def hadd(arg0, arg1, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1], {
@@ -711,6 +760,7 @@ def rint(arg0, _builder=None):
         "", "", [
             arg0,
         ], {
+            (core.dtype("fp16"), ): ("__imf_rintf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_rintf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_rint", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -733,6 +783,7 @@ def nearbyint(arg0, _builder=None):
         "", "", [
             arg0,
         ], {
+            (core.dtype("fp16"), ): ("__imf_nearbyintf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_nearbyintf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_nearbyint", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -764,6 +815,7 @@ def signbit(arg0, _builder=None):
 def copysign(arg0, arg1, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1], {
+            (core.dtype("fp16"), core.dtype("fp16")): ("__imf_copysignf16", core.dtype("fp16")),
             (core.dtype("fp32"), core.dtype("fp32")): ("__imf_copysignf", core.dtype("fp32")),
             (core.dtype("fp64"), core.dtype("fp64")): ("__imf_copysign", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -798,6 +850,7 @@ def nextafter(arg0, arg1, _builder=None):
 def sin(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_sinf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_sinf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_sin", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -807,6 +860,7 @@ def sin(arg0, _builder=None):
 def cos(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_cosf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_cosf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_cos", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -843,6 +897,7 @@ def tan(arg0, _builder=None):
 def log2(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_log2f16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_log2f", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_log2", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -852,6 +907,7 @@ def log2(arg0, _builder=None):
 def exp(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_expf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_expf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_exp", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -861,6 +917,7 @@ def exp(arg0, _builder=None):
 def exp10(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_exp10f16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_exp10f", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_exp10", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -933,6 +990,7 @@ def acos(arg0, _builder=None):
 def log(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_logf16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_logf", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_log", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -942,6 +1000,7 @@ def log(arg0, _builder=None):
 def log10(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
+            (core.dtype("fp16"), ): ("__imf_log10f16", core.dtype("fp16")),
             (core.dtype("fp32"), ): ("__imf_log10f", core.dtype("fp32")),
             (core.dtype("fp64"), ): ("__imf_log10", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
@@ -1225,6 +1284,7 @@ def remainder(arg0, arg1, _builder=None):
 def fma(arg0, arg1, arg2, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1, arg2], {
+            (core.dtype("fp16"), core.dtype("fp16"), core.dtype("fp16")): ("__imf_fmaf16", core.dtype("fp16")),
             (core.dtype("fp32"), core.dtype("fp32"), core.dtype("fp32")): ("__imf_fmaf", core.dtype("fp32")),
             (core.dtype("fp64"), core.dtype("fp64"), core.dtype("fp64")): ("__imf_fma", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
