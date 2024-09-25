@@ -205,9 +205,9 @@ def forward(q, k, v, causal, sm_scale):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['xetla'],
+        line_vals=['triton', 'xetla'],
         # label name for the lines
-        line_names=['XeTLA'],
+        line_names=['Triton', 'XeTLA'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
