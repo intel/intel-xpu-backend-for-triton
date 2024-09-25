@@ -4,6 +4,11 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "tritonintelgpu-materialize-block-pointer"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -33,6 +38,8 @@ public:
 
     MLIRContext *context = &getContext();
     mod.walk([context](tt::LoadOp loadOp) {
+      LDBG("Considering op: " << loadOp);
+
       Value ptr = loadOp.getPtr();
       if (!tt::isTensorPointerType(ptr.getType()))
         return;
@@ -41,19 +48,27 @@ public:
              "Expected 'loadOp' to load a tensor value.");
 
       tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
+      LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
       auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
       auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
       ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
       unsigned rank = order.size();
+      LDBG("Rank: " << rank);
       if (rank == 1)
         return;
 
       unsigned fastChangeDim = order[0];
+      LDBG("Fast change dim: " << fastChangeDim);
       if (fastChangeDim >= (rank - 2)) {
         Operation::operand_range strides = makeTensorPtrOp.getStrides();
 
         // HW 2D block read instruction only supports contiguous access.
         Value fastChangeStride = strides[fastChangeDim];
+        LLVM_DEBUG({
+          DBGS() << "fastChangeStride: ";
+          fastChangeStride.print(llvm::dbgs());
+          llvm::dbgs() << "\n";
+        });
         if (!mlir::triton::gpu::intel::isConstant(fastChangeStride, 1))
           return;
 
@@ -61,6 +76,7 @@ public:
         // multiple of OWord(128 bits).
         Value pitch =
             strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
+        LDBG("Pitch: " << pitch);
         if (!ttgi::isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
           return;
 
