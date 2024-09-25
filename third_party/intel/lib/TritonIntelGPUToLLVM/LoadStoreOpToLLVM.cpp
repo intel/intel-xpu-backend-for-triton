@@ -823,7 +823,7 @@ struct LoadOpConversion
         return success();
       } else {
         // TODO: (johnlu) set the vector size > 1; Need to prove the memory is
-        // contiguous on the fast change dim when fallback to gather load.
+        // contiguous on the fast changing dim when fallback to gather load.
         Type resultType = op.getType();
         auto tensorType = cast<RankedTensorType>(resultType);
         std::tie(ptrElems, maskElems, otherElems) =
