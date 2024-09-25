@@ -104,13 +104,13 @@ def softmax(x, y):
         x_vals=[256, 1024, 2048, 4096, 1024 * 8, 1024 * 16, 1024 * 32],  # different possible values for `x_name`
         line_arg="provider",  # argument name whose value corresponds to a different line in the plot
         line_vals=[
-            "triton",
+            #"triton",
             # "torch-native",
             # "torch-jit",
             "xetla",
         ],  # possible values for `line_arg``
         line_names=[
-            "Triton",
+            #"Triton",
             # "Torch (native)",
             # "Torch (jit)",
             "XeTLA",
@@ -131,7 +131,7 @@ def benchmark(M, N, provider):
         triton_fn = lambda: softmax(x, out)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         benchmark_suit.assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10, kernel_name="softmax_kernel")
 
     elif provider == "torch-jit":
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10,
@@ -144,7 +144,16 @@ def benchmark(M, N, provider):
         xetla_fn = lambda: func(x, out, 0)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), err_msg="xetla to torch")
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
+        kernels_name = {
+            "softmax_shape_4096_256": "mat1_4096x256_bf16_cfg0",
+            "softmax_shape_4096_1024": "mat1_4096x1024_bf16_cfg0",
+            "softmax_shape_4096_2048": "mat1_4096x2048_bf16_cfg0",
+            "softmax_shape_4096_4096": "mat1_4096x4096_bf16_cfg0",
+            "softmax_shape_4096_8192": "mat1_4096x8k_bf16_cfg0",
+            "softmax_shape_4096_16384": "mat1_4096x16k_bf16_cfg0",
+            "softmax_shape_4096_32768": "mat1_4096x32k_bf16_cfg0",
+        }
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10, kernel_name=kernels_name[name])
 
     else:
         raise NotImplementedError(f"Unsupported provider {provider}")
