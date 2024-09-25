@@ -33,7 +33,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                  device="xpu", sync_submitting=True, kernel_name=None):
+                  device="xpu", sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -56,7 +56,7 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
 
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
-    from torch.profiler import profile, ProfilerActivity
+    from torch.autograd.profiler import record_function
 
     fn()
     synchronize()
@@ -88,7 +88,7 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
     for _ in range(n_warmup):
         fn()
     # Benchmark
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
+    with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
         for _ in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
@@ -101,22 +101,24 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
             if sync_submitting:
                 synchronize()
             # record time of `fn`
-            fn()
+            with record_function("__profile_kernel_of_func"):
+                fn()
         # Record clocks
         synchronize()
 
-    # breakpoint()
-    # print(prof.key_averages(group_by_stack_n=5).table(sort_by="xpu_time"))
-    # print(prof.key_averages(group_by_stack_n=5).table)
-
-    function_events = prof.events()
-    profiling_func_filter = filter(lambda x: x.name.endswith(kernel_name), function_events)
-    #profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
+    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.function_events)
     functions = list(profiling_func_filter)
 
-    assert len(functions) == n_repeat, f"the profiling number not match, {len(functions)}"
+    def extract_kernels(funcs):
+        kernels = []
+        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
+        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
+        return kernels
+
+    kernels = [extract_kernels(func.cpu_children) for func in functions]
+    assert len(kernels) == n_repeat, "the profiling number not match"
     # Make the time to the milliseconds.
-    times = torch.tensor([f.self_device_time_total * 1e-3 for f in functions], dtype=torch.float)
+    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 

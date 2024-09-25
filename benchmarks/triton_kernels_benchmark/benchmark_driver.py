@@ -10,7 +10,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.runtime.build import _build, quiet
 
 import torch
-# import intel_extension_for_pytorch
+import intel_extension_for_pytorch
 
 _dirname = os.getenv("ZE_PATH", default="/usr/local")
 
@@ -18,7 +18,7 @@ include_dir = [
     os.path.join(_dirname, "include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include"),
-    # os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include")
+    os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include")
 ]
 
 oneapi_root = os.getenv("ONEAPI_ROOT")
@@ -31,10 +31,9 @@ if oneapi_root:
 library_dir = [
     os.path.join(_dirname, "lib"),
     os.path.join(torch.utils.cmake_prefix_path, "../../lib"),
-    # os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
+    os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
 ]
-
-libraries = ["ze_loader", "sycl", "torch"]
+libraries = ["ze_loader", "sycl", "torch", "intel-ext-pt-gpu"]
 
 
 def compile_module_from_src(src, name):
@@ -151,6 +150,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     #include <level_zero/ze_api.h>
     #include <sycl/sycl.hpp>
     #include <torch/extension.h>
+    #include <ipex.h>
 
     #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
     #include <Python.h>
@@ -261,6 +261,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {", " + arg_decls if len(arg_decls) > 0 else ""}) {{
 
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+    RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {{}});
     void *params[] = {{ {", ".join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
@@ -290,6 +291,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       }}
       }};
     auto event = stream.submit(cgf);
+    xpu::profiler_record(kernel_name, event);
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
