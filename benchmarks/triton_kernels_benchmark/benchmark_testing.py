@@ -193,14 +193,16 @@ def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, 
         # Record clocks
         synchronize()
 
-    # breakpoint()
     # print(prof.key_averages(group_by_stack_n=5).table(sort_by="xpu_time"))
     # print(prof.key_averages(group_by_stack_n=5).table)
-    breakpoint()
     function_events = prof.events()
-    profiling_func_filter = filter(lambda x: x.name.endswith(kernel_name), function_events)
-    #profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
-    functions = list(profiling_func_filter)
+
+    functions = []
+    if isinstance(kernel_name, str):
+        kernel_name = [kernel_name]
+    for ker_name in kernel_name:
+        functions.extend(list(filter(lambda x: x.name.startswith(ker_name), function_events)))  # pylint: disable=cell-var-from-loop
+    # profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
 
     assert len(functions) == n_repeat, f"the profiling number not match, {len(functions)}"
     # Make the time to the milliseconds.
