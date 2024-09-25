@@ -141,8 +141,6 @@ def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, 
     :param fast_flush: Use faster kernel to flush L2 between measurements
     :type fast_flush: bool
     """
-    # TODO: remove this function and switch to `do_bench_no_ipex` after
-    # `XPUEvent.elapsed_time` stops introducing regressions into the results.
 
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
@@ -195,8 +193,6 @@ def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, 
         # Record clocks
         synchronize()
 
-    # print(prof.key_averages(group_by_stack_n=5).table(sort_by="xpu_time"))
-    # print(prof.key_averages(group_by_stack_n=5).table)
     function_events = prof.events()
 
     functions = []
