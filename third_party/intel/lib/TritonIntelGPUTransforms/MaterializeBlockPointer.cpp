@@ -65,11 +65,11 @@ public:
           break;
         }
       }
+      
       LDBG("Fast change dim: " << fastChangeDim);
       if (fastChangeDim < 0) {
         return;
       }
-      ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
 
       if (fastChangeDim >= (rank - 2)) {
         // HW 2D block read instruction only supports contiguous access.
