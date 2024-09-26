@@ -204,8 +204,8 @@ struct LoadStoreConversionBase {
     //    }
     // All the values are decomposed by `unpackLLElements` into a vector.
     // Defines the indices for the block pointer struct.
-    unsigned blockOffset = 0 * rank, blockShape = 1 * rank,
-             blockStride = 2 * rank, blockBase = 3 * rank;
+    unsigned blockOffset = 0, blockShape = 1 * rank, blockStride = 2 * rank,
+             blockBase = 3 * rank;
     const SmallVector<Value> &blockPtr =
         unpackLLElements(loc, blockPointerStruct, rewriter);
 
@@ -231,10 +231,10 @@ struct LoadStoreConversionBase {
 
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems(numElems);
-    for (unsigned i = 0; i < numElems; i++) {
+    for (unsigned i = 0; i < numElems; ++i) {
       auto index = indices[i];
       SmallVector<Value> indicesInTensor(rank);
-      for (unsigned j = 0; j < rank; j++) {
+      for (unsigned j = 0; j < rank; ++j) {
         indicesInTensor[j] = add(index[j], blockPtr[blockOffset + j]);
       }
 
@@ -279,7 +279,7 @@ struct LoadStoreConversionBase {
       } else {
         llvm_unreachable("Unexpected padding option");
       }
-      for (unsigned i = 0; i < numElems; i++) {
+      for (unsigned i = 0; i < numElems; ++i) {
         otherElems.push_back(other);
       }
     }
@@ -824,7 +824,6 @@ struct LoadOpConversion
     int64_t splatVal = 0;
     SmallVector<Value> otherElems;
 
-    // adaptor values
     if (isTensorPointerType(op.getPtr().getType())) {
       if (rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded()) {
         return success();
@@ -844,6 +843,7 @@ struct LoadOpConversion
       Value other = op.getOther();
       Value mask = op.getMask();
 
+      // adaptor values
       Value llPtr = adaptor.getPtr();
       Value llMask = adaptor.getMask();
       Value llOther = adaptor.getOther();
