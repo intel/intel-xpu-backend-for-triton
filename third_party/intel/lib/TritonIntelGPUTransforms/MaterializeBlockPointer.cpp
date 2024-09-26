@@ -71,9 +71,7 @@ public:
       }
       ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
 
-      // unsigned fastChangeDim = order[0];
       if (fastChangeDim >= (rank - 2)) {
-
         // HW 2D block read instruction only supports contiguous access.
         Value fastChangeStride = strides[fastChangeDim];
         LLVM_DEBUG({
@@ -89,7 +87,8 @@ public:
         Value pitch =
             strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
         LDBG("Pitch: " << pitch);
-        if (!ttgi::isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+        if (!ttgi::isDivisible(pitch,
+                               128 / tensorType.getElementTypeBitWidth()))
           return;
 
         loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
