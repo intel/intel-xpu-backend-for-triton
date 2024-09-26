@@ -63,10 +63,11 @@ struct KernelArguments {
   std::vector<std::string> ttype_vec;
   std::tuple<int, std::string> outTensorProp;
   ordered_json jsonData;
+  ordered_json kerSignJson;
   std::vector<char *> dev_buffers;
 
-  KernelArguments(const std::string &filename,
-                  const std::string &outtensorname) {
+  KernelArguments(const std::string &filename, const std::string &outtensorname,
+                  const std::string &kersignfname) {
     std::ifstream file(filename);
     if (!file.is_open()) {
       throw std::runtime_error("Failed to open JSON file");
@@ -98,6 +99,19 @@ struct KernelArguments {
           std::get<1>(outTensorProp) = ttype_vec.back();
         }
       }
+    }
+    std::ifstream signatureJson(kersignfname);
+    if (!signatureJson.is_open()) {
+      throw std::runtime_error("Failed to open JSON file");
+    }
+
+    signatureJson >> kerSignJson;
+    if (kerSignJson.is_discarded()) {
+      throw std::runtime_error("Invalid JSON format in the file");
+    }
+    signatureJson.close();
+    for (auto &[key, value] : kerSignJson.items()) {
+      std::cout << "Key: " << key << ", value: " << value << std::endl;
     }
   }
 
@@ -222,6 +236,42 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index,
   cgh.set_arg(index, *static_cast<const T *>(value));
 }
 
+void set_argument(sycl::handler &cgh, int index, std::string type,
+                  ordered_json::iterator it) {
+  if (type == "i32" || type == "i1") {
+    auto val = it.value().get<int32_t>();
+    set_scalar_arg<int32_t>(cgh, index, &val);
+  } else if (type == "i64") {
+    auto val = it.value().get<int64_t>();
+    set_scalar_arg<int64_t>(cgh, index, &val);
+  } else if (type == "u1" || type == "u32") {
+    auto val = it.value().get<uint32_t>();
+    set_scalar_arg<uint32_t>(cgh, index, &val);
+  } else if (type == "u8") {
+    auto val = it.value().get<uint8_t>();
+    set_scalar_arg<uint8_t>(cgh, index, &val);
+  } else if (type == "u16") {
+    auto val = it.value().get<uint16_t>();
+    set_scalar_arg<uint16_t>(cgh, index, &val);
+  } else if (type == "u64") {
+    auto val = it.value().get<uint64_t>();
+    set_scalar_arg<uint64_t>(cgh, index, &val);
+  } else if (type == "fp32" || type == "fp32" || type == "f32") {
+    auto val = it.value().get<float>();
+    set_scalar_arg<float>(cgh, index, &val);
+  } else if (type == "fp64") {
+    auto val = it.value().get<double>();
+    set_scalar_arg<double>(cgh, index, &val);
+  } else if (type == "i16") {
+    auto val = it.value().get<int16_t>();
+    set_scalar_arg<int16_t>(cgh, index, &val);
+  } else if (type == "i8") {
+    auto val = it.value().get<int8_t>();
+    set_scalar_arg<int8_t>(cgh, index, &val);
+  } else
+    throw std::runtime_error("Argument type doesnt match");
+}
+
 static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
                                KernelArguments triton_args) {
   std::string kernel_name =
@@ -249,26 +299,31 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   // Skip first 8 items from JSON
   // Post this kernel arguments sections starts
   std::advance(it, kernelArgsJsonIdx);
+  auto signature_iter = triton_args.kerSignJson.begin();
   int tensorIdx = 0;
   uint32_t narg = 0;
+  uint32_t kerArgIdx = 0;
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {
     for (; it != triton_args.jsonData.end(); ++it) {
-      auto value = it.value();
-      if (value.is_number_integer()) {
-        if (value.get<int>() == 1)
-          ;
-        else {
-          int32_t iarg = value.get<int>();
-          set_scalar_arg<int32_t>(cgh, narg++, static_cast<void *>(&iarg));
+      if (signature_iter != triton_args.kerSignJson.end()) {
+        auto signature_key = stoi(signature_iter.key());
+        if (signature_key == kerArgIdx) {
+          if (it.value().is_number()) {
+            auto signature_type = signature_iter.value();
+            set_argument(cgh, narg++, signature_type, it);
+          } else if (it.value().is_string()) {
+            set_scalar_arg<void *>(
+                cgh, narg++,
+                static_cast<void *>(&triton_args.dev_buffers[tensorIdx]));
+            tensorIdx++;
+          }
+          signature_iter++;
         }
-      } else if (value.is_string()) {
-        set_scalar_arg<void *>(
-            cgh, narg++,
-            static_cast<void *>(&triton_args.dev_buffers[tensorIdx]));
-        tensorIdx++;
       }
+      kerArgIdx++;
     }
+    std::cout << "Done with setting arguments \n";
     if (triton_args.shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
@@ -347,11 +402,14 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
 
 int main(int argc, char **argv) {
 
-  if (argc < 3) {
+  if (argc < 4) {
     std::cout << "Help: " << std::endl;
-    std::cout << "<Executable> <ArgsJSON> <Output Tensor File Name>"
+    std::cout << "<Executable> <ArgsJSON> <Output Tensor File Name> "
+                 "<KernelSignatureJSON>"
               << std::endl;
-    std::cout << "./build/SPIRVRunner data.json tensor_10.pt" << std::endl;
+    std::cout
+        << "./build/SPIRVRunner args_data.json tensor_10.pt signature.json"
+        << std::endl;
     return -1;
   }
   // initialize sycl runtime
@@ -363,7 +421,7 @@ int main(int argc, char **argv) {
   initDevices(&q);
 
   // Parse the JSON file and create argument dictionary
-  KernelArguments tritonArgDict(argv[1], argv[2]);
+  KernelArguments tritonArgDict(argv[1], argv[2], argv[3]);
 
   // read spirv
   auto spirv = read_spirv(tritonArgDict.spv_name);

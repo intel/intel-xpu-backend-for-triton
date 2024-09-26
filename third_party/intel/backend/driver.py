@@ -476,6 +476,22 @@ def serialize_args(args):
         json.dump(args_dict, json_file, indent=4)
 
 
+def serialize_signature(constants, signature):
+    lconst = constants
+    lsign = signature
+    # Delete the keys from signature dict based
+    # on keys presence in constant dictionary
+    # Dump kernel signature information in JSON format
+    for key in lconst:
+        if key in lsign:
+            del lsign[key]
+    dir_path = os.getenv('TRITON_XPU_DUMP_KERNEL_ARGS')
+    json_path = os.path.join(dir_path, 'signature.json')
+    with open(json_path, 'w') as json_file:
+        import json
+        json.dump(lsign, json_file, indent=4)
+
+
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
@@ -487,6 +503,9 @@ class XPULauncher(object):
         src = make_launcher(constants, signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
+        debug_mode = os.getenv('TRITON_SPIRV_RUNNER_ARGS')
+        if debug_mode:
+            serialize_signature(constants, signature)
 
     def __call__(self, *args, **kwargs):
         self.launch(*args, **kwargs)
