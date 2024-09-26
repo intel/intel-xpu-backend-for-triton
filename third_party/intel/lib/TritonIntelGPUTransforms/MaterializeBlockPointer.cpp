@@ -65,7 +65,7 @@ public:
           break;
         }
       }
-      
+
       LDBG("Fast change dim: " << fastChangeDim);
       if (fastChangeDim < 0) {
         return;
