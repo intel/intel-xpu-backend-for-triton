@@ -1,11 +1,14 @@
 #include "Schedule.h"
 #include "include/triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritonintelgpu-pipeline"
@@ -57,12 +60,16 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
   if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding()))
     return allTransitiveUsesHaveDotEncoding(res);
 
-  if (auto op = dyn_cast<ttg::ConvertLayoutOp>(user))
-    if (auto tensorType =
-            dyn_cast<RankedTensorType>(op->getResult(0).getType()))
-      return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+  return llvm::dyn_cast_or_null<ttg::DotOperandEncodingAttr>(
+      tensorType.getEncoding());
 
-  return nullptr;
+  //  return TypeSwitch<Operation *, ttg::DotOperandEncodingAttr>(user)
+  //    .Case<arith::ExtFOp, arith::TruncFOp, ttg::ConvertLayoutOp>([&](auto op)
+  //    {
+  //        return
+  //        dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
+  //      })
+  //      .Default([](auto) { return nullptr; });
 }
 
 /// If all the transitive uses of the given value are used by a convert to the
