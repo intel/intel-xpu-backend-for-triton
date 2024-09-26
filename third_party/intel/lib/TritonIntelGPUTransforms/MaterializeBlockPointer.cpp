@@ -59,7 +59,7 @@ public:
 
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
       int fastChangeDim = -1;
-      for (size_t i = 0; i < strides.size(); i++) {
+      for (size_t i = 0; i < strides.size(); ++i) {
         if (mlir::triton::gpu::intel::isConstant(strides[i], 1)) {
           fastChangeDim = i;
           break;
