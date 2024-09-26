@@ -51,17 +51,27 @@ public:
       LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
       auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
       auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      ArrayRef<int32_t> order = makeTensorPtrOp.getOrder();
-      unsigned rank = order.size();
+      Operation::operand_range shape = makeTensorPtrOp.getShape();
+      unsigned rank = shape.size();
       LDBG("Rank: " << rank);
       if (rank == 1)
         return;
 
-      unsigned fastChangeDim = order[0];
-      LDBG("Fast change dim: " << fastChangeDim);
-      if (fastChangeDim >= (rank - 2)) {
-        Operation::operand_range strides = makeTensorPtrOp.getStrides();
+      Operation::operand_range strides = makeTensorPtrOp.getStrides();
+      int fastChangeDim = -1;
+      for (size_t i = 0; i < strides.size(); ++i) {
+        if (mlir::triton::gpu::intel::isConstant(strides[i], 1)) {
+          fastChangeDim = i;
+          break;
+        }
+      }
 
+      LDBG("Fast change dim: " << fastChangeDim);
+      if (fastChangeDim < 0) {
+        return;
+      }
+
+      if (fastChangeDim >= (rank - 2)) {
         // HW 2D block read instruction only supports contiguous access.
         Value fastChangeStride = strides[fastChangeDim];
         LLVM_DEBUG({
@@ -77,7 +87,8 @@ public:
         Value pitch =
             strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
         LDBG("Pitch: " << pitch);
-        if (!ttgi::isDivisible(pitch, 64 / tensorType.getElementTypeBitWidth()))
+        if (!ttgi::isDivisible(pitch,
+                               128 / tensorType.getElementTypeBitWidth()))
           return;
 
         loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
