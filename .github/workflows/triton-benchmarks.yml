@@ -14,7 +14,7 @@ on:
       install_ipex:
         description: Install Intel PyTorch Extension
         type: boolean
-        default: false
+        default: true
   schedule:
     - cron: "5 23 * * *"
 
@@ -22,7 +22,7 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  USE_IPEX: ${{ github.event_name == 'schedule' && '0' || inputs.install_ipex && '1' || '0' }}
+  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.install_ipex && '1' || '0' }}
 
 jobs:
   build:
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 720
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

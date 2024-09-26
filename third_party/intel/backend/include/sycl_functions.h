@@ -5,6 +5,7 @@
 #include <cassert>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -23,6 +24,20 @@ typedef struct l0_resc_handles {
 
 using SyclQueueMap = std::unordered_map<sycl::queue, l0_resc_handles>;
 
+// Create an exception handler for asynchronous SYCL exceptions
+auto exception_handler = [](sycl::exception_list e_list) {
+  for (std::exception_ptr const &e : e_list) {
+    try {
+      std::rethrow_exception(e);
+    } catch (std::exception const &e) {
+#if _DEBUG
+      std::cout << "Failure" << std::endl;
+#endif
+      std::terminate();
+    }
+  }
+};
+
 inline std::string parseZeResultCode(const ze_result_t code) {
   const std::string prefix = "Triton Error [ZE]: ";
   std::stringstream ss;
@@ -37,6 +52,15 @@ inline std::string parseZeResultCode(const ze_result_t code) {
     }                                                                          \
   }
 
+// TODO: share Triton GetEnv.hpp impl
+inline std::string getStrEnv(const std::string &env) {
+  const char *cstr = std::getenv(env.c_str());
+  if (!cstr)
+    return "";
+  std::string result(cstr);
+  return result;
+}
+
 bool getBoolEnv(const std::string &env) {
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");
@@ -45,19 +69,29 @@ bool getBoolEnv(const std::string &env) {
   return (str == "on" || str == "true" || str == "1");
 }
 
+inline std::optional<bool> isEnvValueBool(std::string str) {
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (str == "on" || str == "true" || str == "1")
+    return true;
+  if (str == "off" || str == "false" || str == "0")
+    return false;
+  return std::nullopt;
+}
+
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
-              uint8_t *binary_ptr, size_t binary_size,
-              const char *build_flags) {
+              uint8_t *binary_ptr, size_t binary_size, const char *build_flags,
+              const bool is_spv = true) {
   assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
   assert(build_flags != nullptr && "build_flags should not be NULL");
 
-  const ze_module_format_t format = ZE_MODULE_FORMAT_IL_SPIRV;
+  const ze_module_format_t format =
+      is_spv ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE;
   ze_module_desc_t module_description = {};
   module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
   module_description.format = format;
-  module_description.inputSize =
-      static_cast<uint32_t>(binary_size * sizeof(uint32_t));
+  module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = build_flags;
   ze_module_build_log_handle_t buildlog;

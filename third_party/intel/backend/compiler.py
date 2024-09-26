@@ -7,6 +7,8 @@ from typing import Any, Dict, Tuple
 from types import ModuleType
 import hashlib
 import re
+import tempfile
+import signal
 import os
 import shutil
 import subprocess
@@ -51,6 +53,7 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
+    generate_native_code: bool = False
     backend_name: str = 'intel'
 
     def __post_init__(self):
@@ -62,6 +65,7 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
+        self.generate_native_code = bool(os.getenv("TRITON_XPU_GEN_NATIVE_CODE", self.generate_native_code))
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -176,6 +180,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
+        passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
         return mod
 
@@ -283,7 +288,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_spv(src, metadata, options):
-        ret, name = intel.translate_to_spirv(src)
+        spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         if options.grf_mode == 'small':
             metadata["build_flags"] = "-cl-intel-128-GRF-per-thread"
@@ -296,7 +301,60 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
-        return ret
+        if options.generate_native_code:
+            with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
+                tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
+                fsrc.write(spirv)
+                fsrc.flush()
+                fbin = fsrc.name + '.o'
+
+                ocloc_cmd = [
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options',
+                    metadata["build_flags"]
+                ]
+
+                try:
+                    subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog, stderr=subprocess.STDOUT)
+                    if os.path.exists(flog.name):
+                        with open(flog.name) as log_file:
+                            log = log_file.read().strip()
+                            if 'spilled' in log:
+                                """
+                                The exact message is something like:
+                                    warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
+                                is "spilled" enough for now?
+                                """
+                                metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                                # re-run with new build flags
+                                ocloc_cmd[-1] = metadata["build_flags"]
+                                subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog,
+                                               stderr=subprocess.STDOUT)
+                        os.remove(flog.name)
+                    if os.path.exists(fsrc.name):
+                        os.remove(fsrc.name)
+                except subprocess.CalledProcessError as e:
+                    with open(flog.name) as log_file:
+                        log = log_file.read()
+                    if os.path.exists(flog.name):
+                        os.remove(flog.name)
+
+                    if e.returncode == 255:
+                        error = 'Internal Triton ZEBIN codegen error'
+                    elif e.returncode == 128 + signal.SIGSEGV:
+                        error = '`ocloc` raised SIGSEGV'
+                    else:
+                        error = f'`ocloc` failed with error code {e.returncode}'
+
+                    raise RuntimeError(f'{error}\n'
+                                       f'`ocloc` stderr:\n{log}\n'
+                                       f'Repro command: {ocloc_cmd}\n')
+
+                with open(fbin, 'rb') as f:
+                    zebin = f.read()
+                if os.path.exists(fbin):
+                    os.remove(fbin)
+            return zebin
+        return spirv
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)

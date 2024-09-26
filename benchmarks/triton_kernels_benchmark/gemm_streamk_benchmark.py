@@ -194,7 +194,7 @@ def full_tiles(
 # ---------------------------------------------------------------------------
 
 
-def matmul(a: torch.Tensor, b: torch.Tensor):
+def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
     streamk_programs = num_xe_core
 
@@ -226,8 +226,6 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
     streamk_full_tiles = streamk_iters // streamk_programs
     streamk_partial_tiles = streamk_iters % streamk_programs
 
-    # Allocates output.
-    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
     first_wave[(streamk_programs, )](
         a, b, c,  #
         M, N, K,  #
@@ -276,7 +274,8 @@ def benchmark(M, N, K, provider):
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
                                                               quantiles=quantiles)
     elif provider == 'triton':
-        triton_fn = lambda: matmul(a, b)
+        c = torch.empty((M, N), device=a.device, dtype=torch.float32)
+        triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles)
