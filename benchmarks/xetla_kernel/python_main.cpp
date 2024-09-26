@@ -1,3 +1,4 @@
+#include "flash_attention/fmha_backward.h"
 #include "flash_attention/fmha_forward_v5.h"
 #include "gemm/gemm.h"
 #include "softmax/softmax.h"
@@ -147,6 +148,75 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
   return;
 }
 
+#define CALL_IMPL_ATTENTION_BWD_FUNC(P)                                        \
+  fmha::xetla_fmha_backward_kernel<P, T, kUseBias, kIsCausal, kIsDropout>(     \
+      queue, grad_out.data_ptr(), q.data_ptr(), k.data_ptr(), v.data_ptr(),    \
+      bias.data_ptr(), dropout.data_ptr(), out.data_ptr(),                     \
+      log_sumexp.data_ptr(), workspace.data_ptr(), grad_q_tmp.data_ptr(),      \
+      alpha, dropout_prob, grad_query.data_ptr(), grad_key.data_ptr(),         \
+      grad_value.data_ptr(), grad_bias.data_ptr(), num_batches, num_heads,     \
+      head_size, num_queries, num_keys, bias_strideB, bias_strideN,            \
+      bias_strideF, attn_mask_padding)
+
+template <bool kUseBias = false, bool kIsCausal = false,
+          bool kIsDropout = false>
+void flash_attn_bwd(const at::Tensor &grad_out, const at::Tensor &q,
+                    const at::Tensor &k, const at::Tensor &v,
+                    const at::Tensor &bias, const at::Tensor &dropout,
+                    const at::Tensor &out, const at::Tensor &log_sumexp,
+                    const at::Tensor &workspace, const at::Tensor &grad_q_tmp,
+                    float alpha, float dropout_prob,
+                    const at::Tensor &grad_query, const at::Tensor &grad_key,
+                    const at::Tensor &grad_value, const at::Tensor &grad_bias,
+                    const int64_t num_batches, const int64_t num_heads,
+                    const int64_t head_size, const int64_t num_queries,
+                    const int64_t num_keys, const int64_t bias_strideB,
+                    const int64_t bias_strideN, const int64_t bias_strideF,
+                    const int64_t attn_mask_padding) {
+
+  CHECK_INPUT(grad_out);
+  CHECK_INPUT(q);
+  CHECK_INPUT(k);
+  CHECK_INPUT(v);
+  CHECK_INPUT(bias);
+  CHECK_INPUT(dropout);
+  CHECK_INPUT(out);
+  CHECK_INPUT(log_sumexp);
+  CHECK_INPUT(workspace);
+  CHECK_INPUT(grad_q_tmp);
+  CHECK_INPUT(grad_query);
+  CHECK_INPUT(grad_key);
+  CHECK_INPUT(grad_value);
+  CHECK_INPUT(grad_bias);
+
+#ifdef USE_IPEX
+  RECORD_FUNCTION("xetla fa", {num_batches, num_heads, head_size, num_queries,
+                               num_keys, bias_strideB, bias_strideN,
+                               bias_strideF, attn_mask_padding});
+#endif
+
+  auto queue = get_current_sycl_queue();
+
+  sycl::event evt;
+  if (head_size <= 64) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_128x128x64);
+  } else if (head_size <= 128) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_128x128x128);
+  } else if (head_size <= 256) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_128x128x256);
+  } else if (head_size <= 512) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_64x128x512);
+  } else {
+    std::cout << "No policy available for current head_size " << head_size
+              << "\n";
+  }
+
+#ifdef USE_IPEX
+  xpu::profiler_record("xetla kernel", evt);
+#endif
+  return;
+}
+
 PYBIND11_MODULE(xetla_kernel, m) {
   // softmax
   m.def("softmax_shape_4096_256", &softmax<mat1_4096x256_bf16_cfg0>,
@@ -213,9 +283,14 @@ PYBIND11_MODULE(xetla_kernel, m) {
         &bf16_gemm<Test_4096x8x128x16384_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_4096_8_16384_128",
         &bf16_gemm<Test_4096x8x16384x128_row_row>, "bf16_gemm (XeTLA)");
-  // flash_attn
+  // flash_attn_fwd
   m.def("flash_attn_causal_false", &flash_attn<false, false, false>,
         "flash attn fwd (XeTLA)");
   m.def("flash_attn_causal_true", &flash_attn<false, true, false>,
         "flash attn fwd (XeTLA)");
+  // flash_attn_bwd
+  m.def("flash_attn_bwd_causal_false", &flash_attn_bwd<false, false, false>,
+        "flash attn bwd (XeTLA)");
+  m.def("flash_attn_bwd_causal_true", &flash_attn_bwd<false, true, false>,
+        "flash attn bwd (XeTLA)");
 }
