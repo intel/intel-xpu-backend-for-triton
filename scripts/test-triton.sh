@@ -276,35 +276,20 @@ run_benchmark_attention() {
   cd $TRITON_PROJ/benchmarks
   python setup.py install
 
-  echo "Default path (is_causal=0):"
+  echo "Default path:"
   TRITON_INTEL_ADVANCED_PATH=0 \
     TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
     IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
     IGC_DisableLoopUnroll=1 \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 
-  echo "Default path (is_causal=1):"
-  TRITON_INTEL_ADVANCED_PATH=0 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-    IGC_DisableLoopUnroll=1 \
-    IS_CAUSAL=1 python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
-
-  echo "Advanced path (is_causal=0):"
+  echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
     TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
     TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
     IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
     IGC_DisableLoopUnroll=1 \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
-
-  echo "Advanced path (is_causal=1):"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC" \
-    IGC_DisableLoopUnroll=1 \
-    IS_CAUSAL=1 python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 }
 
 run_instrumentation_tests() {
