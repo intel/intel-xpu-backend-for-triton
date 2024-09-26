@@ -876,7 +876,8 @@ struct TritonMatrix2DBlockLoadLowering
     }
 
     if (!isOCLBuiltinAvailable(op)) {
-      op.emitWarning("OpenCL API not available for this operation");
+      op.emitWarning() << "OpenCL API not available for this operation. Got "
+                       << *op;
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
