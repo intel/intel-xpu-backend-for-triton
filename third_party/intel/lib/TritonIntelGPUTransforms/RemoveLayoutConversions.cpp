@@ -13,6 +13,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir::triton::gpu::intel {
@@ -420,14 +421,11 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding({afterArg, result}, info, changed, user);
       continue;
     }
-    if (auto atomic_rmw_op = dyn_cast<AtomicRMWOp>(user)) {
-      bool isBlockedOrMma = true;
-      for (Attribute encoding : info.encodings) {
-        if (!isa<BlockedEncodingAttr, MmaEncodingTrait>(encoding)) {
-          isBlockedOrMma = false;
-          break;
-        }
-      }
+    if (auto atomicRMWOp = dyn_cast<AtomicRMWOp>(user)) {
+      bool isBlockedOrMma = std::all_of(
+          info.encodings.begin(), info.encodings.end(), [](Attribute encoding) {
+            return isa<BlockedEncodingAttr, MmaEncodingTrait>(encoding);
+          });
       if (isBlockedOrMma)
         setEncoding(user->getResults(), info, changed, user);
       continue;
