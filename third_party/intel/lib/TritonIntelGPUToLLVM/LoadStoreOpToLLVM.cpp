@@ -187,6 +187,106 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getMaskAlignment(mask);
   }
 
+  std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
+  convertBlockPtrToTensorOfPtr(
+      Location loc, Value blockPointerStruct, RankedTensorType tensorType,
+      Type valueElemTy, ConversionPatternRewriter &rewriter,
+      ArrayRef<int32_t> boundaryCheck = {},
+      std::optional<PaddingOption> padding = std::nullopt) const {
+
+    auto rank = tensorType.getRank();
+    // The block pointer struct is expected to have the following layout:
+    //    Struct {
+    //      Value offset[rank];
+    //      Value shape[rank];
+    //      Value stride[rank];
+    //      Value base;
+    //    }
+    // All the values are decomposed by `unpackLLElements` into a vector.
+    // Defines the indices for the block pointer struct.
+    unsigned blockOffset = 0, blockShape = 1 * rank, blockStride = 2 * rank,
+             blockBase = 3 * rank;
+    const SmallVector<Value> &blockPtr =
+        unpackLLElements(loc, blockPointerStruct, rewriter);
+
+    unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // Get the LLVM values for indices in block
+    auto indices = mlir::triton::intel::emitIndices(
+        loc, rewriter, targetInfo, tensorType.getEncoding(), tensorType, true);
+
+    auto linearize =
+        [](ArrayRef<Value> A, ArrayRef<Value> B, Value init,
+           std::function<Value(const Value &, const Value &, const Value &)>
+               linearizeFunc) {
+          auto rank = A.size();
+          Value accumulate = init;
+          if (rank > 0) {
+            for (auto [a, b] : llvm::zip(A, B)) {
+              accumulate = linearizeFunc(a, b, accumulate);
+            }
+          }
+          return accumulate;
+        };
+
+    SmallVector<Value> ptrElems(numElems);
+    SmallVector<Value> maskElems(numElems);
+    for (unsigned i = 0; i < numElems; ++i) {
+      auto index = indices[i];
+      SmallVector<Value> indicesInTensor(rank);
+      for (unsigned j = 0; j < rank; ++j) {
+        indicesInTensor[j] = add(index[j], blockPtr[blockOffset + j]);
+      }
+
+      // Get the LLVM values for pointers
+      Value offset = linearize(
+          indicesInTensor,
+          {blockPtr.begin() + blockStride, blockPtr.begin() + blockBase},
+          i32_val(0),
+          [&](const Value &index, const Value &stride, const Value &off) {
+            // off = off + index * stride
+            return add(mul(index, trunc(i32_ty, stride)), off);
+          });
+
+      ptrElems[i] = gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
+                        valueElemTy, blockPtr[blockBase], offset);
+
+      // Get the LLVM values for mask
+      maskElems[i] = linearize(
+          indicesInTensor,
+          {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
+          int_val(1, 1),
+          [&](const Value &index, const Value &shape, const Value &mask) {
+            // mask = mask && (index < shape)
+            return and_(icmp_slt(index, trunc(i32_ty, shape)), mask);
+          });
+    }
+
+    // Get the LLVM values for `other`
+    SmallVector<Value> otherElems;
+    if (padding) {
+      Value other;
+      if (*padding == PaddingOption::PAD_ZERO) {
+        other = rewriter.create<LLVM::ConstantOp>(
+            loc, valueElemTy, rewriter.getZeroAttr(valueElemTy));
+      } else if (*padding == PaddingOption::PAD_NAN) {
+        assert(!valueElemTy.isIntOrIndex() &&
+               "Expect element type to be non-integer type");
+        auto apNaN = llvm::APFloat::getNaN(
+            cast<FloatType>(valueElemTy).getFloatSemantics());
+        other = rewriter.create<LLVM::ConstantOp>(
+            loc, valueElemTy, rewriter.getFloatAttr(valueElemTy, apNaN));
+      } else {
+        llvm_unreachable("Unexpected padding option");
+      }
+      for (unsigned i = 0; i < numElems; ++i) {
+        otherElems.push_back(other);
+      }
+    }
+
+    return std::make_tuple(ptrElems, maskElems, otherElems);
+  }
+
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
   const triton::intel::TargetInfo &targetInfo;
@@ -505,11 +605,10 @@ struct LoadOpConversion
       numOperandsPer2DloadN = isOperandA ? numReps[!opIdx] : repCluster[opIdx];
     } else {
       if (isOperandA)
-        return op.emitOpError("Transposing load doesn't support dot A layout.");
+        return failure();
 
       if (!usePackedType)
-        return op.emitOpError(
-            "Transposing load doesn't support un-pack-able dot B layout.");
+        return failure();
 
       std::swap(tileHeight, tileWidth);
 
@@ -712,56 +811,69 @@ struct LoadOpConversion
     auto typeConverter = getTypeConverter();
     auto *ctx = rewriter.getContext();
 
-    // original values
-    Value ptr = op.getPtr();
-    Value mask = op.getMask();
-    Value other = op.getOther();
-
-    // adaptor values
-    if (isTensorPointerType(ptr.getType()))
-      return rewriteTensorPointerLoad(op, adaptor, rewriter);
-
-    assert(!isTensorPointerType(ptr.getType()) &&
-           "Cannot convert load with a tensor pointer into LLVM; "
-           "this case should be transformed to normal load before lowering");
-    Value llPtr = adaptor.getPtr();
-    Value llMask = adaptor.getMask();
-    Value llOther = adaptor.getOther();
-
     // Determine the vectorization size
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
-    unsigned vec = getVectorSize(ptr);
-    unsigned numElems = getTotalElemsPerThread(ptr.getType());
-    if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(mask));
+    unsigned numElems = getTotalElemsPerThread(op.getType());
+    unsigned vec = 1;
 
-    // Get the LLVM values for pointers
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
-    assert(ptrElems.size() == numElems);
-
-    // Get the LLVM values for mask
+    SmallVector<Value> ptrElems;
     SmallVector<Value> maskElems;
-    if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
-      assert(maskElems.size() == numElems);
-    }
 
-    // Get the LLVM values for `other`
-    // TODO: (goostavz) handle when other is const but not splat, which
-    //       should be rarely seen
     bool otherIsSplatConstInt = false;
-    DenseElementsAttr constAttr;
     int64_t splatVal = 0;
-    if (other && isa<IntegerType>(valueElemTy) &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        isa<IntegerType>(constAttr.getElementType())) {
-      otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-    }
     SmallVector<Value> otherElems;
-    if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
+
+    if (isTensorPointerType(op.getPtr().getType())) {
+      if (rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded()) {
+        return success();
+      } else {
+        // TODO: (johnlu) set the vector size > 1; Need to prove the memory is
+        // contiguous on the fast changing dim when fallback to gather load.
+        Type resultType = op.getType();
+        auto tensorType = cast<RankedTensorType>(resultType);
+        std::tie(ptrElems, maskElems, otherElems) =
+            convertBlockPtrToTensorOfPtr(
+                loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+                op.getBoundaryCheck(), op.getPadding());
+      }
+    } else {
+      // original values
+      Value ptr = op.getPtr();
+      Value other = op.getOther();
+      Value mask = op.getMask();
+
+      // adaptor values
+      Value llPtr = adaptor.getPtr();
+      Value llMask = adaptor.getMask();
+      Value llOther = adaptor.getOther();
+      vec = getVectorSize(ptr);
+      if (llMask)
+        vec = std::min<size_t>(vec, getMaskAlignment(mask));
+
+      // Get the LLVM values for pointers
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+      assert(ptrElems.size() == numElems);
+
+      // Get the LLVM values for mask
+      if (llMask) {
+        maskElems = unpackLLElements(loc, llMask, rewriter);
+        assert(maskElems.size() == numElems);
+      }
+
+      // Get the LLVM values for `other`
+      // TODO: (goostavz) handle when other is const but not splat, which
+      //       should be rarely seen
+      DenseElementsAttr constAttr;
+      if (other && isa<IntegerType>(valueElemTy) &&
+          matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
+          isa<IntegerType>(constAttr.getElementType())) {
+        otherIsSplatConstInt = true;
+        splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
+      }
+      if (other) {
+        otherElems = unpackLLElements(loc, llOther, rewriter);
+      }
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -782,7 +894,7 @@ struct LoadOpConversion
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      Value pred = maskElems.size() ? maskElems[vecStart] : int_val(1, 1);
 
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
       Type retTy = retTys.size() > 1
@@ -790,7 +902,7 @@ struct LoadOpConversion
                        : retTys[0];
 
       Value other_ = undef(retTy);
-      if (other) {
+      if (otherElems.size()) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
 
@@ -1003,46 +1115,61 @@ struct StoreOpConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Value ptr = op.getPtr();
-    Value value = op.getValue();
-
-    if (isTensorPointerType(ptr.getType()))
-      return rewriteTensorPointerStore(op, adaptor, rewriter);
-
-    Value llPtr = adaptor.getPtr();
-    Value llMask = adaptor.getMask();
-    Value llValue = adaptor.getValue();
-
     auto loc = op->getLoc();
     MLIRContext *ctx = rewriter.getContext();
+
+    Value ptr = op.getPtr();
+    Value value = op.getValue();
 
     auto valueTy = value.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
+    SmallVector<Value> ptrElems;
+    SmallVector<Value> maskElems;
+    unsigned vec = 1;
 
-    unsigned vec = getVectorSize(ptr);
-    unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
+    if (isTensorPointerType(ptr.getType())) {
+      if (rewriteTensorPointerStore(op, adaptor, rewriter).succeeded()) {
+        return success();
+      } else {
+        // fallback to scatter store.
+        auto tensorType = cast<RankedTensorType>(valueTy);
+        SmallVector<Value> dummyOther;
+        std::tie(ptrElems, maskElems, dummyOther) =
+            convertBlockPtrToTensorOfPtr(loc, adaptor.getPtr(), tensorType,
+                                         valueElemTy, rewriter,
+                                         op.getBoundaryCheck());
+      }
+    } else {
+      Value llPtr = adaptor.getPtr();
+      Value llMask = adaptor.getMask();
 
-    auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
+      vec = getVectorSize(ptr);
+
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+
+      // Determine the vectorization size
+      if (llMask) {
+        Value mask = op.getMask();
+        maskElems = unpackLLElements(loc, llMask, rewriter);
+
+        unsigned maskAlign = getMaskAlignment(mask);
+        vec = std::min(vec, maskAlign);
+      }
+    }
+
+    Value llValue = adaptor.getValue();
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
-
-    // Determine the vectorization size
-    SmallVector<Value> maskElems;
-    if (llMask) {
-      Value mask = op.getMask();
-      maskElems = unpackLLElements(loc, llMask, rewriter);
-      assert(valueElems.size() == maskElems.size());
-
-      unsigned maskAlign = getMaskAlignment(mask);
-      vec = std::min(vec, maskAlign);
-    }
+    assert(!maskElems.size() ||
+           valueElems.size() == maskElems.size() && "Mask size mismatch");
 
     Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
 
+    unsigned elemsPerThread = getTotalElemsPerThread(valueTy);
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
@@ -1082,7 +1209,7 @@ struct StoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
+      Value maskVal = maskElems.size() ? and_(mask, maskElems[vecStart]) : mask;
 
       auto vecTy = vec_ty(valArgTy, nWords);
       Value vecWord = undef(vecTy);
