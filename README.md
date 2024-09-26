@@ -103,34 +103,17 @@ downloads a prebuilt LLVM, but you can also build LLVM from source and use that.
 LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
-1. Find the version of LLVM that Triton builds against.  Check
-`cmake/llvm-hash.txt` to see the current version. For example, if it says:
-       49af6502c6dcb4a7f7520178bd14df396f78240c
+1. Find the version of LLVM that Triton builds against.
+Check `cmake/llvm-hash.txt` to see the current version.
 
-   This means that the version of Triton you have builds against
-   [LLVM](https://github.com/llvm/llvm-project) 49af6502.
+2. Checkout LLVM at this revision to the directory `llvm`,
+which must be in the same directory as `intel-xpu-backend-for-triton`:
 
-2. `git checkout` LLVM at this revision.  Optionally, make additional
-   modifications to LLVM.
+3. In the directory `intel-xpu-backend-for-triton`, build Triton with custom LLVM:
 
-3. [Build LLVM](https://llvm.org/docs/CMake.html).  For example, you might run
-
-       $ cd $HOME/llvm-project  # your clone of LLVM.
-       $ mkdir build
-       $ cd build
-       $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-       $ ninja
-
-4. Build Triton as above, but set the following environment variables.
-
-       # Modify as appropriate to point to your LLVM build.
-       $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
-
-       $ cd <triton install>
-       $ LLVM_INCLUDE_DIRS=$LLVM_BUILD_DIR/include \
-         LLVM_LIBRARY_DIR=$LLVM_BUILD_DIR/lib \
-         LLVM_SYSPATH=$LLVM_BUILD_DIR \
-         pip install -e python
+    ```shell
+    ./scripts/compile-triton.sh --llvm --triton
+    ```
 
 # Tips for building
 
@@ -223,10 +206,12 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 # Usage Guide
 
 ## Code Modifications
-Intel® XPU Backend for Triton\* doesn't require any modifications and will work with PyTorch 2.4 release out of the box.
+Intel® XPU Backend for Triton\* requires a special version of PyTorch that can be built from sources or installed from nightly wheels.
 
 1. Add `import torch` for xpu support.
 2. Put the tensor and models to XPU by calling `to('xpu')`.
+
+This repository contains modified [tutorials](python/tutorials) that must be used with Intel® XPU Backend for Triton\*.
 
 The following examples show modifications for the user code.
 
@@ -285,10 +270,8 @@ print(
 )
 ```
 
-
 ### Example 2 : End-to-End Model
 Triton is transparent for end-to-end models. One could easily use `torch.compile` with `inductor` as backend by default. It will automatically generates triton kernel and gets benefit from it.
-
 
 ```Python
 import torch
@@ -314,10 +297,6 @@ optimized_mod = torch.compile(xpu_model)
 graph_result = optimized_mod(x)
 ```
 
-## More Examples on Tests
-If you wish to take a look at more examples, please refer to the [Unit Tests](docs/test_docs/unit_tests.md) and [End-to-End Benchmark Tests](docs/test_docs/end_to_end_tests.md).
-
-
 ## Performance Analysis Guide
 
 There are several ways of doing performance analysis. We recommend using `torch.profiler` for end-to-end performance analysis and using Intel® VTune™ Profiler for more detailed kernel analysis. We provide a comprehensive guide for those two:
@@ -330,29 +309,9 @@ Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user 
 export TRITON_XPU_PROFILE=1
 ```
 
-# Changelog
-
-Version 2.2 is out! New features include:
-- Many, many bug fixes
-- Performance improvements for Intel GPU Max series
-- Support for kernels that contain back-to-back matmuls (e.g., flash attention)
-
 # Contributing
 
 Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/intel/intel-xpu-backend-for-triton). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
-
-
-# Compatibility
-
-Supported Platforms:
-  * Linux
-  * WSL2
-
-Supported Hardware:
-  * NVIDIA GPUs (Compute Capability 7.0+)
-  * AMD GPUs (ROCm 5.2+)
-  * Intel GPU Max 1100/1550, Intel Flex, Intel Arc A770
-  * Under development: CPUs
 
 ## License
 

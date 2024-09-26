@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 720
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -55,19 +55,19 @@ jobs:
           pip install wheel cmake
 
       - name: Setup PyTorch with IPEX
-        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
+        if: ${{ env.USE_IPEX == '1' }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: Stonepia/pytorch
 
       - name: Setup PyTorch without IPEX
-        if: ${{ !(github.event_name == 'schedule' || inputs.install_ipex) }}
+        if: ${{ env.USE_IPEX == '0' }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
 
       - name: Setup IPEX
-        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
+        if: ${{ env.USE_IPEX == '1' }}
         uses: ./.github/actions/setup-ipex
 
       - name: Build Triton wheels
