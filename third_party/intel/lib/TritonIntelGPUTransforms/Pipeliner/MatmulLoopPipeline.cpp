@@ -1,7 +1,6 @@
 #include "Schedule.h"
 #include "include/triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
