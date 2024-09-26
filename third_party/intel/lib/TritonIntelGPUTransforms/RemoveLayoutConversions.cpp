@@ -254,7 +254,12 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
         }
       }
 
-      // HACK: we want to propagate mma layout to the atomic rmw op
+      // HACK: we want to propagate mma layout to the atomic_rmw op, so we do
+      // not need an extra ConvertLayout Op to convert layout from mma to other
+      // layouts, which may consume excessive shared local memory.
+      // TODO: we need to investigate the performance impact of atomic_rmw op
+      // with mma layout, compared with ConvertLayout Op + atomic_rmw op with
+      // blocked layout.
       if (auto atomicOp = dyn_cast<AtomicRMWOp>(op)) {
         auto tensorType =
             dyn_cast<RankedTensorType>(atomicOp.getResult().getType());
