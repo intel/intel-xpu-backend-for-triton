@@ -62,14 +62,6 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
 
   return llvm::dyn_cast_or_null<ttg::DotOperandEncodingAttr>(
       tensorType.getEncoding());
-
-  //  return TypeSwitch<Operation *, ttg::DotOperandEncodingAttr>(user)
-  //    .Case<arith::ExtFOp, arith::TruncFOp, ttg::ConvertLayoutOp>([&](auto op)
-  //    {
-  //        return
-  //        dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
-  //      })
-  //      .Default([](auto) { return nullptr; });
 }
 
 /// If all the transitive uses of the given value are used by a convert to the
