@@ -216,7 +216,8 @@ def forward(q, k, v, causal, sm_scale):
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, provider):
-    causal = False
+    import os
+    causal = os.environ.get('IS_CAUSAL', '0') == '1'
     dtype = torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
@@ -226,7 +227,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
-                                                                     False, scale=sm_scale), warmup=10, rep=10,
+                                                                     causal, scale=sm_scale), warmup=10, rep=10,
             quantiles=quantiles, fast_flush=False)
 
     elif provider == 'triton':
