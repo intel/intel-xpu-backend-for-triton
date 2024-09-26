@@ -241,7 +241,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
             quantiles=quantiles, fast_flush=False)
 
     elif provider == 'triton':
-        # FIXME: remove bellow if condition when extend attention support for Causal = True done
+        # FIXME: remove below if condition when extend attention support for Causal = True done
         # https://github.com/intel/intel-xpu-backend-for-triton/issues/1102
         import os
         if os.environ.get('TRITON_INTEL_ADVANCED_PATH', '0') == '1' and CAUSAL:
