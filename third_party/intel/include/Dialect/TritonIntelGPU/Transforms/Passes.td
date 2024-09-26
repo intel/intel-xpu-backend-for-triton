@@ -158,19 +158,6 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
 
 }
 
-def TritonIntelGPURewriteTensorPointer : Pass<"tritonintelgpu-rewrite-tensor-pointer", "mlir::ModuleOp"> {
-  let summary = "Rewrite load/store operations using tensor pointers that cannot be lowered to 2D Block Load/Store intrinsics";
-  let description = [{
-    This pass determines whether a load/store operation can be lowered to 2D
-    Block Load/Store intrinsic. If it cannot, it replaces the load/store
-    operation with a legacy pointer and removes the Triton operations that
-    create and advance the block pointer (that is `tt.make_tensor_tr` and
-    `tt.advance`).
-  }];
-
-  let dependentDialects = ["mlir::triton::TritonDialect"];
-}
-
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
   let summary = "Prefetch a tensor block around loop";
 
