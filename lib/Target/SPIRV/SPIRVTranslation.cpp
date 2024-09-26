@@ -57,6 +57,8 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
 
   SPIRV::TranslatorOpts SPIRVOpts;
   SPIRVOpts.enableAllExtensions();
+  SPIRVOpts.setAllowedToUseExtension(
+      SPIRV::ExtensionID::SPV_KHR_untyped_pointers, false);
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
   SPIRVOpts.setPreserveAuxData(false);
