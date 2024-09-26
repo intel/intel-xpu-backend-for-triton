@@ -305,6 +305,12 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   uint32_t kerArgIdx = 0;
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {
+    // Loop below processes kernel argument info from args_data.json &
+    // signature.json Device buffers and sclar arguments are handled seperately
+    // as follows Similar to sycl_kernel_launch in driver.py device buffers are
+    // configured with void* and scalar arguments are processed based
+    // on signature json info and mapped to type similar to ty_to_cpp from
+    // driver.py
     for (; it != triton_args.jsonData.end(); ++it) {
       if (signature_iter != triton_args.kerSignJson.end()) {
         auto signature_key = stoi(signature_iter.key());
@@ -323,7 +329,6 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       }
       kerArgIdx++;
     }
-    std::cout << "Done with setting arguments \n";
     if (triton_args.shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
