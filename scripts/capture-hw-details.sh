@@ -58,9 +58,9 @@ else
     COMPILER_VERSION="Not installed"
 fi
 
-if [[ "${USE_IPEX}" == "1" ]]; then
+if [[ "${USE_IPEX:undefined}" == "1" ]]; then
   BENCHMARKING_METHOD="PYTORCH_LEGACY_PROFILER_USING_IPEX"
-elif [[ "${USE_IPEX}" == "0" ]]; then
+elif [[ "${USE_IPEX:undefined}" == "0" ]]; then
   BENCHMARKING_METHOD="ELAPSED_TIME"
 fi
 
