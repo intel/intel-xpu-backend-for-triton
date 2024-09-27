@@ -230,7 +230,7 @@ struct LoadStoreConversionBase {
         };
 
     SmallVector<Value> ptrElems(numElems);
-    SmallVector<Value> maskElems(numElems);
+    SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
       auto index = indices[i];
       SmallVector<Value> indicesInTensor(rank);
@@ -251,15 +251,17 @@ struct LoadStoreConversionBase {
       ptrElems[i] = gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
                         valueElemTy, blockPtr[blockBase], offset);
 
-      // Get the LLVM values for mask
-      maskElems[i] = linearize(
-          indicesInTensor,
-          {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
-          int_val(1, 1),
-          [&](const Value &index, const Value &shape, const Value &mask) {
-            // mask = mask && (index < shape)
-            return and_(icmp_slt(index, trunc(i32_ty, shape)), mask);
-          });
+      if (boundaryCheck.size() > 0) {
+        // Get the LLVM values for mask
+        maskElems.push_back(linearize(
+            indicesInTensor,
+            {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
+            int_val(1, 1),
+            [&](const Value &index, const Value &shape, const Value &mask) {
+              // mask = mask && (index < shape)
+              return and_(icmp_slt(index, trunc(i32_ty, shape)), mask);
+            }));
+      }
     }
 
     // Get the LLVM values for `other`
