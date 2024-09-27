@@ -53,7 +53,7 @@ else
 fi
 
 if icpx --version &> /dev/null; then
-    COMPILER_VERSION=$(icpx --version | grep "DPC++/C++ Compiler" | sed 's/.*(\(.*\))/\1/')
+    COMPILER_VERSION=$(icpx --version | grep "DPC++/C++ Compiler" | sed 's/.*(\(.*\))/\1/' | cut -d '.' -f 1-3)
 else
     COMPILER_VERSION="Not installed"
 fi
