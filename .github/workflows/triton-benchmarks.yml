@@ -11,10 +11,13 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
-      install_ipex:
-        description: Install Intel PyTorch Extension
-        type: boolean
-        default: true
+      benchmarking_method:
+        description: The method used to obtain performance numbers
+        type: choice
+        options:
+          - PYTORCH_LEGACY_PROFILER_USING_IPEX
+          - ELAPSED_TIME
+        default: PYTORCH_LEGACY_PROFILER_USING_IPEX
   schedule:
     - cron: "5 23 * * *"
 
@@ -22,7 +25,8 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.install_ipex && '1' || '0' }}
+  BENCHMARKING_METHOD: ${{ github.event_name == 'schedule' && 'PYTORCH_LEGACY_PROFILER_USING_IPEX' || inputs.benchmarking_method }}
+  USE_IPEX: ${{ $BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
 
 jobs:
   build:
