@@ -357,7 +357,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
 
 #blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL:   llvm.func spir_kernelcc @blocked_layout
+  // CHECK-LABEL:   llvm.func spir_kernelcc @blocked_layout_no_boundary_check
   // COM: Check mask is not generated when boundary_check is not set.
   // CHECK-NOT: llvm.icmp "slt"
   tt.func public @blocked_layout_no_boundary_check(%arg0: !tt.ptr<f16>, %col_stride: i64) {
