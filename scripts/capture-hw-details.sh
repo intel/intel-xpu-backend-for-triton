@@ -46,9 +46,32 @@ else
     export GPU_DEVICE="Not Installed"
 fi
 
+if python -c "import torch" &> /dev/null; then
+    TORCH_VERSION=$(python -c "import torch; from packaging.version import Version; print(Version(torch.__version__).base_version)")
+else
+    TORCH_VERSION="Not installed"
+fi
+
+if icpx --version &> /dev/null; then
+    COMPILER_VERSION=$(icpx --version | grep "DPC++/C++ Compiler" | sed 's/.*(\(.*\))/\1/')
+else
+    COMPILER_VERSION="Not installed"
+fi
+
+if [[ "${USE_IPEX}" == "1" ]]; then
+  BENCHMARKING_METHOD="PYTORCH_LEGACY_PROFILER_USING_IPEX"
+elif [[ "${USE_IPEX}" == "0" ]]; then
+  BENCHMARKING_METHOD="PYTORCH_UPSTREAM_PROFILER_USING_PTI"
+fi
+
 if [ "$QUIET" = false ]; then
     echo "LIBIGC1_VERSION=$LIBIGC1_VERSION"
     echo "LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION"
     echo "AGAMA_VERSION=$AGAMA_VERSION"
     echo "GPU_DEVICE=$GPU_DEVICE"
+    echo "TORCH_VERSION=$TORCH_VERSION"
+    echo "COMPILER_VERSION=$COMPILER_VERSION"
+    if [[ ! -z "${BENCHMARKING_METHOD}" ]]; then
+        echo "BENCHMARKING_METHOD=$BENCHMARKING_METHOD"
+    fi
 fi
