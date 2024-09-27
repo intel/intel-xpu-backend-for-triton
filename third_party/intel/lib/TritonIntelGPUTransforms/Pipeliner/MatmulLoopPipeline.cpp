@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritonintelgpu-pipeline"
@@ -57,12 +58,8 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
   if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding()))
     return allTransitiveUsesHaveDotEncoding(res);
 
-  if (auto op = dyn_cast<ttg::ConvertLayoutOp>(user))
-    if (auto tensorType =
-            dyn_cast<RankedTensorType>(op->getResult(0).getType()))
-      return dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
-
-  return nullptr;
+  return llvm::dyn_cast_or_null<ttg::DotOperandEncodingAttr>(
+      tensorType.getEncoding());
 }
 
 /// If all the transitive uses of the given value are used by a convert to the

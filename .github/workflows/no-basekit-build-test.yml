@@ -50,8 +50,8 @@ jobs:
           ln -snf /usr/include/level_zero $HOME/miniforge3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
           find /usr -name libze_\* -exec ln -sf {} $HOME/miniforge3/envs/triton/lib/ \;
 
-          find /home/runner/intel/oneapi/mkl/2025.0/lib/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
-          find /home/runner/intel/oneapi/compiler/2024.1/lib/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
+          find /opt/intel/oneapi/mkl/2025.0/lib/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
+          find /opt/intel/oneapi/compiler/2024.1/lib/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
 
       - name: Calculate ENV
         run: |
