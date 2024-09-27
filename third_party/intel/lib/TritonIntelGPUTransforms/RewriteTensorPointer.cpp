@@ -78,24 +78,17 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   }
 
   // HW 2D block read instruction has restriction on pitch divisibility
-  if (strides.size() == 2) {
+  if (fastChangeDim >= (rank - 2)) {
     auto pitch = strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
     LDBG("Pitch: " << pitch);
     // Across Intel platforms, the strictest pitch restriction is to be a
     // multiple of OWord(128 bits).
-    if (!ttgi::isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth()))
+    if (!ttgi::isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth())) {
       return true;
-  }
-
-  // HW 2D block read instruction only supports contiguous accessing.
-  auto fastChangeStride = strides[fastChangeDim];
-  if (auto stride = fastChangeStride.getDefiningOp<arith::ConstantOp>()) {
-    if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue())) {
-      LDBG("Stride int: " << strideInt.getInt());
-      return strideInt.getInt() != 1;
     }
-  }
 
+    return false;
+  }
   return true;
 }
 
