@@ -58,7 +58,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   ArrayRef<int64_t> tensorShape = tensorType.getShape();
 
   int fastChangeDim = -1;
-  for (size_t i = 0; i < strides.size(); i++) {
+  for (size_t i = 0; i < strides.size(); ++i) {
     if (mlir::triton::gpu::intel::isConstant(strides[i], 1)) {
       fastChangeDim = i;
       break;
@@ -67,7 +67,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
 
   LDBG("fastChangeDim: " << fastChangeDim);
   if (fastChangeDim < 0) {
-    return false;
+    return true;
   }
 
   LDBG("Tensor type element type bit width: "
