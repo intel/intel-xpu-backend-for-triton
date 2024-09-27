@@ -15513,6 +15513,8 @@ static bool isCandidate(llvm::Function &F) {
       auto Callee = CI->getCalledFunction()->getName();
       if (Callee.contains("intel_sub_group_") && Callee.contains("_matrix_mad"))
         return true;
+      if (Callee.contains("llvm.genx.GenISA.sub.group.dpas"))
+        return true;
     }
     return false;
   });
