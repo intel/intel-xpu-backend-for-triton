@@ -309,7 +309,6 @@ bool isLayoutAnchor(Operation *op) {
     return ttgi::isExpensiveLoadOrStore(op);
   if (isa<DotOp, AtomicCASOp>(op))
     return true;
-  // If it's a Atomic_rmw op with mma layout, we don't want to change it
   if (isa<AtomicRMWOp>(op))
     if (auto tensorType =
             dyn_cast<RankedTensorType>(op->getResult(0).getType()))
