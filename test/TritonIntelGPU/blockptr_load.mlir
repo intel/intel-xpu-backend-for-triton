@@ -261,6 +261,8 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 #dot_b = #triton_gpu.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @non_contiguous_load_dot_layout
+  // COM: Check mask is not generated when boundary_check is not set.
+  // CHECK-NOT: llvm.icmp "slt"
   tt.func public @non_contiguous_load_dot_layout(%arg0: !tt.ptr<f16>, %col_stride: i64) {
       %c64_i64 = arith.constant 64 : i64
       %c1_i64 = arith.constant 1 : i64
