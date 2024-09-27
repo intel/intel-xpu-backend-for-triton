@@ -23,6 +23,8 @@ namespace mlir::triton::gpu::intel {
 } // namespace mlir::triton::gpu::intel
 
 #define DEBUG_TYPE "tritonintelgpu-rewrite-tensor-pointer"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
 
@@ -33,12 +35,15 @@ namespace {
 ///   - the tensor pointer pitch is not divisible by Qword bitwidth
 ///   - the tensor pointer is not contiguous on memory
 bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
+  LDBG("Considering removal of: " << op);
   if (!op->getParentOfType<ModuleOp>()->hasAttr(
           ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
     return true;
 
   auto ptrType = cast<tt::PointerType>(op.getType());
+  LDBG("Op ptr type: " << ptrType);
   auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+  LDBG("Op tensor type: " << tensorType);
 
   if (!ttgi::hasDotDpasEncoding(tensorType) &&
       !(isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType)))
@@ -59,13 +64,23 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
       break;
     }
   }
+
+  LDBG("fastChangeDim: " << fastChangeDim);
   if (fastChangeDim < 0) {
     return false;
+  }
+
+  LDBG("Tensor type element type bit width: "
+       << tensorType.getElementTypeBitWidth());
+  if (fastChangeDim == rank - 2 && tensorType.getElementTypeBitWidth() == 8) {
+    // TODO: column major layout w/ fp8 has performance regression
+    return true;
   }
 
   // HW 2D block read instruction has restriction on pitch divisibility
   if (strides.size() == 2) {
     auto pitch = strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
+    LDBG("Pitch: " << pitch);
     // Across Intel platforms, the strictest pitch restriction is to be a
     // multiple of OWord(128 bits).
     if (!ttgi::isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth()))
@@ -75,8 +90,10 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   // HW 2D block read instruction only supports contiguous accessing.
   auto fastChangeStride = strides[fastChangeDim];
   if (auto stride = fastChangeStride.getDefiningOp<arith::ConstantOp>()) {
-    if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue()))
+    if (auto strideInt = dyn_cast<IntegerAttr>(stride.getValue())) {
+      LDBG("Stride int: " << strideInt.getInt());
       return strideInt.getInt() != 1;
+    }
   }
 
   return true;
