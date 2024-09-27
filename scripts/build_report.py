@@ -47,10 +47,10 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
 
     host_info = {
         n: os.getenv(n.upper(), default="")
-        for n in ["libigc1_version", "level_zero_version", "gpu_device", "agama_version"]
+        for n in ["libigc1_version", "level_zero_version", "gpu_device", "agama_version", "torch_version", "compiler_version", "benchmarking_method"]
     }
     if not host_info["gpu_device"]:
-        raise RuntimeError("Could not find GPU device description, was capture_device.sh called?")
+        raise RuntimeError("Could not find GPU device description, was `capture-hw-details.sh` called?")
     for name, val in host_info.items():
         df_results[name] = val
 

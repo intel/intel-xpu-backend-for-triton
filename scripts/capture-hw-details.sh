@@ -47,21 +47,21 @@ else
 fi
 
 if python -c "import torch" &> /dev/null; then
-    TORCH_VERSION=$(python -c "import torch; from packaging.version import Version; print(Version(torch.__version__).base_version)")
+    export TORCH_VERSION=$(python -c "import torch; from packaging.version import Version; print(Version(torch.__version__).base_version)")
 else
-    TORCH_VERSION="Not installed"
+    export TORCH_VERSION="Not installed"
 fi
 
 if icpx --version &> /dev/null; then
-    COMPILER_VERSION=$(icpx --version | grep "DPC++/C++ Compiler" | sed 's/.*(\(.*\))/\1/' | cut -d '.' -f 1-3)
+    export COMPILER_VERSION=$(icpx --version | grep "DPC++/C++ Compiler" | sed 's/.*(\(.*\))/\1/' | cut -d '.' -f 1-3)
 else
-    COMPILER_VERSION="Not installed"
+    export COMPILER_VERSION="Not installed"
 fi
 
 if [[ "${USE_IPEX:-}" == "1" ]]; then
-  BENCHMARKING_METHOD="PYTORCH_LEGACY_PROFILER_USING_IPEX"
+    export BENCHMARKING_METHOD="PYTORCH_LEGACY_PROFILER_USING_IPEX"
 elif [[ "${USE_IPEX:-}" == "0" ]]; then
-  BENCHMARKING_METHOD="ELAPSED_TIME"
+    export BENCHMARKING_METHOD="ELAPSED_TIME"
 fi
 
 if [ "$QUIET" = false ]; then
