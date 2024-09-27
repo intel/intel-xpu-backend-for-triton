@@ -117,20 +117,6 @@ struct KernelArguments {
   void addTensorType(std::string type) { ttype_vec.push_back(type); }
 };
 
-// Create an exception handler for asynchronous SYCL exceptions
-static auto exception_handler = [](sycl::exception_list e_list) {
-  for (std::exception_ptr const &e : e_list) {
-    try {
-      std::rethrow_exception(e);
-    } catch (std::exception const &e) {
-#if _DEBUG
-      std::cout << "Failure" << std::endl;
-#endif
-      std::terminate();
-    }
-  }
-};
-
 /** SYCL Globals **/
 SyclQueueMap g_sycl_queue_map;
 
@@ -429,9 +415,9 @@ int main(int argc, char **argv) {
   auto spirv = read_spirv(tritonArgDict.spv_name);
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
-  auto [kernel_bundle, kernel, n_regs, n_spills] = loadBinary(
-      tritonArgDict.kernel_name, reinterpret_cast<uint8_t *>(spirv.data()),
-      spirv.size(), 0);
+  auto [kernel_bundle, kernel, n_regs, n_spills] =
+      loadBinary(tritonArgDict.kernel_name,
+                 reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
 
   // TODO: missing number of registers
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills
