@@ -17,7 +17,7 @@ using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 constexpr int kernelArgsJsonIdx = 8;
 
-auto readFileAsBytes(const std::string &filename) {
+auto read_file_as_bytes(const std::string &filename) {
   std::ifstream ins(filename, std::ios::binary);
   if (!ins.is_open()) {
     throw std::runtime_error("Failed to open file " + filename);
@@ -33,7 +33,7 @@ auto readFileAsBytes(const std::string &filename) {
 }
 
 auto load_tensor(const std::string &filename) {
-  auto bytes = readFileAsBytes(filename);
+  auto bytes = read_file_as_bytes(filename);
   return torch::pickle_load(bytes).toTensor();
 }
 
@@ -44,7 +44,7 @@ void write_tensor(const std::string &filename, torch::Tensor &tensor) {
 }
 
 auto read_spirv(const std::string &filename) {
-  return readFileAsBytes(filename);
+  return read_file_as_bytes(filename);
 }
 
 // Structure that contains Triton kernel arguments
@@ -79,14 +79,14 @@ struct KernelArguments {
     }
     file.close();
 
-    gridX = jsonData.value("gridX", 0);
-    gridY = jsonData.value("gridY", 0);
-    gridZ = jsonData.value("gridZ", 0);
-    num_warps = jsonData.value("num_warps", 0);
-    shared_memory = jsonData.value("shared_memory", 0);
-    threads_per_warp = jsonData.value("threads_per_warp", 0);
-    kernel_name = jsonData.value("kernel_name", " ");
-    spv_name = jsonData.value("spv_name", " ");
+    gridX = jsonData.at("gridX");
+    gridY = jsonData.at("gridY");
+    gridZ = jsonData.at("gridZ");
+    num_warps = jsonData.at("num_warps");
+    shared_memory = jsonData.at("shared_memory");
+    threads_per_warp = jsonData.at("threads_per_warp");
+    kernel_name = jsonData.at("kernel_name");
+    spv_name = jsonData.at("spv_name");
 
     std::regex tensor_pattern(R"(tensor_\d+)");
     for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
@@ -110,9 +110,6 @@ struct KernelArguments {
       throw std::runtime_error("Invalid JSON format in the file");
     }
     signatureJson.close();
-    for (auto &[key, value] : kerSignJson.items()) {
-      std::cout << "Key: " << key << ", value: " << value << std::endl;
-    }
   }
 
   void addTensor(const torch::Tensor &tensor) { tensor_vec.push_back(tensor); }
@@ -339,7 +336,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     assert(narg == expected_num_params);
     cgh.parallel_for(parallel_work_size, kernel_ptr);
   };
-  auto event = stream.submit(cgf);
+  stream.submit(cgf);
   stream.wait();
 }
 
