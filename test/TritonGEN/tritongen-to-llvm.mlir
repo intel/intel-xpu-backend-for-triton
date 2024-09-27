@@ -49,20 +49,6 @@ llvm.func @triton_gen.split_barrier() {
 
 // -----
 
-// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(i32, i32) attributes {convergent, no_unwind, will_return}
-// CHECK-DAG: llvm.func spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(i32) attributes {convergent, no_unwind, will_return}
-
-llvm.func @triton_gen.named_barrier(%barrier_id : i32, %thread_group_count : i32) {
-  // CHECK-LABEL: triton_gen.named_barrier(%arg0: i32, %arg1: i32) {
-  // CHECK:       llvm.call spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.signal.i32.i32(%arg0, %arg1) {{.*}} : (i32, i32) -> ()
-  // CHECK-NEXT:  llvm.call spir_funccc @llvm.genx.GenISA.threadgroupnamedbarriers.wait.i32(%arg0) {{.*}} : (i32) -> ()
-  triton_gen.named_barrier_signal %barrier_id, %thread_group_count : (i32, i32)
-  triton_gen.named_barrier_wait %barrier_id : i32
-  llvm.return
-}
-
-// -----
-
 // CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_addij(i32, i32) -> i32 attributes {convergent, no_unwind, will_return}
 // CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_mulij(i32, i32) -> i32 attributes {convergent, no_unwind, will_return}
 // CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_maxij(i32, i32) -> i32 attributes {convergent, no_unwind, will_return}

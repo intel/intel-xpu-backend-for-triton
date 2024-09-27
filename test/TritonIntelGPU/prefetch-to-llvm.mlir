@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
-// RUN: TRITON_INTEL_ENABLE_FAST_PREFETCH=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefix=FAST
 
 // CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x2cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind}
 module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
@@ -8,12 +7,6 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
 
-    // FAST: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // FAST: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // FAST: [[C32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-    // FAST: [[C4:%.*]] = llvm.mlir.constant(4 : i32) : i32
-    // FAST: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // FAST: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, [[C16]], [[C32]], [[C4]], [[C1]], {{.*}}, {{.*}}, {{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
     // CHECK: %[[ROW_MAJOR_BLOCK_PTR:.*]] = llvm.insertvalue %arg0, {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK: %[[VAL_17:.*]] = llvm.call spir_funccc @_Z16get_sub_group_idv()
     // CHECK: %[[VAL_18:.*]] = llvm.sext %[[VAL_17]] : i32 to i64
@@ -49,12 +42,6 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
 
     // COM: The memory layout is same for the column major memory and row major memory. The prefetch function should be the same.
 
-    // FAST: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // FAST: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
-    // FAST: [[C32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-    // FAST: [[C4:%.*]] = llvm.mlir.constant(4 : i32) : i32
-    // FAST: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
-    // FAST: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, [[C16]], [[C32]], [[C4]], [[C1]], {{.*}}, {{.*}}, {{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
     // CHECK: %[[COLUMN_MAJOR_BLOCK_PTR:.*]] = llvm.insertvalue %arg1, {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK: %[[COLUMN_MAJOR_OFFSET_Y:.*]] = llvm.extractvalue %[[COLUMN_MAJOR_BLOCK_PTR]][0] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK: %[[COLUMN_MAJOR_OFFSET_X:.*]] = llvm.extractvalue %[[COLUMN_MAJOR_BLOCK_PTR]][1] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>

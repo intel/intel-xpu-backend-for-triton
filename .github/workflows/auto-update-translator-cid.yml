@@ -16,7 +16,7 @@ jobs:
       - runner-0.0.19
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -54,11 +54,6 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
-
-      # TODO: remove this step once ipex is deprecated for benchmarks
-      - name: Setup NO-OP-IPEX
-        if: ${{ env.TARGET_PRID == null }}
-        uses: ./.github/actions/setup-no-op-ipex
 
       - name: Install test dependencies
         if: ${{ env.TARGET_PRID == null }}

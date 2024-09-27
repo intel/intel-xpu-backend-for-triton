@@ -87,6 +87,10 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK:           %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[COL_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[BASE:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
+    // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+    // CHECK:           %[[WIDTH_i32:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
+    // CHECK:           %[[ELEM_SIZE_IN_BYTES:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK:           %[[VAL_32:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_33:.*]] = llvm.mlir.constant(32 : i32) : i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mul %[[outerDimWarpId]], %[[VAL_33]] : i32
@@ -94,14 +98,10 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK:           %[[VAL_36:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[offsetX_:.*]] = llvm.add %[[VAL_36]], %[[OFFSET_1]] : i32
     // CHECK:           %[[offsetY_:.*]] = llvm.add %[[VAL_35]], %[[OFFSET_0]] : i32
-    // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
-    // CHECK:           %[[WIDTH_i32:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
-    // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
-    // CHECK:           %[[VAL_42:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK:           %[[offsetY:.*]] = llvm.trunc %[[offsetY_]] : i32 to i32
     // CHECK:           %[[offsetX:.*]] = llvm.trunc %[[offsetX_]] : i32 to i32
-    // CHECK:           %[[ROW_STRIDE_IN_BYTES:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[VAL_42]] : i32
-    // CHECK:           %[[HEIGHT:.*]] = llvm.mul %[[HEIGHT_i32]], %[[VAL_42]] : i32
+    // CHECK:           %[[ROW_STRIDE_IN_BYTES:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
+    // CHECK:           %[[HEIGHT:.*]] = llvm.mul %[[HEIGHT_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
     // CHECK:           %[[VAL_47:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK:           %[[VAL_48:.*]] = llvm.alloca %[[VAL_47]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           %[[VAL_49:.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -159,6 +159,10 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK:           %[[ROW_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][4] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[COL_STRIDE_i64:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][5] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     // CHECK:           %[[BASE:.*]] = llvm.extractvalue %[[BLOCK_POINTER]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
+    // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
+    // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+    // CHECK:           %[[WIDTH_i32:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
+    // CHECK:           %[[ELEM_SIZE_IN_BYTES:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK:           %[[VAL_31:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_32:.*]] = llvm.mlir.constant(32 : i32) : i32
     // CHECK:           %[[VAL_33:.*]] = llvm.mul %[[outerDimWarpId]], %[[VAL_32]] : i32
@@ -166,14 +170,10 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     // CHECK:           %[[VAL_35:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[offsetX_:.*]] = llvm.add %[[VAL_34]], %[[OFFSET_1]] : i32
     // CHECK:           %[[offsetY_:.*]] = llvm.add %[[VAL_35]], %[[OFFSET_0]] : i32
-    // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
-    // CHECK:           %[[WIDTH_i32:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
-    // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
-    // CHECK:           %[[VAL_41:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK:           %[[VAL_42:.*]] = llvm.trunc %[[offsetY_]] : i32 to i32
     // CHECK:           %[[VAL_43:.*]] = llvm.trunc %[[offsetX_]] : i32 to i32
-    // CHECK:           %[[ROW_STRIDE_IN_BYTES:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[VAL_41]] : i32
-    // CHECK:           %[[HEIGHT:.*]] = llvm.mul %[[HEIGHT_i32]], %[[VAL_41]] : i32
+    // CHECK:           %[[ROW_STRIDE_IN_BYTES:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
+    // CHECK:           %[[HEIGHT:.*]] = llvm.mul %[[HEIGHT_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
     // CHECK:           %[[VAL_46:.*]] = llvm.mlir.constant(32 : i32) : i32
     // CHECK:           %[[VAL_47:.*]] = llvm.alloca %[[VAL_46]] x i32 : (i32) -> !llvm.ptr
     // CHECK:           %[[VAL_48:.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -237,11 +237,9 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
 module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @column_major_dot_b
   tt.func public @column_major_dot_b(%arg0: !tt.ptr<f16>, %col_stride: i64) {
-      %c64_i32 = arith.constant 64 : i32
       %c64_i64 = arith.constant 64 : i64
       %c1_i64 = arith.constant 1 : i64
       %c0_i32 = arith.constant 0 : i32
-      %c32_i64 = arith.constant 32 : i64
       %21 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>>>
       // CHECK:    llvm.call spir_funccc @_Z51intel_sub_group_2d_block_read_transpose_32b_16r8x1cPU3AS1viiiDv2_iPj
       // CHECK:    llvm.shufflevector {{.*}}, {{.*}} [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xi32>
@@ -252,6 +250,45 @@ module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-war
       // CHECK:    llvm.call spir_funccc @_Z51intel_sub_group_2d_block_read_transpose_32b_16r8x1cPU3AS1viiiDv2_iPj
       // CHECK:    llvm.shufflevector {{.*}}, {{.*}} [0, 1, 2, 3, 4, 5, 6, 7] : vector<8xi32>
       %45 = tt.load %21 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>>>
+      tt.return
+  }
+}
+
+// -----
+
+#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
+#dot_b = #triton_gpu.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @non_contiguous_load_dot_layout
+  // COM: Check mask is not generated when boundary_check is not set.
+  // CHECK-NOT: llvm.icmp "slt"
+  tt.func public @non_contiguous_load_dot_layout(%arg0: !tt.ptr<f16>, %col_stride: i64) {
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #dot_b>>
+      // CHECK-COUNT-64: llvm.load {{.*}} -> i16
+      %1 = tt.load %0 : !tt.ptr<tensor<64x16xf16, #dot_b>>
+      %2 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #dot_a>>
+      // CHECK-COUNT-64: llvm.load {{.*}} -> i16
+      %3 = tt.load %2 : !tt.ptr<tensor<64x16xf16, #dot_a>>
+      tt.return
+  }
+}
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @blocked_layout
+  tt.func public @blocked_layout(%arg0: !tt.ptr<f16>, %col_stride: i64) {
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %21 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #blocked>>
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
+      %45 = tt.load %21 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<64x16xf16, #blocked>>
       tt.return
   }
 }

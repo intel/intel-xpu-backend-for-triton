@@ -431,7 +431,7 @@ int main(int argc, char **argv) {
 
   auto [kernel_bundle, kernel, n_regs, n_spills] = loadBinary(
       tritonArgDict.kernel_name, reinterpret_cast<uint8_t *>(spirv.data()),
-      spirv.size() / sizeof(uint32_t), 0);
+      spirv.size(), 0);
 
   // TODO: missing number of registers
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills

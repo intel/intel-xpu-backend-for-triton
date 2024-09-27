@@ -316,9 +316,6 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verify2DBlockLoadHWRestriction(*this).failed())
     return failure();
 
-  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
-    return success();
-
   if (verifyMatrixInput(*this).failed())
     return failure();
 
@@ -383,9 +380,6 @@ LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
   if (verify2DBlockStoreHWRestriction(*this).failed())
     return failure();
 
-  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
-    return success();
-
   if (verifyMatrixInput(*this).failed())
     return failure();
 
@@ -421,18 +415,15 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   if (verifyMatrixInput(*this).failed())
     return failure();
 
-  const bool enableFastPrefetch =
-      tools::getBoolEnv("TRITON_INTEL_ENABLE_FAST_PREFETCH");
   uint32_t tileWidth = getTileWidth();
   switch (getElemSizeInBits()) {
   case 8:
-    if (tileWidth != 16 && tileWidth != 32 &&
-        !(enableFastPrefetch && tileWidth == 64))
+    if (tileWidth != 16 && tileWidth != 32)
       return emitOpError("tile_width for 8 bit elements should be equal to "
                          "16 or 32");
     break;
   case 16:
-    if (tileWidth != 16 && !(enableFastPrefetch && tileWidth == 32))
+    if (tileWidth != 16)
       return emitOpError("tile_width for 16 bit elements should be equal "
                          "to 16");
     break;

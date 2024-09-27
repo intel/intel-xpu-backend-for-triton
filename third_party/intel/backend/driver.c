@@ -134,8 +134,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const sycl::device sycl_device = sycl_l0_device_pair.first;
 
   std::string kernel_name = name;
-  size_t binary_size = PyBytes_Size(py_bytes);
-  binary_size = binary_size / sizeof(uint32_t);
+  const size_t binary_size = PyBytes_Size(py_bytes);
 
   uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
   const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
@@ -143,8 +142,13 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   const auto l0_context =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+
+  const auto use_native_code =
+      isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
+  const bool is_spv = use_native_code ? !(*use_native_code) : true;
+
   auto l0_module = checkSyclErrors(create_module(
-      l0_context, l0_device, binary_ptr, binary_size, build_flags));
+      l0_context, l0_device, binary_ptr, binary_size, build_flags, is_spv));
 
   auto checkL0Errors = [&](auto l0_module) -> ze_kernel_handle_t {
     if (PyErr_Occurred()) {
@@ -169,35 +173,39 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
   int32_t n_spills = props.spillMemSize;
   const int32_t n_regs = 0;
-  constexpr int32_t max_reg_spill = 1000;
-  std::string build_flags_str(build_flags);
-  bool is_GRF_mode_specified = false;
 
-  // Check whether the GRF mode is specified by the build flags.
-  if (build_flags_str.find("-cl-intel-256-GRF-per-thread") !=
-          std::string::npos ||
-      build_flags_str.find("-cl-intel-128-GRF-per-thread") !=
-          std::string::npos ||
-      build_flags_str.find("-cl-intel-enable-auto-large-GRF-mode") !=
-          std::string::npos) {
-    is_GRF_mode_specified = true;
-  }
+  if (is_spv) {
+    constexpr int32_t max_reg_spill = 1000;
+    std::string build_flags_str(build_flags);
+    bool is_GRF_mode_specified = false;
 
-  // If the register mode isn't set, and the number of spills is greater
-  // than the threshold, recompile the kernel using large GRF mode.
-  if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-    std::cout << "(I): Detected " << n_spills
-              << " spills, recompiling the kernel using large GRF mode"
-              << std::endl;
-    const std::string new_build_flags =
-        build_flags_str.append(" -cl-intel-256-GRF-per-thread");
-    l0_module =
-        checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                      binary_size, new_build_flags.c_str()));
-    l0_kernel = checkL0Errors(l0_module);
-    gpuAssert(zeKernelGetProperties(l0_kernel, &props));
-    n_spills = props.spillMemSize;
-    std::cout << "(I): Kernel has now " << n_spills << " spills" << std::endl;
+    // Check whether the GRF mode is specified by the build flags.
+    if (build_flags_str.find("-cl-intel-256-GRF-per-thread") !=
+            std::string::npos ||
+        build_flags_str.find("-cl-intel-128-GRF-per-thread") !=
+            std::string::npos ||
+        build_flags_str.find("-cl-intel-enable-auto-large-GRF-mode") !=
+            std::string::npos) {
+      is_GRF_mode_specified = true;
+    }
+
+    // If the register mode isn't set, and the number of spills is greater
+    // than the threshold, recompile the kernel using large GRF mode.
+    if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
+      std::cout << "(I): Detected " << n_spills
+                << " spills, recompiling the kernel using large GRF mode"
+                << std::endl;
+      const std::string new_build_flags =
+          build_flags_str.append(" -cl-intel-256-GRF-per-thread");
+      l0_module = checkSyclErrors(
+          create_module(l0_context, l0_device, binary_ptr, binary_size,
+                        new_build_flags.c_str(), is_spv));
+
+      l0_kernel = checkL0Errors(l0_module);
+      gpuAssert(zeKernelGetProperties(l0_kernel, &props));
+      n_spills = props.spillMemSize;
+      std::cout << "(I): Kernel has now " << n_spills << " spills" << std::endl;
+    }
   }
 
   auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
