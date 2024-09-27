@@ -4,6 +4,10 @@ import os
 from typing import Any, Dict, List
 
 USE_IPEX_OPTION = os.getenv("USE_IPEX", "1") == "1"
+if USE_IPEX_OPTION:
+    BENCHMARKING_METHOD = "PYTORCH_LEGACY_PROFILER_USING_IPEX"
+else:
+    BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "ELAPSED_TIME")
 
 
 def synchronize():
@@ -122,8 +126,8 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                     device="xpu", sync_submitting=True, kernel_name=None):
+def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True,
+                          return_mode="mean", device="xpu"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -208,9 +212,12 @@ def do_bench_no_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, 
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-do_bench = do_bench_no_ipex
-if USE_IPEX_OPTION:
+if BENCHMARKING_METHOD == "PYTORCH_LEGACY_PROFILER_USING_IPEX":
     do_bench = do_bench_ipex
+elif BENCHMARKING_METHOD == "ELAPSED_TIME":
+    do_bench = do_bench_elapsed_time
+else:
+    raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=""):
