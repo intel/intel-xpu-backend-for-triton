@@ -444,6 +444,7 @@ def kernel_meta_extractor(arg, args_dict):
 
 
 def serialize_args(args):
+    import numbers
     dir_path = os.getenv('TRITON_XPU_DUMP_KERNEL_ARGS')
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
@@ -465,8 +466,8 @@ def serialize_args(args):
             tensor_name = f"tensor_{cnt}"
             args_dict.update({tensor_name: str(tensor_type)})
 
-        if isinstance(arg, int):
-            args_dict.update({f"intArg_{cnt}": args[cnt]})
+        if isinstance(arg, numbers.Number):
+            args_dict.update({f"scalarArg_{cnt}": args[cnt]})
 
         cnt = cnt + 1
     # Dump argument info as a JSON file

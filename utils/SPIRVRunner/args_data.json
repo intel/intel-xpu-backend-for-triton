@@ -10,5 +10,5 @@
   "tensor_9": "torch.float32",
   "tensor_10": "torch.float32",
   "tensor_11": "torch.float32",
-  "intArg_12": 98432
+  "scalarArg_12": 98432
 }
