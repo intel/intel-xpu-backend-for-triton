@@ -26,7 +26,6 @@ permissions: read-all
 env:
   PYTHON_VERSION: "3.10"
   BENCHMARKING_METHOD: ${{ github.event_name == 'schedule' && 'PYTORCH_LEGACY_PROFILER_USING_IPEX' || inputs.benchmarking_method }}
-  USE_IPEX: ${{ $BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
 
 jobs:
   build:
@@ -57,6 +56,9 @@ jobs:
       - name: Install Python build dependencies
         run: |
           pip install wheel cmake
+
+      - name: Set USE_IPEX environment variable
+        run: echo "USE_IPEX=$($BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX')" >> $GITHUB_ENV
 
       - name: Setup PyTorch with IPEX
         if: ${{ env.USE_IPEX == '1' }}
