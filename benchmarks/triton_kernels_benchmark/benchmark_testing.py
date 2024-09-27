@@ -155,7 +155,7 @@ def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=N
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-if USE_IPEX_OPTION:
+if BENCHMARKING_METHOD == "PYTORCH_LEGACY_PROFILER_USING_IPEX":
     do_bench = do_bench_ipex
 elif BENCHMARKING_METHOD == "ELAPSED_TIME":
     do_bench = do_bench_elapsed_time
