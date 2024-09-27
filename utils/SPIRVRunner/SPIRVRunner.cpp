@@ -317,8 +317,6 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
       cgh.set_arg(narg, local_buffer);
     }
-    std::cout << "#Args Set=" << narg
-              << " :: #Expected ArgCount=" << expected_num_params << std::endl;
     assert(narg == expected_num_params);
     cgh.parallel_for(parallel_work_size, kernel_ptr);
   };
@@ -376,11 +374,6 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
       .memcpy(tensor_ptr(output), triton_args.dev_buffers[outTensorIndex],
               output.nbytes())
       .wait();
-
-#if _DEBUG
-  std::cout << "Output Tensor Printed: " << std::endl;
-  std::cout << output << std::endl;
-#endif
 
   for (auto &dev_ptr : triton_args.dev_buffers)
     sycl::free(dev_ptr, stream);
