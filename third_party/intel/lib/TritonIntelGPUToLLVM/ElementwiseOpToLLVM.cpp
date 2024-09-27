@@ -1222,8 +1222,9 @@ struct FpToFpOpConversion
     auto F64TyID = TypeID::get<Float64Type>();
 
     if (srcTy.getTypeID() == dstTy.getTypeID()) {
-      auto identityFn = [](Location loc, ConversionPatternRewriter &rewriter,
-                           const SmallVector<Value> &v) { return v; };
+      constexpr auto identityFn = [](Location,
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) { return v; };
       return {identityFn, (srcTy.getTypeID() == F8E4M3TyID ||
                            dstTy.getTypeID() == F8E4M3TyID)
                               ? 2
@@ -1840,10 +1841,8 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<MulhiUIOpConversion>(
-      typeConverter, axisInfoAnalysis, targetInfo,
-      benefit); // must keep (is different, we hass SPIRV calling convention to
-                // the call op, do we need it ? )
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
+                                    benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   PatternBenefit benefitForPropNan = benefit;
   // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
