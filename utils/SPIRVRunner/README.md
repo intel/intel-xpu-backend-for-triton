@@ -40,7 +40,7 @@ Following input data is generated,
 
 ## Running
 
-Help: 
+Help:
 `./build/SPIRVRunner` < ArgsJSON > < Output Tensor File Name > < KernelSignatureJSON >
 
 ### Demo (01-vector-add.py)
