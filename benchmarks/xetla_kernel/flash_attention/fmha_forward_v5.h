@@ -29,37 +29,6 @@ namespace gpu::xetla {
 
 namespace fmha {
 
-struct Shape {
-  Shape(int B, int N, int F, int T, int H)
-      : num_batches(B), num_heads(N), num_queries(F), num_keys(T),
-        head_size(H) {}
-  const int num_batches;
-  const int num_heads;
-  const int num_queries;
-  const int num_keys;
-  const int head_size;
-
-  inline uint32_t get_query_size() const {
-    return num_batches * num_heads * num_queries * head_size;
-  }
-  inline uint32_t get_key_size() const {
-    return num_batches * num_heads * num_keys * head_size;
-  }
-  inline uint32_t get_score_size() const {
-    return num_batches * num_heads * num_queries * num_keys;
-  }
-  inline uint32_t get_ml_size() const {
-    return num_batches * num_heads * num_queries;
-  }
-  inline uint32_t get_attn_mask_size() const {
-#if _BIAS_AS_INPUT
-    return num_batches * num_heads * num_queries * num_keys;
-#else
-    return num_batches * num_queries * num_keys;
-#endif
-  }
-};
-
 template <typename fmha_policy, typename scalar_t, bool kUseBias,
           bool kIsCausal, bool kIsTraining>
 class fmha_forward_t {
@@ -620,46 +589,28 @@ class FmhaForwardKernel;
 // The launcher of fmha forward kernel
 template <typename fmha_policy, typename T, bool kUseBias = false,
           bool kIsCausal = false, bool kIsTraining = false>
-sycl::event fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v,
-                              void *_out, void *_dropout_mask, void *_bias,
-                              void *_m, void *_l, uint32_t num_batches,
-                              uint32_t num_heads, uint32_t head_size,
-                              uint32_t num_queries, uint32_t num_keys,
-                              uint64_t seed = 0, uint64_t offset = 123) {
-
-  Shape shape(num_batches, num_heads, num_queries, num_keys, head_size);
+sycl::event
+fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v, void *_out,
+                  void *_dropout_mask, void *_bias, void *_m, void *_l,
+                  uint32_t num_batches, uint32_t num_heads, uint32_t head_size,
+                  uint32_t num_queries, uint32_t num_keys, float head_scale,
+                  uint64_t seed = 0, uint64_t offset = 123) {
 
   constexpr bool use_mask = false;
   constexpr bool use_dropout = false;
   float dropout_prob = 0.0f;
   if constexpr (use_dropout)
     dropout_prob = 0.5f;
-  const float scale = 1 / (1 - dropout_prob);
-  const float head_scale = sycl::rsqrt(float(head_size));
-
-  uint32_t size_query = shape.get_query_size();
-  uint32_t size_key = shape.get_key_size();
-  uint32_t size_score = shape.get_score_size();
-  uint32_t size_attn_mask = shape.get_attn_mask_size();
-  uint32_t size_ml = shape.get_ml_size();
 
   // forward
-  // T *query = sycl::malloc_shared<T>(size_query, q);
-  // T *key = sycl::malloc_shared<T>(size_key, q);
-  // T *value = sycl::malloc_shared<T>(size_key, q);
   T *query = static_cast<T *>(_q);
   T *key = static_cast<T *>(_k);
   T *value = static_cast<T *>(_v);
 
-  // T *bias = sycl::malloc_shared<T>(size_attn_mask, q);
   T *bias = static_cast<T *>(_bias);
-  // uint8_t *dropout_mask = sycl::malloc_shared<uint8_t>(size_score, q);
   uint8_t *dropout_mask = static_cast<uint8_t *>(_dropout_mask);
-  // T *out = sycl::malloc_shared<T>(size_query, q);
   T *out = static_cast<T *>(_out);
-  // float *m = sycl::malloc_shared<float>(size_ml, q);
   float *m = static_cast<float *>(_m);
-  // float *l = sycl::malloc_shared<float>(size_ml, q);
   float *l = static_cast<float *>(_l);
 
   // fmha forward kernel
@@ -687,12 +638,6 @@ sycl::event fmha_forward_impl(sycl::queue &q, void *_q, void *_k, void *_v,
           fmha_fwd_op(ei, args);
         });
   });
-  // sycl::free(query, q);
-  // sycl::free(key, q);
-  // sycl::free(value, q);
-  // sycl::free(bias, q);
-  // sycl::free(dropout_mask, q);
-  // sycl::free(out, q);
   return event;
 }
 

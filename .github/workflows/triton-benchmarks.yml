@@ -11,10 +11,13 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
-      install_ipex:
-        description: Install Intel PyTorch Extension
-        type: boolean
-        default: true
+      benchmarking_method:
+        description: The method used to obtain performance numbers
+        type: choice
+        options:
+          - PYTORCH_LEGACY_PROFILER_USING_IPEX
+          - ELAPSED_TIME
+        default: PYTORCH_LEGACY_PROFILER_USING_IPEX
   schedule:
     - cron: "5 23 * * *"
 
@@ -22,7 +25,8 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.install_ipex && '1' || '0' }}
+  BENCHMARKING_METHOD: ${{ github.event_name == 'schedule' && 'PYTORCH_LEGACY_PROFILER_USING_IPEX' || inputs.benchmarking_method }}
+  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
 
 jobs:
   build:
@@ -32,7 +36,7 @@ jobs:
     timeout-minutes: 720
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -55,19 +59,19 @@ jobs:
           pip install wheel cmake
 
       - name: Setup PyTorch with IPEX
-        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
+        if: ${{ env.USE_IPEX == '1' }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: Stonepia/pytorch
 
       - name: Setup PyTorch without IPEX
-        if: ${{ !(github.event_name == 'schedule' || inputs.install_ipex) }}
+        if: ${{ env.USE_IPEX == '0' }}
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
 
       - name: Setup IPEX
-        if: ${{ github.event_name == 'schedule' || inputs.install_ipex }}
+        if: ${{ env.USE_IPEX == '1' }}
         uses: ./.github/actions/setup-ipex
 
       - name: Build Triton wheels
@@ -183,8 +187,8 @@ jobs:
 
           TAG=${{ inputs.tag || 'ci' }}
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark - default path
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
@@ -198,7 +202,7 @@ jobs:
 
           TAG=${{ inputs.tag || 'ci' }}-dflt
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark - advanced path
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
@@ -213,7 +217,7 @@ jobs:
 
           TAG=${{ inputs.tag || 'ci' }}-adv
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-advanced-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-advanced-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Prefix Sums kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

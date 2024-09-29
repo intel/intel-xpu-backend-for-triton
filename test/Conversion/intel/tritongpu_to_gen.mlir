@@ -659,11 +659,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
   // CHECK-LABEL: basic_store
   tt.func @basic_store(%ptrs: tensor<256x!tt.ptr<f32>, #blocked0>, %vals: tensor<256xf32, #blocked0>, %mask: tensor<256xi1, #blocked0>) {
     // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<1>, ptr<1>)>
-    // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
-    // CHECK-NEXT: [[ARG1_0:%.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(f32, f32)>
-    // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(f32, f32)>
-    // CHECK-NEXT: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(i1, i1)>
-    // CHECK-NEXT: [[ARG2_1:%.*]] = llvm.extractvalue %arg2[1] : !llvm.struct<(i1, i1)>
+    // CHECK-DAG: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
+    // CHECK-DAG: [[ARG1_0:%.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(f32, f32)>
+    // CHECK-DAG: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(f32, f32)>
+    // CHECK-DAG: [[ARG2_0:%.*]] = llvm.extractvalue %arg2[0] : !llvm.struct<(i1, i1)>
+    // CHECK-DAG: [[ARG2_1:%.*]] = llvm.extractvalue %arg2[1] : !llvm.struct<(i1, i1)>
 
     // CHECK:      [[VEC1:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK-NEXT: [[BCAST0:%.*]] = llvm.bitcast [[ARG1_0]] : f32 to f32

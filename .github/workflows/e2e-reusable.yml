@@ -54,7 +54,7 @@ jobs:
     timeout-minutes: 720
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Print inputs
         run: |

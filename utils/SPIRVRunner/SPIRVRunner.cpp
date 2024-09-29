@@ -10,20 +10,6 @@
 
 #include "sycl_functions.h"
 
-// Create an exception handler for asynchronous SYCL exceptions
-static auto exception_handler = [](sycl::exception_list e_list) {
-  for (std::exception_ptr const &e : e_list) {
-    try {
-      std::rethrow_exception(e);
-    } catch (std::exception const &e) {
-#if _DEBUG
-      std::cout << "Failure" << std::endl;
-#endif
-      std::terminate();
-    }
-  }
-};
-
 auto load_tensor(const std::string &filename) {
   std::ifstream ins(filename, std::ios::binary);
   if (!ins.is_open()) {
@@ -297,9 +283,8 @@ int main() {
   auto spirv = read_spirv("add_kernel.spv");
   std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
-  auto [kernel_bundle, kernel, n_regs, n_spills] =
-      loadBinary("add_kernel", reinterpret_cast<uint8_t *>(spirv.data()),
-                 spirv.size() / sizeof(uint32_t), 0);
+  auto [kernel_bundle, kernel, n_regs, n_spills] = loadBinary(
+      "add_kernel", reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
 
   // TODO: missing number of registers
   std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills

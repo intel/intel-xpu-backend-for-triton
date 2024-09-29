@@ -74,10 +74,9 @@ def get_raw_data(args: argparse.Namespace) -> tuple[Optional[Path], Optional[Pat
     return num_dir, denom_dir
 
 
-def parse_data(config: str, df: pd.DataFrame, file: Path) -> pd.DataFrame:
-    """Parse data from a single CSV file into the dataframe."""
+def parse_pytorch_benchmark_data(config: str, df: pd.DataFrame, file: Path) -> pd.DataFrame:
+    """Parse pytorch benchmark data from a single CSV file into the dataframe."""
     path = Path(file).absolute()
-
     datatype = path.parts[-2]
     suite = path.parts[-3]
 
@@ -97,25 +96,59 @@ def parse_data(config: str, df: pd.DataFrame, file: Path) -> pd.DataFrame:
     return pd.concat([df, raw_data], ignore_index=True)
 
 
-def parse_directory(config: str, previous: pd.DataFrame, directory: Path) -> pd.DataFrame:
-    """Parse all CSV files for a configuration in a directory, merging with
-        the previous dataframe if present."""
-    df = pd.DataFrame(columns=["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"])
-    for file in Path(directory).rglob("*performance.csv"):
-        df = parse_data(config, df, file)
+def merge_triton_xetla_reports_data(config: str, triton_file: Path, xetla_file: Path) -> pd.DataFrame:
+    """Merge triton and xetla raw data."""
+    try:
+        triton_raw_data, xetla_raw_data = [
+            pd.read_csv(file, header=0, usecols=["params", "tflops", "benchmark"])
+            for file in [triton_file, xetla_file]
+        ]
+        triton_raw_data.rename(columns={"tflops": f"Triton-TFlops-{config}"}, inplace=True)
+        xetla_raw_data.rename(columns={"tflops": f"XeTLA-TFlops-{config}"}, inplace=True)
+        return triton_raw_data.merge(xetla_raw_data, how="outer", on=["params", "benchmark"])
+    except FileNotFoundError:
+        print(f"Warning: One or both files not found: {triton_file} or {xetla_file}")
+        return pd.DataFrame()
 
-    if previous is not None:
-        df = df.merge(previous, how="outer", on=["suite", "datatype", "mode", "name", "dev"])
+
+def build_triton_benchmark_reports_path(directory: Path, report_name: str) -> str:
+    """Construct the full file path for a given report name."""
+    return os.path.join(directory, "benchmark-reports", f"{report_name}-report.csv")
+
+
+def parse_triton_benchmark_data(config: str, directory: Path) -> pd.DataFrame:
+    """Parse triton benchmark data from a merged dataframe into the dataframe.
+        Now focus on dft path for softmax, gemm and attention
+        which include both xetla and triton data with regular name."""
+
+    reports = ["softmax", "gemm", "attn"]
+
+    reports_list = []
+    for report in reports:
+        triton_file = f"{report}-triton"
+        xetla_file = f"{report}-xetla"
+        triton_path = build_triton_benchmark_reports_path(directory, triton_file)
+        xetla_path = build_triton_benchmark_reports_path(directory, xetla_file)
+        reports_list.append(merge_triton_xetla_reports_data(config, triton_path, xetla_path))
+
+    return pd.concat(reports_list, ignore_index=True)
+
+
+def parse_directory(triton_benchmark: bool, config: str, directory: Path) -> pd.DataFrame:
+    """Parse all CSV files for a configuration in a directory."""
+    if triton_benchmark:
+        df = parse_triton_benchmark_data(config, directory)
+    else:
+        df = pd.DataFrame(columns=["dev", "name", "batch_size", f"speedup {config}", "suite", "datatype", "mode"])
+        for file in Path(directory).rglob("*performance.csv"):
+            df = parse_pytorch_benchmark_data(config, df, file)
+
     return df
 
 
-def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
-    """Evaluate the data, print a summary and plot if enabled."""
-    num_col = f"speedup {numerator}"
-    denom_col = f"speedup {denominator}"
-
-    df.drop(columns=["batch_size_x", "batch_size_y"], inplace=True)
-
+def summarize_diff(triton_benchmark: bool, perf_index: str, plot: bool, df: pd.DataFrame, num_col: str, denom_col: str,
+                   numerator: str, denominator: str):
+    """Summarize data difference of numerator and denominator."""
     both_failed = df.loc[(df[num_col] == 0.0) & (df[denom_col] == 0.0)]
     print(f"Both failed ({both_failed.shape[0]} configurations):")
     print(both_failed.to_string())
@@ -142,24 +175,24 @@ def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
 
     df["relative difference"] = (df[num_col] - df[denom_col]) / df[denom_col]
 
-    print("Overview of relative difference in speedup.\n"
+    print(f"Overview of relative difference in {perf_index}.\n"
           "Relative difference 0.0 means both perform identically,"
           f" relative difference > 0.0 means {numerator} performs better,"
           f" relative difference < 0.0 means {denominator} performs better")
 
     print(df["relative difference"].describe())
-    print(f"Mean speedup for denominator: {df[denom_col].mean()}")
+    print(f"Mean {perf_index} for denominator: {df[denom_col].mean()}")
     print("\n" * 2)
 
     df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=True)
     print_cfgs = 10
-    print(f"{print_cfgs} fastest configurations ({denominator} faster than "
-          f"{numerator}, showing relative difference in speedup)")
+    print(f"{print_cfgs} best configurations ({denominator} better than "
+          f"{numerator}, showing relative difference in {perf_index})")
     print(df.head(print_cfgs))
     print("\n" * 2)
     df.sort_values(by=["relative difference"], inplace=True, ignore_index=True, ascending=False)
-    print(f"{print_cfgs} slowest configurations ({denominator} slower than "
-          f"{numerator}, showing relative difference in speedup)")
+    print(f"{print_cfgs} worst configurations ({denominator} worse than "
+          f"{numerator}, showing relative difference in {perf_index})")
     print(df.head(print_cfgs))
     print("\n" * 2)
 
@@ -169,12 +202,13 @@ def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
 
-        df["xlabel"] = df[["suite", "mode", "datatype"]].agg(", ".join, axis=1)
+        keys = ["params", "benchmark"] if triton_benchmark else ["suite", "mode", "datatype"]
+        df["xlabel"] = df[keys].agg(", ".join, axis=1)
 
         # Sort by configuration
         order = list(df["xlabel"].unique())
         order.sort()
-        filename = f"performance-plot-{numerator}-{denominator}.pdf"
+        filename = f"performance-plot-{num_col}-{denom_col}.pdf".lower()
         with PdfPages(filename) as pdf:
             fig = plt.figure()
             plt.xticks(rotation=85)
@@ -188,10 +222,27 @@ def eval_data(df: pd.DataFrame, numerator: str, denominator: str, plot: bool):
 
             ax = sns.boxplot(df, x="xlabel", y="relative difference", order=order)
 
-            ax.set(xlabel=None, ylabel="Relative difference in speedup")
+            ax.set(xlabel=None, ylabel=f"Relative difference in {perf_index}")
 
             pdf.savefig(fig, bbox_inches="tight")
             print(f"Saved performance plot to {filename}")
+
+
+def eval_data(triton_benchmark: bool, plot: bool, df: pd.DataFrame, numerator: str, denominator: str):
+    """Evaluate the data, print a summary and plot if enabled."""
+    if triton_benchmark:
+        num_tri2xe_col = f"Tri2Xe-{numerator}"
+        dem_tri2xe_col = f"Tri2Xe-{denominator}"
+
+        df_ratio = df[["params", "benchmark", num_tri2xe_col, dem_tri2xe_col]]
+        summarize_diff(triton_benchmark, "tri2xe", plot, df_ratio, num_tri2xe_col, dem_tri2xe_col, numerator,
+                       denominator)
+    else:
+        num_col = f"speedup {numerator}"
+        denom_col = f"speedup {denominator}"
+
+        df.drop(columns=["batch_size_x", "batch_size_y"], inplace=True)
+        summarize_diff(triton_benchmark, "speedup", plot, df, num_col, denom_col, numerator, denominator)
 
 
 def main():
@@ -206,6 +257,8 @@ def main():
                         action="store_true")
     parser.add_argument("-e", "--eval-only", help="Use existing preprocessed data", action="store_true")
     parser.add_argument("--no-plot", help="Do not plot, no requirement on seaborn and matplotlib", action="store_true")
+    parser.add_argument("--triton-benchmark", help="Compare triton benchmark performance of two CI runs",
+                        action="store_true")
 
     args = parser.parse_args()
 
@@ -230,19 +283,31 @@ def main():
             print("Failed to obtain raw data")
             sys.exit(1)
 
-        df = parse_directory(num_cfg, None, num_dir)
-        df = parse_directory(denom_cfg, df, denom_dir)
+        num_df = parse_directory(args.triton_benchmark, num_cfg, num_dir)
+        denom_df = parse_directory(args.triton_benchmark, denom_cfg, denom_dir)
+        on = ["params", "benchmark"] if args.triton_benchmark else ["suite", "datatype", "mode", "name", "dev"]
+        df = denom_df.merge(num_df, how="outer", on=on)
 
-        cols = [
-            "dev", "suite", "name", "mode", "datatype", "batch_size_x", "batch_size_y", f"speedup {num_cfg}",
-            f"speedup {denom_cfg}"
-        ]
+        if args.triton_benchmark:
+            cols = [
+                "params", "benchmark", f"Triton-TFlops-{num_cfg}", f"XeTLA-TFlops-{num_cfg}",
+                f"Triton-TFlops-{denom_cfg}", f"XeTLA-TFlops-{denom_cfg}"
+            ]
+        else:
+            cols = [
+                "dev", "suite", "name", "mode", "datatype", "batch_size_x", "batch_size_y", f"speedup {num_cfg}",
+                f"speedup {denom_cfg}"
+            ]
+
         df = df[cols]
+        if args.triton_benchmark:
+            df[f"Tri2Xe-{num_cfg}"] = df[f"Triton-TFlops-{num_cfg}"] / df[f"XeTLA-TFlops-{num_cfg}"]
+            df[f"Tri2Xe-{denom_cfg}"] = df[f"Triton-TFlops-{denom_cfg}"] / df[f"XeTLA-TFlops-{denom_cfg}"]
 
         print(f"Storing preprocessed data to {csv_file}")
         df.to_csv(csv_file, index=False)
 
-    eval_data(df, num_cfg, denom_cfg, (not args.no_plot))
+    eval_data(args.triton_benchmark, (not args.no_plot), df, num_cfg, denom_cfg)
 
 
 if __name__ == "__main__":
