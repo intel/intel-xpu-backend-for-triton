@@ -250,7 +250,7 @@ def benchmark(B, M, N, K, provider):
 
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                                 quantiles=quantiles, fast_flush=False)
+                                                                 quantiles=quantiles)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
@@ -263,9 +263,7 @@ def benchmark(B, M, N, K, provider):
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                                 fast_flush=False,
                                                                  kernel_name='matmul_kernel_with_block_pointers')
-    elif provider == 'xetla':
         if B == 1:
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
             acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
@@ -308,7 +306,7 @@ def benchmark(B, M, N, K, provider):
 
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                                 fast_flush=False, kernel_name=kernels_name[name])
+                                                                 kernel_name=kernels_name[name])
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
