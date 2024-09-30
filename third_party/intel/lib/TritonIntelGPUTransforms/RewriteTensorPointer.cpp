@@ -52,6 +52,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByStoreOp) {
   TypedValue<triton::PointerType> base = op.getBase();
   Operation::operand_range shape = op.getShape();
   unsigned rank = shape.size();
+  assert(rank > 1 && "Expecting tensor with rank > 1");
   Operation::operand_range strides = op.getStrides();
   Operation::operand_range offsets = op.getOffsets();
   ArrayRef<int32_t> order = op.getOrder();
