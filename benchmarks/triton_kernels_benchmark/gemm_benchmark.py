@@ -264,6 +264,7 @@ def benchmark(B, M, N, K, provider):
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
                                                                  kernel_name='matmul_kernel_with_block_pointers')
+    elif provider == 'xetla':
         if B == 1:
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
             acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
