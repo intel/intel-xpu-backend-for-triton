@@ -192,7 +192,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     // If the register mode isn't set, and the number of spills is greater
     // than the threshold, recompile the kernel using large GRF mode.
     if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-      std::optional<bool> debugEnabled =
+      const std::optional<bool> debugEnabled =
           isEnvValueBool(getStrEnv("TRITON_DEBUG"));
       if (debugEnabled)
         std::cout << "(I): Detected " << n_spills
