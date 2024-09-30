@@ -192,9 +192,13 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     // If the register mode isn't set, and the number of spills is greater
     // than the threshold, recompile the kernel using large GRF mode.
     if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-      std::cout << "(I): Detected " << n_spills
-                << " spills, recompiling the kernel using large GRF mode"
-                << std::endl;
+      std::optional<bool> debugEnabled =
+          isEnvValueBool(getStrEnv("TRITON_DEBUG"));
+      if (debugEnabled)
+        std::cout << "(I): Detected " << n_spills
+                  << " spills, recompiling kernel \"" << kernel_name
+                  << "\" using large GRF mode" << std::endl;
+
       const std::string new_build_flags =
           build_flags_str.append(" -cl-intel-256-GRF-per-thread");
       l0_module = checkSyclErrors(
@@ -204,7 +208,10 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       l0_kernel = checkL0Errors(l0_module);
       gpuAssert(zeKernelGetProperties(l0_kernel, &props));
       n_spills = props.spillMemSize;
-      std::cout << "(I): Kernel has now " << n_spills << " spills" << std::endl;
+
+      if (debugEnabled)
+        std::cout << "(I): Kernel has now " << n_spills << " spills"
+                  << std::endl;
     }
   }
 
