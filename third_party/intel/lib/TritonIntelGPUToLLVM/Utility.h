@@ -102,9 +102,9 @@ static Value getStackPointer(PatternRewriter &rewriter,
 
 static Value getSharedMemoryBase(Location loc,
                                  ConversionPatternRewriter &rewriter,
-                                 Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(
-      rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
+                                 const TargetInfoBase &target, Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          target.getSharedAddressSpace());
   FunctionOpInterface func = op->getParentOfType<FunctionOpInterface>();
   // CI debugging usage here
   if (!op->hasAttr("allocation.offset")) {
@@ -608,7 +608,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
   // This means that we can use some immediate offsets for shared memory
   // operations.
-  auto dstPtrTy = ptr_ty(rewriter.getContext(), 3);
+  auto dstPtrTy = shrMemObj.base.getType();
   auto dstOffset = dot(rewriter, loc, offsetVals, shrMemObj.strides);
   Value dstPtrBase = gep(dstPtrTy, resElemTy, shrMemObj.base, dstOffset);
 

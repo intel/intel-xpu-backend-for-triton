@@ -234,4 +234,8 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 }
 
+int TargetInfo::getSharedAddressSpace() const {
+  return TritonGEN::TritonGENMemorySpace::kWorkgroup;
+}
+
 } // namespace mlir::triton::intel

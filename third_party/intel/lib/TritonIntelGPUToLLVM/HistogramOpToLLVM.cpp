@@ -189,8 +189,8 @@ public:
     // TODO: we could skip this for cases with num_warps=1 as long as we can
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
-    Value baseSharedMemPtr =
-        LLVM::intel::getSharedMemoryBase(loc, rewriter, op.getOperation());
+    Value baseSharedMemPtr = LLVM::intel::getSharedMemoryBase(
+        loc, rewriter, targetInfo, op.getOperation());
     auto dstType = op.getType();
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);

@@ -84,7 +84,8 @@ struct ConvertTritonGPUToLLVM
         mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                          getSupportDPASAttrName()) &&
         mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH");
-    TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
+    mlir::triton::intel::TargetInfo targetInfo;
+    TritonIntelGPUToLLVMTypeConverter typeConverter(context, option, targetInfo,
                                                     isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -101,8 +102,8 @@ struct ConvertTritonGPUToLLVM
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonIntelGPUToLLVMTypeConverter typeConverter(context, option,
-                                                      isAdvancedPathEnabled);
+      TritonIntelGPUToLLVMTypeConverter typeConverter(
+          context, option, targetInfo, isAdvancedPathEnabled);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       pipelineManager.populateFunctionConversionPatterns(
@@ -117,7 +118,6 @@ struct ConvertTritonGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-    mlir::triton::intel::TargetInfo targetInfo;
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     pipelineManager.populateConversionPatterns(
         patterns, axisInfoAnalysis, typeConverter, targetInfo, benefit);

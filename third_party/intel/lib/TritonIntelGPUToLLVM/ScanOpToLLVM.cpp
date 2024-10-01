@@ -520,7 +520,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // Slow path for the case where there are multiple warps with unique data on
     // the axis.
     auto elems = helper.getScratchSizeInElems();
-    SmallVector<Value> smemBases = getSmemBases(op, elems, rewriter);
+    SmallVector<Value> smemBases =
+        getSmemBases(op, elems, rewriter, targetInfo);
     SmallVector<Type> smemTypes(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       smemTypes[i] = getElementType(op, i);

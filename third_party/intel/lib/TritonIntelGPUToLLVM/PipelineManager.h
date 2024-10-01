@@ -221,7 +221,7 @@ public:
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
@@ -248,7 +248,7 @@ public:
       intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
                                            benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
       intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                               patterns, benefit);
     }
