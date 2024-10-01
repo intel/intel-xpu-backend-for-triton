@@ -102,15 +102,17 @@ void freeKernelBundle(PyObject *p) {
       PyCapsule_GetPointer(p, "kernel_bundle"));
 }
 
+using Spills = int32_t;
+
 template <typename L0_DEVICE, typename L0_CONTEXT>
-std::tuple<ze_module_handle_t, ze_kernel_handle_t, int32_t, int32_t>
+std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
 compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
-                        L0_CONTEXT l0_context, const std::string &build_flags,
-                        const bool is_spv) {
+                        L0_CONTEXT l0_context,
+                        const std::string& build_flags, const bool is_spv) {
   auto l0_module =
       checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                    binary_size, build_flags.c_str(), is_spv));
+                                    binary_size, build_flags.data(), is_spv));
 
   // Retrieve the kernel properties (e.g. register spills).
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
@@ -121,20 +123,58 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
   checkSyclErrors(
       std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)));
 
-  int32_t n_spills = props.spillMemSize;
-  const int32_t n_regs = 0;
+  const int32_t n_spills = props.spillMemSize;
 
-  return std::make_tuple(l0_module, l0_kernel, n_regs, n_spills);
+  return std::make_tuple(l0_module, l0_kernel, n_spills);
 }
 
+struct BuildFlags {
+  std::string build_flags_str;
+
+  const std::string LARGE_GRF_FLAG{"-cl-intel-256-GRF-per-thread"};
+  const std::string SMALL_GRF_FLAG{"-cl-intel-128-GRF-per-thread"};
+  const std::string AUTO_GRF_FLAG{"-cl-intel-enable-auto-large-GRF-mode"};
+
+  BuildFlags(const char *build_flags) : build_flags_str(build_flags) {}
+
+  const std::string& operator()() const {
+    return build_flags_str;
+  }
+
+  int32_t n_regs() {
+    if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos) {
+      return 256;
+    }
+    if (build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos) {
+      return 128;
+    }
+    // TODO: arguably we could return 128 if we find no flag instead of 0. For
+    // now, stick with the conservative choice and alert the user only if a
+    // specific GRF mode is specified.
+    return 0;
+  }
+
+  const bool hasGRFSizeFlag() {
+    if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos ||
+        build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos ||
+        build_flags_str.find(AUTO_GRF_FLAG) != std::string::npos) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  void addLargeGRFSizeFlag() { build_flags_str = build_flags_str.append(" " + LARGE_GRF_FLAG); }
+};
+
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
-  const char *name, *build_flags;
+  const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
   int devId;
 
-  if (!PyArg_ParseTuple(args, "sSisi", &name, &py_bytes, &shared, &build_flags,
-                        &devId)) {
+  if (!PyArg_ParseTuple(args, "sSisi", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &devId)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
@@ -143,6 +183,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
+
+  BuildFlags build_flags(build_flags_ptr);
 
   try {
 
@@ -164,24 +206,13 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
         isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
     const bool is_spv = use_native_code ? !(*use_native_code) : true;
 
-    auto [l0_module, l0_kernel, n_regs, n_spills] =
+    auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
-                                l0_context, build_flags, is_spv);
+                                l0_context, build_flags(), is_spv);
 
     if (is_spv) {
       constexpr int32_t max_reg_spill = 1000;
-      std::string build_flags_str(build_flags);
-      bool is_GRF_mode_specified = false;
-
-      // Check whether the GRF mode is specified by the build flags.
-      if (build_flags_str.find("-cl-intel-256-GRF-per-thread") !=
-              std::string::npos ||
-          build_flags_str.find("-cl-intel-128-GRF-per-thread") !=
-              std::string::npos ||
-          build_flags_str.find("-cl-intel-enable-auto-large-GRF-mode") !=
-              std::string::npos) {
-        is_GRF_mode_specified = true;
-      }
+      const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
 
       // If the register mode isn't set, and the number of spills is greater
       // than the threshold, recompile the kernel using large GRF mode.
@@ -193,18 +224,19 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
                     << " spills, recompiling the kernel using large GRF mode"
                     << std::endl;
 
-        const std::string new_build_flags =
-            build_flags_str.append(" -cl-intel-256-GRF-per-thread");
+        build_flags.addLargeGRFSizeFlag();
 
-        auto [l0_module, l0_kernel, n_regs, n_spills] = compileLevelZeroObjects(
+        auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
             binary_ptr, binary_size, kernel_name, l0_device, l0_context,
-            new_build_flags, is_spv);
-      
+            build_flags(), is_spv);
+
       if (debugEnabled)
         std::cout << "(I): Kernel has now " << n_spills << " spills"
                   << std::endl;
       }
     }
+    
+    auto n_regs = build_flags.n_regs();
 
     auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
         sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
