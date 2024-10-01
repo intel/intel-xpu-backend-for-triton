@@ -5,6 +5,8 @@ on:
   schedule:
     - cron: '5 23 * * *'
 
+permissions: read-all
+
 env:
   PR_BRANCH: bot/update_translator_cid
 
