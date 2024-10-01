@@ -275,7 +275,7 @@ def benchmark(B, M, N, K, provider):
         name = f'gemm_shape_{B}_{M}_{K}_{N}'
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+        # torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
                                                                  fast_flush=False)

@@ -249,8 +249,8 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['M', 'K', 'N'],
-        x_vals=[[3072, 4096, 3072]],
+        x_names=['B', 'M', 'K', 'N'],
+        x_vals=[[1, 3072, 4096, 3072]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -264,7 +264,8 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(M, N, K, provider):
+def benchmark(B, M, N, K, provider):
+    assert B == 1, 'Only support B=1'
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
     b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
@@ -285,7 +286,7 @@ def benchmark(M, N, K, provider):
         c = torch.empty((M, N), device='xpu', dtype=torch.float32)
         acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
         cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
-        name = f'gemm_shape_1_{M}_{K}_{N}'
+        name = f'gemm_shape_{B}_{M}_{K}_{N}'
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         # torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
