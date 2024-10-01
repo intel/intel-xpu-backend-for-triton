@@ -108,8 +108,8 @@ template <typename L0_DEVICE, typename L0_CONTEXT>
 std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
 compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
-                        L0_CONTEXT l0_context,
-                        const std::string& build_flags, const bool is_spv) {
+                        L0_CONTEXT l0_context, const std::string &build_flags,
+                        const bool is_spv) {
   auto l0_module =
       checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
                                     binary_size, build_flags.data(), is_spv));
@@ -137,9 +137,7 @@ struct BuildFlags {
 
   BuildFlags(const char *build_flags) : build_flags_str(build_flags) {}
 
-  const std::string& operator()() const {
-    return build_flags_str;
-  }
+  const std::string &operator()() const { return build_flags_str; }
 
   int32_t n_regs() {
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos) {
@@ -164,7 +162,9 @@ struct BuildFlags {
     }
   }
 
-  void addLargeGRFSizeFlag() { build_flags_str = build_flags_str.append(" " + LARGE_GRF_FLAG); }
+  void addLargeGRFSizeFlag() {
+    build_flags_str = build_flags_str.append(" " + LARGE_GRF_FLAG);
+  }
 };
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -218,7 +218,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
       // than the threshold, recompile the kernel using large GRF mode.
       if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
         const std::optional<bool> debugEnabled =
-          isEnvValueBool(getStrEnv("TRITON_DEBUG"));
+            isEnvValueBool(getStrEnv("TRITON_DEBUG"));
         if (debugEnabled)
           std::cout << "(I): Detected " << n_spills
                     << " spills, recompiling the kernel using large GRF mode"
@@ -230,12 +230,12 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
             binary_ptr, binary_size, kernel_name, l0_device, l0_context,
             build_flags(), is_spv);
 
-      if (debugEnabled)
-        std::cout << "(I): Kernel has now " << n_spills << " spills"
-                  << std::endl;
+        if (debugEnabled)
+          std::cout << "(I): Kernel has now " << n_spills << " spills"
+                    << std::endl;
       }
     }
-    
+
     auto n_regs = build_flags.n_regs();
 
     auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(

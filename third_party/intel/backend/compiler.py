@@ -338,7 +338,7 @@ class XPUBackend(BaseBackend):
                     if os.path.exists(flog.name):
                         with open(flog.name) as log_file:
                             log = log_file.read().strip()
-                            if 'spilled' in log:
+                            if 'spilled' in log and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") is -1:
                                 """
                                 The exact message is something like:
                                     warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
