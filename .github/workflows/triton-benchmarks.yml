@@ -17,6 +17,7 @@ on:
         options:
           - PYTORCH_LEGACY_PROFILER_USING_IPEX
           - ELAPSED_TIME
+          - UPSTREAM_PYTORCH_PROFILER
         default: PYTORCH_LEGACY_PROFILER_USING_IPEX
   schedule:
     - cron: "5 23 * * *"

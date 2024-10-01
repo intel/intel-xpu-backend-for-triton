@@ -7,7 +7,7 @@ USE_IPEX_OPTION = os.getenv("USE_IPEX", "1") == "1"
 if USE_IPEX_OPTION:
     BENCHMARKING_METHOD = "PYTORCH_LEGACY_PROFILER_USING_IPEX"
 else:
-    BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "ELAPSED_TIME")
+    BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 
 
 def synchronize():
@@ -37,7 +37,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                  device="xpu", sync_submitting=True):
+                  device="xpu", sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -127,7 +127,7 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
 
 
 def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True,
-                          return_mode="mean", device="xpu"):
+                          return_mode="mean", device="xpu", kernel_name=None):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -155,10 +155,98 @@ def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=N
     return _summarize_statistics(times, quantiles, return_mode)
 
 
+def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True,
+                                       return_mode="mean", device="xpu", sync_submitting=True, kernel_name=None):
+    """
+    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
+    the 20-th and 80-th performance percentile.
+
+    :param fn: Function to benchmark
+    :type fn: Callable
+    :param warmup: Warmup time (in ms)
+    :type warmup: int
+    :param rep: Repetition time (in ms)
+    :type rep: int
+    :param grad_to_none: Reset the gradient of the provided tensor to None
+    :type grad_to_none: torch.tensor, optional
+    :param quantiles: Performance percentile to return in addition to the median.
+    :type quantiles: list[float]
+    :param fast_flush: Use faster kernel to flush L2 between measurements
+    :type fast_flush: bool
+    """
+
+    assert return_mode in ["min", "max", "mean", "median"]
+    import torch
+    from torch.profiler import profile, ProfilerActivity
+
+    fn()
+    synchronize()
+
+    # We maintain a buffer of 256 MB that we clear
+    # before each kernel call to make sure that the L2
+    # doesn't contain any input data before the run
+    cache_size = 256 * 1024 * 1024
+    if fast_flush:
+        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
+    else:
+        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
+
+    # Estimate the runtime of the function
+    start_event = torch.xpu.Event(enable_timing=True)
+    end_event = torch.xpu.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(5):
+        cache.zero_()
+        fn()
+    end_event.record()
+    synchronize()
+    estimate_ms = start_event.elapsed_time(end_event) / 5
+
+    # compute number of warmup and repeat
+    n_warmup = max(1, int(warmup / estimate_ms))
+    n_repeat = max(1, int(rep / estimate_ms))
+    # Warm-up
+    for _ in range(n_warmup):
+        fn()
+    # Benchmark
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
+        for _ in range(n_repeat):
+            # we don't want `fn` to accumulate gradient values
+            # if it contains a backward pass. So we clear the
+            # provided gradients
+            if grad_to_none is not None:
+                for x in grad_to_none:
+                    x.grad = None
+            # we clear the L2 cache before each run
+            cache.zero_()
+            if sync_submitting:
+                synchronize()
+            # record time of `fn`
+            fn()
+        # Record clocks
+        synchronize()
+
+    function_events = prof.events()
+
+    functions = []
+    if isinstance(kernel_name, str):
+        kernel_name = [kernel_name]
+    for ker_name in kernel_name:
+        functions.extend(list(filter(lambda x: x.name.startswith(ker_name), function_events)))  # pylint: disable=cell-var-from-loop
+    # profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
+
+    assert len(functions) == n_repeat, f"the profiling number not match, {len(functions)}"
+    # Make the time to the milliseconds.
+    times = torch.tensor([f.self_device_time_total * 1e-3 for f in functions], dtype=torch.float)
+    return _summarize_statistics(times, quantiles, return_mode)
+
+
 if BENCHMARKING_METHOD == "PYTORCH_LEGACY_PROFILER_USING_IPEX":
     do_bench = do_bench_ipex
 elif BENCHMARKING_METHOD == "ELAPSED_TIME":
     do_bench = do_bench_elapsed_time
+elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
+    do_bench = do_bench_upstream_pytorch_profiler
 else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 

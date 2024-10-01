@@ -266,14 +266,17 @@ def benchmark(B, M, N, K, provider):
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
             c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+            kernel_name = 'matmul_kernel_with_block_pointers_batched'
         else:
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+            kernel_name = 'matmul_kernel_with_block_pointers'
         triton_fn = lambda: matmul(a, b, d, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32) + d
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                                 kernel_name=kernel_name)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

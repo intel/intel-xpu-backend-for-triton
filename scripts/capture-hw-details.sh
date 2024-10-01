@@ -58,12 +58,6 @@ else
     export COMPILER_VERSION="Not installed"
 fi
 
-if [[ "${USE_IPEX:-}" == "1" ]]; then
-    export BENCHMARKING_METHOD="PYTORCH_LEGACY_PROFILER_USING_IPEX"
-elif [[ "${USE_IPEX:-}" == "0" ]]; then
-    export BENCHMARKING_METHOD="${BENCHMARKING_METHOD:-ELAPSED_TIME}"
-fi
-
 if [ "$QUIET" = false ]; then
     echo "LIBIGC1_VERSION=$LIBIGC1_VERSION"
     echo "LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION"

@@ -262,7 +262,8 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                                 kernel_name='matmul_kernel_with_block_pointers')
     elif provider == 'xetla':
         if B == 1:
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
@@ -276,8 +277,37 @@ def benchmark(B, M, N, K, provider):
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+
+        kernels_name = {
+            'gemm_shape_1_1024_1024_1024': 'Test_1x1024x1024x1024_row_row',
+            'gemm_shape_1_2048_2048_2048': 'Test_1x2048x2048x2048_row_row',
+            'gemm_shape_1_4096_4096_4096': 'Test_1x4096x4096x4096_row_row',
+            'gemm_shape_1_8192_8192_8192': 'Test_1x8192x8192x8192_row_row',
+            'gemm_shape_1_1_5120_13824': 'Test_1x1x5120x13824_row_row',
+            'gemm_shape_1_4_4096_12288': 'Test_1x4x4096x12288_row_row',
+            'gemm_shape_1_512_8192_8192': 'Test_1x512x8192x8192_row_row',
+            'gemm_shape_1_512_8192_32768': 'Test_1x512x8192x32768_row_row',
+            'gemm_shape_1_512_32768_8192': 'Test_1x512x32768x8192_row_row',
+            'gemm_shape_1_1024_16384_8192': 'Test_1x1024x16384x8192_row_row',
+            'gemm_shape_1_1024_28672_8192': 'Test_1x1024x28672x8192_row_row',
+            'gemm_shape_1_3072_4096_3072': 'Test_1x3072x4096x3072_row_row',
+            'gemm_shape_1_4096_16384_8192': 'Test_1x4096x16384x8192_row_row',
+            'gemm_shape_1_8192_16384_1024': 'Test_1x8192x16384x1024_row_row',
+            'gemm_shape_1_8192_16384_4096': 'Test_1x8192x16384x4096_row_row',
+            'gemm_shape_1_16384_1024_8192': 'Test_1x16384x1024x8192_row_row',
+            'gemm_shape_1_16384_4096_8192': 'Test_1x16384x4096x8192_row_row',
+            'gemm_shape_1_16384_8192_1024': 'Test_1x16384x8192x1024_row_row',
+            'gemm_shape_1_16384_8192_4096': 'Test_1x16384x8192x4096_row_row',
+            'gemm_shape_4_32768_128_4096': 'Test_4x32768x128x4096_row_row',
+            'gemm_shape_4_32768_4096_128': 'Test_4x32768x4096x128_row_row',
+            'gemm_shape_32_4096_4096_128': 'Test_32x4096x4096x128_row_row',
+            'gemm_shape_4096_8_128_16384': 'Test_4096x8x128x16384_row_row',
+            'gemm_shape_4096_8_16384_128': 'Test_4096x8x16384x128_row_row',
+        }
+
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                                 kernel_name=kernels_name[name])
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
