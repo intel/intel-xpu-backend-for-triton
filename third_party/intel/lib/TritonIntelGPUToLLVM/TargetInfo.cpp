@@ -143,15 +143,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return true;
 }
 
-bool TargetInfo::processReplicaUsingStMatrix(
-    RewriterBase &rewriter, Location loc, Value smemBase,
-    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzleByteWidth) const {
-  return false;
-}
-
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   std::string funcName =
       resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";

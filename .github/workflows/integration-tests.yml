@@ -25,6 +25,7 @@ env:
   TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
+  PROTON_SKIP_PC_SAMPLING_TEST: 1
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -460,7 +461,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache llvm
+          brew install ccache llvm@19 lld
       - name: Compute cache keys
         id: cache-key
         run: |
