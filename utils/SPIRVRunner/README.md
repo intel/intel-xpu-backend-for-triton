@@ -22,13 +22,10 @@ make -j
 ### Generate Data
 
 In order to utilize this utility, Triton application must be run with following environment variables enabled
-1. Enable SPIRV argument serialization process
+Provide the path to the directory where the serialized input data is stored.
+
 ```
-export TRITON_SPIRV_RUNNER_ARGS=1
-```
-2. Provide path to the directory where serialized input data is stored
-```
-export TRITON_XPU_DUMP_KERNEL_ARGS=< Path to directory >
+export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=< Path to directory >
 ```
 
 Following input data is generated,
@@ -36,7 +33,6 @@ Following input data is generated,
 1. args_data.json - (Kernel Arguments / Grid Configuration)
 2. signature.json - (Kernel Signature with data type info)
 3. tensor_*.pt (Tensors used by the kernel)
-4. Scalar Arguments
 
 ## Running
 

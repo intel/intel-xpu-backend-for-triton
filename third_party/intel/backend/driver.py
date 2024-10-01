@@ -435,7 +435,7 @@ def make_launcher(constants, signature, ids):
     return src
 
 
-def kernel_meta_extractor(arg, args_dict):
+def serialize_kernel_metadata(arg, args_dict):
     args_dict['num_warps'] = arg.num_warps
     args_dict['threads_per_warp'] = arg.threads_per_warp
     args_dict['shared_memory'] = arg.shared
@@ -445,7 +445,7 @@ def kernel_meta_extractor(arg, args_dict):
 
 def serialize_args(args):
     import numbers
-    dir_path = os.getenv('TRITON_XPU_DUMP_KERNEL_ARGS')
+    dir_path = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS')
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
@@ -454,7 +454,7 @@ def serialize_args(args):
     cnt = 4
     for arg in args[cnt:]:
         if type(arg).__name__ == "KernelMetadata":
-            kernel_meta_extractor(arg, args_dict)
+            serialize_kernel_metadata(arg, args_dict)
 
         if type(arg).__name__ == "Tensor":
             cpu_tensor = arg.cpu()
@@ -462,12 +462,10 @@ def serialize_args(args):
             with open(tensor_path, 'wb') as f:
                 import torch
                 torch.save(cpu_tensor, f)
-            tensor_type = arg.dtype
-            tensor_name = f"tensor_{cnt}"
-            args_dict.update({tensor_name: str(tensor_type)})
+            args_dict[f"tensor_{cnt}"] = str(arg.dtype)
 
         if isinstance(arg, numbers.Number):
-            args_dict.update({f"scalarArg_{cnt}": args[cnt]})
+            args_dict[f"scalarArg_{cnt}"] = args[cnt]
 
         cnt = cnt + 1
     # Dump argument info as a JSON file
@@ -486,7 +484,10 @@ def serialize_signature(constants, signature):
     for key in lconst:
         if key in lsign:
             del lsign[key]
-    dir_path = os.getenv('TRITON_XPU_DUMP_KERNEL_ARGS')
+    dir_path = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS')
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+        print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
     json_path = os.path.join(dir_path, 'signature.json')
     with open(json_path, 'w') as json_file:
         import json
@@ -504,15 +505,15 @@ class XPULauncher(object):
         src = make_launcher(constants, signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
-        debug_mode = os.getenv('TRITON_SPIRV_RUNNER_ARGS')
-        if debug_mode:
+        serialize_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
+        if serialize_args:
             serialize_signature(constants, signature)
 
     def __call__(self, *args, **kwargs):
         self.launch(*args, **kwargs)
         # Serialize KernelArguments for SPIR-V Runner
-        debug_mode = os.getenv('TRITON_SPIRV_RUNNER_ARGS')
-        if debug_mode:
+        serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
+        if serialize_kernel_args:
             serialize_args(args)
 
 
