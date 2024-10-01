@@ -80,7 +80,6 @@ jobs:
         with:
           command: >
             DEBUG=1
-            TRITON_WHEEL_VERSION_SUFFIX="+git$(git rev-parse --short HEAD)"
             python setup.py bdist_wheel && pip install dist/*.whl
 
       - name: Save Triton wheels to a cache
