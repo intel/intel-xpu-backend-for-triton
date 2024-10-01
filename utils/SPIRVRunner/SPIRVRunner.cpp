@@ -350,7 +350,7 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
                         KernelArguments triton_args) {
 
   auto tensor_ptr = [](const torch::Tensor &t) -> void * {
-    return reinterpret_cast<void *>(t.data_ptr());
+    return static_cast<void *>(t.data_ptr());
   };
 
   for (auto tensor : triton_args.tensor_vec) {
