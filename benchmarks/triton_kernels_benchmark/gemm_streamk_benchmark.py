@@ -278,7 +278,8 @@ def benchmark(M, N, K, provider):
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=1e-2, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+                                                              kernel_name=['first_wave', 'full_tiles'])
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
