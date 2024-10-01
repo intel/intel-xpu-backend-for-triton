@@ -125,9 +125,8 @@ matmul = _matmul.apply
         x_names=['M', 'K', 'N'],
         x_vals=[
             [512, 32768, 8192],
-            [3072, 4096, 3072],
-            [4096, 4096, 4096],
             [1024, 28672, 8192],
+            [3072, 4096, 3072],
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot

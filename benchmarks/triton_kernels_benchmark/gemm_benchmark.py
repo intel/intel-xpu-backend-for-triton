@@ -211,7 +211,7 @@ def matmul(a, b, c):
             [1, 512, 32768, 8192],  #
             [1, 1024, 16384, 8192],  #
             [1, 1024, 28672, 8192],  #
-            [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
+            [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
             [1, 4096, 16384, 8192],  #
             [1, 8192, 16384, 1024],  #
             [1, 8192, 16384, 4096],  #
