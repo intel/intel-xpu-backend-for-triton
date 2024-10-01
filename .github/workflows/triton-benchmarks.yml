@@ -109,8 +109,7 @@ jobs:
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_benchmark.py --reports $REPORTS
-          python gemm_streamk_benchmark.py --reports $REPORTS
-          cat $REPORTS/matmul-performance.csv <(sed '1d' $REPORTS/matmul-streamk-performance.csv) > $REPORTS/matmul-performance-base.csv
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base.csv
 
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}
@@ -127,14 +126,7 @@ jobs:
           IGC_VISAOptions=" -enableBCR -nolocalra" \
           IGC_DisableLoopUnroll=1 \
           python gemm_benchmark.py --reports $REPORTS
-
-          TRITON_INTEL_ADVANCED_PATH=0 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-          IGC_VISAOptions=" -enableBCR -nolocalra" \
-          IGC_DisableLoopUnroll=1 \
-          python gemm_streamk_benchmark.py --reports $REPORTS
-
-          cat $REPORTS/matmul-performance.csv <(sed '1d' $REPORTS/matmul-streamk-performance.csv) > $REPORTS/matmul-performance-default-path.csv
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-default-path.csv
 
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}-dflt
@@ -155,6 +147,15 @@ jobs:
           source ../../scripts/capture-hw-details.sh
           TAG=${{ inputs.tag || 'ci' }}-adv
           python ../../scripts/build_report.py $REPORTS/matmul-performance-adv-path.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM (stream-k) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          python gemm_streamk_benchmark.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-streamk-performance.csv $REPORTS/gemm-streamk-triton-report.csv --benchmark gemm-streamk --compiler triton --param_cols "M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (split-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
