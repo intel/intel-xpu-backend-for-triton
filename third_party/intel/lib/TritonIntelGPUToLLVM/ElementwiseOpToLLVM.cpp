@@ -1492,9 +1492,14 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
+  // nan propagation. Set these conversion benefit to the max benefit:
+  // PatternBenefit::ImpossibleToMatchSentinel - 1 to make sure the
+  // correctness
+  PatternBenefit benefitForPropNan = 65534;
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
-      /*hwNanPropagationSupported=*/false, benefit);
+      /*hwNanPropagationSupported=*/false, benefitForPropNan);
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }

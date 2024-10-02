@@ -38,8 +38,7 @@ static SmallVector<Value> computeWarpLevelHistogram(
           targetInfo.ballot(rewriter, loc, int_ty(numThreadPerWarp), cmp);
       ballotBits.push_back(bit);
     }
-    uint64_t fullMaskValue =
-        numThreadPerWarp == 32 ? 0xFFFFFFFF : 0xFFFFFFFFFFFFFFFF;
+    uint64_t fullMaskValue = (1ll << numThreadPerWarp) - 1u;
     Value fullMask = int_val(numThreadPerWarp, fullMaskValue);
     Value mask = fullMask;
     // If not all threads have unique data, mask out the redundant ones.
@@ -67,6 +66,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
           loc, int_ty(numThreadPerWarp), binMask);
       if (numThreadPerWarp > 32)
         bitCount = trunc(i32_ty, bitCount);
+      else if (numThreadPerWarp < 32)
+        bitCount = zext(i32_ty, bitCount);
       warpLevelHistogram[k] = add(warpLevelHistogram[k], bitCount);
     }
   }
@@ -162,9 +163,9 @@ public:
     auto mod = op->getParentOfType<ModuleOp>();
     int numThreadsPerWarp =
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    assert(numThreadsPerWarp == 32 ||
-           numThreadsPerWarp == 64 &&
-               "Only supports 32 or 64 threads per warp");
+    assert((numThreadsPerWarp == 16 || numThreadsPerWarp == 32 ||
+            numThreadsPerWarp == 64) &&
+           "Only supports 16, 32 or 64 threads per warp");
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
