@@ -177,7 +177,7 @@ def matmul(a, b, c):
             a, b, c,  #
             B, M, N, K,  #
             a.stride(0), a.stride(1), a.stride(2),  #
-            b.stride(0), b.stride(1), b.stride(2),  #
+            b.stride(0), b.stride(2), b.stride(1),  #
             c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
@@ -190,7 +190,7 @@ def matmul(a, b, c):
             a, b, c,  #
             M, N, K,  #
             a.stride(0), a.stride(1),  #
-            b.stride(0), b.stride(1),  #
+            b.stride(1), b.stride(0),  #
             c.stride(0), c.stride(1))
     else:
         assert False, 'Input matrixs dimensions mismatch'
