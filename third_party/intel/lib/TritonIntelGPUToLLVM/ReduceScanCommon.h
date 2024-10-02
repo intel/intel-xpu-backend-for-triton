@@ -4,15 +4,13 @@
 // TODO: refactor so that it doesn't fail if Allocation.h
 // is included after utility.h (due to conflict in `store` macro
 // and <atomic>
-#include "triton/Analysis/Allocation.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 //
 #include "Utility.h"
 #include "mlir/IR/TypeUtilities.h"
-
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "triton/Analysis/AxisInfo.h"
-#include <set>
 #include <type_traits>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
@@ -26,7 +24,6 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace mlir::triton {
 class ReduceOp;
@@ -151,12 +148,13 @@ public:
     });
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;
-    indexToBase[indices[0]] = LLVM::intel::getSharedMemoryBase(
-        loc, rewriter, targetInfo, op.getOperation());
+    auto basePtr = LLVM::intel::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                    op.getOperation());
+    indexToBase[indices[0]] = basePtr;
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
-      indexToBase[indices[i]] = gep(
-          ptr_ty(rewriter.getContext(), 3), getElementType(op, indices[i - 1]),
-          indexToBase[indices[i - 1]], i32_val(elems));
+      indexToBase[indices[i]] =
+          gep(basePtr.getType(), getElementType(op, indices[i - 1]),
+              indexToBase[indices[i - 1]], i32_val(elems));
     }
     // smemBases[k] is the base pointer for the k-th operand
     SmallVector<Value> smemBases(op.getNumOperands());
