@@ -2,7 +2,6 @@ import os
 import re
 import shutil
 import subprocess
-import sysconfig
 import sys
 
 from setuptools import setup
@@ -37,12 +36,13 @@ class CMakeBuild():
         self.build_extension()
 
     def build_extension(self):
+        # configuration
+        build_type = "Debug"
+
         ninja_dir = shutil.which("ninja")
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
-        # python directories
-        python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
             "-G",
             "Ninja",  # Ninja is much faster than make
@@ -50,27 +50,39 @@ class CMakeBuild():
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
             f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}{ipex_cmake_prefix_path}",
             f"-DUSE_IPEX={USE_IPEX_OPTION}",
-            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-            "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=" + self.extdir,
-            "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + self.extdir,
-            "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
-            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON",
-            "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
+            "-DCMAKE_INSTALL_PREFIX=" + self.extdir,
+            "-DPython3_ROOT_DIR:FILEPATH=" + sys.exec_prefix,
+            "-DCMAKE_VERBOSE_MAKEFILE=TRUE",
             "-DCMAKE_C_COMPILER=icx",
             "-DCMAKE_CXX_COMPILER=icpx",
+            "-DCMAKE_BUILD_TYPE=" + build_type,
+            "-S",
+            self.current_dir,
+            "-B",
+            self.build_temp,
         ]
 
-        # configuration
-        build_type = "Debug"
-        build_args = ["--config", build_type]
-        cmake_args += ["-DCMAKE_BUILD_TYPE=" + build_type]
         max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
-        build_args += ["-j" + max_jobs]
+        build_args = [
+            "--build",
+            self.build_temp,
+            "-j" + max_jobs,
+        ]
+
+        install_args = [
+            "--build",
+            self.build_temp,
+            "--target",
+            "install",
+        ]
 
         env = os.environ.copy()
-        cmake_dir = self.build_temp
-        subprocess.check_call(["cmake", self.current_dir] + cmake_args, cwd=cmake_dir, env=env)
-        subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
+        print(" ".join(["cmake"] + cmake_args))
+        subprocess.check_call(["cmake"] + cmake_args, env=env)
+        print(" ".join(["cmake"] + build_args))
+        subprocess.check_call(["cmake"] + build_args)
+        print(" ".join(["cmake"] + install_args))
+        subprocess.check_call(["cmake"] + install_args)
 
 
 cmake = CMakeBuild()
@@ -80,4 +92,4 @@ setup(name="triton-kernels-benchmark", packages=[
     "triton_kernels_benchmark",
 ], package_dir={
     "triton_kernels_benchmark": "triton_kernels_benchmark",
-}, package_data={"triton_kernels_benchmark": ["xetla_kernel.so"]})
+}, package_data={"triton_kernels_benchmark": ["xetla_kernel.cpython-*.so"]})
