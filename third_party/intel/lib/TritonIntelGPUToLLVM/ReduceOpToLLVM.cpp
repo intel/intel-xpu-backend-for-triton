@@ -78,8 +78,9 @@ public:
 private:
   const TargetInfoBase &targetInfo;
 
-  void accumulate(ConversionPatternRewriter &rewriter, Region &combineOp,
-                  SmallVector<Value> &acc, ValueRange cur, bool isFirst) const {
+  void accumulate(Location loc, ConversionPatternRewriter &rewriter,
+                  Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
+                  bool isFirst) const {
     if (isFirst) {
       acc = SmallVector<Value>(cur.begin(), cur.end());
       return;
@@ -164,7 +165,8 @@ private:
       SmallVector<unsigned> key = offsets[i];
       key[op.getAxis()] = 0;
       bool isFirst = accs.find(key) == accs.end();
-      accumulate(rewriter, *combineOp, accs[key], srcValues[i], isFirst);
+      accumulate(op.getLoc(), rewriter, *combineOp, accs[key], srcValues[i],
+                 isFirst);
       if (isFirst)
         indices[key] = srcIndices[i];
     }
@@ -174,7 +176,8 @@ private:
   // region and the accumulator values as source.
   void warpReduce(ConversionPatternRewriter &rewriter, Location loc,
                   SmallVector<Value> &acc, triton::ReduceOp op,
-                  unsigned numLaneToReduce, unsigned interleave) const {
+                  unsigned numLaneToReduce, unsigned interleave,
+                  Value pred = {}) const {
     auto success = targetInfo.warpReduce(rewriter, loc, acc, op,
                                          numLaneToReduce, interleave);
     if (success)
@@ -184,7 +187,7 @@ private:
       for (unsigned i = 0; i < acc.size(); ++i) {
         shfl[i] = targetInfo.shuffleXor(rewriter, loc, acc[i], N * interleave);
       }
-      accumulate(rewriter, op.getCombineOp(), acc, shfl, false);
+      accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl, false);
     }
   }
 
@@ -303,8 +306,8 @@ private:
           linearize(rewriter, loc, writeIdx, smemShape, smemOrder);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemTy = getElementType(op, i);
-        Value writePtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                             smemBases[i], writeOffset);
+        Value writePtr =
+            gep(smemBases[i].getType(), elemTy, smemBases[i], writeOffset);
         targetInfo.storeShared(rewriter, loc, writePtr, acc[i], laneZero);
       }
     }
@@ -361,23 +364,19 @@ private:
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
           auto elemTy = getElementType(op, i);
           Value readPtr =
-              gep(ptr_ty(rewriter.getContext(),
-                         triton::TritonGEN::TritonGENMemorySpace::kWorkgroup),
-                  elemTy, smemBases[i], readOffset);
+              gep(smemBases[i].getType(), elemTy, smemBases[i], readOffset);
           acc[i] = targetInfo.loadShared(rewriter, loc, readPtr, elemTy,
                                          threadIsNeeded);
         }
-        warpReduce(rewriter, loc, acc, op, reduceLaneNumber,
-                   1 /* interleave */);
-
+        warpReduce(rewriter, loc, acc, op, reduceLaneNumber, 1 /* interleave */,
+                   threadIsNeeded);
+        // only the first thread in each sizeInterWarps is writing
         Value writeOffset = readOffset;
         SmallVector<Value> writePtrs(op.getNumOperands());
         for (unsigned i = 0; i < op.getNumOperands(); ++i) {
           auto elemTy = getElementType(op, i);
           writePtrs[i] =
-              gep(ptr_ty(rewriter.getContext(),
-                         triton::TritonGEN::TritonGENMemorySpace::kWorkgroup),
-                  elemTy, smemBases[i], writeOffset);
+              gep(smemBases[i].getType(), elemTy, smemBases[i], writeOffset);
         }
 
         // only the first thread in each reduceLaneNumber is writing
@@ -447,8 +446,8 @@ private:
           }
           Value readOffset =
               linearize(rewriter, loc, readIdx, smemShape, smemOrder);
-          Value readPtr = gep(ptr_ty(rewriter.getContext(), 3), elemTy,
-                              smemBases[i], readOffset);
+          Value readPtr =
+              gep(smemBases[i].getType(), elemTy, smemBases[i], readOffset);
           resultVals[j] = load(elemTy, readPtr);
         }
 
