@@ -235,7 +235,7 @@ def matmul(a, b, c):
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='matmul-performance A@B^t',
+        plot_name='matmul-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
