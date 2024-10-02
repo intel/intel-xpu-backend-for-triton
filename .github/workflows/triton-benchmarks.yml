@@ -21,13 +21,19 @@ on:
         default: PYTORCH_LEGACY_PROFILER_USING_IPEX
   schedule:
     - cron: "5 23 * * *"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/triton-benchmarks.yml
+      - benchmarks/**
 
 permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  BENCHMARKING_METHOD: ${{ github.event_name == 'schedule' && 'PYTORCH_LEGACY_PROFILER_USING_IPEX' || inputs.benchmarking_method }}
-  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
+  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
+  USE_IPEX: ${{ github.event_name != 'workflow_dispatch' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
 
 jobs:
   build:
