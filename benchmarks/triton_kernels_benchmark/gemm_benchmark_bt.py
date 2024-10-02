@@ -250,7 +250,7 @@ def benchmark(B, M, N, K, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, torch.transpose(b, -1, -2), warmup=10, rep=10,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, torch.transpose(b, -1, -2)), warmup=10, rep=10,
                                                                  quantiles=quantiles, fast_flush=False)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
