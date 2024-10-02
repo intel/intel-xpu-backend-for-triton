@@ -53,7 +53,7 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
-    generate_native_code: bool = False
+    generate_native_code: bool = True
     backend_name: str = 'intel'
 
     def __post_init__(self):
@@ -65,7 +65,11 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.generate_native_code = bool(os.getenv("TRITON_XPU_GEN_NATIVE_CODE", self.generate_native_code))
+        generate_native_code_env = os.getenv("TRITON_XPU_GEN_NATIVE_CODE")
+        if generate_native_code_env:
+            self.generate_native_code = bool(generate_native_code_env)
+        else:
+            os.putenv("TRITON_XPU_GEN_NATIVE_CODE", str(self.generate_native_code))
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])

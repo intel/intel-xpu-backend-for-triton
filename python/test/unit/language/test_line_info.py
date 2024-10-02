@@ -188,17 +188,17 @@ def test_line_info(func: str):
     shape = (128, )
     kernel_info = {}
     if func == "single":
-        kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,), generate_native_code=False)
     elif func == "call":
-        kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,), generate_native_code=False)
     elif func == "call_noinline":
-        kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,), generate_native_code=False)
     elif func == "autotune":
-        kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,))[0]
+        kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,), generate_native_code=False)[0]
     elif func == "dot_combine":
-        kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
+        kernel_info = kernel_dot_combine.warmup(20, grid=(1,), generate_native_code=False)
     elif func == "cdiv":
-        kernel_info = kernel_cdiv.warmup(20, grid=(1,))
+        kernel_info = kernel_cdiv.warmup(20, grid=(1,), generate_native_code=False)
 
     if obj_kind == "spvbin":
         file_lines = spv_extract_file_lines(kernel_info.asm["spv"], command)
