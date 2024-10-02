@@ -748,11 +748,11 @@ public:
 
     LLVM_DEBUG({
       if (valueToRemove.empty())
-        LDBG("No tensor pointer to remove");
+        DBGS() << "No tensor pointer to remove";
       else {
-        LDBG("Values to remove: ");
+        DBGS() << "Values to remove: ";
         for (auto val : valueToRemove)
-          LDBG(val);
+          DBGS() << val;
       }
     });
 
