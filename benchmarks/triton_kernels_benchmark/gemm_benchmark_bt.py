@@ -180,11 +180,11 @@ def matmul(a, b, c):
             b.stride(0), b.stride(2), b.stride(1),  #
             c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
-        assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
+        assert a.shape[1] == b.shape[1], 'Incompatible dimensions'
         assert a.is_contiguous(), 'Matrix A must be contiguous'
         assert b.is_contiguous(), 'Matrix B must be contiguous'
         M, K = a.shape
-        K, N = b.shape
+        N, K = b.shape
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel_with_block_pointers[grid](
             a, b, c,  #
