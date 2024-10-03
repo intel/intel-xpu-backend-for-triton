@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -25,16 +24,6 @@ class CMakeBuild():
         self.build_type = build_type
 
     def run(self):
-        try:
-            out = subprocess.check_output(["cmake", "--version"])
-        except OSError as error:
-            raise RuntimeError("CMake must be installed") from error
-
-        match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
-        cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
-        if (cmake_major, cmake_minor) < (3, 18):
-            raise RuntimeError("CMake >= 3.18.0 is required")
-
         self.build_extension()
 
     def build_extension(self):
