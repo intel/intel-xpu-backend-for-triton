@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 from setuptools import setup
+from setuptools.command.build_ext import build_ext as build_ext_orig
 
 import torch
 
@@ -17,10 +18,11 @@ if USE_IPEX_OPTION == "1":
 
 class CMakeBuild():
 
-    def __init__(self):
+    def __init__(self, build_type="Debug"):
         self.current_dir = os.path.abspath(os.path.dirname(__file__))
         self.build_temp = self.current_dir + "/build/temp"
         self.extdir = self.current_dir + "/triton_kernels_benchmark"
+        self.build_type = build_type
 
     def run(self):
         try:
@@ -36,9 +38,6 @@ class CMakeBuild():
         self.build_extension()
 
     def build_extension(self):
-        # configuration
-        build_type = "Debug"
-
         ninja_dir = shutil.which("ninja")
         # create build directories
         if not os.path.exists(self.build_temp):
@@ -55,7 +54,7 @@ class CMakeBuild():
             "-DCMAKE_VERBOSE_MAKEFILE=TRUE",
             "-DCMAKE_C_COMPILER=icx",
             "-DCMAKE_CXX_COMPILER=icpx",
-            "-DCMAKE_BUILD_TYPE=" + build_type,
+            "-DCMAKE_BUILD_TYPE=" + self.build_type,
             "-S",
             self.current_dir,
             "-B",
@@ -85,11 +84,23 @@ class CMakeBuild():
         subprocess.check_call(["cmake"] + install_args)
 
 
-cmake = CMakeBuild()
-cmake.run()
+class build_ext(build_ext_orig):
+
+    def run(self):
+        self.build_cmake()
+        super().run()
+
+    def build_cmake(self):
+        DEBUG_OPTION = os.getenv("DEBUG", "0")
+        build_type = "Debug" if self.debug or DEBUG_OPTION == "1" else "Release"
+        cmake = CMakeBuild(build_type)
+        cmake.run()
+
 
 setup(name="triton-kernels-benchmark", packages=[
     "triton_kernels_benchmark",
 ], package_dir={
     "triton_kernels_benchmark": "triton_kernels_benchmark",
-}, package_data={"triton_kernels_benchmark": ["xetla_kernel.cpython-*.so"]})
+}, package_data={"triton_kernels_benchmark": ["xetla_kernel.cpython-*.so"]}, cmdclass={
+    "build_ext": build_ext,
+})
