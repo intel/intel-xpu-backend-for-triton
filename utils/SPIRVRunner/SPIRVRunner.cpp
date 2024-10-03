@@ -3,6 +3,8 @@
 #include <torch/torch.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <ios>
 #include <iostream>
@@ -15,7 +17,6 @@
 
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
-constexpr int kernelArgsJsonIdx = 8;
 
 auto read_file_as_bytes(const std::string &filename) {
   std::ifstream ins(filename, std::ios::binary);
@@ -59,25 +60,31 @@ struct KernelArguments {
   int shared_memory;
   std::string kernel_name;
   std::string spv_name;
-  std::vector<torch::Tensor> tensor_vec;
-  std::vector<std::string> ttype_vec;
-  std::tuple<int, std::string> outTensorProp;
   ordered_json jsonData;
-  ordered_json kerSignJson;
   std::vector<char *> dev_buffers;
+  torch::Tensor host_outbuffer;
+  std::string out_tensor_name;
+  std::string spirv_dump_dir;
 
-  KernelArguments(const std::string &filename, const std::string &outtensorname,
-                  const std::string &kersignfname) {
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-      throw std::runtime_error("Failed to open JSON file");
-    }
-
-    file >> jsonData;
-    if (jsonData.is_discarded()) {
-      throw std::runtime_error("Invalid JSON format in the file");
-    }
-    file.close();
+  KernelArguments(const std::string &outtensorname) {
+    // Check if the triton_xpu_dump path exists if not point to current
+    // directory
+    auto env_path = std::getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS");
+    spirv_dump_dir = (env_path != nullptr)
+                         ? env_path
+                         : std::filesystem::current_path().string();
+    if (std::filesystem::exists(spirv_dump_dir)) {
+      std::ifstream file(spirv_dump_dir + "/args_data.json");
+      if (!file.is_open()) {
+        throw std::runtime_error("Failed to open JSON file");
+      }
+      file >> jsonData;
+      if (jsonData.is_discarded()) {
+        throw std::runtime_error("Invalid JSON format in the file");
+      }
+      file.close();
+    } else
+      throw std::runtime_error("Triton Spirv dump path doesnt exist");
 
     gridX = jsonData.at("gridX");
     gridY = jsonData.at("gridY");
@@ -86,35 +93,10 @@ struct KernelArguments {
     shared_memory = jsonData.at("shared_memory");
     threads_per_warp = jsonData.at("threads_per_warp");
     kernel_name = jsonData.at("kernel_name");
-    spv_name = jsonData.at("spv_name");
-
-    std::regex tensor_pattern(R"(tensor_\d+)");
-    for (auto it = jsonData.begin(); it != jsonData.end(); ++it) {
-      if (std::regex_match(it.key(), tensor_pattern)) {
-        addTensorType(it.value());
-        auto tsname = it.key() + ".pt";
-        addTensor(load_tensor(tsname));
-        if (tsname == outtensorname) {
-          std::get<0>(outTensorProp) = tensor_vec.size() - 1;
-          std::get<1>(outTensorProp) = ttype_vec.back();
-        }
-      }
-    }
-    std::ifstream signatureJson(kersignfname);
-    if (!signatureJson.is_open()) {
-      throw std::runtime_error("Failed to open JSON file");
-    }
-
-    signatureJson >> kerSignJson;
-    if (kerSignJson.is_discarded()) {
-      throw std::runtime_error("Invalid JSON format in the file");
-    }
-    signatureJson.close();
+    spv_name =
+        spirv_dump_dir + "/" + jsonData.at("spv_name").get<std::string>();
+    out_tensor_name = outtensorname;
   }
-
-  void addTensor(const torch::Tensor &tensor) { tensor_vec.push_back(tensor); }
-
-  void addTensorType(std::string type) { ttype_vec.push_back(type); }
 };
 
 /** SYCL Globals **/
@@ -219,37 +201,37 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index,
   cgh.set_arg(index, *static_cast<const T *>(value));
 }
 
-void set_argument(sycl::handler &cgh, int index, std::string type,
-                  ordered_json::iterator it) {
+void set_argument(sycl::handler &cgh, int index, ordered_json &item) {
+  auto type = item.at("ctype").get<std::string>();
   if (type == "i32" || type == "i1") {
-    auto val = it.value().get<int32_t>();
+    auto val = item.at("value").get<int32_t>();
     set_scalar_arg<int32_t>(cgh, index, &val);
   } else if (type == "i64") {
-    auto val = it.value().get<int64_t>();
+    auto val = item.at("value").get<int64_t>();
     set_scalar_arg<int64_t>(cgh, index, &val);
   } else if (type == "u1" || type == "u32") {
-    auto val = it.value().get<uint32_t>();
+    auto val = item.at("value").get<uint32_t>();
     set_scalar_arg<uint32_t>(cgh, index, &val);
   } else if (type == "u8") {
-    auto val = it.value().get<uint8_t>();
+    auto val = item.at("value").get<uint8_t>();
     set_scalar_arg<uint8_t>(cgh, index, &val);
   } else if (type == "u16") {
-    auto val = it.value().get<uint16_t>();
+    auto val = item.at("value").get<uint16_t>();
     set_scalar_arg<uint16_t>(cgh, index, &val);
   } else if (type == "u64") {
-    auto val = it.value().get<uint64_t>();
+    auto val = item.at("value").get<uint64_t>();
     set_scalar_arg<uint64_t>(cgh, index, &val);
   } else if (type == "fp32" || type == "fp32" || type == "f32") {
-    auto val = it.value().get<float>();
+    auto val = item.at("value").get<float>();
     set_scalar_arg<float>(cgh, index, &val);
   } else if (type == "fp64") {
-    auto val = it.value().get<double>();
+    auto val = item.at("value").get<double>();
     set_scalar_arg<double>(cgh, index, &val);
   } else if (type == "i16") {
-    auto val = it.value().get<int16_t>();
+    auto val = item.at("value").get<int16_t>();
     set_scalar_arg<int16_t>(cgh, index, &val);
   } else if (type == "i8") {
-    auto val = it.value().get<int8_t>();
+    auto val = item.at("value").get<int8_t>();
     set_scalar_arg<int8_t>(cgh, index, &val);
   } else
     throw std::runtime_error("Argument type doesnt match");
@@ -278,39 +260,22 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   if (triton_args.shared_memory) {
     expected_num_params -= 1;
   }
-  auto it = triton_args.jsonData.begin();
-  // Skip first 8 items from JSON
-  // Post this kernel arguments sections starts
-  std::advance(it, kernelArgsJsonIdx);
-  auto signature_iter = triton_args.kerSignJson.begin();
   int tensorIdx = 0;
   uint32_t narg = 0;
-  uint32_t kerArgIdx = 0;
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {
-    // Loop below processes kernel argument info from args_data.json &
-    // signature.json Device buffers and sclar arguments are handled seperately
-    // as follows Similar to sycl_kernel_launch in driver.py device buffers are
-    // configured with void* and scalar arguments are processed based
-    // on signature json info and mapped to type similar to ty_to_cpp from
-    // driver.py
-    for (; it != triton_args.jsonData.end(); ++it) {
-      if (signature_iter != triton_args.kerSignJson.end()) {
-        auto signature_key = stoi(signature_iter.key());
-        if (signature_key == kerArgIdx) {
-          if (it.value().is_number()) {
-            auto signature_type = signature_iter.value();
-            set_argument(cgh, narg++, signature_type, it);
-          } else if (it.value().is_string()) {
-            set_scalar_arg<void *>(
-                cgh, narg++,
-                static_cast<void *>(&triton_args.dev_buffers[tensorIdx]));
-            tensorIdx++;
-          }
-          signature_iter++;
-        }
-      }
-      kerArgIdx++;
+    // Loop below loads the kernel arguments tensors/sclars
+    for (auto &item : triton_args.jsonData["argument_list"]) {
+      if (item.contains("type")) {
+        if (item.at("type").get<std::string>() == "tensor") {
+          set_scalar_arg<void *>(
+              cgh, narg++,
+              static_cast<void *>(&triton_args.dev_buffers.at(tensorIdx++)));
+        } else
+          set_argument(cgh, narg++, item);
+      } else
+        throw std::runtime_error(
+            "Type entry is missing in JSON argument_list\n");
     }
     if (triton_args.shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
@@ -321,7 +286,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     cgh.parallel_for(parallel_work_size, kernel_ptr);
   };
   stream.submit(cgf);
-  stream.wait();
+  stream.wait_and_throw();
 }
 
 at::TensorOptions getTensorOptions(const std::string &dtype) {
@@ -352,72 +317,96 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   auto tensor_ptr = [](const torch::Tensor &t) -> void * {
     return static_cast<void *>(t.data_ptr());
   };
+  int devout_idx = 0;
+  for (auto &item : triton_args.jsonData["argument_list"]) {
+    if (item.contains("type")) {
+      if (item.at("type").get<std::string>() == "tensor") {
+        auto tensor_name = triton_args.spirv_dump_dir + "/" +
+                           item.at("name").get<std::string>() + ".pt";
+        auto tensor = load_tensor(tensor_name);
+        auto dev = sycl::malloc_device<char>(tensor.nbytes(), stream);
+        if (!dev)
+          throw std::runtime_error("Device Memory Allocation Failed \n");
+        triton_args.dev_buffers.push_back(dev);
+        stream.memcpy(dev, tensor_ptr(tensor), tensor.nbytes())
+            .wait_and_throw();
 
-  for (auto tensor : triton_args.tensor_vec) {
-    auto dev = sycl::malloc_device<char>(tensor.nbytes(), stream);
-    triton_args.dev_buffers.push_back(dev);
-    stream.memcpy(dev, tensor_ptr(tensor), tensor.nbytes()).wait();
+        // Configure output tensor
+        if (item.at("name").get<std::string>() == triton_args.out_tensor_name) {
+          devout_idx = triton_args.dev_buffers.size() - 1;
+          triton_args.host_outbuffer =
+              torch::zeros({tensor.sizes()}, getTensorOptions(item.at("type")));
+          std::cout << "Tensor output: " << triton_args.host_outbuffer.sizes()
+                    << ", " << triton_args.host_outbuffer.scalar_type() << " ("
+                    << triton_args.host_outbuffer.nbytes() << " bytes)"
+                    << std::endl;
+        }
+      }
+    } else
+      throw std::runtime_error("Type entry is missing in JSON argument_list");
   }
 
-  auto outTensorIndex = std::get<0>(triton_args.outTensorProp);
-  auto outTensorType = std::get<1>(triton_args.outTensorProp);
-  auto output = torch::zeros({triton_args.tensor_vec[outTensorIndex].sizes()},
-                             getTensorOptions(outTensorType));
-  std::cout << "Tensor output: " << output.sizes() << ", "
-            << output.scalar_type() << " (" << output.nbytes() << " bytes)"
-            << std::endl;
-
+  // Launch SYCL kernel
   sycl_kernel_launch(stream, kernel, triton_args);
 
   // copy back
   stream
-      .memcpy(tensor_ptr(output), triton_args.dev_buffers[outTensorIndex],
-              output.nbytes())
-      .wait();
+      .memcpy(tensor_ptr(triton_args.host_outbuffer),
+              triton_args.dev_buffers.at(devout_idx),
+              triton_args.host_outbuffer.nbytes())
+      .wait_and_throw();
 
-  for (auto &dev_ptr : triton_args.dev_buffers)
-    sycl::free(dev_ptr, stream);
+  for (auto *dev_ptr : triton_args.dev_buffers) {
+    if (dev_ptr)
+      sycl::free(dev_ptr, stream);
+    else
+      throw std::runtime_error("sycl::free failed \n");
+  }
 
-  return output;
+  return triton_args.host_outbuffer;
 }
 
 int main(int argc, char **argv) {
+  try {
+    if (argc < 2) {
+      std::cout << "Help: " << std::endl;
+      std::cout << "<Executable> <Output Tensor Name> \n";
+      std::cout << "./build/SPIRVRunner tensor_2" << std::endl;
+      throw std::runtime_error("Input arguments are missing \n");
+    }
 
-  if (argc < 4) {
-    std::cout << "Help: " << std::endl;
-    std::cout << "<Executable> <ArgsJSON> <Output Tensor File Name> "
-                 "<KernelSignatureJSON>"
-              << std::endl;
-    std::cout
-        << "./build/SPIRVRunner args_data.json tensor_10.pt signature.json"
-        << std::endl;
-    return -1;
+    // initialize sycl runtime
+    sycl::queue q = sycl::queue(sycl::gpu_selector_v, exception_handler);
+
+    std::cout << "Running on device: "
+              << q.get_device().get_info<sycl::info::device::name>() << "\n";
+    initContext(&q);
+    initDevices(&q);
+
+    // Parse the JSON file and create argument dictionary
+    KernelArguments tritonArgDict(argv[1]);
+
+    // read spirv
+    auto spirv = read_spirv(tritonArgDict.spv_name);
+    std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
+
+    auto [kernel_bundle, kernel, n_regs, n_spills] =
+        loadBinary(tritonArgDict.kernel_name,
+                   reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
+
+    // TODO: missing number of registers
+    std::cout << "Loaded kernel with " << n_regs << " registers and "
+              << n_spills << " register spills." << std::endl;
+
+    auto output = launchKernel(q, kernel, tritonArgDict);
+    std::cout << "Kernel return output: " << output[0] << std::endl;
+
+    auto output_tensor = tritonArgDict.spirv_dump_dir + "/cpp_outs.pt";
+    write_tensor(output_tensor, output);
+    std::cout << "Output Tensor Path: " << output_tensor << std::endl;
+  } catch (const std::runtime_error &e) {
+    std::cerr << "Error: " << e.what() << std::endl;
+    return EXIT_FAILURE;
   }
-  // initialize sycl runtime
-  sycl::queue q = sycl::queue(sycl::gpu_selector_v, exception_handler);
-
-  std::cout << "Running on device: "
-            << q.get_device().get_info<sycl::info::device::name>() << "\n";
-  initContext(&q);
-  initDevices(&q);
-
-  // Parse the JSON file and create argument dictionary
-  KernelArguments tritonArgDict(argv[1], argv[2], argv[3]);
-
-  // read spirv
-  auto spirv = read_spirv(tritonArgDict.spv_name);
-  std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
-
-  auto [kernel_bundle, kernel, n_regs, n_spills] =
-      loadBinary(tritonArgDict.kernel_name,
-                 reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
-
-  // TODO: missing number of registers
-  std::cout << "Loaded kernel with " << n_regs << " registers and " << n_spills
-            << " register spills." << std::endl;
-
-  auto output = launchKernel(q, kernel, tritonArgDict);
-  std::cout << "Kernel return output: " << output[0] << std::endl;
-
-  write_tensor("cpp_outs.pt", output);
+  return EXIT_SUCCESS;
 }

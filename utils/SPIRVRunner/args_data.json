@@ -2,13 +2,35 @@
   "gridX": 97,
   "gridY": 1,
   "gridZ": 1,
+  "argument_list": [
+    {
+      "name": "tensor_0",
+      "type": "tensor",
+      "dtype": "torch.float32",
+      "ctype": "*fp32"
+    },
+    {
+      "name": "tensor_1",
+      "type": "tensor",
+      "dtype": "torch.float32",
+      "ctype": "*fp32"
+    },
+    {
+      "name": "tensor_2",
+      "type": "tensor",
+      "dtype": "torch.float32",
+      "ctype": "*fp32"
+    },
+    {
+      "name": "scalarArg_3",
+      "type": "scalar",
+      "value": 98432,
+      "ctype": "i32"
+    }
+  ],
   "num_warps": 4,
   "threads_per_warp": 32,
   "shared_memory": 0,
   "kernel_name": "add_kernel",
-  "spv_name": "add_kernel.spv",
-  "tensor_9": "torch.float32",
-  "tensor_10": "torch.float32",
-  "tensor_11": "torch.float32",
-  "scalarArg_12": 98432
+  "spv_name": "add_kernel.spv"
 }

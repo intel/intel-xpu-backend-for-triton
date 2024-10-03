@@ -22,29 +22,30 @@ make -j
 ### Generate Data
 
 In order to utilize this utility, Triton application must be run with following environment variables enabled
-Provide the path to the directory where the serialized input data is stored.
+Provide the path to the directory where the serialized JSON, tensors and SPRI-V binary stored. It is recommended to clear triton cache.
 
 ```
-export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=< Path to directory >
+export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=< Absolute path to SPV Dumps >
 ```
 
 Following input data is generated,
 
 1. args_data.json - (Kernel Arguments / Grid Configuration)
-2. signature.json - (Kernel Signature with data type info)
-3. tensor_*.pt (Tensors used by the kernel)
+2. tensors  (Tensors used by the kernel (.pt))
+3. SPIR-V binary (.spv)
+
 
 ## Running
 
 Help:
-`./build/SPIRVRunner` < ArgsJSON > < Output Tensor File Name > < KernelSignatureJSON >
+`./build/SPIRVRunner` < Output Tensor Title >
 
 ### Demo (01-vector-add.py)
 
-`SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `tensor_9.py` and `tensor_10.py` and output `tensor_11.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
+`SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `tensor_0.pt` and `tensor_1.pt` and output `tensor_2.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
 
 SPIRVRunner Usage:
-`./build/SPIRVRunner args_data.json tensor_11.pt signature.json`
+`./build/SPIRVRunner tensor_2`
 
 Expected output follows:
 
