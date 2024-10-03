@@ -8,12 +8,6 @@ from setuptools.command.build_ext import build_ext as build_ext_orig
 
 import torch
 
-ipex_cmake_prefix_path = ""
-USE_IPEX_OPTION = os.getenv("USE_IPEX", "1")
-if USE_IPEX_OPTION == "1":
-    import intel_extension_for_pytorch
-    ipex_cmake_prefix_path = f";{intel_extension_for_pytorch.cmake_prefix_path}"
-
 
 class CMakeBuild():
 
@@ -22,9 +16,19 @@ class CMakeBuild():
         self.build_temp = self.current_dir + "/build/temp"
         self.extdir = self.current_dir + "/triton_kernels_benchmark"
         self.build_type = build_type
+        self.cmake_prefix_paths = [torch.utils.cmake_prefix_path]
+        self.use_ipex = False
 
     def run(self):
+        self.check_ipex()
         self.build_extension()
+
+    def check_ipex(self):
+        self.use_ipex = os.getenv("USE_IPEX", "1") == "1"
+        if not self.use_ipex:
+            return
+        import intel_extension_for_pytorch
+        self.cmake_prefix_paths.append(intel_extension_for_pytorch.cmake_prefix_path)
 
     def build_extension(self):
         ninja_dir = shutil.which("ninja")
@@ -36,8 +40,8 @@ class CMakeBuild():
             "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
-            f"-DCMAKE_PREFIX_PATH={torch.utils.cmake_prefix_path}{ipex_cmake_prefix_path}",
-            f"-DUSE_IPEX={USE_IPEX_OPTION}",
+            "-DCMAKE_PREFIX_PATH=" + ";".join(self.cmake_prefix_paths),
+            "-DUSE_IPEX=" + ("1" if self.use_ipex else "0"),
             "-DCMAKE_INSTALL_PREFIX=" + self.extdir,
             "-DPython3_ROOT_DIR:FILEPATH=" + sys.exec_prefix,
             "-DCMAKE_VERBOSE_MAKEFILE=TRUE",
