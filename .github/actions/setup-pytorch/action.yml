@@ -93,7 +93,8 @@ runs:
       with:
         repository: ${{ env.PYTORCH_REPO }}
         ref: ${{ env.PYTORCH_COMMIT_ID }}
-        submodules: recursive
+        # To build PyTorch from source we need all submodules, they are not required for benchmarks
+        submodules: ${{ inputs.mode == 'source' && 'recursive' || 'false' }}
         path: pytorch
 
     - name: Apply additional PR patches

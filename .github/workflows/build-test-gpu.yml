@@ -14,8 +14,11 @@ on:
         default: ""
       pytorch_mode:
         description: PyTorch mode, source or wheels
-        type: string
-        default: "source"
+        type: choice
+        options:
+          - source
+          - wheels
+        default: source
       upload_test_reports:
         description: Upload test reports
         type: boolean
@@ -50,7 +53,7 @@ jobs:
       device: ${{ inputs.runner_label }}
       runner_label: ${{ inputs.runner_label }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
-      pytorch_mode: ${{ inputs.pytorch_mode }}
+      pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports }}
       ignore_errors: ${{ inputs.ignore_errors }}
