@@ -59,8 +59,6 @@ def test_module_walk(device):
         torch.empty((32, 32), device=device),  # out_ptr
         16,  # BLOCK_SIZE
     ]
-    target = triton.runtime.driver.active.get_current_target()
-    backend = triton.compiler.compiler.make_backend(target)
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
         signature={
@@ -71,10 +69,12 @@ def test_module_walk(device):
         constants={kernel.arg_names[i]: arg
                    for i, arg in enumerate(args)
                    if not isinstance(arg, torch.Tensor)},
-        attrs=backend.get_attrs_descriptor(args, kernel.params),
+        attrs=kernel._get_config(*args, ),
     )
 
     context = triton._C.libtriton.ir.context()
+    target = triton.runtime.driver.active.get_current_target()
+    backend = triton.compiler.compiler.make_backend(target)
     options = backend.parse_options(dict())
     codegen_fns = dict()
     module_map = backend.get_module_map()
