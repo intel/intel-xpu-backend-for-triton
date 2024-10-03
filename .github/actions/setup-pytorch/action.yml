@@ -16,6 +16,9 @@ inputs:
   ref:
     description: Branch, tag, commit id
     default: ""
+  mode:
+    description: Source or wheels
+    default: source
 runs:
   using: "composite"
   steps:
@@ -71,7 +74,7 @@ runs:
     - name: Generate PyTorch cache key
       shell: bash
       run: |
-        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} | sha256sum - | cut -d\  -f1)
+        PYTORCH_CACHE_KEY=$(echo $PYTHON_VERSION $PYTORCH_COMMIT_ID ${{ hashFiles('scripts/patch-pytorch.sh') }} ${{ inputs.mode }} | sha256sum - | cut -d\  -f1)
         echo "PYTORCH_CACHE_KEY=$PYTORCH_CACHE_KEY" | tee -a "$GITHUB_ENV"
 
     - name: Load PyTorch from a cache
@@ -94,7 +97,7 @@ runs:
         path: pytorch
 
     - name: Apply additional PR patches
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.repository == 'pytorch/pytorch' && inputs.mode == 'source' }}
       shell: bash
       run: |
         cd pytorch
@@ -108,7 +111,7 @@ runs:
         pip install 'numpy<2.0.0'
 
     - name: Build PyTorch
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.mode == 'source' }}
       shell: bash
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
@@ -116,6 +119,13 @@ runs:
         pip install wheel
         pip install -r requirements.txt
         python setup.py bdist_wheel
+
+    - name: Download PyTorch wheels
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.mode == 'wheels' }}
+      shell: bash
+      run: |
+        mkdir -p pytorch/dist
+        pip download torch --index-url https://download.pytorch.org/whl/nightly/xpu --dest pytorch/dist/
 
     - name: Install PyTorch
       shell: bash
