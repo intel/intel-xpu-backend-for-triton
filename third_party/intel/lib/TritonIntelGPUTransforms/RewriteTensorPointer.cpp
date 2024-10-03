@@ -33,7 +33,7 @@ namespace {
 ///   - it does not have Dpas layout or Dot layout (with Dpas layout as parent)
 ///   - its pitch is not divisible by Qword bitwidth
 ///   - it is not contiguous in memory
-bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByLoadOrStoreOp) {
+bool shouldRemove(tt::MakeTensorPtrOp &op, const bool isUsedByLoadOrStoreOp) {
   LDBG("Considering removal of: " << op);
   if (!op->getParentOfType<ModuleOp>()->hasAttr(
           ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName())) {
@@ -52,55 +52,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByLoadOrStoreOp) {
          "by load or store op with DPAS layout");
     return true;
   }
-
-  TypedValue<triton::PointerType> base = op.getBase();
-  Operation::operand_range shape = op.getShape();
-  unsigned rank = shape.size();
-  assert(rank > 1 && "Expecting tensor with rank > 1");
-  Operation::operand_range strides = op.getStrides();
-  Operation::operand_range offsets = op.getOffsets();
-  ArrayRef<int32_t> order = op.getOrder();
-  ArrayRef<int64_t> tensorShape = tensorType.getShape();
-
-  int fastChangeDim = -1;
-  for (size_t i = 0; i < strides.size(); ++i) {
-    if (ttgi::isConstant(strides[i], 1)) {
-      fastChangeDim = i;
-      break;
-    }
-  }
-
-  LDBG("fastChangeDim: " << fastChangeDim);
-  if (fastChangeDim < 0) {
-    LDBG("Marked for removal: fast changing dimension not found");
-    return true;
-  }
-
-  LDBG("Tensor type element type bit width: "
-       << tensorType.getElementTypeBitWidth());
-  if (fastChangeDim == rank - 2 && tensorType.getElementTypeBitWidth() == 8) {
-    // TODO: column major layout w/ fp8 has performance regression
-    LDBG("Marked for removal: column major layout with fp8 element type");
-    return true;
-  }
-
-  // HW 2D block read instruction has restriction on pitch divisibility
-  if (fastChangeDim >= (rank - 2)) {
-    auto pitch = strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
-    LDBG("Pitch: " << pitch);
-    // Across Intel platforms, the strictest pitch restriction is to be a
-    // multiple of OWord(128 bits).
-    if (!ttgi::isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth())) {
-      LDBG("Marked for removal: cannot use block read/write instructions");
-      return true;
-    }
-
-    return false;
-  }
-
-  LDBG("Marked for removal: fall-trough");
-
-  return true;
+  return false;
 }
 
 /// The `RewritedInfo` struct is used to store information about a rewritten
@@ -715,10 +667,19 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    auto usedByLoadOrStoreOp = [](Value val) {
-      return llvm::any_of(val.getUsers(), [](Operation *user) {
-        return isa<tt::LoadOp, tt::StoreOp>(user);
-      });
+    // TODO: do we need this attribute?
+    auto usedByLoadOrStoreOp = [](Value val,
+                                  const bool check_block_io_attribute = false) {
+      return llvm::any_of(
+          val.getUsers(), [check_block_io_attribute](Operation *user) {
+            const bool is_load_or_store = isa<tt::LoadOp, tt::StoreOp>(user);
+            if (check_block_io_attribute) {
+              return user->hasAttr(
+                  ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+            } else {
+              return is_load_or_store;
+            }
+          });
     };
 
     auto markTensorPointerForRemoval =
@@ -738,8 +699,17 @@ public:
         markTensorPointerForRemoval(op->getOperand(0),
                                     isa<tt::LoadOp, tt::StoreOp>(op));
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        for (auto arg : forOp.getInitArgs())
-          markTensorPointerForRemoval(arg);
+        for (auto [arg, blockArg] :
+             llvm::zip(forOp.getInitArgs(),
+                       forOp.getBody()->getArguments().drop_front(
+                           forOp.getNumInductionVars()))) {
+          if (isa<tt::MakeTensorPtrOp>(arg.getDefiningOp())) {
+            constexpr bool check_block_io_attribute = true;
+            markTensorPointerForRemoval(
+                arg.getDefiningOp()->getResult(0),
+                usedByLoadOrStoreOp(blockArg, check_block_io_attribute));
+          }
+        }
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         for (auto operand : yieldOp.getOperands())
           markTensorPointerForRemoval(operand);
