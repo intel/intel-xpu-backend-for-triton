@@ -5,17 +5,14 @@ namespace {
 
 using namespace mlir;
 using namespace mlir::triton;
-
 struct MakeRangeOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp> {
-
   MakeRangeOpConversion(LLVMTypeConverter &converter,
                         const TargetInfoBase &targetInfo,
                         PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::MakeRangeOp>(converter,
                                                              benefit),
         targetInfo(targetInfo) {}
-
   LogicalResult
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -23,7 +20,6 @@ struct MakeRangeOpConversion
     RankedTensorType ty = op.getType();
     auto shape = ty.getShape();
     auto layout = ty.getEncoding();
-
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());

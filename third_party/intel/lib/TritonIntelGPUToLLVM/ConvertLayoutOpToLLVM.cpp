@@ -127,23 +127,6 @@ private:
     llvm_unreachable("unexpected layout in getMultiDimOffset");
   }
 
-  SmallVector<Value>
-  getWrappedMultiDimOffset(ConversionPatternRewriter &rewriter, Location loc,
-                           ArrayRef<Value> multiDimOffset,
-                           ArrayRef<unsigned> shape,
-                           SmallVector<unsigned> shapePerCTATile,
-                           SmallVector<int64_t> shapePerCTA) const {
-    unsigned rank = shape.size();
-    SmallVector<Value> multiDimOffsetWrapped(rank);
-    for (unsigned d = 0; d < rank; ++d) {
-      if (shapePerCTATile[d] > shapePerCTA[d])
-        multiDimOffsetWrapped[d] = urem(multiDimOffset[d], i32_val(shape[d]));
-      else
-        multiDimOffsetWrapped[d] = multiDimOffset[d];
-    }
-    return multiDimOffsetWrapped;
-  }
-
   // shared memory rd/st for blocked or dpas layout with data padding
   void processReplica(Location loc, ConversionPatternRewriter &rewriter,
                       bool stNotRd, RankedTensorType type,
@@ -194,9 +177,10 @@ private:
         SmallVector<Value> multiDimOffset =
             getMultiDimOffset(layout, loc, rewriter, elemId, type,
                               multiDimCTAInRepId, shapePerCTATile);
-        SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
-            rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
-            shapePerCTA);
+        SmallVector<Value> multiDimOffsetWrapped =
+            mlir::LLVM::getWrappedMultiDimOffset(rewriter, loc, multiDimOffset,
+                                                 origRepShape, shapePerCTATile,
+                                                 shapePerCTA);
         Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
                                  paddedRepShape, outOrd);
         auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);

@@ -14,11 +14,21 @@ using namespace mlir;
 
 namespace mlir::triton::intel {
 
-bool TargetInfo::supportMaximumMinimum() const { return true; }
+bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  assert("TODO: implement ballot on XPU");
-  return Value();
+  // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
+  // TODO: check for more efficient solution.
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  Value threadId = getThreadId(rewriter, loc);
+  int numThreadPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
+  Value reduced_val = shl(select(cmp, i32_val(1), i32_val(0)), laneId);
+  for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
+    Value other_val = LLVM::intel::shuffleXor(loc, rewriter, reduced_val, offs);
+    reduced_val = or_(reduced_val, other_val);
+  }
+  return reduced_val;
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {

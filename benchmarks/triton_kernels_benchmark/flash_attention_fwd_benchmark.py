@@ -1,3 +1,4 @@
+import os
 import torch
 import triton
 import triton.language as tl
@@ -151,6 +152,18 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
 
 
+configs = [
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
+    for BM in [256] \
+    for BN in [32, 64] \
+    for s in [3] \
+    for w in [32] \
+    ]
+
+tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
+tune_attn_fwd = tuner(_attn_fwd)
+
+
 def forward(q, k, v, causal, sm_scale):
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
@@ -162,23 +175,38 @@ def forward(q, k, v, causal, sm_scale):
     num_stages = 3
     num_warps = 8 if Lq == 64 else 16
     stage = 3 if causal else 1
-    grid = (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], BLOCK_M))
+    grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-    _attn_fwd[grid](
-        q, k, v, sm_scale, M, o,  #
-        q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-        k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-        v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-        o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-        q.shape[0], q.shape[1],  #
-        N_CTX=q.shape[2],  #
-        BLOCK_M=BLOCK_M,  #
-        BLOCK_N=BLOCK_N,  #
-        BLOCK_DMODEL=Lk,  #
-        STAGE=stage,  #
-        num_warps=num_warps,  #
-        num_stages=num_stages  #
-    )
+
+    if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
+        # default pipeline
+        tune_attn_fwd[grid](
+            q, k, v, sm_scale, M, o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1],  #
+            N_CTX=q.shape[2],  #
+            BLOCK_DMODEL=Lk,  #
+            STAGE=stage,  #
+        )
+    else:
+        _attn_fwd[grid](
+            q, k, v, sm_scale, M, o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1],  #
+            N_CTX=q.shape[2],  #
+            BLOCK_M=BLOCK_M,  #
+            BLOCK_N=BLOCK_N,  #
+            BLOCK_DMODEL=Lk,  #
+            STAGE=stage,  #
+            num_warps=num_warps,  #
+            num_stages=num_stages  #
+        )
     return o
 
 
@@ -243,7 +271,6 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
     elif provider == 'triton':
         # FIXME: remove below if condition when extend attention support for Causal = True done
         # https://github.com/intel/intel-xpu-backend-for-triton/issues/1102
-        import os
         if os.environ.get('TRITON_INTEL_ADVANCED_PATH', '0') == '1' and CAUSAL:
             min_ms, max_ms, mean, cv = (float('inf'), ) * 4
         else:
