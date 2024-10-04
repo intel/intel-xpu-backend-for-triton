@@ -163,7 +163,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          python gemm_benchmark_bt.py --reports $REPORTS
+          python gemm_abT_benchmark.py --reports $REPORTS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv
           source ../../scripts/capture-hw-details.sh
 
