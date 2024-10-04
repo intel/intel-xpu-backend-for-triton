@@ -229,9 +229,9 @@ def matmul(a, b, c):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn'],
+        line_vals=['triton'],
         # label name for the lines
-        line_names=['Triton', 'onednn'],
+        line_names=['Triton'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
