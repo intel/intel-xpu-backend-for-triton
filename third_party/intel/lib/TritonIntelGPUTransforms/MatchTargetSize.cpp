@@ -1228,9 +1228,10 @@ void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
 
   unsigned start = op.getStart();
   unsigned end = op.getEnd();
-  assert(start == 0 && end % subgroupSize == 0 && "Unsupported range");
+  assert(start == 0 && end <= subgroupSize ||
+         end % subgroupSize == 0 && "Unsupported range");
 
-  if (end == subgroupSize)
+  if (end <= subgroupSize)
     // nothing to do
     return;
 
