@@ -103,6 +103,49 @@ class BackendInstaller:
         ]
 
 
+def find_vswhere():
+    program_files = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+    vswhere_path = Path(program_files) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if vswhere_path.exists():
+        return vswhere_path
+    return None
+
+
+def find_visual_studio(version_ranges):
+    vswhere = find_vswhere()
+    if not vswhere:
+        raise FileNotFoundError("vswhere.exe not found.")
+
+    for version_range in version_ranges:
+        command = [
+            str(vswhere), "-version", version_range, "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property", "installationPath", "-prerelease"
+        ]
+
+        try:
+            output = subprocess.check_output(command, text=True).strip()
+            if output:
+                return output
+        except subprocess.CalledProcessError:
+            continue
+
+    return None
+
+
+def set_env_vars(vs_path, arch="x64"):
+    vcvarsall_path = Path(vs_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+    if not vcvarsall_path.exists():
+        raise FileNotFoundError(f"vcvarsall.bat not found in expected path: {vcvarsall_path}")
+
+    command = f'call "{vcvarsall_path}" {arch} && set'
+    output = subprocess.check_output(command, shell=True, text=True)
+
+    for line in output.splitlines():
+        if '=' in line:
+            var, value = line.split('=', 1)
+            os.environ[var] = value
+
+
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
 def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
@@ -166,10 +209,7 @@ def get_json_package_info():
 # llvm
 def get_llvm_package_info():
     system = platform.system()
-    try:
-        arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
-    except KeyError:
-        arch = platform.machine()
+    arch = {"x86_64": "x64", "AMD64": "64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     if system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
@@ -280,18 +320,18 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
-    try:
-        arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
-    except KeyError:
-        arch = platform.machine()
-    url = url_func(arch, version)
+    arch = {"x86_64": "64", "AMD64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
+    supported = {"Linux": "linux", "Windows": "win"}
+    is_supported = system in supported
+    if is_supported:
+        url = url_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     platform_name = "sbsa-linux" if arch == "aarch64" else "x86_64-linux"
     src_path = src_path(platform_name, version) if callable(src_path) else src_path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
-    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
+    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None and is_supported:
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
@@ -400,6 +440,12 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
+        if platform.system() == "Windows":
+            vs_path = find_visual_studio(["[17.0,18.0)", "[16.0,17.0)"])
+            env = set_env_vars(vs_path)
+            print(vs_path)
+            if not vs_path:
+                raise EnvironmentError("Visual Studio 2019 or 2022 not found.")
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
@@ -420,6 +466,10 @@ class CMakeBuild(build_ext):
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
+        if platform.system() == "Windows":
+            installed_base = sysconfig.get_config_var('installed_base')
+            py_lib_dirs = os.getenv("PYTHON_LIB_DIRS", os.path.join(installed_base, "libs"))
+            cmake_args.append("-DPYTHON_LIB_DIRS=" + py_lib_dirs)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
@@ -429,9 +479,8 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         if platform.system() == "Windows":
+            cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
-            if sys.maxsize > 2**32:
-                cmake_args += ["-A", "x64"]
         else:
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
@@ -498,63 +547,64 @@ def get_platform_dependent_src_path(subdir):
          if int(version_major) >= 12 and int(version_minor1) >= 5 else subdir)(*version.split('.')))
 
 
+extension = ".exe" if os.name == "nt" else ""
 download_and_copy(
-    name="ptxas", src_path="bin/ptxas", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
-    version=NVIDIA_TOOLCHAIN_VERSION["ptxas"], url_func=lambda arch, version:
+    name="ptxas", src_path=f"bin/ptxas{extension}", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["ptxas"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://anaconda.org/nvidia/cuda-nvcc-tools/{version}/download/linux-{arch}/cuda-nvcc-tools-{version}-0.tar.bz2"
+      f"https://anaconda.org/nvidia/cuda-nvcc-tools/{version}/download/{system}-{arch}/cuda-nvcc-tools-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
-      f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
+      f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/{system}-{arch}/cuda-nvcc-{version}-0.tar.bz2")
      (*version.split('.'))))
 download_and_copy(
     name="cuobjdump",
-    src_path="bin/cuobjdump",
+    src_path=f"bin/cuobjdump{extension}",
     dst_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/linux-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
+    url_func=lambda system, arch, version:
+    f"https://anaconda.org/nvidia/cuda-cuobjdump/{version}/download/{system}-{arch}/cuda-cuobjdump-{version}-0.tar.bz2",
 )
 download_and_copy(
     name="nvdisasm",
-    src_path="bin/nvdisasm",
+    src_path=f"bin/nvdisasm{extension}",
     dst_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
-    url_func=lambda arch, version:
-    f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/linux-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
+    url_func=lambda system, arch, version:
+    f"https://anaconda.org/nvidia/cuda-nvdisasm/{version}/download/{system}-{arch}/cuda-nvdisasm-{version}-0.tar.bz2",
 )
 download_and_copy(
     name="cudacrt", src_path=get_platform_dependent_src_path("include"), dst_path="include",
-    variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"], url_func=lambda arch, version:
+    variable="TRITON_CUDACRT_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://anaconda.org/nvidia/cuda-crt-dev_linux-{arch}/{version}/download/noarch/cuda-crt-dev_linux-{arch}-{version}-0.tar.bz2"
+      f"https://anaconda.org/nvidia/cuda-crt-dev_{system}-{arch}/{version}/download/noarch/cuda-crt-dev_{system}-{arch}-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
-      f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/linux-{arch}/cuda-nvcc-{version}-0.tar.bz2")
+      f"https://anaconda.org/nvidia/cuda-nvcc/{version}/download/{system}-{arch}/cuda-nvcc-{version}-0.tar.bz2")
      (*version.split('.'))))
 download_and_copy(
     name="cudart", src_path=get_platform_dependent_src_path("include"), dst_path="include",
-    variable="TRITON_CUDART_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cudart"], url_func=lambda arch, version:
+    variable="TRITON_CUDART_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cudart"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://anaconda.org/nvidia/cuda-cudart-dev_linux-{arch}/{version}/download/noarch/cuda-cudart-dev_linux-{arch}-{version}-0.tar.bz2"
+      f"https://anaconda.org/nvidia/cuda-cudart-dev_{system}-{arch}/{version}/download/noarch/cuda-cudart-dev_{system}-{arch}-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
-      f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/linux-{arch}/cuda-cudart-dev-{version}-0.tar.bz2"
+      f"https://anaconda.org/nvidia/cuda-cudart-dev/{version}/download/{system}-{arch}/cuda-cudart-dev-{version}-0.tar.bz2"
       )(*version.split('.'))))
 download_and_copy(
     name="cupti", src_path=get_platform_dependent_src_path("include"), dst_path="include",
-    variable="TRITON_CUPTI_INCLUDE_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda arch, version:
+    variable="TRITON_CUPTI_INCLUDE_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://anaconda.org/nvidia/cuda-cupti-dev/{version}/download/linux-{arch}/cuda-cupti-dev-{version}-0.tar.bz2"
+      f"https://anaconda.org/nvidia/cuda-cupti-dev/{version}/download/{system}-{arch}/cuda-cupti-dev-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
-      f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2")
+      f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/{system}-{arch}/cuda-cupti-{version}-0.tar.bz2")
      (*version.split('.'))))
 download_and_copy(
     name="cupti", src_path=get_platform_dependent_src_path("lib"), dst_path="lib/cupti",
-    variable="TRITON_CUPTI_LIB_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda arch, version:
+    variable="TRITON_CUPTI_LIB_PATH", version=NVIDIA_TOOLCHAIN_VERSION["cupti"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://anaconda.org/nvidia/cuda-cupti-dev/{version}/download/linux-{arch}/cuda-cupti-dev-{version}-0.tar.bz2"
+      f"https://anaconda.org/nvidia/cuda-cupti-dev/{version}/download/{system}-{arch}/cuda-cupti-dev-{version}-0.tar.bz2"
       if int(version_major) >= 12 and int(version_minor1) >= 5 else
-      f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/linux-{arch}/cuda-cupti-{version}-0.tar.bz2")
+      f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/{system}-{arch}/cuda-cupti-{version}-0.tar.bz2")
      (*version.split('.'))))
 
 backends = [*BackendInstaller.copy(["intel", "nvidia", "amd"]), *BackendInstaller.copy_externals()]

@@ -7,6 +7,7 @@ import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
+import platform
 
 
 def is_interpreter():
@@ -154,7 +155,8 @@ def test_err_in_builtin():
     try:
         inner = e.value.__cause__
         outer = e.value
-        assert "/core.py" in '\n'.join(traceback.format_tb(inner.__traceback__)), "error should point inside core.py"
+        target = "\\core.py" if platform.system() == 'Windows' else "/core.py"
+        assert target in '\n'.join(traceback.format_tb(inner.__traceback__)), "error should point inside core.py"
 
         assert "at 2:4:" in str(outer), "error should point to expand_dims call"
         assert "<source unavailable>" not in str(outer)

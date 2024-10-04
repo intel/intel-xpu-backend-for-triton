@@ -11,6 +11,9 @@ python/*.whl
 python/triton/_C/*.pyd
 python/triton/_C/*.so
 python/triton/_C/*.dylib
+python/triton/_C/*.pdb
+python/triton/_C/*.exe
+python/triton/_C/*.ilk
 
 benchmarks/dist
 benchmarks/*.egg-info/
@@ -53,6 +56,10 @@ cmake-build-*
 cuobjdump
 nvdisasm
 ptxas
+
+cuobjdump.exe
+nvdisasm.exe
+ptxas.exe
 
 # Third-party include
 third_party/nvidia/backend/include
