@@ -4,6 +4,8 @@
 #include <stdlib.h>
 
 #if defined(_MSC_VER)
+#include <xmmintrin.h> // For _mm_prefetch
+#define __builtin_prefetch(addr) _mm_prefetch(reinterpret_cast<const char *>(addr), _MM_HINT_T0)
 #define RESTRICT __restrict
 #define NO_INLINE __declspec(noinline)
 #elif defined(__GNUC__)
