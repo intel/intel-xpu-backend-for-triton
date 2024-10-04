@@ -2,7 +2,13 @@
 #define TRITON_CUBLAS_INSTANCE_H
 
 #include "cublas_types.h"
+#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <stdexcept>
 #include <string>
 
@@ -64,6 +70,9 @@ class CublasLtInstance {
   cublasLtMatmulPreference_t preference = NULL;
 
   void loadCublasDylib() {
+#ifdef WIN32
+    assert(0 && "Not implemented on Windows");
+#else
     if (dylibHandle == nullptr) {
       // First reuse the existing handle
       dylibHandle = dlopen(name, RTLD_NOLOAD);
@@ -108,9 +117,16 @@ class CublasLtInstance {
                                std::string(name) +
                                "`: " + std::string(dlsym_error));
     }
+#endif
   }
 
-  void unloadCublasDylib() { dlclose(dylibHandle); }
+  void unloadCublasDylib() {
+#ifdef WIN32
+    assert(0 && "Not implemented on Windows");
+#else
+    dlclose(dylibHandle);
+#endif
+  }
 
   void successOrExit(cublasStatus_t status) {
     if (status != CUBLAS_STATUS_SUCCESS) {

@@ -1,5 +1,6 @@
 import multiprocessing
 import shutil
+import os
 
 import triton
 import triton.language as tl
@@ -26,7 +27,10 @@ def compile_fn(attrs):
 
 def test_compile_in_subproc() -> None:
     config = triton.compiler.AttrsDescriptor(tuple(range(4)), ())
-    multiprocessing.set_start_method('fork')
+    if os.name == "nt":
+        multiprocessing.set_start_method('spawn')
+    else:
+        multiprocessing.set_start_method('fork')
     proc = multiprocessing.Process(target=compile_fn, args=(config, ))
     proc.start()
     proc.join()
@@ -91,7 +95,7 @@ def test_compile_in_forked_subproc_with_forced_gc(fresh_triton_cache) -> None:
 
     # stage 2.p
     shutil.rmtree(fresh_triton_cache)
-    assert multiprocessing.get_start_method() == 'fork'
+    assert multiprocessing.get_start_method() in ['fork', 'spawn']
     proc = multiprocessing.Process(target=compile_empty_kernel_with_gc, args=(config, ))
 
     # stage 3.c
