@@ -1,10 +1,8 @@
 """
-Gemm benchmark
-============================
+Gemm with A@B^t benchmark
+====================================
 
-This benchmark is come from the Triton tutorial 10-experimental-block-pointer.py
-To compare the performance to XeTLA kernel.
-
+This benchmark is modified from gemm_benchmark.py with added transpose.
 """
 
 import torch
