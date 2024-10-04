@@ -466,7 +466,7 @@ def serialize_args(args, constants, signature):
                 import torch
                 torch.save(cpu_tensor, f)
             new_arg = {
-                "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": "torch.float32", "ctype":
+                "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
                 signature[counts['karg_cnt']]
             }
             args_dict['argument_list'].append(new_arg)

@@ -334,8 +334,8 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
         // Configure output tensor
         if (item.at("name").get<std::string>() == triton_args.out_tensor_name) {
           devout_idx = triton_args.dev_buffers.size() - 1;
-          triton_args.host_outbuffer =
-              torch::zeros({tensor.sizes()}, getTensorOptions(item.at("type")));
+          triton_args.host_outbuffer = torch::zeros(
+              {tensor.sizes()}, getTensorOptions(item.at("dtype")));
           std::cout << "Tensor output: " << triton_args.host_outbuffer.sizes()
                     << ", " << triton_args.host_outbuffer.scalar_type() << " ("
                     << triton_args.host_outbuffer.nbytes() << " bytes)"
