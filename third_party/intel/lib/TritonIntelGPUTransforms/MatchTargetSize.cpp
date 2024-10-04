@@ -149,7 +149,6 @@ static tt::LoadOp findUsedLoad(Value val) {
 }
 
 static bool getTransposeFlagFromValue(Value val) {
-  bool isTransposed = false;
   Value loadPtr = val;
   // backward: from dot operands to tt.load
   if (llvm::any_of(val.getUsers(),
@@ -167,23 +166,26 @@ static bool getTransposeFlagFromValue(Value val) {
   if (auto blockArg = dyn_cast<BlockArgument>(loadPtr)) {
     unsigned argIdx = blockArg.getArgNumber();
     if (auto loopLikeOp = dyn_cast<LoopLikeOpInterface>(
-            blockArg.getParentBlock()->getParentOp())) {
-      auto inits = llvm::to_vector(loopLikeOp.getInits());
-      if (auto glueOp = inits[argIdx - 1].getDefiningOp<ttgi::GlueOp>()) {
-        if (auto tempPtr =
-                glueOp.getOperands()[0].getDefiningOp<tt::MakeTensorPtrOp>()) {
-          loadPtr = tempPtr.getResult();
-        }
-      }
-    }
+            blockArg.getParentBlock()->getParentOp()))
+      loadPtr = loopLikeOp.getInits()[argIdx - 1];
+  }
+
+  if (auto glueOp = loadPtr.getDefiningOp<ttgi::GlueOp>()) {
+    if (isa_and_present<tt::MakeTensorPtrOp, tt::AdvanceOp>(
+            glueOp.getOperands()[0].getDefiningOp()))
+      loadPtr = glueOp.getOperands()[0];
   }
 
   if (auto tensorPtr = loadPtr.getDefiningOp<tt::MakeTensorPtrOp>()) {
     ArrayRef<int32_t> order = tensorPtr.getOrder();
     auto rank = order.size();
-    isTransposed = (order[rank - 2] != 1);
+    return (order[rank - 2] != 1);
   }
-  return isTransposed;
+
+  if (auto advOp = loadPtr.getDefiningOp<tt::AdvanceOp>())
+    return getTransposeFlagFromValue(advOp.getPtr());
+
+  return false;
 }
 
 static void rewriteLoadWithSLM(ModuleOp &m, DenseSet<Value> &dotWithSLMOperands,
@@ -275,6 +277,14 @@ public:
     MLIRContext *ctx = &getContext();
     ModuleOp m = getOperation();
 
+    // By default, tritongpu are lowered to simt mode (threads-per-warp=16)
+    // instead of simd mode (threads-per-warp=1).
+    // FIXME: force threads-per-warp=16 in simt(this should be done via an
+    // analysis designed to determine whether the kernel contains tt.dot
+    // operations that use block pointers).
+    m->setAttr("triton_gpu.threads-per-warp",
+               IntegerAttr::get(IntegerType::get(ctx, 32), 16));
+
     Workload workload = Workload::None;
     m.walk([&](scf::ForOp forOp) {
       if (Attribute attr = forOp->getAttr(AttrWorkloadName))
@@ -352,14 +362,6 @@ public:
     canonicalize();
     LLVM_DEBUG(llvm::dbgs() << "Module after canonicalization:\n"
                             << m << "\n\n");
-
-    // By default, tritongpu are lowered to simt mode (threads-per-warp=16)
-    // instead of simd mode (threads-per-warp=1).
-    // FIXME: force threads-per-warp=16 in simt(this should be done via an
-    // analysis designed to determine whether the kernel contains tt.dot
-    // operations that use block pointers).
-    m->setAttr("triton_gpu.threads-per-warp",
-               IntegerAttr::get(IntegerType::get(ctx, 32), 16));
   }
 
 private:
@@ -379,8 +381,8 @@ private:
                                     bool isTransposed) const;
 
   std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
-  getSubTypeAndShape(Type type, bool isTransposed = false,
-                     bool useSLM = false) const;
+  getSubTypeAndShape(Type type, bool isTransposed = false, bool useSLM = false,
+                     bool keepEncoding = false) const;
 
   Value getSubVal(Operation *op, Value val, ArrayRef<int64_t> srcOffset,
                   ArrayRef<int64_t> dstSize);
@@ -753,7 +755,7 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type,
 /// return [shape, subType, subSize] for a tensor (or pointer to tensor)
 std::tuple<SmallVector<int64_t>, Type, SmallVector<int64_t>>
 MatchTargetSizePass::getSubTypeAndShape(Type type, bool isTransposed,
-                                        bool useSLM) const {
+                                        bool useSLM, bool keepEncoding) const {
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     Attribute layout = tensorType.getEncoding();
     assert(layout && "Expecting a valid layout");
@@ -771,15 +773,16 @@ MatchTargetSizePass::getSubTypeAndShape(Type type, bool isTransposed,
       subSize[1] = std::min(subSize[1], shape[1]);
     }
 
-    auto subType = RankedTensorType::get(
-        subSize, tensorType.getElementType() /*no encoding*/);
+    auto subType = RankedTensorType::get(subSize, tensorType.getElementType(),
+                                         keepEncoding ? tensorType.getEncoding()
+                                                      : Attribute{});
     return {shape, subType, subSize};
   }
 
   if (auto ptrType = dyn_cast<tt::PointerType>(type)) {
     Type pointeeType = ptrType.getPointeeType();
     auto [shape, subType, subSize] =
-        getSubTypeAndShape(pointeeType, isTransposed, useSLM);
+        getSubTypeAndShape(pointeeType, isTransposed, useSLM, keepEncoding);
     auto newType = tt::PointerType::get(subType, ptrType.getAddressSpace());
     return {shape, newType, subSize};
   }
@@ -1186,8 +1189,11 @@ void MatchTargetSizePass::transformBroadcastOp(ttgi::BroadcastOp op) {
     glue = b.create<ttgi::GlueOp>(loc, resType, ops);
   } else if (srcDim0 == 1 && srcDim1 == resDim1) {
     // Handle row-vector broadcasts, e.g. 1x64 --> 16x64.
+    // This kind of broadcast requires that the tensor type is kept intact by
+    // SIMT lowering, hence propagate the encoding here.
     auto subRowVecTy =
-        RankedTensorType::get({1, tType.getShape()[1]}, tType.getElementType());
+        RankedTensorType::get({1, tType.getShape()[1]}, tType.getElementType(),
+                              srcType.getEncoding());
 
     // How many extracts do we need to cover the width of the input tensor?
     unsigned nExtracts = srcDim1 / dstDim1;
@@ -1240,6 +1246,7 @@ void MatchTargetSizePass::transformMakeRangeOp(tt::MakeRangeOp op) {
   Location loc = op.getLoc();
   RankedTensorType origTy = op.getType();
   Type elemTy = origTy.getElementType();
+  // Propagate encoding to keep tensor during SIMT lowering.
   auto subRangeTy =
       RankedTensorType::get({subgroupSize}, elemTy, origTy.getEncoding());
   auto subRange = b.create<tt::MakeRangeOp>(loc, subRangeTy, 0, subgroupSize);
@@ -1310,8 +1317,16 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
         cast<tt::PointerType>(load.getPtr().getType()).getAddressSpace();
     useSLM = (ptrAS == TritonGEN::TritonGENMemorySpace::kWorkgroup);
   }
+
+  // Keep encoding on certain tensors to leave them untouched during SIMT
+  // lowering. Currently, this is required for "row vectors" (= `tensor<1xN>`).
+  bool keepEncoding = false;
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    ArrayRef<int64_t> shape = tensorType.getShape();
+    keepEncoding = shape.size() == 2 && shape[0] == 1 && shape[1] > 1;
+  }
   auto [shape, subType, subSize] =
-      getSubTypeAndShape(type, isTransposed, useSLM);
+      getSubTypeAndShape(type, isTransposed, useSLM, keepEncoding);
 
   unsigned dim = shape.size();
   OpBuilder b(op);
@@ -1328,8 +1343,8 @@ void MatchTargetSizePass::transformGenericOp(Operation *op) {
                         [&](Value operand) {
                           Type type = operand.getType();
                           if (isa<tt::PointerType, RankedTensorType>(type)) {
-                            Type subOpndType = std::get<1>(
-                                getSubTypeAndShape(type, isTransposed, useSLM));
+                            Type subOpndType = std::get<1>(getSubTypeAndShape(
+                                type, isTransposed, useSLM, keepEncoding));
                             Value newOp = b.create<ttgi::ExtractOp>(
                                 loc, subOpndType, operand, idx);
                             return newOp;
