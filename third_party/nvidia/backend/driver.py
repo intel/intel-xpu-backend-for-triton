@@ -16,18 +16,6 @@ include_dir = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 
-# Extract major and minor version of Python
-major, minor = sys.version_info[:2]
-
-# Generate the library name by concatenating 'python' with the major and minor version
-python_version_str = f"python{major}{minor}"
-
-# Append the generated library name to the libraries list
-
-if os.name == "nt":
-    libraries.append(python_version_str)
-    include_dir += [os.path.join(os.environ.get("CUDA_PATH"), "include")]
-
 
 @functools.lru_cache()
 def libcuda_dirs():
