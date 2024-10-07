@@ -17,4 +17,3 @@ test -d $HOME/miniforge3/envs/triton || install_conda
 
 source /opt/intel/oneapi/setvars.sh >/dev/null
 conda run --no-capture-output -n triton bash $1
-
