@@ -95,7 +95,7 @@ jobs:
           key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python ${{ inputs.python_version }}
-        if: env_manager == "base"
+        if: inputs.env_manager == "base"
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
