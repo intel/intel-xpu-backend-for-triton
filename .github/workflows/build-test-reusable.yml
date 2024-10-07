@@ -59,11 +59,11 @@ on:
       env_manager:
         description: Environment manager
         default: base
-        type: choice
-        options:
-          - base
-          - conda
-          - nobasekit      
+        type: sting
+#        options:
+#         - base
+#          - conda
+#          - nobasekit      
 
 permissions: read-all
 
