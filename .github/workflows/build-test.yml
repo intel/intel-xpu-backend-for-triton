@@ -44,8 +44,9 @@ on:
     branches:
       - main
   push:
-    branches:
-      - main
+# FIXME    
+#    branches:
+#      - main
 
 permissions: read-all
 

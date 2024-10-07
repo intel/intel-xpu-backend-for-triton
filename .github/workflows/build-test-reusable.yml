@@ -56,6 +56,14 @@ on:
         description: Runner label for version
         type: string
         default: runner-0.0.19
+      env_manager:
+        description: Environment manager
+        type: choice
+        options:
+        - default
+        - conda
+        - nobasekit      
+        default: default
 
 permissions: read-all
 
@@ -69,16 +77,17 @@ jobs:
     runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail scripts/runner_${{ inputs.env_manager }}.sh"
+        envinputs.env-c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Print inputs
         run: |
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
       - name: Load pip cache
         id: pip-cache
