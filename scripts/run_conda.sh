@@ -15,7 +15,7 @@ install_conda() {
     conda list -n triton
 }
 
-
+export PATH=$HOME/miniforge3/bin:$PATH
 test -d $HOME/miniforge3/envs/triton || install_conda
 
 source /opt/intel/oneapi/setvars.sh >/dev/null
