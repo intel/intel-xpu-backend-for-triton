@@ -60,10 +60,6 @@ on:
         description: Environment manager
         default: base
         type: string
-        options:
-          - base
-          - conda
-          - nobasekit
 
 permissions: read-all
 
