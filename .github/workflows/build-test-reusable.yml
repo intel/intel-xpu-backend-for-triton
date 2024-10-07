@@ -129,6 +129,14 @@ jobs:
         with:
           build_llvm: ${{ inputs.build_llvm }}
 
+      - name: Setup Triton
+        if: inputs.env_manager != 'base'
+        run: |
+          export DEBUG=1
+          cd python
+          conda run --no-capture-output -n triton pip install pybind11
+          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
+
       - name: Create test-triton command line
         run: |
           if [[ -n "${{ inputs.skip_list }}" ]]; then
