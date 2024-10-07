@@ -2,8 +2,11 @@
 
 set -vx
 
+python_version=$2
+script_name=$3
+
 install_conda() {
-    conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
+    conda create -n triton --override-channels -c conda-forge python=$python_version.*
     conda env update -f scripts/triton.yml
     find /opt/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
     ln -snf /usr/include/level_zero $HOME/miniforge3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
@@ -16,4 +19,4 @@ install_conda() {
 test -d $HOME/miniforge3/envs/triton || install_conda
 
 source /opt/intel/oneapi/setvars.sh >/dev/null
-conda run --no-capture-output -n triton bash $1
+conda run --no-capture-output -n triton bash $script_name
