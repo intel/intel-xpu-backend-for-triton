@@ -12,11 +12,12 @@ install_conda() {
     conda list -n triton
 }
 
+source /opt/intel/oneapi/setvars.sh >/dev/null
+
 script_dir=$(dirname "$0")
 source "$script_dir/run_util.sh"
 
 export PATH="$HOME/miniforge3/bin:$PATH"
 test -d "$HOME/miniforge3/envs/triton" || install_conda
 
-source /opt/intel/oneapi/setvars.sh >/dev/null
 conda run --no-capture-output -n triton bash "$script_name"
