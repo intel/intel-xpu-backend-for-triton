@@ -44,6 +44,10 @@ on:
           - all
           - subset
         default: all
+      test_all_subset_models:
+        description: In "subset" mode, do not fail workflow if one of models failed
+        type: boolean
+        default: false
       only_one_model:
         description: Run only this one model
         type: string

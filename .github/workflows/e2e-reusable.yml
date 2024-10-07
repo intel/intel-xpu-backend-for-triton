@@ -27,6 +27,10 @@ on:
         description: Run all models or a subset
         type: string
         default: all
+      test_all_subset_models:
+        description: In "subset" mode, do not fail workflow if one of models failed
+        type: boolean
+        default: false
       only_one_model:
         description: Run only this one model
         type: string
@@ -225,7 +229,7 @@ jobs:
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
           elif [[ "${{ inputs.models }}" == "subset" ]]; then
             while read model; do
-              bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
+              bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model || ${{ inputs.test_all_subset_models }}
             done < $GITHUB_WORKSPACE/.github/models/performance/${{ inputs.suite }}.txt
           else
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0
