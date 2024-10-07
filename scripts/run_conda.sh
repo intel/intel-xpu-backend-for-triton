@@ -2,9 +2,6 @@
 
 set -vx
 
-python_version=$2
-script_name=$3
-
 install_conda() {
     conda create -n triton --override-channels -c conda-forge python=$python_version.*
     conda env update -f scripts/triton.yml
@@ -15,8 +12,11 @@ install_conda() {
     conda list -n triton
 }
 
-export PATH=$HOME/miniforge3/bin:$PATH
-test -d $HOME/miniforge3/envs/triton || install_conda
+script_dir=$(dirname "$0")
+source "$script_dir/run_util.sh"
+
+export PATH="$HOME/miniforge3/bin:$PATH"
+test -d "$HOME/miniforge3/envs/triton" || install_conda
 
 source /opt/intel/oneapi/setvars.sh >/dev/null
-conda run --no-capture-output -n triton bash $script_name
+conda run --no-capture-output -n triton bash "$script_name"
