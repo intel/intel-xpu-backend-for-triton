@@ -60,9 +60,9 @@ on:
         description: Environment manager
         type: choice
         options:
-        - default
-        - conda
-        - nobasekit      
+          - default
+          - conda
+          - nobasekit      
         default: default
 
 permissions: read-all
