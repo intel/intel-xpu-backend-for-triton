@@ -1,4 +1,4 @@
 #!/bin/bash
 
 source /opt/intel/oneapi/setvars.sh >/dev/null
-source {0}
+source $1
