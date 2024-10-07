@@ -78,6 +78,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Load conda cache
+        if: inputs.env_manager != 'base'
+        id: conda-cache
+        uses: ./.github/actions/load
+        env:
+          CACHE_NUMBER: 5
+        with:
+          path: $HOME/miniforge3/envs/triton
+          key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
+
       - name: Print inputs
         run: |
           cat <<EOF
@@ -85,6 +95,7 @@ jobs:
           EOF
 
       - name: Load pip cache
+        if: inputs.env_manager == 'base'
         id: pip-cache
         uses: ./.github/actions/load
         env:
@@ -101,6 +112,7 @@ jobs:
           python-version: ${{ inputs.python_version }}
 
       - name: Setup PyTorch
+        if: inputs.env_manager == 'base'
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
@@ -112,6 +124,7 @@ jobs:
           pip install defusedxml
 
       - name: Setup Triton
+        if: inputs.env_manager == 'base'
         uses: ./.github/actions/setup-triton
         with:
           build_llvm: ${{ inputs.build_llvm }}
