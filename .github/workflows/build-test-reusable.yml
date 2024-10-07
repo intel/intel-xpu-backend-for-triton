@@ -59,7 +59,7 @@ on:
       env_manager:
         description: Environment manager
         default: base
-        type: choice
+        type: string
         options:
           - base
           - conda
