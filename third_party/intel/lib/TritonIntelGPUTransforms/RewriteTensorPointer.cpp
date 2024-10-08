@@ -690,15 +690,12 @@ public:
           auto crtOp = *crtOpItr;
           LDBG("Processing op: " << *crtOp);
           if (isa<tt::LoadOp, tt::StoreOp>(crtOp)) {
-            LDBG("is load store, checking to see if we should remove make "
-                 "tensor ptr op");
             if (shouldRemove(makeTensorPtrOp,
                              /*isUsedByStoreOp=*/isa<tt::StoreOp>(crtOp),
                              /*isBlockLoad=*/
                              isa<tt::LoadOp>(crtOp) &&
                                  crtOp->hasAttr(ttgi::TritonIntelGPUDialect::
                                                     getBlockIOAttrName()))) {
-              LDBG("Marking op for removal: " << result);
               tensorPointersToRemove.insert(makeTensorPtrOp);
             }
           } else if (auto forOp = dyn_cast<scf::ForOp>(crtOp)) {
@@ -782,7 +779,6 @@ public:
     valueToRemove.clear();
     while (!eraser.empty()) {
       auto op = eraser.top();
-      LDBG("DELETING " << *op);
       eraser.pop();
       op->erase();
     }
