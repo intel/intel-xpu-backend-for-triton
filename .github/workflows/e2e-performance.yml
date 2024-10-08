@@ -140,7 +140,7 @@ jobs:
       test_mode: performance
       dtype: ${{ matrix.dtype }}
       models: ${{ inputs.models }}
-      test_all_subset_models: "${{ inputs.test_all_subset_models }}"
+      test_all_subset_models: ${{ inputs.test_all_subset_models || false }}
       only_one_model: ${{ inputs.only_one_model }}
       runner_label: ${{ inputs.runner_label }}
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
