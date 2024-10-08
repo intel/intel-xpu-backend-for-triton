@@ -78,6 +78,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
       - name: Load conda cache
         if: inputs.env_manager != 'base'
         id: conda-cache
@@ -86,13 +92,7 @@ jobs:
           CACHE_NUMBER: 5
         with:
           path: $HOME/miniforge3/envs/triton
-          key: conda-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
-
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
+          key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Load pip cache
         if: inputs.env_manager == 'base'

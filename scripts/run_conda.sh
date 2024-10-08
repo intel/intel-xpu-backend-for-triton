@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -vx
-
 install_conda() {
     conda create -n triton --override-channels -c conda-forge python=$python_version.*
     conda env update -f scripts/triton.yml
@@ -13,6 +11,8 @@ install_conda() {
 }
 
 source /opt/intel/oneapi/setvars.sh >/dev/null
+
+set -vx
 
 script_dir=$(dirname "$0")
 source "$script_dir/run_util.sh"

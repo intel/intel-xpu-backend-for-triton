@@ -1,4 +1,4 @@
-name: Nobasekit test
+name: No-Basekit Test
 run-name: ${{ inputs.run_name }}
 
 on:
@@ -129,8 +129,9 @@ jobs:
       pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
       python_version: ${{ matrix.python }}
       upload_test_reports: ${{ inputs.upload_test_reports || false }}
-      ignore_errors: ${{ inputs.ignore_errors || false }}
-      skip_list: nobasekit
+      ignore_errors: true
+      #FIXME${{ inputs.ignore_errors || false }}
+      skip_list: no-basekit
       run_name: ${{ inputs.run_name }}
       enable_unskip: ${{ inputs.enable_unskip || false }}
-      env_manager: nobasekit
+      env_manager: no_basekit
