@@ -3,8 +3,12 @@ import shutil
 import subprocess
 import sys
 
+from distutils import log
+from distutils.dir_util import remove_tree
+from distutils.command.clean import clean as _clean
+from distutils.command.build import build as _build
+
 from setuptools import setup
-from setuptools.command.build_ext import build_ext as build_ext_orig
 
 import torch
 
@@ -27,8 +31,17 @@ class CMakeBuild():
         self.use_ipex = os.getenv("USE_IPEX", "1") == "1"
         if not self.use_ipex:
             return
-        import intel_extension_for_pytorch
+        try:
+            import intel_extension_for_pytorch
+        except ImportError:
+            log.warn("ipex is not installed trying to build without ipex")
+            self.use_ipex = False
+            return
         self.cmake_prefix_paths.append(intel_extension_for_pytorch.cmake_prefix_path)
+
+    def check_call(self, *popenargs, **kwargs):
+        print(" ".join(popenargs[0]))
+        subprocess.check_call(*popenargs, **kwargs)
 
     def build_extension(self):
         ninja_dir = shutil.which("ninja")
@@ -69,15 +82,19 @@ class CMakeBuild():
         ]
 
         env = os.environ.copy()
-        print(" ".join(["cmake"] + cmake_args))
-        subprocess.check_call(["cmake"] + cmake_args, env=env)
-        print(" ".join(["cmake"] + build_args))
-        subprocess.check_call(["cmake"] + build_args)
-        print(" ".join(["cmake"] + install_args))
-        subprocess.check_call(["cmake"] + install_args)
+        self.check_call(["cmake"] + cmake_args, env=env)
+        self.check_call(["cmake"] + build_args)
+        self.check_call(["cmake"] + install_args)
+
+    def clean(self):
+        if os.path.exists(self.build_temp):
+            remove_tree(self.build_temp, dry_run=self.dry_run)
+        else:
+            log.warn("'%s' does not exist -- can't clean it", os.path.relpath(self.build_temp,
+                                                                              os.path.dirname(__file__)))
 
 
-class build_ext(build_ext_orig):
+class build(_build):
 
     def run(self):
         self.build_cmake()
@@ -85,9 +102,23 @@ class build_ext(build_ext_orig):
 
     def build_cmake(self):
         DEBUG_OPTION = os.getenv("DEBUG", "0")
-        build_type = "Debug" if self.debug or DEBUG_OPTION == "1" else "Release"
+        debug = DEBUG_OPTION == "1"
+        if hasattr(self, "debug"):
+            debug = debug or self.debug
+        build_type = "Debug" if debug else "Release"
         cmake = CMakeBuild(build_type)
         cmake.run()
+
+
+class clean(_clean):
+
+    def run(self):
+        self.clean_cmake()
+        super().run()
+
+    def clean_cmake(self):
+        cmake = CMakeBuild()
+        cmake.clean()
 
 
 setup(name="triton-kernels-benchmark", packages=[
@@ -95,5 +126,6 @@ setup(name="triton-kernels-benchmark", packages=[
 ], package_dir={
     "triton_kernels_benchmark": "triton_kernels_benchmark",
 }, package_data={"triton_kernels_benchmark": ["xetla_kernel.cpython-*.so"]}, cmdclass={
-    "build_ext": build_ext,
+    "build": build,
+    "clean": clean,
 })
