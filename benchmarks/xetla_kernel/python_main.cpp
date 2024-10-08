@@ -190,9 +190,7 @@ void flash_attn_bwd(const at::Tensor &grad_out, const at::Tensor &q,
   CHECK_INPUT(grad_bias);
 
 #ifdef USE_IPEX
-  RECORD_FUNCTION("xetla fa", {num_batches, num_heads, head_size, num_queries,
-                               num_keys, bias_strideB, bias_strideN,
-                               bias_strideF, attn_mask_padding});
+  RECORD_FUNCTION("xetla fa", {});
 #endif
 
   auto queue = get_current_sycl_queue();
