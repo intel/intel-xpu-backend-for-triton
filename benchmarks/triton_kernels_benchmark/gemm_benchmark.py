@@ -250,9 +250,9 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton'] + (['xetla'] if use_xetla else []),
+        line_vals=['triton'] + (['xetla'] if use_xetla else ['onednn']),
         # label name for the lines
-        line_names=['Triton'] + (['XeTLA'] if use_xetla else []),
+        line_names=['Triton'] + (['XeTLA'] if use_xetla else ['onednn']),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
