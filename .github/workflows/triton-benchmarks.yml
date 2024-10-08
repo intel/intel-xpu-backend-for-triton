@@ -179,7 +179,7 @@ jobs:
           source ../../scripts/capture-hw-details.sh
 
           TAG=${{ inputs.tag || 'ci' }}
-          python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-triton-report.csv --benchmark gemm-bt --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-triton-report.csv --benchmark gemm-at --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (stream-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
