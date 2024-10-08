@@ -84,6 +84,10 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
+      - name: FIXME Remove the env
+        run: |
+          rm -rf $HOME/miniforge3/envs/triton
+
       - name: Load conda cache
         if: inputs.env_manager != 'base'
         id: conda-cache
