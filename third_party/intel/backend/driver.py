@@ -479,6 +479,10 @@ class XPUDriver(DriverBase):
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
 
+    def get_device_interface(self):
+        import torch
+        return torch.xpu
+
     @staticmethod
     def is_active():
         import torch

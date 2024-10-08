@@ -43,7 +43,7 @@ at::Tensor softmax(const at::Tensor &input, const at::Tensor &output,
   CHECK_INPUT(input);
   CHECK_INPUT(output);
 #ifdef USE_IPEX
-  RECORD_FUNCTION("xetla softmax", {input});
+  RECORD_FUNCTION("xetla softmax", {});
 #endif
 
   auto queue = get_current_sycl_queue();
@@ -63,7 +63,7 @@ at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
 #ifdef USE_IPEX
-  RECORD_FUNCTION("xetla gemm", {a, b, c, acc});
+  RECORD_FUNCTION("xetla gemm", {});
 #endif
 
   auto queue = get_current_sycl_queue();
@@ -83,7 +83,7 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
 #ifdef USE_IPEX
-  RECORD_FUNCTION("xetla stream_k_gemm", {a, b, c, acc});
+  RECORD_FUNCTION("xetla stream_k_gemm", {});
 #endif
 
   auto queue = get_current_sycl_queue();
@@ -120,8 +120,7 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
   CHECK_INPUT(m);
   CHECK_INPUT(l);
 #ifdef USE_IPEX
-  RECORD_FUNCTION("xetla fa",
-                  {num_batches, num_heads, head_size, num_queries, num_keys});
+  RECORD_FUNCTION("xetla fa", {});
 #endif
 
   auto queue = get_current_sycl_queue();

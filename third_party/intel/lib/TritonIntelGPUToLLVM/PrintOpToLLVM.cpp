@@ -48,8 +48,7 @@ struct PrintOpConversion
       return success();
     }
 
-    assert(op.getNumOperands() == op.getIsSigned().size() &&
-           "All operands must have 'isSigned' attribute");
+    assert(op.getNumOperands() == op.getIsSigned().size());
 
     for (size_t i = 0; i < op.getNumOperands(); i++) {
       bool isSigned = op.getIsSigned()[i] > 0;

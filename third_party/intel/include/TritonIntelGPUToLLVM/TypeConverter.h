@@ -18,7 +18,8 @@ public:
   using TypeConverter::convertType;
 
   TritonIntelGPUToLLVMTypeConverter(
-      MLIRContext *ctx, LowerToLLVMOptions &option, bool isAdvancedPathEnabled,
+      MLIRContext *ctx, LowerToLLVMOptions &option,
+      const TargetInfoBase &targetInfo, bool isAdvancedPathEnabled,
       const DataLayoutAnalysis *analysis = nullptr);
 };
 

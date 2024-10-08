@@ -125,9 +125,8 @@ matmul = _matmul.apply
         x_names=['M', 'K', 'N'],
         x_vals=[
             [512, 32768, 8192],
-            [3072, 4096, 3072],
-            [4096, 4096, 4096],
             [1024, 28672, 8192],
+            [3072, 4096, 3072],
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
@@ -150,7 +149,7 @@ def benchmark(M, N, K, provider):
 
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                              quantiles=quantiles, fast_flush=False)
+                                                              quantiles=quantiles)
     elif provider == 'triton':
         c = torch.empty((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
@@ -158,7 +157,7 @@ def benchmark(M, N, K, provider):
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+                                                              kernel_name='_kernel')
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
