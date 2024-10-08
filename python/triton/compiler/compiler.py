@@ -236,11 +236,11 @@ def filter_traceback(e: BaseException):
         e.__traceback__ = frames[0]
 
 
-def triton_spirv_dump(data, file_name, ext):
+def triton_spirv_dump(data, file_name):
+    ext = "spv"
     spv_path = os.getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
-    if not os.path.exists(spv_path):
-        os.makedirs(spv_path)
-    spv_name = f"{spv_path}/{file_name}.{ext}"
+    os.makedirs(spv_path, exist_ok=True)
+    spv_name = os.path.join(spv_path, f"{file_name}.{ext}")
     with open(spv_name, "wb") as f:
         f.write(data)
 
@@ -318,7 +318,7 @@ def compile(src, target=None, options=None):
         # Write spv file to path specified by user
         serialize_dir = os.getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS", None)
         if serialize_dir and ext == "spv":
-            triton_spirv_dump(next_module, file_name, ext)
+            triton_spirv_dump(next_module, file_name)
         # use an env variable to parse ir from file
         if use_ir_loc == ext:
             ir_full_name = fn_cache_manager.get_file(ir_filename)

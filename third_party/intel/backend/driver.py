@@ -444,6 +444,7 @@ def serialize_kernel_metadata(arg, args_dict):
 
 
 def serialize_args(args, constants, signature):
+    import torch
     import numbers
     dir_path = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS')
     if not os.path.exists(dir_path):
@@ -459,11 +460,11 @@ def serialize_args(args, constants, signature):
         if type(arg).__name__ == "KernelMetadata":
             serialize_kernel_metadata(arg, args_dict)
 
-        if type(arg).__name__ == "Tensor":
+        #if type(arg).__name__ == "Tensor":
+        if isinstance(arg, torch.Tensor):
             cpu_tensor = arg.cpu()
             tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
             with open(tensor_path, 'wb') as f:
-                import torch
                 torch.save(cpu_tensor, f)
             new_arg = {
                 "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
