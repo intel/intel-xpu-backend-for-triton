@@ -303,3 +303,27 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     tt.return
   }
 }
+
+// -----
+
+tt.func public @test(%arg0: !tt.ptr<tensor<16x16xf16>>, %arg1: !tt.ptr<tensor<8x32xf16>>) {
+  %lb = arith.constant 0 : i32
+  %ub = tt.get_program_id x : i32
+  %st = arith.constant 32 : i32
+  %zero = arith.constant dense<0.000000e+00> : tensor<8x16xf32>
+  %common = tt.load %arg1 {DotIdx = 0 : i32} : !tt.ptr<tensor<8x32xf16>>
+  // COM: Check %common is not moved in the loop.
+  // CHECK: tt.load %arg1
+  // CHECK-COUNT-2: scf.for
+  scf.for %iv0 = %lb to %ub step %st : i32 {
+    %load1 = tt.load %arg0 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
+    %extract1 = triton_intel_gpu.extract %common[0] : tensor<8x32xf16> -> tensor<8x16xf16>
+    %dot1 = tt.dot %extract1, %load1, %zero, inputPrecision = tf32 {"schedule-group" = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+  }
+  scf.for %iv1 = %lb to %ub step %st : i32 {
+    %load2 = tt.load %arg0 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
+    %extract2 = triton_intel_gpu.extract %common[0] : tensor<8x32xf16> -> tensor<8x16xf16>
+    %dot2 = tt.dot %extract2, %load2, %zero, inputPrecision = tf32 {"schedule-group" = 0 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
+  }
+  tt.return
+}
