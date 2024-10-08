@@ -89,7 +89,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 5
+          CACHE_NUMBER: 6
         with:
           path: $HOME/miniforge3/envs/triton
           key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
