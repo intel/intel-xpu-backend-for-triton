@@ -71,7 +71,8 @@ public:
         return;
       }
 
-      if (fastChangeDim == rank - 2 && tensorType.getElementTypeBitWidth() == 8) {
+      if (fastChangeDim == rank - 2 &&
+          tensorType.getElementTypeBitWidth() == 8) {
         // TODO: column major layout w/ fp8 has performance regression
         return;
       }

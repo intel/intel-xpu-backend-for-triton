@@ -49,16 +49,16 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, const bool isUsedByStoreOp,
   LDBG("Used by store op? " << isUsedByStoreOp);
   LDBG("Used by block load op? " << isUsedByBlockLoadOp);
 
-  LDBG("hasDotDpasEncoding: " << ttgi::hasDotDpasEncoding(tensorType));
   LDBG("hasDpasEncoding: " << ttgi::hasDpasEncoding(tensorType));
-  if (/*ttgi::hasDotDpasEncoding(tensorType) ||*/ isUsedByBlockLoadOp || (isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType))) {
+  if (isUsedByBlockLoadOp ||
+      (isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType))) {
     LDBG("Tensor has DPAS layout or is used by load/store op with DPAS layout, "
          "skipping removal");
     return false;
   }
 
-  LDBG("Marked for removal: tensor doesn't have DPAS layout and is not used "
-       "by load or store op with DPAS layout");
+  LDBG("Marked for removal: make tensor ptr op is not used by block load op or "
+       "by store op with DPAS layout");
   return true;
 }
 
@@ -689,8 +689,6 @@ public:
           });
     };
 
-
-    // TODO: this is working, but materialize block pointer needs to 
     DenseSet<Operation *> tensorPointersToRemove;
     mod.walk([&](Operation *op) {
       if (isa<tt::MakeTensorPtrOp>(op)) {
@@ -711,11 +709,12 @@ public:
           LDBG("Processing op: " << *crtOp);
           if (isa<tt::LoadOp, tt::StoreOp>(crtOp)) {
             LDBG("is load store, should remove?");
-            if (shouldRemove(
-                    makeTensorPtrOp, /*isUsedByStoreOp=*/isa<tt::StoreOp>(crtOp),
-                    /*isBlockLoad=*/
-                    isa<tt::LoadOp>(crtOp) && crtOp->hasAttr(
-                        ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))) {
+            if (shouldRemove(makeTensorPtrOp,
+                             /*isUsedByStoreOp=*/isa<tt::StoreOp>(crtOp),
+                             /*isBlockLoad=*/
+                             isa<tt::LoadOp>(crtOp) &&
+                                 crtOp->hasAttr(ttgi::TritonIntelGPUDialect::
+                                                    getBlockIOAttrName()))) {
               LDBG("Removing: " << result);
               tensorPointersToRemove.insert(makeTensorPtrOp);
             }
@@ -779,8 +778,9 @@ public:
     });
 
     auto markTensorPointerForRemoval =
-        [this, &tensorPointersToRemove](Value val, bool isUsedByLoadOrStoreOp = false,
-               bool isUsedByBlockLoadOrStoreOp = false) {
+        [this,
+         &tensorPointersToRemove](Value val, bool isUsedByLoadOrStoreOp = false,
+                                  bool isUsedByBlockLoadOrStoreOp = false) {
           if (tt::isTensorPointerType(val.getType())) {
             tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
             if (tensorPointersToRemove.count(makeTensorPtrOp)) {
