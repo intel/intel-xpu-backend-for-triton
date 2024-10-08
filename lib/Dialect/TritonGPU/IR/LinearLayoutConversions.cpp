@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -826,6 +827,9 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
     return dotOperandMfmaToLinearLayout(*this, shape);
+  }
+  if (auto dpasLayout = llvm::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
+    return dotOperandDpasToLinearLayout(*this, shape);
   }
 
   return std::nullopt;
