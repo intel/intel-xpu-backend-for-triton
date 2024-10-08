@@ -86,6 +86,7 @@ jobs:
 
       - name: FIXME Remove the env
         run: |
+          ls -l $HOME/miniforge3/envs/triton || true
           rm -rf $HOME/miniforge3/envs/triton
 
       - name: Load conda cache

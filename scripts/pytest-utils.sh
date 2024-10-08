@@ -92,8 +92,8 @@ run_tutorial_test() {
 capture_runtime_env() {
     mkdir -p "$TRITON_TEST_REPORTS_DIR"
 
-    echo "$CMPLR_ROOT" > $TRITON_TEST_REPORTS_DIR/cmplr_version.txt
-    echo "$MKLROOT" > $TRITON_TEST_REPORTS_DIR/mkl_version.txt
+    echo "$CMPLR_ROOT" > $TRITON_TEST_REPORTS_DIR/cmplr_version.txt || true
+    echo "$MKLROOT" > $TRITON_TEST_REPORTS_DIR/mkl_version.txt || true
 
     # Exit script execution as long as one of those components is not found.
     local TRITON_COMMIT=""
