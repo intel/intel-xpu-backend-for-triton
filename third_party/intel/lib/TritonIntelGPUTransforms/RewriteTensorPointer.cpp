@@ -51,7 +51,7 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, const bool isUsedByStoreOp,
 
   LDBG("hasDotDpasEncoding: " << ttgi::hasDotDpasEncoding(tensorType));
   LDBG("hasDpasEncoding: " << ttgi::hasDpasEncoding(tensorType));
-  if (ttgi::hasDotDpasEncoding(tensorType) || isUsedByBlockLoadOp || (isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType))) {
+  if (/*ttgi::hasDotDpasEncoding(tensorType) ||*/ isUsedByBlockLoadOp || (isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType))) {
     LDBG("Tensor has DPAS layout or is used by load/store op with DPAS layout, "
          "skipping removal");
     return false;
