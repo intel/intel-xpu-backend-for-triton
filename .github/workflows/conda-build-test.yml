@@ -1,4 +1,4 @@
-name: Build and test
+name: Conda test
 run-name: ${{ inputs.run_name }}
 
 on:

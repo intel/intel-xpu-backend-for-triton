@@ -19,5 +19,6 @@ source "$script_dir/run_util.sh"
 
 export PATH="$HOME/miniforge3/bin:$PATH"
 test -d "$HOME/miniforge3/envs/triton" || install_conda
+print_conda_info
 
 conda run --no-capture-output -n triton bash "$script_name"
