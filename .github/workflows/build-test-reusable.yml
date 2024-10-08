@@ -212,11 +212,18 @@ jobs:
           grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
 
       - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        if: (inputs.env_manager == 'base') && (steps.pip-cache.outputs.status == 'miss')
         uses: ./.github/actions/save
         with:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Save conda cache
+        if: (inputs.env_manager != 'base') && (steps.conda-cache.outputs.status == 'miss')
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.conda-cache.outputs.path }}
+          dest: ${{ steps.conda-cache.outputs.dest }}
 
       - name: Pass rate
         run: |
