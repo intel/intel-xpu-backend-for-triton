@@ -78,17 +78,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: FIXME Remove the env
-        run: |
-          ls -l $HOME/miniforge3/envs/triton || true
-          rm -rf $HOME/miniforge3/envs/triton
-
       - name: Load conda cache
         if: inputs.env_manager != 'base'
         id: conda-cache
@@ -98,6 +87,12 @@ jobs:
         with:
           path: $HOME/miniforge3/envs/triton
           key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
 
       - name: Load pip cache
         if: inputs.env_manager == 'base'

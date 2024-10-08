@@ -1,6 +1,8 @@
 #!/bin/bash
 
 print_conda_info() {
+    test ! -f first_run || return 0
+    touch first_run
     conda info
     conda list -n triton
 }
