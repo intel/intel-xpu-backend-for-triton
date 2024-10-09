@@ -105,8 +105,8 @@ build_llvm() {
   if [ ! -d "$LLVM_PROJ" ]; then
     echo "**** Cloning $LLVM_PROJ ****"
     cd $BASE
-    LLVM_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/cmake/llvm-hash.txt)"
-    git clone --recurse-submodules --jobs 8 https://github.com/llvm/llvm-project.git llvm
+    LLVM_COMMIT_ID="f3f5c845c10749210f2f93a65e65eabb3c8fae8e"
+    git clone --recurse-submodules --jobs 8 https://github.com/FMarno/llvm-project.git llvm
     cd llvm
     git checkout $LLVM_COMMIT_ID
     git submodule update --recursive
