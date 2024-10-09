@@ -298,10 +298,7 @@ run_instrumentation_tests() {
     return
   fi
 
-  #FIXME
-  find $TRITON_PROJ
-
-  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/_C, build Triton first"
+  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/_C, build Triton first"
 
   cd $TRITON_PROJ/python/test/unit
 
