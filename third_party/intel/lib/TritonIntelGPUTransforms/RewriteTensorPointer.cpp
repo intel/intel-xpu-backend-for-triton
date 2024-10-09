@@ -675,52 +675,51 @@ public:
     ModuleOp mod = getOperation();
 
     DenseSet<Operation *> tensorPointersToRemove;
-    mod.walk([&](Operation *op) {
-      if (isa<tt::MakeTensorPtrOp>(op)) {
-        DenseSet<Operation *> workingSet;
+    mod.walk([&](tt::MakeTensorPtrOp makeTensorPtrOp) {
+      DenseSet<Operation *> workingSet;
 
-        auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op);
-        LDBG("Considering: " << *op);
-        Value result = op->getResult(0);
-        for (auto user : result.getUsers()) {
-          workingSet.insert(user);
-        }
-        while (!workingSet.empty()) {
-          auto crtOpItr = workingSet.begin();
-          auto crtOp = *crtOpItr;
-          LDBG("Processing op: " << *crtOp);
-          if (isa<tt::LoadOp, tt::StoreOp>(crtOp)) {
-            if (shouldRemove(makeTensorPtrOp,
-                             /*isUsedByStoreOp=*/isa<tt::StoreOp>(crtOp),
-                             /*isBlockLoad=*/
-                             isa<tt::LoadOp>(crtOp) &&
-                                 crtOp->hasAttr(ttgi::TritonIntelGPUDialect::
-                                                    getBlockIOAttrName()))) {
-              tensorPointersToRemove.insert(makeTensorPtrOp);
-            }
-          } else if (auto forOp = dyn_cast<scf::ForOp>(crtOp)) {
-            for (auto [arg, blockArg] :
-                 llvm::zip(forOp.getInitArgs(),
-                           forOp.getBody()->getArguments().drop_front(
-                               forOp.getNumInductionVars()))) {
-              if (arg == makeTensorPtrOp) {
-                // add users of block arg
-                for (auto user : blockArg.getUsers()) {
-                  workingSet.insert(user);
-                }
+      LDBG("Considering: " << makeTensorPtrOp);
+      Value result = makeTensorPtrOp.getResult();
+      for (auto user : result.getUsers()) {
+        workingSet.insert(user);
+      }
+      while (!workingSet.empty()) {
+        auto crtOpItr = workingSet.begin();
+        auto crtOp = *crtOpItr;
+        LDBG("Processing op: " << *crtOp);
+        if (isa<tt::LoadOp, tt::StoreOp>(crtOp)) {
+          if (shouldRemove(
+                  makeTensorPtrOp,
+                  /*isUsedByStoreOp=*/isa<tt::StoreOp>(crtOp),
+                  /*isBlockLoad=*/
+                  isa<tt::LoadOp>(crtOp) &&
+                      crtOp->hasAttr(
+                          ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))) {
+            tensorPointersToRemove.insert(makeTensorPtrOp);
+            return;
+          }
+        } else if (auto forOp = dyn_cast<scf::ForOp>(crtOp)) {
+          for (auto [arg, blockArg] :
+               llvm::zip(forOp.getInitArgs(),
+                         forOp.getBody()->getArguments().drop_front(
+                             forOp.getNumInductionVars()))) {
+            if (arg == makeTensorPtrOp) {
+              // add users of block arg
+              for (auto user : blockArg.getUsers()) {
+                workingSet.insert(user);
               }
             }
-          } else if (crtOp->getNumResults() > 0) {
-            // TODO: should we handle more than one result?
-            auto crtOpResult = crtOp->getResult(0);
-            LDBG("Not a load store and not a loop, adding users to working "
-                 "set.");
-            for (auto user : crtOpResult.getUsers()) {
-              workingSet.insert(user);
-            }
           }
-          workingSet.erase(crtOpItr);
+        } else if (crtOp->getNumResults() > 0) {
+          // TODO: should we handle more than one result?
+          auto crtOpResult = crtOp->getResult(0);
+          LDBG("Not a load store and not a loop, adding users to working "
+               "set.");
+          for (auto user : crtOpResult.getUsers()) {
+            workingSet.insert(user);
+          }
         }
+        workingSet.erase(crtOpItr);
       }
     });
 
