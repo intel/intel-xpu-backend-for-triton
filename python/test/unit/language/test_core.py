@@ -4262,11 +4262,6 @@ def test_reshape_err(device):
 
 def test_trans_reshape(device):
 
-    if is_xpu():
-        pytest.skip(
-            "test_trans_reshape: XPU block pointer implementation preserves the block pointer load for eventual lowering to 2D block read, does not convert layouts in TTGIR"
-        )
-
     @triton.jit
     def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
 
@@ -4291,8 +4286,9 @@ def test_trans_reshape(device):
     actual = torch.zeros(expected.shape, dtype=torch.int32, device=device)
 
     k = kernel[(1, )](input, actual, shape[0], shape[1])
-    assert k.asm['ttgir'].count(
-        'triton_gpu.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
+    if not is_xpu():
+        assert k.asm['ttgir'].count(
+            'triton_gpu.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
 
     np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
 
