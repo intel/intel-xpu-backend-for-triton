@@ -51,6 +51,8 @@ public:
       LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
       auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
       auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      auto dotLayout = ttgi::getDotEncoding(tensorType);
+
       Operation::operand_range shape = makeTensorPtrOp.getShape();
       unsigned rank = shape.size();
       LDBG("Rank: " << rank);
@@ -97,10 +99,26 @@ public:
                                128 / tensorType.getElementTypeBitWidth()))
           return;
 
+        const bool isRowMajor = fastChangeDim == rank - 1;
+        if (dotLayout) {
+          // Check if the load is being used in a dot layout, and if so is this
+          // the first op and is it a transposed row major matrix. If so, skip
+          // the block ptr attribute as performance is worse than if we remove
+          // the tensor pointer
+          LDBG("dotLayout: " << *dotLayout);
+          const unsigned opIdx = dotLayout->getOpIdx();
+          auto dotOrder = dotLayout->getThreadOrder();
+          const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+          if (opIdx == 0 && valueRowMajor ^ isRowMajor) {
+            LDBG("Skipping block pointer attribute for transposed A matrix in "
+                 "dot operation");
+            return;
+          }
+        }
+
         loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                        StringAttr::get(context, fastChangeDim == rank - 1
-                                                     ? "row_major"
-                                                     : "column_major"));
+                        StringAttr::get(context, isRowMajor ? "row_major"
+                                                            : "column_major"));
       }
     });
   }
