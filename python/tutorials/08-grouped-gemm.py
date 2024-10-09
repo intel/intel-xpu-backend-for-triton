@@ -32,6 +32,10 @@ import triton
 import triton.language as tl
 
 
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
 @triton.autotune(
     configs=[
         triton.Config({
@@ -228,6 +232,9 @@ def torch_perf_fn(group_A, group_B):
         torch.matmul(a, b)
 
 
+ref_lib = 'cuBLAS' if is_cuda() else 'oneDNN'
+
+
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
@@ -236,9 +243,9 @@ def torch_perf_fn(group_A, group_B):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['cublas', 'triton'],
+        line_vals=[ref_lib.lower(), 'triton'],
         # label name for the lines
-        line_names=["cuBLAS", "Triton"],
+        line_names=[ref_lib, "Triton"],
         # line styles
         styles=[('green', '-'), ('blue', '-')],
         ylabel="runtime(ms)",  # label name for the y-axis
@@ -276,7 +283,7 @@ def benchmark(N, provider):
     d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device="xpu")
 
     quantiles = [0.5, 0.2, 0.8]
-    if provider == 'cublas':
+    if provider == ref_lib.lower():
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(
