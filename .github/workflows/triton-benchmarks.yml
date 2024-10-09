@@ -34,6 +34,7 @@ env:
   PYTHON_VERSION: "3.10"
   BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
   USE_IPEX: ${{ github.event_name != 'workflow_dispatch' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
+  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && 'pr') || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
   build:
@@ -111,7 +112,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python fused_softmax.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-triton-report.csv --benchmark softmax --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python ../../scripts/build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
@@ -123,7 +123,6 @@ jobs:
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base.csv
 
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
@@ -140,7 +139,7 @@ jobs:
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-default-path.csv
 
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}-dflt
+          TAG="${TAG}-dflt"
           python ../../scripts/build_report.py $REPORTS/matmul-performance-default-path.csv $REPORTS/gemm-triton-default-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark - advanced path
@@ -156,7 +155,7 @@ jobs:
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-adv-path.csv
 
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}-adv
+          TAG="${TAG}-adv"
           python ../../scripts/build_report.py $REPORTS/matmul-performance-adv-path.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (A@B^t) kernel benchmark
@@ -167,7 +166,6 @@ jobs:
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv
           source ../../scripts/capture-hw-details.sh
 
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-performance-bt.csv $REPORTS/gemm-bt-triton-report.csv --benchmark gemm-bt --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (A^t@B) kernel benchmark
@@ -178,7 +176,6 @@ jobs:
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-at.csv
           source ../../scripts/capture-hw-details.sh
 
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-triton-report.csv --benchmark gemm-at --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (stream-k) kernel benchmark
@@ -187,7 +184,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python gemm_streamk_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-streamk-performance.csv $REPORTS/gemm-streamk-triton-report.csv --benchmark gemm-streamk --compiler triton --param_cols "M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (split-k) kernel benchmark
@@ -196,7 +192,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python gemm_splitk_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-splitk-performance.csv $REPORTS/gemm-splitk-triton-report.csv --benchmark gemm-splitk --compiler triton --param_cols "M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PreOp (exp) kernel benchmark
@@ -205,7 +200,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python gemm_preop_exp_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-performance-preop-exp.csv $REPORTS/gemm-preop-exp-triton-report.csv --benchmark gemm-preop-exp --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
@@ -214,7 +208,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_gelu_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-gelu.csv $REPORTS/gemm-postop-gelu-triton-report.csv --benchmark gemm-postop-gelu --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark
@@ -223,7 +216,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix.csv $REPORTS/gemm-postop-addmatrix-triton-report.csv --benchmark gemm-postop-addmatrix --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark
@@ -232,7 +224,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_fwd_benchmark.py --reports $REPORTS
 
-          TAG=${{ inputs.tag || 'ci' }}
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
@@ -246,7 +237,7 @@ jobs:
           IGC_VISAOptions=" -enableBCR" \
           python flash_attention_fwd_benchmark.py --reports $REPORTS
 
-          TAG=${{ inputs.tag || 'ci' }}-dflt
+          TAG="${TAG}-dflt"
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
@@ -260,7 +251,7 @@ jobs:
           IGC_VISAOptions=" -enableBCR" \
           python flash_attention_fwd_benchmark.py --reports $REPORTS
 
-          TAG=${{ inputs.tag || 'ci' }}-adv
+          TAG="${TAG}-adv"
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-advanced-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
@@ -270,7 +261,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           python prefix_sums.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          TAG=${{ inputs.tag || 'ci' }}
           python ../../scripts/build_report.py $REPORTS/prefix-sums.csv $REPORTS/prefix_sums-triton-report.csv --benchmark prefix_sums --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run micro benchmark
