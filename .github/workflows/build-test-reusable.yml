@@ -20,6 +20,10 @@ on:
         description: PyTorch ref, keep empty for default
         type: string
         default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: string
+        default: "source"
       python_version:
         description: Python version
         type: string
@@ -96,6 +100,7 @@ jobs:
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
 
       - name: Install pass_rate dependencies
         run: |

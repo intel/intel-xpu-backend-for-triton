@@ -21,13 +21,19 @@ on:
         default: PYTORCH_LEGACY_PROFILER_USING_IPEX
   schedule:
     - cron: "5 23 * * *"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/triton-benchmarks.yml
+      - benchmarks/**
 
 permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  BENCHMARKING_METHOD: ${{ github.event_name == 'schedule' && 'PYTORCH_LEGACY_PROFILER_USING_IPEX' || inputs.benchmarking_method }}
-  USE_IPEX: ${{ github.event_name == 'schedule' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
+  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
+  USE_IPEX: ${{ github.event_name != 'workflow_dispatch' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
 
 jobs:
   build:
@@ -153,6 +159,28 @@ jobs:
           TAG=${{ inputs.tag || 'ci' }}-adv
           python ../../scripts/build_report.py $REPORTS/matmul-performance-adv-path.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
+      - name: Run Triton GEMM (A@B^t) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv
+          source ../../scripts/capture-hw-details.sh
+
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-bt.csv $REPORTS/gemm-bt-triton-report.csv --benchmark gemm-bt --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton GEMM (A^t@B) kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          TRANSPOSE_A=1 python gemm_benchmark.py --reports $REPORTS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-at.csv
+          source ../../scripts/capture-hw-details.sh
+
+          TAG=${{ inputs.tag || 'ci' }}
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-triton-report.csv --benchmark gemm-at --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
       - name: Run Triton GEMM (stream-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
@@ -215,8 +243,7 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           TRITON_INTEL_ADVANCED_PATH=0 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-          IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
-          IGC_DisableLoopUnroll=1 \
+          IGC_VISAOptions=" -enableBCR" \
           python flash_attention_fwd_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}-dflt
@@ -230,8 +257,7 @@ jobs:
           TRITON_INTEL_ADVANCED_PATH=1 \
           TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-          IGC_VISAOptions=" -enableBCR -nolocalra -printregusage -DPASTokenReduction -enableHalfLSC -abiver 2" \
-          IGC_DisableLoopUnroll=1 \
+          IGC_VISAOptions=" -enableBCR" \
           python flash_attention_fwd_benchmark.py --reports $REPORTS
 
           TAG=${{ inputs.tag || 'ci' }}-adv

@@ -168,6 +168,21 @@ static bool isValidElementType(Type *Ty) {
          !Ty->isPPC_FP128Ty();
 }
 
+/// \returns the number of elements for Ty.
+static unsigned getNumElements(Type *Ty) {
+  assert(!isa<ScalableVectorType>(Ty) &&
+         "ScalableVectorType is not supported.");
+  if (auto *VecTy = dyn_cast<FixedVectorType>(Ty))
+    return VecTy->getNumElements();
+  return 1;
+}
+
+/// \returns the vector type of ScalarTy based on vectorization factor.
+static FixedVectorType *getWidenedType(Type *ScalarTy, unsigned VF) {
+  return FixedVectorType::get(ScalarTy->getScalarType(),
+                              VF * getNumElements(ScalarTy));
+}
+
 /// \returns True if the value is a constant (but not globals/constant
 /// expressions).
 static bool isConstant(Value *V) {
@@ -9088,6 +9103,32 @@ BoUpSLP::getEntryCost(const TreeEntry *E, ArrayRef<Value *> VectorizedVals,
     return VecCost - ScalarCost;
   };
 
+  auto GetMinMaxCost = [&](Type *Ty, Instruction *VI = nullptr) {
+    auto [MinMaxID, SelectOnly] = canConvertToMinOrMaxIntrinsic(VI ? VI : VL);
+    if (MinMaxID == Intrinsic::not_intrinsic)
+      return InstructionCost::getInvalid();
+    Type *CanonicalType = Ty;
+    if (CanonicalType->isPtrOrPtrVectorTy())
+      CanonicalType = CanonicalType->getWithNewType(IntegerType::get(
+          CanonicalType->getContext(),
+          DL->getTypeSizeInBits(CanonicalType->getScalarType())));
+
+    IntrinsicCostAttributes CostAttrs(MinMaxID, CanonicalType,
+                                      {CanonicalType, CanonicalType});
+    InstructionCost IntrinsicCost =
+        TTI->getIntrinsicInstrCost(CostAttrs, CostKind);
+    // If the selects are the only uses of the compares, they will be
+    // dead and we can adjust the cost by removing their cost.
+    if (VI && SelectOnly) {
+      assert(!Ty->isVectorTy() && "Expected only for scalar type.");
+      auto *CI = cast<CmpInst>(VI->getOperand(0));
+      IntrinsicCost -= TTI->getCmpSelInstrCost(
+          CI->getOpcode(), Ty, Builder.getInt1Ty(), CI->getPredicate(),
+          CostKind, {TTI::OK_AnyValue, TTI::OP_None},
+          {TTI::OK_AnyValue, TTI::OP_None}, CI);
+    }
+    return IntrinsicCost;
+  };
   switch (ShuffleOrOp) {
   case Instruction::PHI: {
     // Count reused scalars.
@@ -9345,30 +9386,39 @@ BoUpSLP::getEntryCost(const TreeEntry *E, ArrayRef<Value *> VectorizedVals,
                                        ? CmpInst::BAD_FCMP_PREDICATE
                                        : CmpInst::BAD_ICMP_PREDICATE;
 
-      return TTI->getCmpSelInstrCost(E->getOpcode(), OrigScalarTy,
-                                     Builder.getInt1Ty(), CurrentPred, CostKind,
-                                     VI);
+      InstructionCost ScalarCost = TTI->getCmpSelInstrCost(
+          E->getOpcode(), OrigScalarTy, Builder.getInt1Ty(), CurrentPred,
+          CostKind, getOperandInfo(VI->getOperand(0)),
+          getOperandInfo(VI->getOperand(1)), VI);
+      InstructionCost IntrinsicCost = GetMinMaxCost(OrigScalarTy, VI);
+      if (IntrinsicCost.isValid())
+        ScalarCost = IntrinsicCost;
+
+      return ScalarCost;
     };
     auto GetVectorCost = [&](InstructionCost CommonCost) {
-      auto *MaskTy = FixedVectorType::get(Builder.getInt1Ty(), VL.size());
+      auto *MaskTy = getWidenedType(Builder.getInt1Ty(), VL.size());
 
-      InstructionCost VecCost = TTI->getCmpSelInstrCost(
-          E->getOpcode(), VecTy, MaskTy, VecPred, CostKind, VL0);
-      // Check if it is possible and profitable to use min/max for selects
-      // in VL.
-      //
-      auto IntrinsicAndUse = canConvertToMinOrMaxIntrinsic(VL);
-      if (IntrinsicAndUse.first != Intrinsic::not_intrinsic) {
-        IntrinsicCostAttributes CostAttrs(IntrinsicAndUse.first, VecTy,
-                                          {VecTy, VecTy});
-        InstructionCost IntrinsicCost =
-            TTI->getIntrinsicInstrCost(CostAttrs, CostKind);
-        // If the selects are the only uses of the compares, they will be
-        // dead and we can adjust the cost by removing their cost.
-        if (IntrinsicAndUse.second)
-          IntrinsicCost -= TTI->getCmpSelInstrCost(Instruction::ICmp, VecTy,
-                                                   MaskTy, VecPred, CostKind);
-        VecCost = std::min(VecCost, IntrinsicCost);
+      InstructionCost VecCost =
+          TTI->getCmpSelInstrCost(E->getOpcode(), VecTy, MaskTy, VecPred,
+                                  CostKind, getOperandInfo(E->getOperand(0)),
+                                  getOperandInfo(E->getOperand(1)), VL0);
+      if (auto *SI = dyn_cast<SelectInst>(VL0)) {
+        auto *CondType =
+            getWidenedType(SI->getCondition()->getType(), VL.size());
+        unsigned CondNumElements = CondType->getNumElements();
+        unsigned VecTyNumElements = getNumElements(VecTy);
+        assert(VecTyNumElements >= CondNumElements &&
+               VecTyNumElements % CondNumElements == 0 &&
+               "Cannot vectorize Instruction::Select");
+        if (CondNumElements != VecTyNumElements) {
+          // When the return type is i1 but the source is fixed vector type, we
+          // need to duplicate the condition value.
+          VecCost += ::getShuffleCost(
+              *TTI, TTI::SK_PermuteSingleSrc, CondType,
+              createReplicatedMask(VecTyNumElements / CondNumElements,
+                                   CondNumElements));
+        }
       }
       return VecCost + CommonCost;
     };
@@ -9580,16 +9630,19 @@ BoUpSLP::getEntryCost(const TreeEntry *E, ArrayRef<Value *> VectorizedVals,
         VecCost +=
             TTIRef.getArithmeticInstrCost(E->getAltOpcode(), VecTy, CostKind);
       } else if (auto *CI0 = dyn_cast<CmpInst>(VL0)) {
-        auto *MaskTy = FixedVectorType::get(Builder.getInt1Ty(), VL.size());
-        VecCost = TTIRef.getCmpSelInstrCost(E->getOpcode(), VecTy, MaskTy,
-                                            CI0->getPredicate(), CostKind, VL0);
+        auto *MaskTy = getWidenedType(Builder.getInt1Ty(), VL.size());
+        VecCost = TTIRef.getCmpSelInstrCost(
+            E->getOpcode(), VecTy, MaskTy, CI0->getPredicate(), CostKind,
+            {TTI::OK_AnyValue, TTI::OP_None}, {TTI::OK_AnyValue, TTI::OP_None},
+            VL0);
         VecCost += TTIRef.getCmpSelInstrCost(
             E->getOpcode(), VecTy, MaskTy,
             cast<CmpInst>(E->getAltOp())->getPredicate(), CostKind,
+            {TTI::OK_AnyValue, TTI::OP_None}, {TTI::OK_AnyValue, TTI::OP_None},
             E->getAltOp());
       } else {
         Type *SrcSclTy = E->getMainOp()->getOperand(0)->getType();
-        auto *SrcTy = FixedVectorType::get(SrcSclTy, VL.size());
+        auto *SrcTy = getWidenedType(SrcSclTy, VL.size());
         if (SrcSclTy->isIntegerTy() && ScalarTy->isIntegerTy()) {
           auto SrcIt = MinBWs.find(getOperandEntry(E, 0));
           unsigned BWSz = DL->getTypeSizeInBits(ScalarTy);
@@ -9598,7 +9651,7 @@ BoUpSLP::getEntryCost(const TreeEntry *E, ArrayRef<Value *> VectorizedVals,
           if (SrcIt != MinBWs.end()) {
             SrcBWSz = SrcIt->second.first;
             SrcSclTy = IntegerType::get(SrcSclTy->getContext(), SrcBWSz);
-            SrcTy = FixedVectorType::get(SrcSclTy, VL.size());
+            SrcTy = getWidenedType(SrcSclTy, VL.size());
           }
           if (BWSz <= SrcBWSz) {
             if (BWSz < SrcBWSz)

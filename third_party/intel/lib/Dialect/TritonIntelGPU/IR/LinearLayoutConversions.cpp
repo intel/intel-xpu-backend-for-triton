@@ -582,4 +582,13 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                                 CTALayoutAttr::getDefault(ctx, rank), shape);
 }
 
+std::optional<LinearLayout>
+dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
+                             ArrayRef<int64_t> shape) {
+  auto dpasLayout = cast<intel::DpasEncodingAttr>(dotDpasLayout.getParent());
+  if (dotDpasLayout.getOpIdx() == 0)
+    return std::nullopt;
+  return DPAStoLinearLayout(shape, dpasLayout, dotDpasLayout.getOpIdx());
+}
+
 } // namespace mlir::triton::gpu
