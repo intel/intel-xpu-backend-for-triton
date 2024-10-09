@@ -27,7 +27,7 @@ def quiet():
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     if cc in ["cl", "clang-cl"]:
-        cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
+        cc_cmd = [cc, src, "/nologo", "/O2", "/LD", "-std:c++20"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
@@ -98,10 +98,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         cc_cmd = [cc]
 
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
-    cc_cmd += [src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
-    cc_cmd += [f'-l{lib}' for lib in libraries]
-    cc_cmd += [f"-L{dir}" for dir in library_dirs]
-    cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
+    cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
 
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
