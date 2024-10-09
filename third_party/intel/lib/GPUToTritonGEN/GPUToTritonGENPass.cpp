@@ -42,7 +42,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "GPUOpsLowering.h"
-#include "IndexIntrinsicsOpLowering.h"
 #include "OpToFuncCallLowering.h"
 
 namespace mlir::triton {
