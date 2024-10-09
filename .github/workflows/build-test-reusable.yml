@@ -200,7 +200,7 @@ jobs:
           env_manager: ${{ inputs.env-manager }}
 
       - name: Run E2E test
-        if: inputs.env_manager == 'base' && nputs.python_version != '3.12'
+        if: inputs.env_manager == 'base' && inputs.python_version != '3.12'
         run: |
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
