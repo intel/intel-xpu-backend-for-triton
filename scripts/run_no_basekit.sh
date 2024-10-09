@@ -13,13 +13,9 @@ install_conda() {
     find /opt/intel/oneapi/compiler/2024.1/lib/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
 
     wget https://files.pythonhosted.org/packages/cc/1e/d74e608f0c040e4f72dbfcd3b183f39570f054d08de39cc431f153220d90/intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
-    wheel unpack intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
-    mkdir -p ./intel_sycl_rt-2024.1.2/intel_sycl_rt-2024.1.2.data/data/include
-    cp -r /opt/intel/oneapi/compiler/2024.1/include/sycl ./intel_sycl_rt-2024.*/intel_sycl_rt-2024.*.data/data/include/
-    wheel pack intel_sycl_rt-2024.1.2 --build headers_patch
-    mv intel_sycl_rt-2024.1.2-headers_patch-py2.py3-none-manylinux1_x86_64.whl intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
-    pip install --force-reinstall ./intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
-    pip install dpcpp_cpp_rt==2024.1.2
+    pip install ./intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl dpcpp_cpp_rt==2024.1.2
+
+    ln -snf $HOME/miniconda3/envs/dpcpp/include/sycl $HOME/miniconda3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/
 }
 
 script_dir=$(dirname "$0")
