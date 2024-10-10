@@ -43,8 +43,6 @@ on:
   pull_request:
     branches:
       - main
-  #FIXME      
-  push:
 
 permissions: read-all
 
