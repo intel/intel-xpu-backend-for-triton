@@ -696,7 +696,7 @@ public:
                       crtOp->hasAttr(
                           ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))) {
             tensorPointersToRemove.insert(makeTensorPtrOp);
-            return WalkResult::advance();
+            return;
           }
         } else if (auto forOp = dyn_cast<scf::ForOp>(crtOp)) {
           for (auto [arg, blockArg] :
