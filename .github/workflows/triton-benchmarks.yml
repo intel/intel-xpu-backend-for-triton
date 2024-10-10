@@ -28,6 +28,10 @@ on:
       - .github/workflows/triton-benchmarks.yml
       - benchmarks/**
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 env:
