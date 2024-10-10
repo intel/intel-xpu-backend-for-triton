@@ -8,13 +8,6 @@ llvm.func @triton_gen_special_regs() -> i32 {
   llvm.return %0 : i32
 }
 
-llvm.func @triton_gen.barrier() {
-  // CHECK-LABEL: triton_gen.barrier
-  // CHECK: triton_gen.barrier {mem_fence = Local}
-  triton_gen.barrier {mem_fence=Local}
-  llvm.return
-}
-
 llvm.func @triton_gen.split_barrier_signal() {
   // CHECK-LABEL: triton_gen.split_barrier_signal
   // CHECK: triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
