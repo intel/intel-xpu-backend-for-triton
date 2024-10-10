@@ -71,6 +71,12 @@ public:
         return;
       }
 
+      if (fastChangeDim == rank - 2 &&
+          tensorType.getElementTypeBitWidth() == 8) {
+        // TODO: column major layout w/ fp8 has performance regression
+        return;
+      }
+
       if (fastChangeDim >= (rank - 2)) {
         // HW 2D block read instruction only supports contiguous access.
         Value fastChangeStride = strides[fastChangeDim];
