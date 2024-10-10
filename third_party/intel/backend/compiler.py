@@ -140,12 +140,33 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
-                                                                           False)
-        dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
-            'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
-        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+        if os.getenv("TRITON_INTEL_QUERY_DEVICE_EXTENSIONS", "0") == "1":
+            try:
+                # FIXME: Add support for other devices.
+                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS_WITH_VERSION', '-device', 'pvc']
+                result = subprocess.run(ocloc_cmd, check=True, capture_output=True, text=True)
+                output = result.stdout
+                supported_extension_map = {}
+                for line in output.split(' '):
+                    if ':' not in line:
+                        raise AssertionError("Invalid output from `ocloc query CL_DEVICE_EXTENSIONS_WITH_VERSION`")
+                    key, value = line.split(':', 1)
+                    supported_extension_map[key.strip()] = value.strip()
+                dev_prop[
+                    'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extension_map
+                dev_prop[
+                    'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extension_map
+                dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extension_map
+                dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extension_map
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f'`ocloc` failed with error code {e.returncode}')
+        else:
+            dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get(
+                'has_subgroup_matrix_multiply_accumulate', False)
+            dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
+                'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+            dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
+            dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
