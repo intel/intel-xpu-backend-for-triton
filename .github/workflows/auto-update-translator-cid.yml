@@ -24,6 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN }}
 
       # search the opened PR that has branch "bot/update_translator_cid", no new PR as long as the target PR is open
       - name: Search the opened PR that has branch ${{ env.PR_BRANCH }}
@@ -98,8 +99,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git config --global user.name 'glados-intel'
+          git config --global user.email 'glados@intel.com'
 
           if git show-ref --verify --quiet "refs/remotes/origin/${PR_BRANCH}"; then
             echo "${PR_BRANCH} already exist, deleting..."
