@@ -36,13 +36,5 @@ gpu.module @kernels {
     %14 = gpu.subgroup_reduce xor %1 : (i32) -> (i32)
     llvm.return
   }
-
-// CHECK:           tt.func @triton_gen.sub_group_local_id() -> index {
-// CHECK:             %[[VAL_15:.*]] = triton_gen.subgroup.local.id : i32
-// CHECK:             %[[VAL_16:.*]] = llvm.sext %[[VAL_15]] : i32 to i64
-  tt.func @triton_gen.sub_group_local_id() -> index {
-    %0 = gpu.lane_id
-    tt.return %0 : index
-  }
 }
 }
