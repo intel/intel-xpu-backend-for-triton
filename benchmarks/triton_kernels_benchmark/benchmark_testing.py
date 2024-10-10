@@ -147,8 +147,8 @@ def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=N
     import torch
     from triton.testing import do_bench as triton_do_bench
 
-    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none,
-                            return_mode="all", device_type=device)
+    times = triton_do_bench(fn, warmup=warmup, rep=rep, grad_to_none=grad_to_none, return_mode="all",
+                            device_type=device)
     times = torch.tensor(times, dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
