@@ -54,7 +54,7 @@ class CMakeBuild():
         self.cmake_prefix_paths.append(intel_extension_for_pytorch.cmake_prefix_path)
 
     def check_call(self, *popenargs, **kwargs):
-        print(" ".join(popenargs[0]))
+        log.info(" ".join(popenargs[0]))
         if not self.dry_run:
             subprocess.check_call(*popenargs, **kwargs)
 
@@ -69,7 +69,7 @@ class CMakeBuild():
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
             "-DCMAKE_PREFIX_PATH=" + ";".join(self.cmake_prefix_paths),
-            "-DUSE_IPEX=" + ("1" if self.use_ipex else "0"),
+            f"-DUSE_IPEX={int(self.use_ipex)}",
             "-DCMAKE_INSTALL_PREFIX=" + self.extdir,
             "-DPython3_ROOT_DIR:FILEPATH=" + sys.exec_prefix,
             "-DCMAKE_VERBOSE_MAKEFILE=TRUE",
