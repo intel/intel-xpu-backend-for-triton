@@ -36,8 +36,8 @@ def _summarize_statistics(times, quantiles, return_mode):
     return getattr(torch, return_mode)(times).item()
 
 
-def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True, return_mode="mean",
-                  device="xpu", sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
+def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
+                  sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -52,8 +52,6 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float]
-    :param fast_flush: Use faster kernel to flush L2 between measurements
-    :type fast_flush: bool
     """
     # TODO: remove this function and switch to `do_bench_no_ipex` after
     # `XPUEvent.elapsed_time` stops introducing regressions into the results.
@@ -69,10 +67,7 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
     cache_size = 256 * 1024 * 1024
-    if fast_flush:
-        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
-    else:
-        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
+    cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Estimate the runtime of the function
     start_event = torch.xpu.Event(enable_timing=True)
@@ -126,8 +121,8 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True,  # pylint: disable=unused-argument
-                          return_mode="mean", device="xpu", kernel_name=None):  # pylint: disable=unused-argument
+def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
+                          kernel_name=None):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -142,8 +137,6 @@ def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=N
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float]
-    :param fast_flush: Use faster kernel to flush L2 between measurements
-    :type fast_flush: bool
     """
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
@@ -155,8 +148,8 @@ def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=N
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True,
-                                       return_mode="mean", device="xpu", sync_submitting=True, kernel_name=None):
+def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean",
+                                       device="xpu", sync_submitting=True, kernel_name=None):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -171,8 +164,6 @@ def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float]
-    :param fast_flush: Use faster kernel to flush L2 between measurements
-    :type fast_flush: bool
     """
 
     assert return_mode in ["min", "max", "mean", "median"]
@@ -186,10 +177,7 @@ def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None
     # before each kernel call to make sure that the L2
     # doesn't contain any input data before the run
     cache_size = 256 * 1024 * 1024
-    if fast_flush:
-        cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
-    else:
-        cache = torch.empty(int(cache_size), dtype=torch.int8, device=device)
+    cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Estimate the runtime of the function
     start_event = torch.xpu.Event(enable_timing=True)

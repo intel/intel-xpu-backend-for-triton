@@ -37,6 +37,10 @@
 
 namespace mlir {
 namespace test {
+namespace intel {
+void registerTestAxisInfoPass();
+}
+
 void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
@@ -50,6 +54,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonPasses();
   mlir::triton::gpu::registerTritonGPUPasses();
   mlir::registerTritonNvidiaGPUPasses();
+  mlir::test::intel::registerTestAxisInfoPass();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
