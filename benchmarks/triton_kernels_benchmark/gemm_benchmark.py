@@ -13,6 +13,8 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
+from triton_kernels_benchmark.benchmark_testing import do_bench_elapsed_time, BENCHMARKING_METHOD
+
 import xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
@@ -277,8 +279,11 @@ def benchmark(B, M, N, K, provider):
         torch_b = torch.transpose(torch_b, -2, -1)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), warmup=10,
-                                                                 rep=10, quantiles=quantiles)
+        do_bench = benchmark_suit.do_bench
+        if BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX':
+            do_bench = do_bench_elapsed_time
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), warmup=10, rep=10,
+                                                  quantiles=quantiles, kernel_name='gemm_kernel')
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:

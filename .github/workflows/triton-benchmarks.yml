@@ -162,7 +162,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          BENCHMARKING_METHOD="ELAPSED_TIME" TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS
+          TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv
           source ../../scripts/capture-hw-details.sh
 
@@ -173,7 +173,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          BENCHMARKING_METHOD="ELAPSED_TIME" TRANSPOSE_A=1 python gemm_benchmark.py --reports $REPORTS
+          TRANSPOSE_A=1 python gemm_benchmark.py --reports $REPORTS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-at.csv
           source ../../scripts/capture-hw-details.sh
 
