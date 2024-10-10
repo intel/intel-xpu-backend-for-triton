@@ -3,11 +3,10 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "third_party/intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#define DEBUG_TYPE "axis-info"
+#define DEBUG_TYPE "intel-axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -278,6 +277,11 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
+    // Contiguity assumes an increasing sequence. So for SubIOp contiguous
+    // RHS doesn't produce a contiguous result.
+    if (isa<arith::SubIOp>(op))
+      return gcd(lhs.getContiguity(dim), rhs.getConstancy(dim));
+
     return std::max(gcd(lhs.getConstancy(dim), rhs.getContiguity(dim)),
                     gcd(lhs.getContiguity(dim), rhs.getConstancy(dim)));
   }

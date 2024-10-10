@@ -13,7 +13,7 @@ struct TestAxisInfoPass
 
   StringRef getArgument() const final { return "test-print-axis-info"; }
   StringRef getDescription() const final {
-    return "print the result of the axis analysis pass";
+    return "print the result of the alignment analysis pass";
   }
 
   void runOnOperation() override {

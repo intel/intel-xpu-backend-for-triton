@@ -1,5 +1,5 @@
-#ifndef TRITON_ANALYSIS_AXISINFO_H
-#define TRITON_ANALYSIS_AXISINFO_H
+#ifndef TRITON_INTEL_ANALYSIS_AXISINFO_H
+#define TRITON_INTEL_ANALYSIS_AXISINFO_H
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "llvm/Support/raw_ostream.h"
