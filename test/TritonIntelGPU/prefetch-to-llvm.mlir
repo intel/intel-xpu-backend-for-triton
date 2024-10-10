@@ -8,8 +8,8 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
     %c1_i64 = arith.constant 1 : i64
 
     // CHECK: %[[ROW_MAJOR_BLOCK_PTR:.*]] = llvm.insertvalue %arg0, {{.*}}[6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
-    // CHECK: %[[VAL_17:.*]] = llvm.call spir_funccc @_Z16get_sub_group_idv()
-    // CHECK: %[[VAL_18:.*]] = llvm.sext %[[VAL_17]] : i32 to i64
+    // CHECK: %[[VAL_17:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
+    // CHECK: %[[VAL_18:.*]] = llvm.zext %[[VAL_17]] : i32 to i64
     // CHECK: %[[VAL_19:.*]] = llvm.trunc %[[VAL_18]] : i64 to i32
     // CHECK: %[[VAL_20:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: %[[VAL_21:.*]] = llvm.urem %[[VAL_19]], %[[VAL_20]]  : i32
