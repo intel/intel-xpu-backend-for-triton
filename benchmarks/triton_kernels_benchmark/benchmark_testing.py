@@ -124,7 +124,7 @@ def do_bench_ipex(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fas
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True,
+def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flush=True,  # pylint: disable=unused-argument
                           return_mode="mean", device="xpu", kernel_name=None):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
