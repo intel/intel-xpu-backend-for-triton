@@ -336,10 +336,10 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 // CHECK-LABEL:   llvm.func spir_kernelcc @test(
 // CHECK-SAME:                                  %[[VAL_0:.*]]: !llvm.ptr<3>,
 // CHECK-SAME:                                  %[[VAL_1:.*]]: vector<16xf32>) -> vector<16xf32>
-// CHECK:           %[[VAL_2:.*]] = llvm.call spir_funccc @_Z16get_sub_group_idv() {{{.*}}} : () -> i32
-// CHECK:           %[[VAL_3:.*]] = llvm.sext %[[VAL_2]] : i32 to i64
-// CHECK:           %[[VAL_4:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_idv() {{{.*}}} : () -> i32
-// CHECK:           %[[VAL_5:.*]] = llvm.sext %[[VAL_4]] : i32 to i64
+// CHECK:           %[[VAL_2:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {{{.*}}} : () -> i32
+// CHECK:           %[[VAL_3:.*]] = llvm.zext %[[VAL_2]] : i32 to i64
+// CHECK:           %[[VAL_4:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {{{.*}}} : () -> i32
+// CHECK:           %[[VAL_5:.*]] = llvm.zext %[[VAL_4]] : i32 to i64
 // CHECK:           %[[VAL_6:.*]] = llvm.mlir.constant(16 : i64) : i64
 // CHECK:           %[[VAL_7:.*]] = llvm.mlir.constant(256 : i64) : i64
 // CHECK:           %[[VAL_8:.*]] = llvm.mul %[[VAL_7]], %[[VAL_3]] : i64

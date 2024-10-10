@@ -1147,7 +1147,7 @@ struct ExternElementwiseOpConversion
     LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
         rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
 
-    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]);
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
     callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 
     return {callOp.getResult()};
@@ -1411,7 +1411,7 @@ struct MulhiUIOpConversion
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]);
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
     callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     return {callOp.getResult()};
   }
@@ -1444,7 +1444,7 @@ struct OpToExternCallConversion
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]);
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
     callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
     return {callOp.getResult()};
   }

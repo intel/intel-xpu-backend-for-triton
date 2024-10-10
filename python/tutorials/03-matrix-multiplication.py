@@ -433,7 +433,7 @@ if TORCH_HAS_FP8 and is_cuda():
 # We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
+ref_lib = 'cuBLAS' if is_cuda() else 'oneDNN' if is_xpu() else 'rocBLAS'
 
 configs = []
 for fp8_inputs in [False, True]:

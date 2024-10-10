@@ -487,3 +487,7 @@ class XPUDriver(DriverBase):
     def is_active():
         import torch
         return torch.xpu.is_available()
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench
