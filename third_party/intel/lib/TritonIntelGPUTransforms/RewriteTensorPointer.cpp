@@ -676,6 +676,7 @@ public:
 
     DenseSet<Operation *> tensorPointersToRemove;
     mod.walk([&](tt::MakeTensorPtrOp makeTensorPtrOp) {
+      tensorPointersToRemove.insert(makeTensorPtrOp);
       DenseSet<Operation *> workingSet;
 
       LDBG("Considering: " << makeTensorPtrOp);
@@ -688,14 +689,14 @@ public:
         auto crtOp = *crtOpItr;
         LDBG("Processing op: " << *crtOp);
         if (isa<tt::LoadOp, tt::StoreOp>(crtOp)) {
-          if (shouldRemove(
+          if (!shouldRemove(
                   makeTensorPtrOp,
                   /*isUsedByStoreOp=*/isa<tt::StoreOp>(crtOp),
                   /*isBlockLoad=*/
                   isa<tt::LoadOp>(crtOp) &&
                       crtOp->hasAttr(
                           ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))) {
-            tensorPointersToRemove.insert(makeTensorPtrOp);
+            tensorPointersToRemove.erase(makeTensorPtrOp);
             return WalkResult::advance();
           }
         } else if (auto forOp = dyn_cast<scf::ForOp>(crtOp)) {
