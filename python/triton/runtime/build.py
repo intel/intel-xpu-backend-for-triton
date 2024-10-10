@@ -27,7 +27,7 @@ def quiet():
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     if cc in ["cl", "clang-cl"]:
-        cc_cmd = [cc, src, "/nologo", "/O2", "/LD", "-std:c++20"]
+        cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
@@ -37,13 +37,13 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
         cc_cmd += [f"/LIBPATH:{dir}" for dir in library_dirs]
         cc_cmd += [f'{lib}.lib' for lib in libraries]
     else:
-        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC"]
+        cc_cmd = [cc, src, "-O3", "-shared"]
+        if os.name != "nt":
+          cc_cmd += ["fPIC"]
         cc_cmd += [f'-l{lib}' for lib in libraries]
         cc_cmd += [f"-L{dir}" for dir in library_dirs]
         cc_cmd += [f"-I{dir}" for dir in include_dirs]
         cc_cmd += ["-o", out]
-
-        if os.name == "nt": cc_cmd.pop(cc_cmd.index("-fPIC"))
 
     return cc_cmd
 
@@ -75,6 +75,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
     custom_backend_dirs = set(os.getenv(var) for var in ('TRITON_CUDACRT_PATH', 'TRITON_CUDART_PATH'))
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
+    extra_compiler_flags = []
 
     if is_xpu():
         icpx = None
@@ -83,22 +84,25 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
-            cxx = icpx or clangpp or gxx
+            cxx = icpx if os.name == "nt" else icpx or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
+        cc = cxx
         import numpy as np
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
-        cc_cmd = [cxx]
         if icpx is not None:
-            cc_cmd += ["-fsycl"]
+            extra_compiler_flags += ["-fsycl"]
         else:
-            cc_cmd += ["--std=c++17"]
+            extra_compiler_flags += ["--std=c++17"]
+        if os.name == "nt":
+            library_dirs += [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
     else:
         cc_cmd = [cc]
 
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
+    cc_cmd += extra_compiler_flags
 
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
