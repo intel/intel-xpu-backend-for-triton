@@ -281,6 +281,7 @@ def benchmark(B, M, N, K, provider):
     if provider == 'onednn':
         do_bench = benchmark_suit.do_bench
         if BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX':
+            # Legacy profiler shows ~6000TFLOPS GeoMean for onednn measurements, so use more reliable method
             do_bench = do_bench_elapsed_time
         _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), warmup=10, rep=10,
                                                   quantiles=quantiles, kernel_name='gemm_kernel')
