@@ -507,59 +507,6 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
 namespace {
 
 //===----------------------------------------------------------------------===//
-// SubgroupID Op Lowering
-//===----------------------------------------------------------------------===//
-
-struct TritonGENSubgroupIdLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubgroupIdOp> {
-  using ConvertOpToLLVMPattern<TritonGEN::SubgroupIdOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::SubgroupIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    MLIRContext *ctx = rewriter.getContext();
-    Type retType = rewriter.getIntegerType(32);
-
-    auto funcAttrs = noUnwindWillReturnAttrs;
-    auto memory_zero = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/LLVM::ModRefInfo::NoModRef,
-        /*argMem=*/LLVM::ModRefInfo::NoModRef,
-        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-    funcAttrs.memEffectsAttr = memory_zero;
-    intel::AttributeList passthroughAttrs = createFunctionAttributes(
-        {{llvm::Attribute::NoSync, std::nullopt}}, ctx);
-    LLVM::CallOp callOp =
-        createDeviceFunctionCall(rewriter, "_Z16get_sub_group_idv", retType, {},
-                                 {}, {}, funcAttrs, passthroughAttrs);
-    rewriter.replaceOp(op, callOp);
-    return success();
-  }
-};
-
-//===----------------------------------------------------------------------===//
-// SubgroupLocalID Op Lowering
-//===----------------------------------------------------------------------===//
-
-struct TritonGENSubgroupLocalIdLowering
-    : ConvertOpToLLVMPattern<TritonGEN::SubgroupLocalIdOp> {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::SubgroupLocalIdOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::SubgroupLocalIdOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    MLIRContext *ctx = rewriter.getContext();
-    Type retType = rewriter.getIntegerType(32);
-
-    LLVM::CallOp callOp =
-        createDeviceFunctionCall(rewriter, "_Z22get_sub_group_local_idv",
-                                 retType, {}, {}, {}, noUnwindWillReturnAttrs);
-    rewriter.replaceOp(op, callOp);
-    return success();
-  }
-};
-
-//===----------------------------------------------------------------------===//
 // Synchronization Ops Lowerings
 //===----------------------------------------------------------------------===//
 
@@ -1184,8 +1131,7 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   patterns
-      .add<TritonGENSubgroupIdLowering, TritonGENSubgroupLocalIdLowering,
-           TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
+      .add<TritonGENBarrierLowering, TritonGENSplitBarrierSignalLowering,
            TritonGENSplitBarrierWaitLowering, TritonSubGroupReduceLowering,
            TritonSubGroupScanLowering, TritonMatrixDPASLowering,
            TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
