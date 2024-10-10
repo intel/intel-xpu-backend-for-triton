@@ -83,8 +83,9 @@ struct KernelArguments {
         throw std::runtime_error("Invalid JSON format in the file");
       }
       file.close();
-    } else
+    } else {
       throw std::runtime_error("Triton Spirv dump path doesnt exist");
+    }
 
     gridX = jsonData.at("gridX");
     gridY = jsonData.at("gridY");
@@ -233,8 +234,9 @@ void set_argument(sycl::handler &cgh, int index, ordered_json &item) {
   } else if (type == "i8") {
     auto val = item.at("value").get<int8_t>();
     set_scalar_arg<int8_t>(cgh, index, &val);
-  } else
+  } else {
     throw std::runtime_error("Argument type doesnt match");
+  }
 }
 
 static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
@@ -273,9 +275,10 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
               static_cast<void *>(&triton_args.dev_buffers.at(tensorIdx++)));
         } else
           set_argument(cgh, narg++, item);
-      } else
+      } else {
         throw std::runtime_error(
             "Type entry is missing in JSON argument_list\n");
+      }
     }
     if (triton_args.shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
@@ -342,8 +345,9 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
                     << std::endl;
         }
       }
-    } else
+    } else {
       throw std::runtime_error("Type entry is missing in JSON argument_list");
+    }
   }
 
   // Launch SYCL kernel

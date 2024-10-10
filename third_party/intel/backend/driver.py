@@ -490,46 +490,6 @@ def serialize_args(args, constants, signature):
         json.dump(args_dict, json_file, indent=4)
 
 
-def find_latest_spv_file(cache_dir):
-    import glob
-    # Check if the directory exists
-    if cache_dir and os.path.isdir(cache_dir):
-        # Find all .spv files in the directory and its subdirectories
-        spv_files = glob.glob(os.path.join(cache_dir, "**", "*.spv"), recursive=True)
-        if spv_files:
-            # Return the latest .spv file based on modification time
-            return max(spv_files, key=os.path.getmtime)
-    return None
-
-
-def copy_spv_binary():
-    import shutil
-    # Determine the cache directory
-    cache_dir = os.getenv("TRITON_CACHE_DIR", "").strip() or os.path.join(Path.home(), ".triton", "cache")
-    print(f"Cache directory: {cache_dir}")
-
-    # Find .spv files in the cache directory
-    spv_file = find_latest_spv_file(cache_dir)
-    if not spv_file:
-        print("No .spv file found in Cache Directory.")
-        return
-
-    print(f"Found .spv file: {spv_file}")
-
-    # Determine the destination path
-    dest_path = os.getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS", "").strip()
-    if not dest_path:
-        print("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS is not set.")
-        return
-
-    # Copy the latest .spv file to the destination path
-    try:
-        shutil.copy(spv_file, dest_path)
-        print(f"Copied {spv_file} to {dest_path}")
-    except IOError as e:
-        print(f"Failed to copy {spv_file} to {dest_path}: {e}")
-
-
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
@@ -543,12 +503,11 @@ class XPULauncher(object):
         self.launch = mod.launch
 
     def __call__(self, *args, **kwargs):
-        self.launch(*args, **kwargs)
         # Serialize KernelArguments for SPIR-V Runner
         serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
         if serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
-            copy_spv_binary()
+        self.launch(*args, **kwargs)
 
 
 class XPUDriver(DriverBase):
