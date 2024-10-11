@@ -15,7 +15,7 @@ source /opt/intel/oneapi/setvars.sh >/dev/null
 set -vx
 
 script_dir=$(dirname "$0")
-source "$script_dir/run_util.sh"
+source "$script_dir/run-util.sh"
 
 export PATH="$HOME/miniforge3/bin:$PATH"
 test -d "$HOME/miniforge3/envs/triton" || install_conda

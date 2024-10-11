@@ -73,7 +73,7 @@ jobs:
     runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail scripts/run_${{ inputs.env_manager }}.sh --python-version ${{ inputs.python_version }} {0}
+        shell: bash -noprofile --norc -eo pipefail scripts/run-${{ inputs.env_manager }}.sh --python-version ${{ inputs.python_version }} {0}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
