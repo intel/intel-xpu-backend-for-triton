@@ -44,6 +44,9 @@ on:
     branches:
       - main
 
+  #FIXME
+  push:
+
 permissions: read-all
 
 jobs:
