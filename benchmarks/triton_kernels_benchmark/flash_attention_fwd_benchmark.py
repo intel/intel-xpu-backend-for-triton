@@ -154,10 +154,10 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
-    for BM in [256] \
+    for BM in [128, 256] \
     for BN in [32, 64] \
-    for s in [3] \
-    for w in [32] \
+    for s in [3, 4] \
+    for w in [8, 16, 32] \
     ]
 
 tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
