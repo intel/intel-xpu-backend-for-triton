@@ -108,7 +108,8 @@ compilation_helper = CompilationHelper()
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
+    file_name = name + (".pyd" if os.name == "nt" else ".so")
+    cache_path = cache.get_file(file_name)
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
@@ -117,7 +118,7 @@ def compile_module_from_src(src, name):
             so = _build(name, src_path, tmpdir, compilation_helper.library_dir, compilation_helper.include_dir,
                         compilation_helper.libraries)
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+                cache_path = cache.put(f.read(), file_name, binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
