@@ -42,6 +42,8 @@ public:
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcEncoding = srcType.getEncoding();
+      auto srcOrder = triton::gpu::getOrder(srcEncoding);
+      auto rank = srcOrder.size();
       if (isa<triton::gpu::SharedEncodingAttr>(srcEncoding))
         return;
       auto dstDotOp =
@@ -69,17 +71,15 @@ public:
         unsigned opIdx = dstDotOp.getOpIdx();
         if ((opIdx == 0 /* Operand A */ &&
              dstDotOp.getParent() == srcDpasEncoding &&
-             srcDpasEncoding.getWarpsPerCTA()[1] ==
+             srcDpasEncoding.getWarpsPerCTA()[rank - 1] ==
                  1 /* No parallel on N dim */) ||
             (opIdx == 1 /* Operand B */ &&
              dstDotOp.getParent() == srcDpasEncoding &&
-             srcDpasEncoding.getWarpsPerCTA()[0] ==
+             srcDpasEncoding.getWarpsPerCTA()[rank - 2] ==
                  1 /* No parallel on M dim */))
           /* The destination dot layout has no duplication. */
           return;
       }
-      auto srcOrder = triton::gpu::getOrder(srcEncoding);
-      auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;
       if (rank == 3) {
         // add all elements except the element that is zero

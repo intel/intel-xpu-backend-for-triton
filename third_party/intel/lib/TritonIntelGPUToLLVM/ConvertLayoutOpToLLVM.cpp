@@ -6,6 +6,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -110,17 +111,26 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
-      assert(rank == 2);
+      assert(rank == 2 || rank == 3 && "Unexpected rank");
       auto multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;
       ::emitOffsetForDpasLayoutPerCTA(
-          dpasLayout, offsets, multiDimCTAInRepId[0] * shapePerCTATile[0],
-          multiDimCTAInRepId[1] * shapePerCTATile[1]);
+          dpasLayout, offsets,
+          multiDimCTAInRepId[rank - 2] * shapePerCTATile[rank - 2],
+          multiDimCTAInRepId[rank - 1] * shapePerCTATile[rank - 1]);
 
-      SmallVector<Value> multiDimOffset = {
-          add(multiDimBase[0], i32_val(offsets[elemId][0])),
-          add(multiDimBase[1], i32_val(offsets[elemId][1]))};
+      SmallVector<Value> multiDimOffset(rank);
+      if (rank == 3)
+        multiDimOffset[0] = add(multiDimBase[0], i32_val(multiDimCTAInRepId[0] *
+                                                         shapePerCTATile[0]));
+      multiDimOffset[rank - 2] =
+          add(multiDimBase[rank - 2], i32_val(offsets[elemId][rank - 2]));
+      multiDimOffset[rank - 1] =
+          add(multiDimBase[rank - 1], i32_val(offsets[elemId][rank - 1]));
+      // SmallVector<Value> multiDimOffset = {
+      //     add(multiDimBase[0], i32_val(offsets[elemId][0])),
+      //     add(multiDimBase[1], i32_val(offsets[elemId][1]))};
 
       return multiDimOffset;
     }

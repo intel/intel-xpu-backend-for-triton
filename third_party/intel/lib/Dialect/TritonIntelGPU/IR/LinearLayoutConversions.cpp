@@ -491,7 +491,8 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   assert(dpas && "Must be DPAS layout");
 
   int rank = shape.size();
-  assert(rank == dpas.getWarpsPerCTA().size() && rank == 2 && "Invalid rank");
+  assert(rank == dpas.getWarpsPerCTA().size() && (rank == 2 || rank == 3) &&
+         "Invalid rank");
 
   MLIRContext *ctx = dpas.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
