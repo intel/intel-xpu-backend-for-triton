@@ -195,7 +195,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
 
   // CHECK: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
-  // CHECK: llvm.func spir_funccc @_Z22get_sub_group_local_idv() -> i32
+  // CHECK: llvm.func spir_funccc @_Z22get_sub_group_local_id() -> i32
 
   // CHECK-LABEL: llvm.func spir_kernelcc @broadcast(
   // CHECK-SAME:                                     [[VAL_0:%.*]]: f32) -> vector<16xf32>
@@ -214,7 +214,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   tt.func public @broadcast_range() -> tensor<16x16xi32> {
     // CHECK: [[LAST_CONST:%.*]] = llvm.mlir.constant(15 : i32) : i32
     // CHECK: [[RANGE:%.*]] = llvm.insertelement [[LAST_CONST]], {{%.*}}[[[LAST_CONST]] : i32] : vector<16xi32>
-    // CHECK: [[LANE_ID:%.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_idv()
+    // CHECK: [[LANE_ID_RAW:%.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id()
+    // CHECK: [[LANE_ID_EXT:%.*]] = llvm.zext [[LANE_ID_RAW]] : i32 to i64
+    // CHECK: [[LANE_ID:%.*]] = llvm.trunc [[LANE_ID_EXT]] : i64 to i32
     // CHECK: [[EXTRACT:%.*]] = llvm.extractelement [[RANGE]][[[LANE_ID]] : i32] : vector<16xi32>
     // CHECK: [[EMPTY:%.*]] = llvm.mlir.poison : vector<1xi32>
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32

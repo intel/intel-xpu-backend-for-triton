@@ -1,21 +1,5 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
-// CHECK-DAG: llvm.func spir_funccc @_Z16get_sub_group_idv() -> i32 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, passthrough = ["nosync"], will_return}
-
-llvm.func @gen_special_regs() -> i32 {
-  // CHECK-LABEL: gen_special_regs
-
-  // CHECK: llvm.call spir_funccc @_Z16get_sub_group_idv() {{.*}} : () -> i32
-  %1 = triton_gen.subgroup.id : i32
-
-  // CHECK: llvm.call spir_funccc @_Z22get_sub_group_local_idv() {{.*}} : () -> i32
-  %14 = triton_gen.subgroup.local.id : i32
-
-  llvm.return %1 : i32
-}
-
-// -----
-
 // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
 
 llvm.func @triton_gen.barrier() {

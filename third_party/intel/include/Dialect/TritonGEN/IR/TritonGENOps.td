@@ -29,39 +29,6 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
   Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
-// Subgroup index
-//===----------------------------------------------------------------------===//
-
-def TritonGEN_SubgroupIdOp : TritonGEN_Op<"subgroup.id", [Pure]> {
-  let summary = "Subgroup Index";
-  let description = [{
-    The `triton_gen.subgroup.id` operation returns the subgroup ID which is a
-    number from 0 to the number of subgroups minus one.
-  }];
-  let arguments = (ins);
-  let results = (outs I32:$res);
-  let assemblyFormat = [{
-    attr-dict `:` type($res)
-  }];
-}
-
-//===----------------------------------------------------------------------===//
-// Subgroup local index
-//===----------------------------------------------------------------------===//
-
-def TritonGEN_SubgroupLocalIdOp : TritonGEN_Op<"subgroup.local.id", [Pure]> {
-  let summary = "Subgroup Local Invocation Index";
-  string baseDescription = [{
-    The `triton_gen.subgroup.local.id` operation returns the local invocation ID
-    of the work-item within the sub-group, which is a number in the range `[0,
-    subgroup_size)`.
-  }];
-  let arguments = (ins);
-  let results = (outs I32 : $res);
-  let assemblyFormat = "attr-dict `:` type($res)";
-}
-
-//===----------------------------------------------------------------------===//
 // Synchronization
 //===----------------------------------------------------------------------===//
 
