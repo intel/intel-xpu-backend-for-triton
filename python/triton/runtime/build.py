@@ -39,7 +39,7 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     else:
         cc_cmd = [cc, src, "-O3", "-shared"]
         if os.name != "nt":
-          cc_cmd += ["fPIC"]
+            cc_cmd += ["fPIC"]
         cc_cmd += [f'-l{lib}' for lib in libraries]
         cc_cmd += [f"-L{dir}" for dir in library_dirs]
         cc_cmd += [f"-I{dir}" for dir in include_dirs]
