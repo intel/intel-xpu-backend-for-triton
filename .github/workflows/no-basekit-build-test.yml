@@ -1,93 +1,137 @@
-name: No-Basekit Test
-run-name: ${{ inputs.run_name }}
+name: No-basekit build and test
 
 on:
   workflow_dispatch:
-    inputs:
-      runner_label:
-        description: Runner label, keep empty for default
-        type: string
-        default: ""
-      pytorch_ref:
-        description: PyTorch ref, keep empty for default
-        type: string
-        default: ""
-      pytorch_mode:
-        description: PyTorch mode, source or wheels
-        type: choice
-        options:
-          - source
-          - wheels
-        default: source
-      upload_test_reports:
-        description: Upload test reports
-        type: boolean
-        default: false
-      ignore_errors:
-        description: Ignore test errors
-        type: boolean
-        default: false
-      skip_list:
-        description: Skip list
-        type: string
-        default: ""
-      run_name:
-        description: Custom run name
-        type: string
-        default: "Build and test"
-      enable_unskip:
-        description: Ignore pytest.skip
-        type: boolean
-        default: false
-
-  pull_request:
-    branches:
-      - main
+  schedule:
+    - cron: "5 2 * * *"
 
 permissions: read-all
 
+env:
+  TRITON_DISABLE_LINE_INFO: 1
+
 jobs:
-  prepare:
-    name: Prepare
-    runs-on: Linux
-
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-
-    steps:
-      - name: Inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Matrix
-        id: matrix
-        run: |
-          if [[ -n "${{ inputs.runner_label }}" ]]; then
-            matrix='{"python": ["3.9"]}'
-          else
-            matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
-          fi
-          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 
   integration-tests:
-    name: Integration tests matrix
-    needs: prepare
-
+    name: Integration tests
+    runs-on:
+      - max1100
+      - rolling
+      - runner-0.0.19
     strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix:
+        python: ${{ github.ref_name == 'main' && fromJson('["3.9", "3.10", "3.11"]') || fromJson('["3.9"]') }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    uses: ./.github/workflows/build-test-reusable.yml
-    with:
-      driver_version: ${{ matrix.driver }}
-      runner_label: ${{ inputs.runner_label }}
-      pytorch_ref: ${{ inputs.pytorch_ref }}
-      pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
-      python_version: ${{ matrix.python }}
-      upload_test_reports: ${{ inputs.upload_test_reports || false }}
-      ignore_errors: ${{ inputs.ignore_errors || false }}
-      skip_list: no-basekit
-      run_name: ${{ inputs.run_name }}
-      enable_unskip: ${{ inputs.enable_unskip || false }}
-      env_manager: no_basekit
+      - name: Calculate PATH
+        run: |
+          echo $HOME/miniforge3/bin >>$GITHUB_PATH
+
+      - name: Load conda cache
+        id: conda-cache
+        uses: ./.github/actions/load
+        env:
+          CACHE_NUMBER: 6
+        with:
+          path: $HOME/miniforge3/envs/triton
+          key: no-basekit-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', '.github/pins/ipex.txt', '.github/pins/pytorch.txt') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Update conda env
+        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+        run: |
+          conda create -n triton --override-channels -c conda-forge python=${{ matrix.python }}.*
+          conda env update -f scripts/triton.yml
+
+          ln -snf /usr/include/level_zero $HOME/miniforge3/envs/triton/x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
+          find /usr -name libze_\* -exec ln -sf {} $HOME/miniforge3/envs/triton/lib/ \;
+
+          find /opt/intel/oneapi/mkl/2025.0/lib/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
+          find /opt/intel/oneapi/compiler/2024.1/lib/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
+
+      - name: Calculate ENV
+        run: |
+          python -m venv ./.venv; source ./.venv/bin/activate
+          echo LD_LIBRARY_PATH=$HOME/miniforge3/envs/triton/lib:$LD_LIBRARY_PATH:$VIRTUAL_ENV/lib >>$GITHUB_ENV
+          echo CPATH=$CPATH:$VIRTUAL_ENV/include:$VIRTUAL_ENV/include/sycl >>$GITHUB_ENV
+
+      - name: Install deps
+        run: |
+          python -m venv ./.venv; source ./.venv/bin/activate
+
+          wget https://files.pythonhosted.org/packages/cc/1e/d74e608f0c040e4f72dbfcd3b183f39570f054d08de39cc431f153220d90/intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
+          wheel unpack intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
+          mkdir -p ./intel_sycl_rt-2024.1.2/intel_sycl_rt-2024.1.2.data/data/include
+          cp -r /opt/intel/oneapi/compiler/2024.1/include/sycl ./intel_sycl_rt-2024.*/intel_sycl_rt-2024.*.data/data/include/
+          wheel pack intel_sycl_rt-2024.1.2 --build headers_patch
+          mv intel_sycl_rt-2024.1.2-headers_patch-py2.py3-none-manylinux1_x86_64.whl intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
+          pip install --force-reinstall ./intel_sycl_rt-2024.1.2-py2.py3-none-manylinux1_x86_64.whl
+          pip install dpcpp_cpp_rt==2024.1.2
+
+
+      - name: Add conda info to log
+        run: |
+          conda info
+          conda list -n triton
+
+      - name: Install latest nightly wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          install_cmd: conda run --no-capture-output -n triton pip install
+          python_version: ${{ matrix.python }}
+          wheels_pattern: 'torch-*'
+
+      - name: Build Triton
+        run: |
+          set -x
+          python -m venv ./.venv; source ./.venv/bin/activate
+          export DEBUG=1
+          cd python
+          conda run --no-capture-output -n triton pip install pybind11
+          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
+
+      - name: Run tests
+        run: |
+          set -x
+          python -m venv ./.venv; source ./.venv/bin/activate
+
+          export TRITON_TEST_REPORTS=true
+          export TRITON_TEST_REPORTS_DIR=$HOME/reports
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/866
+          export TRITON_TEST_SKIPLIST_DIR=scripts/skiplist/no-basekit
+          conda run --no-capture-output -n triton bash -v -x scripts/test-triton.sh
+
+      - name: Run E2E test
+        run: |
+          # FIXME https://github.com/intel/intel-xpu-backend-for-triton/issues/1031
+          cd ../pytorch || {
+            PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)
+            cd ..
+            git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules https://github.com/Stonepia/pytorch.git
+            cd pytorch
+            git branch pin-branch $PYTORCH_COMMIT_ID
+            git switch pin-branch
+          }
+
+          TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
+          conda run -n triton pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec transformers==$TRANSFORMERS_VERSION
+
+          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
+          export WORKSPACE=$GITHUB_WORKSPACE
+          # TODO: Find the fastest Hugging Face model
+          conda run --no-capture-output -n triton $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
+          cat $WORKSPACE/inductor_log/*/*/*.csv
+          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
+
+      - name: Save conda cache
+        if: ${{ steps.conda-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.conda-cache.outputs.path }}
+          dest: ${{ steps.conda-cache.outputs.dest }}
