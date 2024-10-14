@@ -38,7 +38,8 @@ Following input data is generated,
 ## Running
 
 Help:
-`./build/SPIRVRunner` < Output Tensor Title >
+`./build/SPIRVRunner` < Output Tensor Name >
+Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copied back to the CPU and written to disk. Additionally, the name must match the tensor's name (tensor_) and number as specified in the JSON file. Please refer args_data.json file.
 
 ### Demo (01-vector-add.py)
 
