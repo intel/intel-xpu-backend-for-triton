@@ -80,6 +80,7 @@ jobs:
 
       - name: Clone PyTorch
         if: inputs.env_manager != 'base'
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           git clone --recursive https://github.com/pytorch/pytorch
           cd pytorch
