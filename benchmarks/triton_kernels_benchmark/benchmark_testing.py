@@ -149,7 +149,7 @@ def do_bench_elapsed_time(fn, warmup=25, rep=100, grad_to_none=None, quantiles=N
 
 
 def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                                       device="xpu", sync_submitting=True, kernel_name=None):
+                                       device="xpu", sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -168,7 +168,7 @@ def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None
 
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
-    from torch.profiler import profile, ProfilerActivity
+    from torch.profiler import profile, ProfilerActivity, record_function
 
     fn()
     synchronize()
@@ -210,22 +210,24 @@ def do_bench_upstream_pytorch_profiler(fn, warmup=25, rep=100, grad_to_none=None
             if sync_submitting:
                 synchronize()
             # record time of `fn`
-            fn()
+            with record_function("__profile_kernel_of_func"):
+                fn()
         # Record clocks
         synchronize()
 
-    function_events = prof.events()
+    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.events())
+    functions = list(profiling_func_filter)
 
-    functions = []
-    if isinstance(kernel_name, str):
-        kernel_name = [kernel_name]
-    for ker_name in kernel_name:
-        functions.extend(list(filter(lambda x: x.name.startswith(ker_name), function_events)))  # pylint: disable=cell-var-from-loop
-    # profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
+    def extract_kernels(funcs):
+        kernels = []
+        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
+        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
+        return kernels
 
-    assert len(functions) == n_repeat, f"the profiling number not match, {len(functions)}"
+    kernels = [extract_kernels(func.cpu_children) for func in functions]
+    assert len(kernels) == n_repeat, "the profiling number not match"
     # Make the time to the milliseconds.
-    times = torch.tensor([f.self_device_time_total * 1e-3 for f in functions], dtype=torch.float)
+    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
