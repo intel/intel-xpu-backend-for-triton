@@ -144,8 +144,8 @@ jobs:
         run: |
           export DEBUG=1
           cd python
-          conda run --no-capture-output -n triton pip install pybind11
-          conda run --no-capture-output -n triton pip install --no-build-isolation -e '.[build,tests,tutorials]'
+          pip install pybind11
+          pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
       - name: Create test-triton command line
         run: |
@@ -195,13 +195,22 @@ jobs:
           echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
 
       - name: Install transformers
+        if: inputs.env_manager == 'base'
         uses: ./.github/actions/install-dependency
         with:
           package: transformers
           repository: huggingface/transformers
           ref: ${{ env.TRANSFORMERS_VERSION }}
           try-tag-prefix: v
-          env_manager: ${{ inputs.env-manager }}
+
+      - name: Install transformers
+        if: inputs.env_manager != 'base'
+        run:
+          git clone --recursive https://github.com/huggingface/transformers
+          cd transformers
+          git checkout ${{ env.TRANSFORMERS_VERSION }}
+          python setup.py bdist_wheel
+          pip install dist/*.whl
 
       - name: Run E2E test
         run: |
