@@ -9,6 +9,7 @@ add_triton_plugin(TritonXPU
 
   LINK_LIBS
   MLIRGPUToLLVMSPV
+  MLIRSPIRVToLLVM
   PostProcessLLVMIR
   TritonGENToLLVM
   TritonGENToLLVMIRTranslation
