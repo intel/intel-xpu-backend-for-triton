@@ -1,5 +1,9 @@
 #!/bin/bash
 
+install_env() {
+  :
+}
+
 source /opt/intel/oneapi/setvars.sh >/dev/null
 
 script_dir=$(dirname "$0")

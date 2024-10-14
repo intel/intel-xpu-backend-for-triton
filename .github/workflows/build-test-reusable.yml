@@ -88,6 +88,10 @@ jobs:
           path: $HOME/miniforge3/envs/triton
           key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
+      - name: Install Manager Environment
+        run: |
+          install-env
+
       - name: Print inputs
         run: |
           cat <<EOF
