@@ -1,7 +1,6 @@
 #!/bin/bash
 
-
-intall_env() {
+install_env() {
     export PATH="$HOME/miniforge3/bin:$PATH"
     conda create -n triton --override-channels -c conda-forge python=$python_version.*
     conda env update -f scripts/triton.yml
@@ -16,7 +15,7 @@ print_env_info() {
 }
 
 script_dir=$(dirname "$0")
-source "$script_dir/run-util.sh"
+source "$script_dir/env-util.sh"
 
 install_env
 print_env_info
