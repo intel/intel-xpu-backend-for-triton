@@ -128,6 +128,9 @@ jobs:
         if: inputs.env_manager != 'base'
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
+          git clone --recursive https://github.com/pytorch/pytorch
+          cd pytorch
+          git checkout ${{ inputs.pytorch_ref }}
 
       - name: Install pass_rate dependencies
         run: |
@@ -204,20 +207,21 @@ jobs:
           try-tag-prefix: v
 
       - name: Install transformers
-        if: inputs.env_manager != 'base'
+        if: (inputs.env_manager != 'base') && (steps.conda-cache.outputs.status == 'miss')
         run: |
           git clone --recursive https://github.com/huggingface/transformers
           cd transformers
           git checkout ${{ env.TRANSFORMERS_VERSION }}
           python setup.py bdist_wheel
           pip install dist/*.whl
+          python -c "import transformers; print(transformers.__version__)"
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
 
       - name: Run E2E test
         run: |
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
           cd pytorch
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
           # TODO: Find the fastest Hugging Face model
           $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
           # The script above always returns 0, so we need an additional check to see if the accuracy test passed
