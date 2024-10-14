@@ -283,7 +283,7 @@ def benchmark(B, M, N, K, provider):
         if BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX':
             # Legacy profiler shows ~6000TFLOPS GeoMean for onednn measurements, so use more reliable method
             do_bench = do_bench_elapsed_time
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10, n_rep=10,
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10, n_repeat=10,
                                                   quantiles=quantiles, kernel_name='gemm_kernel')
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
@@ -296,7 +296,8 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_rep=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles,
                                                                  kernel_name='matmul_kernel_with_block_pointers')
     elif provider == 'xetla':
         if B == 1:
@@ -340,8 +341,8 @@ def benchmark(B, M, N, K, provider):
         }
 
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_rep=10, quantiles=quantiles,
-                                                                 kernel_name=kernels_name[name])
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles, kernel_name=kernels_name[name])
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
