@@ -479,7 +479,15 @@ class XPUDriver(DriverBase):
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
 
+    def get_device_interface(self):
+        import torch
+        return torch.xpu
+
     @staticmethod
     def is_active():
         import torch
         return torch.xpu.is_available()
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench

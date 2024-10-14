@@ -44,7 +44,8 @@ def benchmark(M, N, AXIS, provider):
 
     if provider == 'triton':
         triton_fn = lambda: scan_kernel[(1, )](x, BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, AXIS=AXIS)
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles,
+                                                                 kernel_name='scan_kernel')
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

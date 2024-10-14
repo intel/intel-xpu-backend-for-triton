@@ -14,11 +14,21 @@ using namespace mlir;
 
 namespace mlir::triton::intel {
 
-bool TargetInfo::supportMaximumMinimum() const { return true; }
+bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  assert("TODO: implement ballot on XPU");
-  return Value();
+  // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
+  // TODO: check for more efficient solution.
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  Value threadId = getThreadId(rewriter, loc);
+  int numThreadPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
+  Value reduced_val = shl(select(cmp, i32_val(1), i32_val(0)), laneId);
+  for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
+    Value other_val = LLVM::intel::shuffleXor(loc, rewriter, reduced_val, offs);
+    reduced_val = or_(reduced_val, other_val);
+  }
+  return reduced_val;
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -143,15 +153,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   return true;
 }
 
-bool TargetInfo::processReplicaUsingStMatrix(
-    RewriterBase &rewriter, Location loc, Value smemBase,
-    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzleByteWidth) const {
-  return false;
-}
-
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   std::string funcName =
       resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
@@ -241,6 +242,10 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
   auto ret = call(funcOp, operands);
   ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+}
+
+int TargetInfo::getSharedAddressSpace() const {
+  return TritonGEN::TritonGENMemorySpace::kWorkgroup;
 }
 
 } // namespace mlir::triton::intel

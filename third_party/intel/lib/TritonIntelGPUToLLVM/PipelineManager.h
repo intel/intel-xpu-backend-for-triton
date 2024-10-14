@@ -18,6 +18,7 @@
 #include "mlir/Conversion/GPUToLLVMSPV/GPUToLLVMSPVPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -221,7 +222,7 @@ public:
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
@@ -243,18 +244,21 @@ public:
                                                targetInfo, benefit);
       intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                           benefit);
+      mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
       populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                     benefit);
       intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
                                            benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
       intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                               patterns, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                        benefit);
+    mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
+                                              targetInfo, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.

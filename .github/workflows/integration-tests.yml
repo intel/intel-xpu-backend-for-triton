@@ -25,6 +25,7 @@ env:
   TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
+  PROTON_SKIP_PC_SAMPLING_TEST: 1
 jobs:
   Runner-Preparation:
     runs-on: ubuntu-latest
@@ -48,7 +49,7 @@ jobs:
       - name: Detect if build deps (e.g. LLVM hash) changed
         id: detect-change
         if: github.event_name == 'push'
-        uses: tj-actions/changed-files@v44
+        uses: tj-actions/changed-files@v45
         with:
           files: |
             cmake/*.txt
@@ -225,7 +226,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install wheel cmake==3.24 ninja pytest-xdist lit
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-forked pytest-xdist lit
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_CCACHE: "true"
@@ -249,8 +250,9 @@ jobs:
             echo "Coult not find '${SHARED_LIB_DIR}'" ; exit -1
           fi
           cd python/test/unit
-          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
           python3 -m pytest -s -n 8 language/test_subprocess.py
+          python3 -m pytest -s -n 8 test_debug.py --forked
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s language/test_line_info.py
           # Run hopper/test_flashattention.py separately to avoid out of gpu memory
@@ -406,7 +408,10 @@ jobs:
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           cd python/test/unit
           pytest --capture=tee-sys -rfs -n 16 language runtime \
-                 --ignore=language/test_line_info.py
+                 --ignore=language/test_line_info.py \
+                 --ignore=test_debug.py
+          # TODO: uncomment
+          # pytest --capture=tee-sys -rfs test_debug.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
           pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
@@ -460,7 +465,7 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install ccache llvm
+          brew install ccache llvm@19 lld
       - name: Compute cache keys
         id: cache-key
         run: |

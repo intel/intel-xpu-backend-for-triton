@@ -1,13 +1,5 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
-llvm.func @triton_gen_special_regs() -> i32 {
-  // CHECK: triton_gen.subgroup.id : i32
-  %0 = triton_gen.subgroup.id : i32
-  // CHECK: triton_gen.subgroup.local.id : i32
-  %1 = triton_gen.subgroup.local.id : i32
-  llvm.return %0 : i32
-}
-
 llvm.func @triton_gen.barrier() {
   // CHECK-LABEL: triton_gen.barrier
   // CHECK: triton_gen.barrier {mem_fence = Local}

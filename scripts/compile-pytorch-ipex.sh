@@ -117,7 +117,7 @@ if [[ $BUILD_PYTORCH = true ]]; then
 
   echo "****** Building $PYTORCH_PROJ ******"
   pip install -r requirements.txt
-  pip install cmake ninja mkl-static mkl-include "numpy<2.0"
+  pip install cmake ninja "numpy<2.0"
   python setup.py bdist_wheel
 
   echo "****** Installing PyTorch ******"

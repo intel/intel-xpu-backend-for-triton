@@ -71,8 +71,15 @@ public:
       for (SmallVector<tt::DotOp> &dots : dotsGroup) {
         SmallVector<Value> notVisited = getNotVisitedUses(dots);
         for (Value val : notVisited) {
-          if (Operation *op = val.getDefiningOp())
+          if (Operation *op = val.getDefiningOp()) {
+            // Cannot move op that used by other ops in another region.
+            Region *rgn = dots.begin()->getOperation()->getParentRegion();
+            if (any_of(val.getUsers(), [&](Operation *user) {
+                  return user->getParentRegion() != rgn;
+                }))
+              continue;
             op->moveBefore(dots.begin()->getOperation());
+          }
         }
       }
     });
