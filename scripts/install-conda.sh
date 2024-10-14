@@ -2,6 +2,7 @@
 
 
 intall_env() {
+    export PATH="$HOME/miniforge3/bin:$PATH"
     conda create -n triton --override-channels -c conda-forge python=$python_version.*
     conda env update -f scripts/triton.yml
     find /opt/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
