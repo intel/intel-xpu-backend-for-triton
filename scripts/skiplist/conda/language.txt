@@ -339,3 +339,4 @@ test/unit/language/test_core.py::test_const[if-False-True]
 test/unit/language/test_core.py::test_const[if-False-False]
 test/unit/language/test_core.py::test_unroll_attr
 test/unit/language/test_decorator.py::test_triton_heuristic
+test/unit/language/test_core.py::test_constexpr_if_return
