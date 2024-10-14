@@ -205,7 +205,7 @@ jobs:
 
       - name: Install transformers
         if: inputs.env_manager != 'base'
-        run:
+        run: |
           git clone --recursive https://github.com/huggingface/transformers
           cd transformers
           git checkout ${{ env.TRANSFORMERS_VERSION }}
