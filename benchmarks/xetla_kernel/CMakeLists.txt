@@ -2,7 +2,10 @@
 find_package(XeTLALibrary REQUIRED)
 set(CMAKE_CXX_STANDARD 20)
 
-set(XETLA_KERNEL_FLAGS ${XETLA_KERNEL_FLAGS} -fsycl)
+set(XETLA_KERNEL_FLAGS ${XETLA_KERNEL_FLAGS}
+  -fsycl
+  -fsycl-device-code-split=per_kernel
+)
 
 if (USE_AOT_DEVLIST)
   set(XETLA_KERNEL_FLAGS ${XETLA_KERNEL_FLAGS} -fsycl-targets=spir64_gen)
