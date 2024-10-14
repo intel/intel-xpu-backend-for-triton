@@ -154,10 +154,10 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
-    for BM in [256] \
+    for BM in [128, 256] \
     for BN in [32, 64] \
-    for s in [3] \
-    for w in [32] \
+    for s in [3, 4] \
+    for w in [8, 16, 32] \
     ]
 
 tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
@@ -214,34 +214,11 @@ def forward(q, k, v, causal, sm_scale):
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL'],
-        x_vals=[  #
-            [1, 16, 16384, 128, False],  #
-            [1, 16, 16384, 128, True],  #
-            [1, 32, 16384, 64, False],  #
-            [1, 32, 16384, 64, True],  #
-            [2, 16, 8192, 128, False],  #
-            [2, 16, 8192, 128, True],  #
-            [2, 32, 8192, 64, False],  #
-            [2, 32, 8192, 64, True],  #
-            [4, 16, 4096, 128, False],  #
-            [4, 16, 4096, 128, True],  #
-            [4, 32, 4096, 64, False],  #
-            [4, 32, 4096, 64, True],  #
-            [4, 48, 1024, 64, False],  #
-            [4, 48, 1024, 64, True],  #
-            [8, 16, 2048, 128, False],  #
-            [8, 16, 2048, 128, True],  #
-            [8, 32, 2048, 64, False],  #
-            [8, 32, 2048, 64, True],  #
-            [16, 16, 1024, 128, False],  #
-            [16, 16, 1024, 128, True],  #
-            [16, 32, 1024, 64, False],  #
-            [16, 32, 1024, 64, True],  #
-            [32, 16, 512, 128, False],  #
-            [32, 16, 512, 128, True],  #
-            [32, 32, 512, 64, False],  #
-            [32, 32, 512, 64, True],  #
-        ],
+        x_vals=[[z, h, 16384 // z, dhead, causal]
+                for z in [1, 2, 4, 8, 16, 32]
+                for (h, dhead) in [(16, 128), (32, 64)]
+                for causal in [False, True]]  #
+        + [[4, 48, 1024, 64, causal] for causal in [False, True]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
