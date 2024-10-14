@@ -89,8 +89,9 @@ jobs:
           key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Manager Environment
+        shell: bash --noprofile --norc -eo pipefail {0}
         run: |
-          install-env
+          scripts/install-${{ inputs.env_manager }}.sh --python-version ${{ inputs.python_version }}
 
       - name: Print inputs
         run: |
