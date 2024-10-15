@@ -140,12 +140,30 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
-                                                                           False)
-        dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
-            'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
-        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+        if os.getenv("TRITON_INTEL_QUERY_DEVICE_EXTENSIONS", "0") == "1":
+            try:
+                # FIXME: Add support for other devices.
+                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', 'pvc']
+                result = subprocess.run(ocloc_cmd, check=True, capture_output=True, text=True)
+                output = result.stdout
+                supported_extensions = set()
+                for extension in output.split(' '):
+                    supported_extensions.add(extension)
+                dev_prop[
+                    'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extensions
+                dev_prop[
+                    'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
+                dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
+                dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f'`ocloc` failed with error code {e.returncode}')
+        else:
+            dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get(
+                'has_subgroup_matrix_multiply_accumulate', False)
+            dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
+                'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+            dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
+            dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
