@@ -280,7 +280,10 @@ PYBIND11_MODULE(xetla_kernel, m) {
         &bf16_gemm<Test_4096x8x128x16384_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_4096_8_16384_128",
         &bf16_gemm<Test_4096x8x16384x128_row_row>, "bf16_gemm (XeTLA)");
-  // flash_attn_fwd
+  // gemm stream k
+  m.def("gemm_streamk_shape_3072_4096_3072", &bf16_stream_k_gemm,
+        "bf16_gemm_streamk (XeTLA)");
+  // flash_attn
   m.def("flash_attn_causal_false", &flash_attn<false, false, false>,
         "flash attn fwd (XeTLA)");
   m.def("flash_attn_causal_true", &flash_attn<false, true, false>,
