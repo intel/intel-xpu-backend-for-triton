@@ -135,7 +135,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
     if ( // X axis condition
         encoding.getExecutionSize() != encoding.getSubGroupSize() ||
         // Y axis condition
-        type.getShape()[0] / encoding.getWarpsPerCTA()[0] !=
+        encoding.getRepeatCount() * encoding.getRepCluster()[0] !=
             encoding.getSubGroupSize())
       return failure();
 
