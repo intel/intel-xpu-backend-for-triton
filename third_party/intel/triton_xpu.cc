@@ -215,6 +215,7 @@ void init_triton_intel(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
+  // May do this after llvm ir according to user fmath flag.
   m.def("set_fast_math", [](mlir::ModuleOp mod) {
     using namespace mlir;
     MLIRContext *ctx = mod.getContext();
