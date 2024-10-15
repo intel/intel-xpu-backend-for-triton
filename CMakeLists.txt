@@ -8,8 +8,6 @@ endif()
 
 include(ExternalProject)
 
-set(CMAKE_CXX_STANDARD 20)
-
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 project(triton)
@@ -36,11 +34,13 @@ set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 if(NOT MSVC)
+  set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
   set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
 else()
+  set(CMAKE_CXX_STANDARD 20)
   set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1 /bigobj")
   set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1 /bigobj ")
   set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
