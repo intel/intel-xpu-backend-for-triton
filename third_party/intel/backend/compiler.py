@@ -279,6 +279,7 @@ class XPUBackend(BaseBackend):
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
