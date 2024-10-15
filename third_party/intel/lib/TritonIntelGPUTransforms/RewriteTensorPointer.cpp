@@ -33,7 +33,8 @@ namespace {
 ///   - it does not have Dpas layout or Dot layout (with Dpas layout as parent)
 ///   - its pitch is not divisible by Qword bitwidth
 ///   - it is not contiguous in memory
-bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByLoadOrStoreOp) {
+bool shouldRemove(tt::MakeTensorPtrOp &op, const bool isUsedByStoreOp,
+                  const bool isUsedByBlockLoadOp) {
   LDBG("Considering removal of: " << op);
   if (!op->getParentOfType<ModuleOp>()->hasAttr(
           ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName())) {
@@ -45,61 +46,19 @@ bool shouldRemove(tt::MakeTensorPtrOp &op, bool isUsedByLoadOrStoreOp) {
   LDBG("Op ptr type: " << ptrType);
   auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
   LDBG("Op tensor type: " << tensorType);
+  LDBG("Used by store op? " << isUsedByStoreOp);
+  LDBG("Used by block load op? " << isUsedByBlockLoadOp);
 
-  if (!ttgi::hasDotDpasEncoding(tensorType) &&
-      !(isUsedByLoadOrStoreOp && ttgi::hasDpasEncoding(tensorType))) {
-    LDBG("Marked for removal: tensor doesn't have DPAS layout and is not used "
-         "by load or store op with DPAS layout");
-    return true;
-  }
-
-  TypedValue<triton::PointerType> base = op.getBase();
-  Operation::operand_range shape = op.getShape();
-  unsigned rank = shape.size();
-  assert(rank > 1 && "Expecting tensor with rank > 1");
-  Operation::operand_range strides = op.getStrides();
-  Operation::operand_range offsets = op.getOffsets();
-  ArrayRef<int32_t> order = op.getOrder();
-  ArrayRef<int64_t> tensorShape = tensorType.getShape();
-
-  int fastChangeDim = -1;
-  for (size_t i = 0; i < strides.size(); ++i) {
-    if (ttgi::isConstant(strides[i], 1)) {
-      fastChangeDim = i;
-      break;
-    }
-  }
-
-  LDBG("fastChangeDim: " << fastChangeDim);
-  if (fastChangeDim < 0) {
-    LDBG("Marked for removal: fast changing dimension not found");
-    return true;
-  }
-
-  LDBG("Tensor type element type bit width: "
-       << tensorType.getElementTypeBitWidth());
-  if (fastChangeDim == rank - 2 && tensorType.getElementTypeBitWidth() == 8) {
-    // TODO: column major layout w/ fp8 has performance regression
-    LDBG("Marked for removal: column major layout with fp8 element type");
-    return true;
-  }
-
-  // HW 2D block read instruction has restriction on pitch divisibility
-  if (fastChangeDim >= (rank - 2)) {
-    auto pitch = strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
-    LDBG("Pitch: " << pitch);
-    // Across Intel platforms, the strictest pitch restriction is to be a
-    // multiple of OWord(128 bits).
-    if (!ttgi::isDivisible(pitch, 128 / tensorType.getElementTypeBitWidth())) {
-      LDBG("Marked for removal: cannot use block read/write instructions");
-      return true;
-    }
-
+  LDBG("hasDpasEncoding: " << ttgi::hasDpasEncoding(tensorType));
+  if (isUsedByBlockLoadOp ||
+      (isUsedByStoreOp && ttgi::hasDpasEncoding(tensorType))) {
+    LDBG("Tensor has DPAS layout or is used by load/store op with DPAS layout, "
+         "skipping removal");
     return false;
   }
 
-  LDBG("Marked for removal: fall-trough");
-
+  LDBG("Marked for removal: make tensor ptr op is not used by block load op or "
+       "by store op with DPAS layout");
   return true;
 }
 
@@ -715,28 +674,73 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    auto usedByLoadOrStoreOp = [](Value val) {
-      return llvm::any_of(val.getUsers(), [](Operation *user) {
-        return isa<tt::LoadOp, tt::StoreOp>(user);
-      });
-    };
+    DenseSet<Operation *> tensorPointersToRemove;
+    mod.walk([&](tt::MakeTensorPtrOp makeTensorPtrOp) {
+      tensorPointersToRemove.insert(makeTensorPtrOp);
+      DenseSet<Operation *> workingSet;
 
-    auto markTensorPointerForRemoval =
-        [this](Value val, bool isUsedByLoadOrStoreOp = false) {
-          if (tt::isTensorPointerType(val.getType())) {
-            tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
-            if (shouldRemove(makeTensorPtrOp, isUsedByLoadOrStoreOp))
-              valueToRemove.insert(val);
+      LDBG("Considering: " << makeTensorPtrOp);
+      Value result = makeTensorPtrOp.getResult();
+      for (auto user : result.getUsers()) {
+        workingSet.insert(user);
+      }
+      while (!workingSet.empty()) {
+        auto crtOpItr = workingSet.begin();
+        auto crtOp = *crtOpItr;
+        LDBG("Processing op: " << *crtOp);
+        if (isa<tt::LoadOp, tt::StoreOp>(crtOp)) {
+          if (!shouldRemove(
+                  makeTensorPtrOp,
+                  /*isUsedByStoreOp=*/isa<tt::StoreOp>(crtOp),
+                  /*isBlockLoad=*/
+                  isa<tt::LoadOp>(crtOp) &&
+                      crtOp->hasAttr(
+                          ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))) {
+            tensorPointersToRemove.erase(makeTensorPtrOp);
+            return WalkResult::advance();
           }
-        };
+        } else if (auto forOp = dyn_cast<scf::ForOp>(crtOp)) {
+          for (auto [arg, blockArg] :
+               llvm::zip(forOp.getInitArgs(),
+                         forOp.getBody()->getArguments().drop_front(
+                             forOp.getNumInductionVars()))) {
+            if (arg == makeTensorPtrOp) {
+              // add users of block arg
+              for (auto user : blockArg.getUsers()) {
+                workingSet.insert(user);
+              }
+            }
+          }
+        } else if (crtOp->getNumResults() > 0) {
+          // TODO: should we handle more than one result?
+          auto crtOpResult = crtOp->getResult(0);
+          LDBG("Not a load store and not a loop, adding users to working "
+               "set.");
+          for (auto user : crtOpResult.getUsers()) {
+            workingSet.insert(user);
+          }
+        }
+        workingSet.erase(crtOpItr);
+      }
+      return WalkResult::advance();
+    });
+
+    auto markTensorPointerForRemoval = [this,
+                                        &tensorPointersToRemove](Value val) {
+      if (tt::isTensorPointerType(val.getType())) {
+        tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(val);
+        if (tensorPointersToRemove.count(makeTensorPtrOp)) {
+          valueToRemove.insert(val);
+        }
+      }
+    };
 
     mod.walk([&](Operation *op) {
       if (isa<tt::MakeTensorPtrOp>(op)) {
         Value result = op->getResult(0);
-        markTensorPointerForRemoval(result, usedByLoadOrStoreOp(result));
+        markTensorPointerForRemoval(result);
       } else if (isa<tt::AdvanceOp, tt::LoadOp, tt::StoreOp>(op)) {
-        markTensorPointerForRemoval(op->getOperand(0),
-                                    isa<tt::LoadOp, tt::StoreOp>(op));
+        markTensorPointerForRemoval(op->getOperand(0));
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         for (auto arg : forOp.getInitArgs())
           markTensorPointerForRemoval(arg);
@@ -752,7 +756,7 @@ public:
       else {
         DBGS() << "Values to remove: ";
         for (auto val : valueToRemove)
-          DBGS() << val;
+          DBGS() << val << "\n";
       }
     });
 

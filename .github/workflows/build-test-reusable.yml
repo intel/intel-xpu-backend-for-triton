@@ -20,6 +20,10 @@ on:
         description: PyTorch ref, keep empty for default
         type: string
         default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: string
+        default: "source"
       python_version:
         description: Python version
         type: string
@@ -96,6 +100,7 @@ jobs:
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
 
       - name: Install pass_rate dependencies
         run: |
@@ -154,7 +159,6 @@ jobs:
           echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
 
       - name: Install transformers
-        if: ${{ inputs.python_version != '3.12' }}
         uses: ./.github/actions/install-dependency
         with:
           package: transformers
@@ -163,7 +167,6 @@ jobs:
           try-tag-prefix: v
 
       - name: Run E2E test
-        if: ${{ inputs.python_version != '3.12' }}
         run: |
           # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
           export WORKSPACE=$GITHUB_WORKSPACE
