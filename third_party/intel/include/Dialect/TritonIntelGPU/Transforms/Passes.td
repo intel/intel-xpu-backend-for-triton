@@ -284,4 +284,66 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonIntelGPUOptimizeReductionLocality
+    : Pass<"tritonintelgpu-optimize-reduction-locality", "mlir::ModuleOp"> {
+  let summary = "Minimize number of reductions within sub-groups";
+
+  let description = [{
+    This pass performs layout conversions so `tt.reduce` operations resulting in
+    sub-group reductions are converted to `tt.reshape`, `tt.reduce`, and
+    `triton_gpu.convert_layout` operations, e.g.:
+    ```mlir
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "xpu", "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+  tt.func @test.work(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #mma}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %1 = arith.maxnumf %arg1, %arg2 : f32
+      tt.reduce.return %1 : f32
+    }) : (tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #mma}>>
+    tt.return %0 : tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #mma}>>
+  }
+}
+    ```
+    Is converted to:
+    ```mlir
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16, 1], threadsPerWarp = [16, 1, 1], warpsPerCTA = [2, 2, 1], order = [0, 2, 1], CTAsPerCGA = [1, 1, 1], CTASplitNum = [1, 1, 1], CTAOrder = [0, 2, 1]}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, triton_gpu.target = "xpu", "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+  tt.func @test.work(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #mma}>> {
+    %0 = tt.reshape %arg0 {allow_reorder = true} : tensor<32x32xf32, #mma> -> tensor<32x32x1xf32, #blocked>
+    %1 = "tt.reduce"(%0) <{axis = 2 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %2 = arith.maxnumf %arg1, %arg2 : f32
+      tt.reduce.return %2 : f32
+    }) : (tensor<32x32x1xf32, #blocked>) -> tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked}>>
+    %3 = triton_gpu.convert_layout %1 : tensor<32x32xf32, #triton_gpu.slice<{dim = 2, parent = #blocked}>> -> tensor<32x32xf32, #blocked2>
+    %4 = "tt.reduce"(%3) <{axis = 0 : i32}> ({
+    ^bb0(%arg3: f32, %arg4: f32):
+      %5 = arith.maxnumf %arg3, %arg4 : f32
+      tt.reduce.return %5 : f32
+    }) : (tensor<32x32xf32, #blocked2>) -> tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #blocked2}>>
+    %6 = triton_gpu.convert_layout %4 : tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #blocked2}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #mma}>>
+    tt.return %6 : tensor<32xf32, #triton_gpu.slice<{dim = 0, parent = #mma}>>
+  }
+}
+    ```
+    The `tt.reshape` operation is a NOP so that the following `tt.reduce`
+    operation performs a reduction within the work-item. Then,
+    `triton_gpu.convert_layout` performs the actual data movement to prevent
+    within the sub-group reductions so that the following `tt.reduce` performs
+    a reduction within the work-item again. Finally, we convert back to the
+    expected layout.
+
+    Note this pass only supports `triton_intel_gpu.dpas` input layouts at the
+    moment, but it should be easily extended.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
