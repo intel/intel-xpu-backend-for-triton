@@ -211,6 +211,11 @@ jobs:
           ref: ${{ env.TRANSFORMERS_VERSION }}
           try-tag-prefix: v
 
+      - name: Install transformers dependencies
+        if: (inputs.env_manager == 'base') && (steps.pip-cache.outputs.status == 'miss')
+        run: |
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+
       - name: Install transformers
         if: (inputs.env_manager != 'base') && (steps.conda-cache.outputs.status == 'miss')
         run: |
