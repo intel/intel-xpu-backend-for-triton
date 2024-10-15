@@ -22,6 +22,15 @@ namespace mlir::triton::gpu::intel {
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
 namespace {
+static CTALayoutAttr getIdentityCTALayoutAttr(PatternRewriter &rewriter,
+                                              std::size_t rank) {
+  SmallVector<unsigned> ctasPerCGA(rank, 1);
+  SmallVector<unsigned> ctaSplitNum(rank, 1);
+  SmallVector<unsigned> ctaOrder(rank);
+  std::iota(std::rbegin(ctaOrder), std::rend(ctaOrder), 0);
+  return rewriter.getAttr<CTALayoutAttr>(ctasPerCGA, ctaSplitNum, ctaOrder);
+}
+
 // clang-format off
   /// Optimize reduction with DPAS-encoded input.
   ///
@@ -213,11 +222,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
                                            1, oldEncoding.getWarpsPerCTA()[1],
                                            1};
     std::array<unsigned, rank> order{4, 0, 1, 2, 3};
-    std::array<unsigned, rank> ctasPerCGA{1, 1, 1, 1, 1};
-    std::array<unsigned, rank> ctaSplitNum{1, 1, 1, 1, 1};
-    std::array<unsigned, rank> ctaOrder{4, 3, 2, 1, 0};
-    auto ctaLayout =
-        rewriter.getAttr<CTALayoutAttr>(ctasPerCGA, ctaSplitNum, ctaOrder);
+    CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -272,11 +277,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
     std::array<unsigned, rank> warpsPerCTA{dpasEncoding.getWarpsPerCTA()[0], 1,
                                            dpasEncoding.getWarpsPerCTA()[1]};
     std::array<unsigned, rank> order{2, 0, 1};
-    std::array<unsigned, rank> ctasPerCGA{1, 1, 1};
-    std::array<unsigned, rank> ctaSplitNum{1, 1, 1};
-    std::array<unsigned, rank> ctaOrder{2, 1, 0};
-    auto ctaLayout =
-        rewriter.getAttr<CTALayoutAttr>(ctasPerCGA, ctaSplitNum, ctaOrder);
+    CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -302,11 +303,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
     std::array<unsigned, rank> warpsPerCTA{oldEncoding.getWarpsPerCTA()[0],
                                            oldEncoding.getWarpsPerCTA()[2]};
     std::array<unsigned, rank> order{1, 0};
-    std::array<unsigned, rank> ctasPerCGA{1, 1};
-    std::array<unsigned, rank> ctaSplitNum{1, 1};
-    std::array<unsigned, rank> ctaOrder{1, 0};
-    auto ctaLayout =
-        rewriter.getAttr<CTALayoutAttr>(ctasPerCGA, ctaSplitNum, ctaOrder);
+    CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
