@@ -223,7 +223,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
 
     # Make the time to the milliseconds.
-    times = torch.tensor([sum(map(lambda elem: elem.self_device_time_total, f)) * 1e-3 for f in all_functions],
+    times = torch.tensor([sum(map(lambda elem: elem.self_device_time_total, f)) * 1e-3 for f in zip(*all_functions)],
                          dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
