@@ -212,8 +212,9 @@ jobs:
           try-tag-prefix: v
 
       - name: Install transformers dependencies
-        if: (inputs.env_manager == 'base') && (steps.pip-cache.outputs.status == 'miss')
+        if: inputs.env_manager == 'base'
         run: |
+          #FIXME: somehow caching dows not work for psutil
           pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
 
       - name: Install transformers
