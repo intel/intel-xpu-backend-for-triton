@@ -31,6 +31,14 @@ static CTALayoutAttr getIdentityCTALayoutAttr(PatternRewriter &rewriter,
   return rewriter.getAttr<CTALayoutAttr>(ctasPerCGA, ctaSplitNum, ctaOrder);
 }
 
+static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
+                                       Type type, Value val) {
+  auto reshapeOp =
+      rewriter.create<ReshapeOp>(loc, type, val, /*allow_reorder=*/true);
+  reshapeOp.setEfficientLayout(true);
+  return reshapeOp;
+}
+
 // clang-format off
   /// Optimize reduction with DPAS-encoded input.
   ///
@@ -232,8 +240,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
 
     // Although this is a NOP, we have to pass allow_reorder=true as static
     // analysis will fail to infer it.
-    return rewriter.create<ReshapeOp>(op.getLoc(), type, val,
-                                      /*allow_reorder=*/true);
+    return createReshapeForReduction(rewriter, op.getLoc(), type, val);
   }
 
   Value performReduction(ReduceOp op, PatternRewriter &rewriter, Value val,
@@ -313,8 +320,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
 
     // Although this is a NOP, we have to pass allow_reorder=true as static
     // analysis will fail to infer it.
-    return rewriter.create<ReshapeOp>(op.getLoc(), type, val,
-                                      /*allow_reorder=*/true);
+    return createReshapeForReduction(rewriter, op.getLoc(), type, val);
   }
 
   Value performFinalReduction(ReduceOp op, PatternRewriter &rewriter,
