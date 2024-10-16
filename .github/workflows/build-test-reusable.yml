@@ -91,6 +91,7 @@ jobs:
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref || env.PYTORCH_REF }}
+          path: pytorch
 
       - name: Load conda cache
         id: conda-cache
