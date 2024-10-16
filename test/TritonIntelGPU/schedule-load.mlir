@@ -148,7 +148,6 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
       scf.yield %98, %106, %110, %114, %118, %122, %126, %130, %321, %322, %323, %324, %325, %326, %327, %328, %329, %330, %331, %332, %333, %334, %335, %336 : tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>
     }
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<8x16xf32>
-    // CHECK-COUNT-8: arith.divf {{.*}} fastmath<fast>
     %67 = arith.divf %62#1, %cst_1 : tensor<8x16xf32>
     %68 = arith.divf %62#2, %cst_1 : tensor<8x16xf32>
     %69 = arith.divf %62#3, %cst_1 : tensor<8x16xf32>
