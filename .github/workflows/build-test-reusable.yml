@@ -78,16 +78,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Clone PyTorch
-        if: inputs.env_manager != 'base'
+      - name: Get pinned PyTorch ref
         shell: bash --noprofile --norc -eo pipefail {0}
+        if: inputs.env_manager != 'base' && inputs.ref == ''
         run: |
-          git clone --recursive https://github.com/pytorch/pytorch
-          cd pytorch
-          git checkout ${{ inputs.pytorch_ref }}
+          PYTORCH_REF="$(<.github/pins/pytorch-upstream.txt)"
+          echo "PYTORCH_REF=$PYTORCH_REF" | tee -a "$GITHUB_ENV"
+
+      - name: Clone PyTorch repository
+        if: inputs.env_manager != 'base'
+        uses: actions/checkout@v4
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ inputs.pytorch_ref || env.PYTORCH_REF }}
 
       - name: Load conda cache
-        if: inputs.env_manager != 'base'
         id: conda-cache
         uses: ./.github/actions/load
         env:
