@@ -140,7 +140,8 @@ def test_print(func: str, data_type: str, device: str):
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
        func != "device_print_pointer" and func != "device_print_scalar":
         assert_close(y, x)
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
 
     # Wait until driver complete all the jobs for the device_print, especially test_subprocess
     # require this which captures stdout when child exits.
