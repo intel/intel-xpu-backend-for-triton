@@ -30,6 +30,7 @@ namespace {
 
 struct CoalescePass
     : public ttgi::impl::TritonIntelGPUCoalesceBase<CoalescePass> {
+private:
   void
   setCoalescedEncoding(tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                        Operation *op, int numWarps, int threadsPerWarp,
@@ -180,7 +181,29 @@ struct CoalescePass
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
         // Modify and propagate the result of the enclosing loop.
         auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        changeAndPropagateLayout(forOp, layout, rewriter);
+
+        rewriter.modifyOpInPlace(forOp, [&]() {
+          for (auto [opType, res] :
+               llvm::zip(yieldOp->getOperandTypes(), forOp.getResults())) {
+            if (opType == res.getType())
+              continue;
+
+            assert(tt::isTensorPointerType(res.getType()) &&
+                   tt::isTensorPointerType(opType) &&
+                   "Expecting blocked pointers");
+            assert(cast<RankedTensorType>(
+                       cast<tt::PointerType>(opType).getPointeeType())
+                           .getEncoding() == layout &&
+                   "Unexpected layout");
+
+            auto resType = cast<tt::PointerType>(res.getType());
+            auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
+            res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                             resType.getAddressSpace()));
+          }
+        });
+
+        propagateLayout(forOp, layout, rewriter);
         continue;
       }
 
@@ -204,7 +227,29 @@ struct CoalescePass
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
         // Modify and propagate the result of the enclosing loop.
         auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        changeAndPropagateLayout(forOp, layout, rewriter);
+
+        rewriter.modifyOpInPlace(forOp, [&]() {
+          for (auto [opType, res] :
+               llvm::zip(yieldOp->getOperandTypes(), forOp.getResults())) {
+            if (opType == res.getType())
+              continue;
+
+            assert(tt::isTensorPointerType(res.getType()) &&
+                   tt::isTensorPointerType(opType) &&
+                   "Expecting blocked pointers");
+            assert(cast<RankedTensorType>(
+                       cast<tt::PointerType>(opType).getPointeeType())
+                           .getEncoding() == layout &&
+                   "Unexpected layout");
+
+            auto resType = cast<tt::PointerType>(res.getType());
+            auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
+            res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                             resType.getAddressSpace()));
+          }
+        });
+
+        propagateLayout(forOp, layout, rewriter);
         continue;
       }
 
@@ -247,6 +292,10 @@ struct CoalescePass
       for (Value res : op->getResults()) {
         if (!tt::isTensorPointerType(res.getType()))
           continue;
+
+        // Problem: if the operation is a for loop we cannot modify the layout
+        // of all the tensor ptr results, we need to modify only the one used by
+        // the yield operation.
 
         auto ptrType = cast<tt::PointerType>(res.getType());
         auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
@@ -319,6 +368,7 @@ struct CoalescePass
     assert(succeeded(verify(newOp)) && "Operation verification failed");
   }
 
+public:
   void runOnOperation() override {
     // Run axis info analysis
     ModuleOp moduleOp = getOperation();
@@ -339,6 +389,13 @@ struct CoalescePass
               : dyn_cast<RankedTensorType>(ptr.getType());
       if (!refTensorType || !refTensorType.getEncoding())
         return;
+
+      //      static int n = 0;
+      //    if (tt::isTensorPointerType(ptr.getType()))
+      //    n++;
+
+      //      if (n != 2)
+      //      return;
 
       int numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
       int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
