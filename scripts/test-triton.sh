@@ -316,8 +316,13 @@ run_inductor_tests() {
   test -d pytorch || {
     git clone https://github.com/pytorch/pytorch
     cd pytorch
+
     TRANSFORMERS_VERSION=$(cat .ci/docker/ci_commit_pins/huggingface.txt)
-    pip install transformers==$TRANSFORMERS_VERSION
+    git clone --recursive https://github.com/huggingface/transformers
+    cd transformers
+    git checkout $TRANSFORMERS_VERSION
+    python setup.py bdist_wheel
+    pip install dist/*.whl
     python -c "import transformers; print(transformers.__version__)"
   }
 
