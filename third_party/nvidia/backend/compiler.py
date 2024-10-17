@@ -20,12 +20,17 @@ def min_dot_size(target: GPUTarget):
 
 @functools.lru_cache()
 def _path_to_binary(binary: str):
+    binary += ".exe" if os.name == "nt" else ""
     paths = [
         os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
         os.path.join(os.path.dirname(__file__), "bin", binary),
     ]
 
-    for bin in paths:
+    for p in paths:
+        if os.name != "nt":
+            bin = p.split(" ")[0]
+        else:
+            bin = p
         if os.path.exists(bin) and os.path.isfile(bin):
             result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
             if result is not None:
@@ -365,6 +370,12 @@ class CUDABackend(BaseBackend):
                 cubin = f.read()
             if os.path.exists(fbin):
                 os.remove(fbin)
+
+        if os.path.exists(fsrc.name):
+            os.remove(fsrc.name)
+        if os.path.exists(flog.name):
+            os.remove(flog.name)
+
         return cubin
 
     def add_stages(self, stages, options):
