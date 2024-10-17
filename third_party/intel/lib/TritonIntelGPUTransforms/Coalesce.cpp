@@ -28,6 +28,13 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
+RankedTensorType getRankedTensorType(Type ptrTy) {
+  return tt::isTensorPointerType(ptrTy)
+             ? cast<RankedTensorType>(
+                   cast<tt::PointerType>(ptrTy).getPointeeType())
+             : dyn_cast<RankedTensorType>(ptrTy);
+}
+
 struct CoalescePass
     : public ttgi::impl::TritonIntelGPUCoalesceBase<CoalescePass> {
 private:
@@ -49,12 +56,7 @@ private:
     SmallVector<unsigned> order = argSort(contiguity);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
-    RankedTensorType refTensorType =
-        tt::isTensorPointerType(ptr.getType())
-            ? cast<RankedTensorType>(
-                  cast<tt::PointerType>(ptr.getType()).getPointeeType())
-            : cast<RankedTensorType>(ptr.getType());
-
+    RankedTensorType refTensorType = getRankedTensorType(ptr.getType());
     auto matchesShape = [&refTensorType](const Value &val) {
       auto rttType = dyn_cast<RankedTensorType>(val.getType());
       return rttType && rttType.getShape() == refTensorType.getShape();
@@ -197,7 +199,7 @@ private:
                    "Unexpected layout");
 
             auto resType = cast<tt::PointerType>(res.getType());
-            auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
+            RankedTensorType tensorType = getRankedTensorType(resType);
             res.setType(tt::PointerType::get(getNewType(tensorType, layout),
                                              resType.getAddressSpace()));
           }
@@ -243,7 +245,7 @@ private:
                    "Unexpected layout");
 
             auto resType = cast<tt::PointerType>(res.getType());
-            auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
+            RankedTensorType tensorType = getRankedTensorType(resType);
             res.setType(tt::PointerType::get(getNewType(tensorType, layout),
                                              resType.getAddressSpace()));
           }
@@ -281,8 +283,10 @@ private:
     }
   }
 
-  // Change the \p layout of the \p op result(s) and propagate the new result
-  // type to its users.
+  // TODO: change the implementation to handle only operation yielding one
+  // result?
+  // Change the \p layout of the \p op result(s) and propagate the new
+  // result type to its users.
   static void changeAndPropagateLayout(Operation *op, Attribute layout,
                                        IRRewriter &rewriter) {
     assert(op && op->getNumResults() != 0 &&
@@ -292,10 +296,6 @@ private:
       for (Value res : op->getResults()) {
         if (!tt::isTensorPointerType(res.getType()))
           continue;
-
-        // Problem: if the operation is a for loop we cannot modify the layout
-        // of all the tensor ptr results, we need to modify only the one used by
-        // the yield operation.
 
         auto ptrType = cast<tt::PointerType>(res.getType());
         auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
@@ -382,11 +382,7 @@ public:
       if (!ptr)
         return;
 
-      RankedTensorType refTensorType =
-          tt::isTensorPointerType(ptr.getType())
-              ? cast<RankedTensorType>(
-                    cast<tt::PointerType>(ptr.getType()).getPointeeType())
-              : dyn_cast<RankedTensorType>(ptr.getType());
+      RankedTensorType refTensorType = getRankedTensorType(ptr.getType());
       if (!refTensorType || !refTensorType.getEncoding())
         return;
 
