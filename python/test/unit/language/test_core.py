@@ -2600,7 +2600,7 @@ def test_scan_layouts(M, N, src_layout, axis, device):
     }}
     """
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
         kernel = triton.compile(f.name)
@@ -2734,10 +2734,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, reduce
         }}) {{axis = {axis} : i32}} : (tensor<{M}x{N}x{ty}, #src>) -> tensor<{rdims_1d}x{ty}, #{GPU_DIALECT}.slice<{{dim = {axis}, parent = #src}}>>
     """ + epilogue
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
-        f.close()
         kernel = triton.compile(f.name)
 
     rs = RandomState(17)
@@ -2789,7 +2788,7 @@ def test_store_op(M, src_layout, device):
     }}
     """
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
         store_kernel = triton.compile(f.name)
@@ -2839,7 +2838,7 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device):
         }}
     }}
     """
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
         kernel = triton.compile(f.name)
@@ -2921,7 +2920,7 @@ def test_chain_reduce(M, N, src_layout, op, device, first_axis):
     }}
     }}
     """
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
         kernel = triton.compile(f.name)
@@ -5298,7 +5297,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
     z = torch.empty_like(x, device=device)
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
         kernel = triton.compile(f.name)
@@ -5411,7 +5410,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device):
         x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
         z = torch.empty_like(x)
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
             f.write(ir)
             f.flush()
             kernel = triton.compile(f.name)
