@@ -87,6 +87,10 @@ jobs:
           path: $HOME/miniforge3/envs/triton
           key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
+      - name: Fail
+        if: inputs.env_manager == 'base'
+        run: exit 1
+
       - name: Install Manager Environment
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
