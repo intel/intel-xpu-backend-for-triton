@@ -145,7 +145,7 @@ jobs:
       - name: Run E2E test
         run: |
           #FIXME move back test when ready
-          scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          scripts/test-inductor.sh
           exit 1
 
       - name: Create test-triton command line
@@ -190,6 +190,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --instrumentation --skip-pip-install
 
       - name: Get transformers version
+        if: inputs.env_manager == 'base'
         run: |
           cd pytorch
           TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
