@@ -142,11 +142,6 @@ jobs:
           pip install pybind11
           pip install --no-build-isolation -e '.[build,tests,tutorials]'
 
-      - name: Run E2E test
-        run: |
-          #FIXME move back test when ready
-          scripts/test-inductor.sh
-
       - name: Create test-triton command line
         run: |
           if [[ -n "${{ inputs.skip_list }}" ]]; then
@@ -167,6 +162,11 @@ jobs:
             echo SKIPLIST="$skiplist"
             echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           } | tee -a $GITHUB_ENV
+
+      - name: Run inductor test
+        run: |
+          #FIXME move back test when ready
+          ${{ env.TRITON_TEST_CMD }} --inductor #--skip-pip-install
 
       - name: Run unit tests
         run: |
