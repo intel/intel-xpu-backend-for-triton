@@ -134,13 +134,13 @@ jobs:
         with:
           build_llvm: ${{ inputs.build_llvm }}
 
-      - name: Setup Triton
+      - name: Setup Triton and Transformers
         if: inputs.env_manager != 'base'
-        run: |
-          export DEBUG=1
-          cd python
-          pip install pybind11
-          pip install --no-build-isolation -e '.[build,tests,tutorials]'
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          install_cmd: conda run --no-capture-output -n triton pip install
+          python_version: ${{ matrix.python }}
 
       - name: Create test-triton command line
         run: |

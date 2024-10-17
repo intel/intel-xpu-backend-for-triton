@@ -315,15 +315,9 @@ run_instrumentation_tests() {
 run_inductor_tests() {
   test -d pytorch || {
     git clone https://github.com/pytorch/pytorch
+    rev=$(cat .github/pins/pytorch-upstream.txt)
     cd pytorch
-
-    TRANSFORMERS_VERSION=$(cat .ci/docker/ci_commit_pins/huggingface.txt)
-    git clone --recursive https://github.com/huggingface/transformers
-    cd transformers
-    git checkout $TRANSFORMERS_VERSION
-    python setup.py bdist_wheel
-    pip install dist/*.whl
-    python -c "import transformers; print(transformers.__version__)"
+    git checkout $rev
   }
 
   pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
