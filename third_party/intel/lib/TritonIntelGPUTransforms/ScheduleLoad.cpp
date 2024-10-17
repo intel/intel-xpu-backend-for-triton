@@ -90,15 +90,6 @@ public:
         op->moveAfter(def);
       }
     });
-
-    // HoHo, add fastmath for all
-    // may do this after llvm ir according to user fmath flag
-    mod.walk([&](Operation *op) {
-      if (auto fmIf = dyn_cast<arith::ArithFastMathInterface>(op))
-        op->setAttr(
-            fmIf.getFastMathAttrName(),
-            arith::FastMathFlagsAttr::get(ctx, arith::FastMathFlags::fast));
-    });
   }
 
 private:

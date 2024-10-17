@@ -1,8 +1,7 @@
-# XeTLA library is required.
-find_package(XeTLALibrary REQUIRED)
-set(CMAKE_CXX_STANDARD 20)
-
-set(XETLA_KERNEL_FLAGS ${XETLA_KERNEL_FLAGS} -fsycl)
+set(XETLA_KERNEL_FLAGS ${XETLA_KERNEL_FLAGS}
+  -fsycl
+  -fsycl-device-code-split=per_kernel
+)
 
 if (USE_AOT_DEVLIST)
   set(XETLA_KERNEL_FLAGS ${XETLA_KERNEL_FLAGS} -fsycl-targets=spir64_gen)
@@ -26,8 +25,7 @@ else()
   set(XETLA_KERNEL_FLAGS ${XETLA_KERNEL_FLAGS} "${XETLA_OFFLINE_OPTIONS}")
 endif()
 
-add_library(xetla_kernel SHARED python_main.cpp)
-set_target_properties(xetla_kernel PROPERTIES PREFIX "")
+Python3_add_library(xetla_kernel MODULE WITH_SOABI python_main.cpp)
 target_compile_options(xetla_kernel PRIVATE "-fPIC")
 if(USE_IPEX)
   target_compile_options(xetla_kernel PRIVATE "-fsycl")
@@ -37,7 +35,6 @@ endif()
 target_compile_options(xetla_kernel PUBLIC "-DXETPP_NEW_XMAIN")
 target_link_options(xetla_kernel PRIVATE ${XETLA_KERNEL_FLAGS})
 target_link_libraries(xetla_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
-target_include_directories(xetla_kernel PUBLIC "${PYTHON_INCLUDE_DIRS}")
 target_include_directories(xetla_kernel PUBLIC "${XeTLALibrary_INCLUDE_DIR}")
 
 if(USE_IPEX)
@@ -49,3 +46,5 @@ add_subdirectory(softmax)
 add_subdirectory(gemm)
 add_subdirectory(stream_k_gemm)
 add_subdirectory(flash_attention)
+
+install(TARGETS xetla_kernel LIBRARY DESTINATION .)

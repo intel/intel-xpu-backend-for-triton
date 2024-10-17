@@ -167,7 +167,7 @@ jobs:
           source ../../scripts/capture-hw-details.sh
 
           python ../../scripts/build_report.py $REPORTS/matmul-performance-bt.csv $REPORTS/gemm-bt-triton-report.csv --benchmark gemm-bt --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python ../../scripts/build_report.py $REPORTS/matmul-performance-bt.csv $REPORTS/gemm-bt-triton-report.csv --benchmark gemm-bt --compiler onednn --param_cols "B,M,K,N" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-bt.csv $REPORTS/gemm-bt-onednn-report.csv --benchmark gemm-bt --compiler onednn --param_cols "B,M,K,N" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (A^t@B) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
@@ -178,7 +178,7 @@ jobs:
           source ../../scripts/capture-hw-details.sh
 
           python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-triton-report.csv --benchmark gemm-at --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-triton-report.csv --benchmark gemm-at --compiler onednn --param_cols "B,M,K,N" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-onednn-report.csv --benchmark gemm-at --compiler onednn --param_cols "B,M,K,N" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (stream-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
