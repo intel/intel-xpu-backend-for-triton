@@ -91,6 +91,7 @@ jobs:
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           scripts/install-${{ inputs.env_manager }}.sh --python-version ${{ inputs.python_version }}
+          echo $HOME/miniforge3/bin >>$GITHUB_PATH
 
       - name: Print inputs
         run: |
@@ -139,7 +140,7 @@ jobs:
         uses: ./.github/actions/install-wheels
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
-          install_cmd: ${{ env.HOME }}/miniforge3/bin/conda run --no-capture-output -n triton pip install
+          install_cmd: conda run --no-capture-output -n triton pip install
           python_version: ${{ inputs.python_version }}
 
       - name: Create test-triton command line
