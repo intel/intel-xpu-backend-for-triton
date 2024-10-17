@@ -146,7 +146,6 @@ jobs:
         run: |
           #FIXME move back test when ready
           scripts/test-inductor.sh
-          exit 1
 
       - name: Create test-triton command line
         run: |
