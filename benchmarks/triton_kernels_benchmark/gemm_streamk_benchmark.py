@@ -293,9 +293,8 @@ def benchmark(M, N, K, provider):
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(
-            xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-            kernel_name='gpu::xetla::kernel::gemm_universal_t<dispatch_stream_k')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles, kernel_name='stream_k_gemm_run')
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
