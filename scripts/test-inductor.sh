@@ -6,7 +6,7 @@ set -vx
 test -d pytorch || {
   git clone https://github.com/pytorch/pytorch
   cd pytorch
-  TRANSFORMERS_VERSION=$(.ci/docker/ci_commit_pins/huggingface.txt)
+  TRANSFORMERS_VERSION=$(cat .ci/docker/ci_commit_pins/huggingface.txt)
   pip install transformers=$TRANSFORMERS_VERSION
   python -c "import transformers; print(transformers.__version__)"
 }
