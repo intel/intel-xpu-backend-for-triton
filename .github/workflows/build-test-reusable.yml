@@ -78,21 +78,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get pinned PyTorch ref
-        shell: bash --noprofile --norc -eo pipefail {0}
-        if: inputs.env_manager != 'base' && inputs.ref == ''
-        run: |
-          PYTORCH_REF="$(<.github/pins/pytorch-upstream.txt)"
-          echo "PYTORCH_REF=$PYTORCH_REF" | tee -a "$GITHUB_ENV"
-
-      - name: Clone PyTorch repository
-        if: inputs.env_manager != 'base'
-        uses: actions/checkout@v4
-        with:
-          repository: pytorch/pytorch
-          ref: ${{ inputs.pytorch_ref || env.PYTORCH_REF }}
-          path: pytorch
-
       - name: Load conda cache
         id: conda-cache
         uses: ./.github/actions/load
@@ -100,7 +85,7 @@ jobs:
           CACHE_NUMBER: 6
         with:
           path: $HOME/miniforge3/envs/triton
-          key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py', 'pytorch/.ci/docker/ci_commit_pins/huggingface.txt') }}-${{ env.CACHE_NUMBER }}
+          key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Manager Environment
         shell: bash --noprofile --norc -eo pipefail {0}
@@ -143,10 +128,6 @@ jobs:
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
-      - name: Install pass_rate dependencies
-        run: |
-          pip install defusedxml
-
       - name: Setup Triton
         if: inputs.env_manager == 'base'
         uses: ./.github/actions/setup-triton
@@ -160,6 +141,12 @@ jobs:
           cd python
           pip install pybind11
           pip install --no-build-isolation -e '.[build,tests,tutorials]'
+
+      - name: Run E2E test
+        run: |
+          #FIXME move back test when ready
+          scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
+          exit 1
 
       - name: Create test-triton command line
         run: |
@@ -217,33 +204,6 @@ jobs:
           ref: ${{ env.TRANSFORMERS_VERSION }}
           try-tag-prefix: v
 
-      - name: Install transformers dependencies
-        if: inputs.env_manager == 'base'
-        run: |
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
-
-      - name: Install transformers
-        if: (inputs.env_manager != 'base') && (steps.conda-cache.outputs.status == 'miss')
-        run: |
-          git clone --recursive https://github.com/huggingface/transformers
-          cd transformers
-          git checkout ${{ env.TRANSFORMERS_VERSION }}
-          python setup.py bdist_wheel
-          pip install dist/*.whl
-          python -c "import transformers; print(transformers.__version__)"
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
-
-      - name: Run E2E test
-        run: |
-          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
-          export WORKSPACE=$GITHUB_WORKSPACE
-          cd pytorch
-          # TODO: Find the fastest Hugging Face model
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
-          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
-          cat $WORKSPACE/inductor_log/*/*/*.csv
-          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
-
       - name: Save pip cache
         if: (inputs.env_manager == 'base') && (steps.pip-cache.outputs.status == 'miss')
         uses: ./.github/actions/save
@@ -260,6 +220,7 @@ jobs:
 
       - name: Pass rate
         run: |
+          pip install defusedxml
           source ./scripts/capture-hw-details.sh
           python3 scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
           python3 scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
