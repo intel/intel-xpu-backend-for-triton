@@ -140,7 +140,7 @@ jobs:
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           install_cmd: conda run --no-capture-output -n triton pip install
-          python_version: ${{ matrix.python }}
+          python_version: ${{ inputs.python_version }}
 
       - name: Create test-triton command line
         run: |
