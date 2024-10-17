@@ -1050,6 +1050,17 @@ public:
   }
 };
 
+class AdvanceOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::AdvanceOp> {
+public:
+  using AxisInfoVisitorImpl<triton::AdvanceOp>::AxisInfoVisitorImpl;
+  AxisInfo
+  getAxisInfo(triton::AdvanceOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    return operands[0]->getValue();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
@@ -1098,6 +1109,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
+  visitors.append<AdvanceOpAxisInfoVisitor>();
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
