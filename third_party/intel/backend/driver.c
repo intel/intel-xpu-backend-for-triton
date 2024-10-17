@@ -31,9 +31,8 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   const auto code = std::get<1>(tuple);
   if (code != ZE_RESULT_SUCCESS) {
     throw std::runtime_error(parseZeResultCode(code));
-  } else {
-    return std::get<0>(tuple);
   }
+  return std::get<0>(tuple);
 }
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
@@ -131,15 +130,15 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
 struct BuildFlags {
   std::string build_flags_str;
 
-  const std::string LARGE_GRF_FLAG{"-cl-intel-256-GRF-per-thread"};
-  const std::string SMALL_GRF_FLAG{"-cl-intel-128-GRF-per-thread"};
-  const std::string AUTO_GRF_FLAG{"-cl-intel-enable-auto-large-GRF-mode"};
+  const char *LARGE_GRF_FLAG{"-cl-intel-256-GRF-per-thread"};
+  const char *SMALL_GRF_FLAG{"-cl-intel-128-GRF-per-thread"};
+  const char *AUTO_GRF_FLAG{"-cl-intel-enable-auto-large-GRF-mode"};
 
   BuildFlags(const char *build_flags) : build_flags_str(build_flags) {}
 
   const std::string &operator()() const { return build_flags_str; }
 
-  int32_t n_regs() {
+  int32_t n_regs() const {
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos) {
       return 256;
     }
@@ -152,18 +151,18 @@ struct BuildFlags {
     return 0;
   }
 
-  const bool hasGRFSizeFlag() {
+  const bool hasGRFSizeFlag() const {
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(AUTO_GRF_FLAG) != std::string::npos) {
       return true;
-    } else {
-      return false;
     }
+
+    return false;
   }
 
   void addLargeGRFSizeFlag() {
-    build_flags_str = build_flags_str.append(" " + LARGE_GRF_FLAG);
+    build_flags_str = build_flags_str.append(" ").append(LARGE_GRF_FLAG);
   }
 };
 
