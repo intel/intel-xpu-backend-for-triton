@@ -395,8 +395,8 @@ LogicalResult DpasEncodingAttr::verify(
     return emitError() << "systolicDepth must be 8, but was:" << opsPerChan;
   }
 
-  if (repCluster.size() != 2) {
-    return emitError() << "expected rank 2 of repCluster, but the rank is:"
+  if (!(repCluster.size() == 2 || repCluster.size() == 3)) {
+    return emitError() << "expected rank 2 or 3 of repCluster, but the rank is:"
                        << repCluster.size();
   }
 

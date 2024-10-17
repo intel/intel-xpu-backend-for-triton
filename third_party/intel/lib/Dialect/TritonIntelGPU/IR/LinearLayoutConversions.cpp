@@ -1,3 +1,4 @@
+#include <iostream>
 #include <vector>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -53,6 +54,8 @@ LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,
   LinearLayout ret = LinearLayout::empty();
   for (int i = 0; i < shape.size(); i++) {
     // Start with the most-minor dimension, which is order[0].
+    std::cout << "i: " << i << " shape[i]: " << shape[i]
+              << " order[i]: " << order[i] << std::endl;
     int dim = order[i];
     ret *= LinearLayout::identity1D(shape[dim], inDimName, outDimNames[dim]);
   }
@@ -337,6 +340,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   for (auto dim : ret.getOutDimNames()) {
     assert(ret.getOutDimSize(dim) == labeledShape[dim] && "bad shape");
   }
+  std::cout << "combineCtaCgaWithShape: \n" << ret.toString() << std::endl;
   return ret;
 }
 
@@ -518,56 +522,80 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
         DPASLaneBasesA(opsPerChannel, threadsPerWarp, systolicDepth);
     tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
                               outDimNames);
-    // A only repeats by repCluster[0]
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[0], kRegister, outDimNames[0]);
+    // A only repeats by repCluster[rank-2]
+    tileLayout *= LinearLayout::identity1D(repCluster[rank - 2], kRegister,
+                                           outDimNames[rank - 2]);
 
-    nonKDim = 0;
-    KDim = 1;
+    nonKDim = rank - 2;
+    KDim = rank - 1;
     // K-dimension is shared among warps
-    tileLayout *= LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDimNames[1]);
-    tileLayout *=
-        LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    tileLayout *= LinearLayout::zeros1D(warpsPerCTA[rank - 1], kWarp,
+                                        outDimNames[rank - 1]);
+    tileLayout *= LinearLayout::identity1D(warpsPerCTA[rank - 2], kWarp,
+                                           outDimNames[rank - 2]);
 
   } else if (opIdx == 1) { // Operand B
+    std::cout << "\nOperand B" << std::endl;
     auto regBasesB = DPASRegBasesB(opsPerChannel, executionSize, threadsPerWarp,
                                    systolicDepth);
     auto laneBasesB =
         DPASLaneBasesB(opsPerChannel, threadsPerWarp, executionSize);
     tileLayout = LinearLayout({{kRegister, regBasesB}, {kLane, laneBasesB}},
-                              outDimNames);
-    // B only repeats by repCluster[1]
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[1], kRegister, outDimNames[1]);
+                              ArrayRef(outDimNames).take_back(2));
+    std::cout << (tileLayout.toString()) << std::endl;
+    // B only repeats by repCluster[rank-1]
+    tileLayout *= LinearLayout::identity1D(repCluster[rank - 1], kRegister,
+                                           outDimNames[rank - 1]);
+    std::cout << (tileLayout.toString()) << std::endl;
 
-    nonKDim = 1;
-    KDim = 0;
+    nonKDim = rank - 1;
+    KDim = rank - 2;
 
     // K-dimension is shared among warps
-    tileLayout *=
-        LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDimNames[1]);
-    tileLayout *= LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    // tileLayout *=
+    //     LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    // std::cout<<(tileLayout.toString());
+    // tileLayout *=
+    //     LinearLayout::identity1D(warpsPerCTA[rank-1], kWarp,
+    //     outDimNames[rank-1]);
+    // std::cout<<(tileLayout.toString());
+    // tileLayout *= LinearLayout::zeros1D(warpsPerCTA[rank-2], kWarp,
+    // outDimNames[rank-2]); std::cout<<(tileLayout.toString());
+    tileLayout *= identityND(kWarp, warpsPerCTA,
+                             triton::gpu::getWarpOrder(layout), outDimNames);
+    std::cout << (tileLayout.toString());
   } else { // opIdx=2 -> Operand C
+    std::cout << "\nOperand C" << std::endl;
     auto regBasesC = DPASRegBasesC(repeatCount, executionSize, threadsPerWarp);
     auto laneBasesC =
         DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
-    tileLayout = LinearLayout({{kRegister, regBasesC}, {kLane, laneBasesC}},
-                              outDimNames);
+    tileLayout = LinearLayout(
+        {{kRegister, regBasesC}, {kLane, laneBasesC}},
+        llvm::to_vector(llvm::reverse(ArrayRef(outDimNames).take_back(2))));
+    std::cout << (tileLayout.toString()) << std::endl;
     // The per-inst layout is repeated at each repCluster.
     // Hence, multiply with the identity layouts starting from the
     // least significant dimension.
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[1], kRegister, outDimNames[1]);
-    tileLayout *=
-        LinearLayout::identity1D(repCluster[0], kRegister, outDimNames[0]);
+    nonKDim = rank - 2;
+    KDim = rank - 1;
+    tileLayout *= LinearLayout::identity1D(repCluster[KDim], kRegister,
+                                           outDimNames[KDim]);
+    tileLayout *= LinearLayout::identity1D(repCluster[nonKDim], kRegister,
+                                           outDimNames[nonKDim]);
+    std::cout << (tileLayout.toString()) << std::endl;
 
-    // The identical layout is repeated among warps
-    tileLayout *=
-        LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDimNames[1]);
-    tileLayout *=
-        LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
-    nonKDim = 0;
-    KDim = 1;
+    // // The identical layout is repeated among warps
+    // tileLayout *=
+    //     LinearLayout::identity1D(warpsPerCTA[KDim], kWarp,
+    //     outDimNames[KDim]);
+    // tileLayout *=
+    //     LinearLayout::identity1D(warpsPerCTA[nonKDim], kWarp,
+    //     outDimNames[nonKDim]);
+    // tileLayout *=
+    //     LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    tileLayout *= identityND(kWarp, warpsPerCTA,
+                             triton::gpu::getWarpOrder(layout), outDimNames);
+    std::cout << (tileLayout.toString()) << std::endl;
   }
 
   // Lastly, the layout repeats to match the shape.
@@ -576,8 +604,10 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opIdx);
   tileLayout *=
       LinearLayout::identity1D(numReps[KDim], kRegister, outDimNames[KDim]);
+  std::cout << (tileLayout.toString()) << std::endl;
   tileLayout *= LinearLayout::identity1D(numReps[nonKDim], kRegister,
                                          outDimNames[nonKDim]);
+  std::cout << (tileLayout.toString()) << std::endl;
 
   return combineCtaCgaWithShape(std::move(tileLayout),
                                 CTALayoutAttr::getDefault(ctx, rank), shape);
