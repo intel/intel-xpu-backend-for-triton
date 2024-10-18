@@ -8,8 +8,8 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
@@ -37,9 +37,14 @@ void TritonGENDialect::initialize() {
 }
 
 int triton::TritonGEN::getSubgroupSize(Operation *op) {
-  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(op);
-  assert(attr && "Expecting valid target env attribute");
-  return attr.getResourceLimits().getSubgroupSize();
+  op->getParentOfType<FunctionOpInterface>().emitWarning() << "func";
+  auto knownSubgroupSizeHelper =
+      mlir::gpu::GPUDialect::KnownSubgroupSizeAttrHelper(op->getContext());
+  IntegerAttr knownSubgroupSizeAttr = knownSubgroupSizeHelper.getAttr(op);
+  if (!knownSubgroupSizeAttr) {
+    op->emitError("NOT PRESENT") << "NOPE";
+  }
+  return knownSubgroupSizeAttr.getInt();
 }
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.cpp.inc"

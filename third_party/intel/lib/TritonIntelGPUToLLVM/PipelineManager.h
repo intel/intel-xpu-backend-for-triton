@@ -19,7 +19,6 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
-#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
@@ -138,39 +137,52 @@ private:
   int numWarps{0};
 };
 
-struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
+// struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
+//
+//   using mlir::OpRewritePattern<ModuleOp>::OpRewritePattern;
+//
+//   LogicalResult matchAndRewrite(ModuleOp op,
+//                                 PatternRewriter &rewriter) const override {
+//     op.emitWarning() << "HERE!";
+//
+//     int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
+//     IntegerAttr subgroupSizeAttr = rewriter.getUI32IntegerAttr(subgroupSize);
+//     auto knownSubgroupSizeHelper =
+//         mlir::gpu::GPUDialect::KnownSubgroupSizeAttrHelper(op->getContext());
+//
+//     op.walk([&rewriter, &subgroupSizeAttr,
+//              &knownSubgroupSizeHelper](FunctionOpInterface funcOp) {
+//       rewriter.modifyOpInPlace(
+//           funcOp, [&funcOp, &subgroupSizeAttr, &knownSubgroupSizeHelper] {
+//             knownSubgroupSizeHelper.setAttr(funcOp, subgroupSizeAttr);
+//           });
+//     });
+//
+//     op.emitWarning() << "END!";
+//     return success();
+//   }
+// };
 
-  using mlir::OpRewritePattern<ModuleOp>::OpRewritePattern;
+struct AddKnownSubgroupSize : public mlir::OpRewritePattern<func::FuncOp> {
+  using mlir::OpRewritePattern<func::FuncOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ModuleOp op,
+  LogicalResult matchAndRewrite(func::FuncOp funcOp,
                                 PatternRewriter &rewriter) const override {
-    if (spirv::lookupTargetEnv(op)) {
+    // TODO this isn't matching anything
+    funcOp.emitRemark("adding to this");
+    ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
+    if (!mod)
       return failure();
-    }
 
-    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
-
-    auto resourceLimit = spirv::getDefaultResourceLimits(rewriter.getContext());
-    auto newResourceLimit = rewriter.getAttr<spirv::ResourceLimitsAttr>(
-        resourceLimit.getMaxComputeSharedMemorySize(),
-        resourceLimit.getMaxComputeWorkgroupInvocations(),
-        resourceLimit.getMaxComputeWorkgroupSize(), subgroupSize,
-        resourceLimit.getMinSubgroupSize(), resourceLimit.getMaxSubgroupSize(),
-        resourceLimit.getCooperativeMatrixPropertiesKhr(),
-        resourceLimit.getCooperativeMatrixPropertiesNv());
-    auto triple = spirv::VerCapExtAttr::get(
-        spirv::Version::V_1_2,
-        {spirv::Capability::GroupNonUniform, spirv::Capability::Addresses,
-         spirv::Capability::Float16Buffer, spirv::Capability::Int64,
-         spirv::Capability::Int16, spirv::Capability::Int8,
-         spirv::Capability::Kernel, spirv::Capability::Linkage,
-         spirv::Capability::Vector16, spirv::Capability::GenericPointer,
-         spirv::Capability::Groups, spirv::Capability::Float64},
-        {}, rewriter.getContext());
-    auto newTargetEnv = spirv::TargetEnvAttr::get(triple, newResourceLimit);
-    rewriter.modifyOpInPlace(op, [op, newTargetEnv] {
-      op->setAttr(spirv::getTargetEnvAttrName(), newTargetEnv);
-    });
+    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    IntegerAttr subgroupSizeAttr = rewriter.getUI32IntegerAttr(subgroupSize);
+    auto knownSubgroupSizeHelper =
+        mlir::gpu::GPUDialect::KnownSubgroupSizeAttrHelper(
+            funcOp->getContext());
+    rewriter.modifyOpInPlace(
+        funcOp, [&funcOp, &subgroupSizeAttr, &knownSubgroupSizeHelper] {
+          knownSubgroupSizeHelper.setAttr(funcOp, subgroupSizeAttr);
+        });
     return success();
   }
 };
@@ -215,8 +227,8 @@ public:
 
     // should run before other patterns that need the SPIRV-ENV attr
     // (e.g. patterns that output triton_gen.sub_group_reduce)
-    patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(),
-                                     patternBenefitAddSPIRVEnv);
+    patterns.add<AddKnownSubgroupSize>(&typeConverter.getContext(),
+                                       patternBenefitAddSPIRVEnv);
 
     if (isAdvancedPathEnabled) {
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
