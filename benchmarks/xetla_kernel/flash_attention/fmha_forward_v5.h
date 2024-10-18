@@ -16,6 +16,8 @@
 #ifndef TRITONBENCHMARK_FMHA_FWD_V5_H
 #define TRITONBENCHMARK_FMHA_FWD_V5_H
 
+#include <cmath>
+
 #include "fmha_policy_v2.h"
 #include "fmha_utils.h"
 #include "xetla.hpp"
