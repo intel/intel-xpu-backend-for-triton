@@ -2,6 +2,8 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 
+#include "llvm/ADT/TypeSwitch.h"
+
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
@@ -432,11 +434,34 @@ private:
 
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+  constexpr static unsigned maxSubGroupTransposeWidth = 64;
+
   // Set benefit to 2 so that this pattern applies before other convert-layout
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
-  explicit ConvertLayoutOpUsingLinearLayoutsConversion(
-      LLVMTypeConverter &typeConverter, PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern(typeConverter, benefit) {}
+  ConvertLayoutOpUsingLinearLayoutsConversion(
+      LLVMTypeConverter &typeConverter,
+      const triton::intel::TargetInfo &targetInfo, PatternBenefit benefit = 2)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  bool isSubGroupTranspose(const LinearLayout &srcLayout,
+                           const LinearLayout &dstLayout) const {
+    if (srcLayout.getInDimNames().empty())
+      return false;
+
+    MLIRContext *ctx = srcLayout.getInDimNames().begin()->getContext();
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    if (!srcLayout.hasInDim(kLane) || !dstLayout.hasInDim(kLane) ||
+        !srcLayout.hasInDim(kRegister) || !dstLayout.hasInDim(kRegister))
+      return false;
+
+    auto srcBases = srcLayout.getBases();
+    auto dstBases = dstLayout.getBases();
+
+    return srcBases[kRegister] == dstBases[kLane] &&
+           srcBases[kLane] == dstBases[kRegister];
+  }
 
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
@@ -537,8 +562,184 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                    const LinearLayout &dstLayout,
                                    OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
+    if (isSubGroupTranspose(srcLayout, dstLayout))
+      return performSubGroupTranspose(op, srcLayout, dstLayout, adaptor,
+                                      rewriter);
     return failure();
+  }
+
+  bool isValidTypeForSubGroupTranspose(Type type) const {
+    return TypeSwitch<Type, bool>(type)
+        .Case([](IntegerType intTy) {
+          unsigned width = intTy.getWidth();
+          return width == 8 || width == 16 || width == 32 || width == 64;
+        })
+        .Default([](auto) { return false; });
+  }
+
+  LogicalResult
+  performSubGroupTranspose(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                           const LinearLayout &dstLayout, OpAdaptor adaptor,
+                           ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    // TODO: Support multiples of sub_group_size
+    auto mod = op->getParentOfType<ModuleOp>();
+    if (inVals.size() !=
+        mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod))
+      return failure();
+
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    Type origElemTy = srcTy.getElementType();
+
+    LogicalResult conversionRes =
+        TypeSwitch<Type, LogicalResult>(origElemTy)
+            .Case([&](FloatType floatTy) {
+              // TODO: Support FP4.
+              Type dstType = int_ty(floatTy.getWidth());
+              if (!isValidTypeForSubGroupTranspose(dstType))
+                return failure();
+              llvm::transform(
+                  inVals, std::begin(inVals),
+                  [&](Value val) -> Value { return bitcast(val, dstType); });
+              return success();
+            })
+            .Case([&](IntegerType intTy) {
+              if (isValidTypeForSubGroupTranspose(intTy))
+                return success();
+              if (intTy.getWidth() > maxSubGroupTransposeWidth)
+                return failure();
+              // intTy.getWidth() < minSubGroupTransposeWidth
+              Type dstType = i8_ty;
+              llvm::transform(
+                  inVals, std::begin(inVals),
+                  [&](Value val) -> Value { return zext(dstType, val); });
+              return success();
+            })
+            .Case([&](triton::PointerType) {
+              Type dstType = i64_ty;
+              assert(isValidTypeForSubGroupTranspose(dstType) &&
+                     "i64 type should be supported");
+              llvm::transform(
+                  inVals, std::begin(inVals),
+                  [&](Value val) -> Value { return ptrtoint(dstType, val); });
+              return success();
+            })
+            .Default([&](auto) { return failure(); });
+
+    if (failed(conversionRes))
+      return conversionRes;
+
+    SmallVector<Value> outVals =
+        performSubGroupTranspose(loc, inVals, rewriter);
+
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](FloatType floatTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return bitcast(val, origElemTy); });
+        })
+        .Case([&](IntegerType intTy) {
+          // Check whether conversion took place.
+          if (intTy == outVals.front().getType())
+            return;
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return trunc(origElemTy, val); });
+        })
+        .Case([&](triton::PointerType ptrTy) {
+          Type llvmPtrTy = getTypeConverter()->convertType(ptrTy);
+          assert(llvmPtrTy && "Type conversion failed");
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return inttoptr(llvmPtrTy, val); });
+        });
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+  VectorType
+  getTypeForSubGroupTranspose(ArrayRef<Value> inVals,
+                              ConversionPatternRewriter &rewriter) const {
+    auto elementTy = cast<IntegerType>(inVals.front().getType());
+    return elementTy.getWidth() <= 16 ? vec_ty(elementTy, 16)
+                                      : vec_ty(elementTy, 8);
+  }
+
+  Value wrapInVector(Location loc, VectorType type, ArrayRef<Value> values,
+                     ConversionPatternRewriter &rewriter) const {
+    assert(type.getShape()[0] == values.size() && "Size mismatch");
+    Value res = rewriter.create<LLVM::PoisonOp>(loc, type);
+    for (auto [index, val] : llvm::enumerate(values))
+      res = insert_element(res, val, i32_val(index));
+    return res;
+  }
+
+  SmallVector<Value>
+  unwrapFromVector(Location loc, Value vec,
+                   ConversionPatternRewriter &rewriter) const {
+    SmallVector<Value> res;
+    for (unsigned i = 0, n = cast<VectorType>(vec.getType()).getShape()[0];
+         i < n; ++i)
+      res.push_back(extract_element(vec, i32_val(i)));
+    return res;
+  }
+
+  SmallVector<Value>
+  performSubGroupTranspose(Location loc, ArrayRef<Value> inVals,
+                           ConversionPatternRewriter &rewriter) const {
+    VectorType opType = getTypeForSubGroupTranspose(inVals, rewriter);
+    auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
+    unsigned vecWidth = opType.getShape()[0];
+
+    Value smemBase = LLVM::intel::getSharedMemoryBase(
+        loc, rewriter, targetInfo, &*rewriter.getInsertionPoint());
+    Type ptrType = smemBase.getType();
+
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int offset = threadsPerWarp;
+    Type offsetType = getTypeConverter()->getIndexType();
+    Value subGroupId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(
+            loc, /*upper_bound=*/IntegerAttr{}));
+    Value subGroupLocalId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::LaneIdOp>(loc,
+                                             /*upper_bound=*/IntegerAttr{}));
+    Value wiStride =
+        rewriter.create<LLVM::ConstantOp>(loc, offsetType, threadsPerWarp);
+    Value sgStride = rewriter.create<LLVM::ConstantOp>(
+        loc, offsetType, threadsPerWarp * threadsPerWarp);
+    Value subGroupOffset = mul(sgStride, subGroupId);
+    Type elementType = opType.getElementType();
+    Value subGroupBasePtr = gep(ptrType, elementType, smemBase,
+                                ValueRange{subGroupOffset}, /*inbounds=*/true);
+    Value base = subGroupBasePtr;
+    // Store in matrix, non-transposed
+    for (ArrayRef<Value> vals = inVals; !vals.empty();
+         vals = vals.drop_front(vecWidth)) {
+      ArrayRef<Value> curr = vals.take_front(vecWidth);
+      Value vec = wrapInVector(loc, opType, curr, rewriter);
+      rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, vec);
+      base = gep(base.getType(), opType, base, ArrayRef<LLVM::GEPArg>{offset},
+                 /*inbounds=*/true);
+    }
+
+    // Load from matrix, trasposed.
+    Value workItemOffset = mul(wiStride, subGroupLocalId);
+    Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
+                                ValueRange{workItemOffset}, /*inbounds=*/true);
+    Value transposedVec =
+        load(vec_ty(opType.getElementType(), inVals.size()), workItemBasePtr);
+
+    return unwrapFromVector(loc, transposedVec, rewriter);
   }
 
   LogicalResult
@@ -548,6 +749,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // TODO(jlebar): Implement me.
     return failure();
   }
+
+private:
+  const triton::intel::TargetInfo &targetInfo;
 };
 
 } // namespace
@@ -560,7 +764,7 @@ void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
   // Eventually the LL conversion will subsume all of the others and be the only
   // one left.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, benefit.getBenefit() + 1);
+      typeConverter, targetInfo, benefit.getBenefit() + 1);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
                                                benefit);
 }
