@@ -446,21 +446,23 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   bool isSubGroupTranspose(const LinearLayout &srcLayout,
                            const LinearLayout &dstLayout) const {
-    if (srcLayout.getInDimNames().empty())
-      return false;
-
     MLIRContext *ctx = srcLayout.getInDimNames().begin()->getContext();
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
-    if (!srcLayout.hasInDim(kLane) || !dstLayout.hasInDim(kLane) ||
-        !srcLayout.hasInDim(kRegister) || !dstLayout.hasInDim(kRegister))
-      return false;
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
 
-    auto srcBases = srcLayout.getBases();
-    auto dstBases = dstLayout.getBases();
-
-    return srcBases[kRegister] == dstBases[kLane] &&
-           srcBases[kLane] == dstBases[kRegister];
+    LinearLayout comp = srcLayout.invertAndCompose(dstLayout);
+    std::optional<LinearLayout> conversion = comp.divideRight(
+        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
+        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    assert(conversion && "Expecting valid conversion");
+    LinearLayout id =
+        LinearLayout::identity1D(conversion->getInDimSize(kRegister), kRegister,
+                                 kRegister) *
+        LinearLayout::identity1D(conversion->getInDimSize(kLane), kLane, kLane);
+    // Composing the transposition with itself should give us the identity.
+    return id == conversion->compose(*conversion);
   }
 
   LogicalResult
@@ -561,10 +563,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                     OpAdaptor adaptor) const {
     auto srcType = cast<LLVM::LLVMStructType>(adaptor.getSrc().getType());
     ArrayRef<Type> body = srcType.getBody();
+    // TODO: Support more configurations.
     auto mod = op->getParentOfType<ModuleOp>();
-    // Only supporting sub_group_size^2 transpositions for now.
-    if (body.size() !=
-        mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod))
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    if (body.size() != threadsPerWarp)
       return false;
     return TypeSwitch<Type, bool>(body.front())
         .Case([this](FloatType floatTy) {
@@ -581,7 +583,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           // Support via ptrtoint
           return true;
         })
-        .Default([](auto) { return false; });
+        .Default(false);
   }
 
   LogicalResult transferWithinLane(ConvertLayoutOp op,
@@ -604,7 +606,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           unsigned width = intTy.getWidth();
           return width == 8 || width == 16 || width == 32 || width == 64;
         })
-        .Default([](auto) { return false; });
+        .Default(false);
   }
 
   void performSubGroupTranspose(ConvertLayoutOp op,
@@ -621,9 +623,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
-    // TODO: Support multiples of sub_group_size
-    auto mod = op->getParentOfType<ModuleOp>();
 
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     Type origElemTy = inVals.front().getType();
@@ -679,7 +678,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           llvm::transform(
               outVals, std::begin(outVals),
               [&](Value val) -> Value { return inttoptr(ptrTy, val); });
-        });
+        })
+        .Default([](auto) { llvm_unreachable("Unsupported type"); });
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
