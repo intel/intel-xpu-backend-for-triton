@@ -1010,8 +1010,12 @@ public:
   getAxisInfo(triton::MakeTensorPtrOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
-    assert(op.getShape().size() == 2 && operands.size() == 7 &&
-           "MakeTensorPtrOp should have 2D shape");
+
+    // TODO: Extend to higher dimension tensor pointers.
+    if (op.getShape().size() != 2)
+      return {};
+
+    assert(operands.size() == 7 && "MakeTensorPtrOp should have 2D shape");
 
     AxisInfo ptrInfo = operands[0]->getValue();
     AxisInfo shapeInfo0 = operands[1]->getValue();
