@@ -171,11 +171,77 @@ private:
     return false;
   }
 
-  // Propagate the layout to \p root operation's result to the \p forOp loop
+  // Change the \p layout of the \p op result and propagate the new result type
+  // to its users.
+  void changeAndPropagateLayout(Operation *op, Attribute layout,
+                                IRRewriter &rewriter) const {
+    assert(op && op->getNumResults() == 1 &&
+           "Expecting operation yielding a result");
+
+    rewriter.modifyOpInPlace(op, [&]() {
+      Value res = op->getOpResult(0);
+      assert(tt::isTensorPointerType(res.getType()) &&
+             "Expecting a block pointer");
+
+      auto ptrType = cast<tt::PointerType>(res.getType());
+      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                       ptrType.getAddressSpace()));
+    });
+    LDBG("Coalesced op: " << *op);
+
+    propagateLayout(op, layout, rewriter);
+  }
+
+  // Propagate the layout of the \p root operation's result to its users.
+  void propagateLayout(Operation *root, Attribute layout,
+                       IRRewriter &rewriter) const {
+    assert(root->getNumResults() != 0 &&
+           "Expecting an operation yielding a result");
+
+    LDBG("root: " << *root);
+    for (Operation *user : root->getUsers()) {
+      if (filterUser(user))
+        continue;
+
+      LDBG("root's user: " << *user << "\n");
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        propagateLayoutToArgsAndBody(forOp, root, layout, rewriter);
+        continue;
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
+        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        continue;
+      }
+      changeAndPropagateLayout(user, layout, rewriter);
+    }
+  }
+
+  // Propagate the layout of the \p arg block argument to its users.
+  void propagateLayout(BlockArgument arg, Attribute layout,
+                       IRRewriter &rewriter) const {
+    LDBG("arg: " << arg);
+    for (Operation *user : arg.getUsers()) {
+      if (filterUser(user))
+        continue;
+
+      LDBG("arg's user: " << *user << "\n");
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
+        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        continue;
+      }
+      changeAndPropagateLayout(user, layout, rewriter);
+    }
+  }
+
+  // Propagate the layout of the \p root operation's result to the \p forOp loop
   // init argument that uses it, and transitively to the operations in the loop
   // body that use that argument.
-  static void propagate(scf::ForOp forOp, Operation *root, Attribute layout,
-                        IRRewriter &rewriter) {
+  void propagateLayoutToArgsAndBody(scf::ForOp forOp, Operation *root,
+                                    Attribute layout,
+                                    IRRewriter &rewriter) const {
     assert(llvm::any_of(root->getUsers(),
                         [&](Operation *user) { return user == forOp; }) &&
            "Expecting the loop to be a user of the root operation");
@@ -202,8 +268,8 @@ private:
 
   // Modify the given loop \p forOp and propagate the result of the enclosing
   // loop.
-  static void propagate(scf::ForOp forOp, Attribute layout,
-                        IRRewriter &rewriter) {
+  void propagateLayoutToLoopResults(scf::ForOp forOp, Attribute layout,
+                                    IRRewriter &rewriter) const {
     Operation *yieldOp = forOp.getBody()->getTerminator();
 
     rewriter.modifyOpInPlace(forOp, [&]() {
@@ -227,69 +293,6 @@ private:
     });
 
     propagateLayout(forOp, layout, rewriter);
-  }
-
-  static void propagateLayout(BlockArgument arg, Attribute layout,
-                              IRRewriter &rewriter) {
-    LDBG("arg: " << arg);
-    for (Operation *user : arg.getUsers()) {
-      LDBG("arg's user: " << *user << "\n");
-      if (filterUser(user)) {
-        continue;
-      }
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        propagate(forOp, layout, rewriter);
-        continue;
-      }
-      changeAndPropagateLayout(user, layout, rewriter);
-    }
-  }
-
-  static void propagateLayout(Operation *root, Attribute layout,
-                              IRRewriter &rewriter) {
-    assert(root->getNumResults() != 0 &&
-           "Expecting an operation yielding a result");
-
-    LDBG("root: " << *root);
-    for (Operation *user : root->getUsers()) {
-      LDBG("root's user: " << *user << "\n");
-      if (filterUser(user)) {
-        continue;
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        propagate(forOp, root, layout, rewriter);
-        continue;
-      }
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        propagate(forOp, layout, rewriter);
-        continue;
-      }
-      changeAndPropagateLayout(user, layout, rewriter);
-    }
-  }
-
-  // Change the \p layout of the \p op result and propagate the new result type
-  // to its users.
-  static void changeAndPropagateLayout(Operation *op, Attribute layout,
-                                       IRRewriter &rewriter) {
-    assert(op && op->getNumResults() == 1 &&
-           "Expecting operation yielding a result");
-
-    rewriter.modifyOpInPlace(op, [&]() {
-      Value res = op->getOpResult(0);
-      assert(tt::isTensorPointerType(res.getType()) &&
-             "Expecting a block pointer");
-
-      auto ptrType = cast<tt::PointerType>(res.getType());
-      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                       ptrType.getAddressSpace()));
-    });
-    LDBG("Coalesced op: " << *op);
-
-    propagateLayout(op, layout, rewriter);
   }
 
   void coalesceOp(Attribute encoding, Operation *op) {
@@ -316,8 +319,7 @@ private:
                "Expecting operand to have blocked pointer type");
         auto defOp = findDefiningMakeTensorPtrOp(operand);
         assert(defOp && "Expected a make_tensor_ptr operation");
-
-        llvm::errs() << "Found make_tensor_ptr definition: " << *defOp << "\n";
+        LDBG("Found make_tensor_ptr definition: " << *defOp);
         changeAndPropagateLayout(*defOp, encoding, rewriter);
         newArgs.push_back(operand);
       }
@@ -326,8 +328,7 @@ private:
     // Convert output types
     SmallVector<Type, 4> newTypes;
     for (auto t : op->getResultTypes()) {
-      bool isAsync = isa<ttg::AsyncCopyGlobalToLocalOp>(op);
-      assert(!isAsync &&
+      assert(!isa<ttg::AsyncCopyGlobalToLocalOp>(op) &&
              "AsyncCopyGlobalToLocalOp not supported for Intel GPU");
       newTypes.push_back(getNewType(cast<RankedTensorType>(t), encoding));
     }
@@ -379,7 +380,8 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "layoutMap:" << "\n";
+      DBGS() << "layoutMap:"
+             << "\n";
       for (auto [op, encoding] : layoutMap) {
         DBGS() << "op: " << *op << "\n";
         DBGS() << "encoding: " << encoding << "\n";
@@ -398,20 +400,10 @@ public:
       coalesceOp(layout, op);
     }
 
-    if (failed(verify(moduleOp))) {
-      llvm::errs() << "Module verification failed.\n";
-      llvm::errs() << "mod: " << moduleOp << "\n";
-      for (Operation &op1 : moduleOp.getOps()) {
-        if (isa<tt::FuncOp>(op1)) {
-          for (Operation &op2 : cast<tt::FuncOp>(op1).getOps()) {
-            if (failed(verify(&op2))) {
-              llvm::errs() << "op2: " << op2 << "\n";
-              llvm::errs() << "Operation verification failed.\n";
-              assert(false);
-            }
-          }
-        }
-      }
+    // Verify the module's functions after the transformation.
+    for (auto op : moduleOp.getOps<tt::FuncOp>()) {
+      for (Operation &op1 : op.getOps())
+        assert(succeeded(verify(&op1)));
     }
   }
 };
