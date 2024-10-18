@@ -2,6 +2,7 @@ import importlib.metadata
 import os
 import hashlib
 import shutil
+import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
@@ -108,7 +109,7 @@ compilation_helper = CompilationHelper()
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    file_name = name + (".pyd" if os.name == "nt" else ".so")
+    file_name = f"{name}.{sysconfig.get_config_var('EXT_SUFFIX').split('.')[-1]}"
     cache_path = cache.get_file(file_name)
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
