@@ -173,8 +173,15 @@ private:
   static void propagateLayout(BlockArgument arg, Attribute layout,
                               IRRewriter &rewriter) {
     llvm::errs() << "arg: " << arg << "\n";
-    for (Operation *user : arg.getUsers()) {
-      llvm::errs() << "user: " << *user << "\n\n";
+
+    auto users = arg.getUsers();
+    if (users.empty()) {
+      llvm::errs() << "arg has no users\n";
+      return;
+    }
+
+    for (Operation *user : users) {
+      llvm::errs() << "arg's user: " << *user << "\n\n";
       if (filterUser(user)) {
         llvm::errs() << "SKIP\n";
         continue;
@@ -218,9 +225,15 @@ private:
     assert(root && root->getNumResults() != 0 &&
            "Expecting an operation yielding a result");
 
-    //    llvm::errs() << "root: " << *root << "\n\n";
-    for (Operation *user : root->getUsers()) {
-      llvm::errs() << "user: " << *user << "\n\n";
+    llvm::errs() << "root: " << *root << "\n";
+    auto users = root->getUsers();
+    if (users.empty()) {
+      llvm::errs() << "root has no users\n";
+      return;
+    }
+
+    for (Operation *user : users) {
+      llvm::errs() << "root's user: " << *user << "\n\n";
       if (filterUser(user)) {
         llvm::errs() << "SKIP\n";
         continue;
@@ -262,7 +275,6 @@ private:
             if (res == loopArg && tt::isTensorPointerType(res.getType())) {
               llvm::errs() << "arg: " << arg << "\n";
               llvm::errs() << "loopArg: " << loopArg << "\n";
-              llvm::errs() << "arg type: " << arg.getType() << "\n";
 
               // Modify the layout of the loop init argument...
               tt::PointerType ptrType = cast<tt::PointerType>(arg.getType());
@@ -309,7 +321,7 @@ private:
   }
 
   void coalesceOp(Attribute encoding, Operation *op) {
-    llvm::errs() << "Coalescing op: " << *op << "\n";
+    LDBG("Coalescing op: " << *op);
 
     OpBuilder builder(op);
     IRRewriter rewriter(builder);
@@ -362,9 +374,11 @@ private:
       }
       op->getResult(i).replaceAllUsesWith(newResult);
     }
+
+    LDBG("Old op: " << *op);
+    LDBG("newOp: " << *newOp);
     op->erase();
 
-    llvm::errs() << "newOp: " << *newOp << "\n";
     assert(succeeded(verify(newOp)) && "Operation verification failed");
   }
 
@@ -399,12 +413,15 @@ public:
                            layoutMap);
     });
 
-    llvm::errs() << "layoutMap:\n";
-    for (auto [op, encoding] : layoutMap) {
-      llvm::errs() << "op: " << *op << "\n";
-      llvm::errs() << "encoding: " << encoding << "\n";
-    }
-    llvm::errs() << "\n";
+    LLVM_DEBUG({
+      DBGS() << "layoutMap:"
+             << "\n";
+      for (auto [op, encoding] : layoutMap) {
+        DBGS() << "op: " << *op << "\n";
+        DBGS() << "encoding: " << encoding << "\n";
+      }
+      llvm::errs() << "\n\n";
+    });
 
     // For each memory op that has a layout L1:
     // 1. Create a coalesced memory layout L2 of the pointer operands
@@ -415,22 +432,22 @@ public:
     // 5. Replace all the uses of the original memory op by the new one
     for (auto [op, layout] : layoutMap) {
       coalesceOp(layout, op);
-      if (failed(verify(moduleOp))) {
-        for (Operation &op1 : moduleOp.getOps()) {
-          if (isa<tt::FuncOp>(op1)) {
-            for (Operation &op2 : cast<tt::FuncOp>(op1).getOps()) {
-              if (failed(verify(&op2))) {
-                llvm::errs() << "op2: " << op2 << "\n";
-                llvm::errs() << "Operation verification failed.\n";
-              }
+    }
+
+    if (failed(verify(moduleOp))) {
+      llvm::errs() << "Module verification failed.\n";
+      llvm::errs() << "mod: " << moduleOp << "\n";
+      for (Operation &op1 : moduleOp.getOps()) {
+        if (isa<tt::FuncOp>(op1)) {
+          for (Operation &op2 : cast<tt::FuncOp>(op1).getOps()) {
+            if (failed(verify(&op2))) {
+              llvm::errs() << "op2: " << op2 << "\n";
+              llvm::errs() << "Operation verification failed.\n";
+              assert(false);
             }
           }
         }
-        llvm::errs() << "Module verification failed.\n";
-        llvm::errs() << "mod: " << moduleOp << "\n";
-        assert(false);
       }
-      llvm::errs() << "Module verified.\n";
     }
   }
 };
