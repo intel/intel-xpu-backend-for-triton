@@ -309,7 +309,7 @@ class XPUBackend(BaseBackend):
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
-        intel.set_fast_math(mod)
+        # intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -322,6 +322,7 @@ class XPUBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         intel.set_spv_target_triple(llvm_mod)
+        # intel.set_fast_math(llvm_mod)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
