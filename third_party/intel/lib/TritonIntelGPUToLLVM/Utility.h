@@ -163,6 +163,7 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
   SmallVector<unsigned> instShapeC = dpasLayout.getDPASInstShapeC();
   SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+  size_t rank = repCluster.size();
   SmallVector<unsigned> sizePerDPASInst = {sizePerThreads[0] / repCluster[0],
                                            sizePerThreads[1] / repCluster[1]};
 
@@ -477,6 +478,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   RewriterBase::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
+    printf("emitBaseIndexForLayoutImpl: dpasLayout\n");
     result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
   } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
@@ -489,6 +491,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
   } else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    printf("emitBaseIndexForLayoutImpl: DotOperandLayout\n");
     result = emitBaseIndexForDotOpLayout(loc, rewriter, dotLayout, type);
   } else {
     return mlir::emitBaseIndexForLayoutImpl(loc, rewriter, target, layout, type,

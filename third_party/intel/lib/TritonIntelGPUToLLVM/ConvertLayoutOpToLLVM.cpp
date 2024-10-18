@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
+// #include <iostream>
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -110,17 +111,34 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
-      assert(rank == 2);
+      assert(rank == 2 || rank == 3 && "Unexpected rank");
       auto multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;
       ::emitOffsetForDpasLayoutPerCTA(
-          dpasLayout, offsets, multiDimCTAInRepId[0] * shapePerCTATile[0],
-          multiDimCTAInRepId[1] * shapePerCTATile[1]);
+          dpasLayout, offsets,
+          multiDimCTAInRepId[rank - 2] * shapePerCTATile[rank - 2],
+          multiDimCTAInRepId[rank - 1] * shapePerCTATile[rank - 1]);
 
-      SmallVector<Value> multiDimOffset = {
-          add(multiDimBase[0], i32_val(offsets[elemId][0])),
-          add(multiDimBase[1], i32_val(offsets[elemId][1]))};
+      // SmallVector<Value> multiDimOffset = {
+      //     add(multiDimBase[0], i32_val(offsets[elemId][0])),
+      //     add(multiDimBase[1], i32_val(offsets[elemId][1]))};
+
+      SmallVector<Value> multiDimOffset(rank);
+      if (rank == 3)
+        multiDimOffset[0] = add(multiDimBase[0], i32_val(multiDimCTAInRepId[0] *
+                                                         shapePerCTATile[0]));
+      multiDimOffset[rank - 2] =
+          add(multiDimBase[0], i32_val(offsets[elemId][0]));
+      multiDimOffset[rank - 1] =
+          add(multiDimBase[1], i32_val(offsets[elemId][1]));
+      // std::cout << "elemId: " << elemId << " offsets[0]: " <<
+      // offsets[elemId][0] << " offsets[1]: " << offsets[elemId][1] <<
+      // std::endl; std::cout << "multiDimOffset[0]: " <<
+      // dyn_cast<llvm::ConstantInt>(multiDimOffset[0]).getSExtValue() << "
+      // multiDimOffset[1]: " <<
+      // dyn_cast<llvm::ConstantInt>(multiDimOffset[1]).getSExtValue() <<
+      // std::endl;
 
       return multiDimOffset;
     }
