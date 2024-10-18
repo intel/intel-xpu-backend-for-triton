@@ -457,12 +457,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
         LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
     assert(conversion && "Expecting valid conversion");
-    LinearLayout id =
-        LinearLayout::identity1D(conversion->getInDimSize(kRegister), kRegister,
-                                 kRegister) *
-        LinearLayout::identity1D(conversion->getInDimSize(kLane), kLane, kLane);
-    // Composing the transposition with itself should give us the identity.
-    return id == conversion->compose(*conversion);
+    // Expected conversion is:
+    // - register=1 -> (0, 1)
+    //    register=2 -> (0, 2)
+    //    register=4 -> (0, 4)
+    //    register=8 -> (0, 8)
+    //  - lane=1 -> (1, 0)
+    //    lane=2 -> (2, 0)
+    //    lane=4 -> (4, 0)
+    //    lane=8 -> (8, 0)
+    // where out dims are: [register (size 16), lane (size 16)]
+    std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
+        bases{{{kRegister, {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+               {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}}}}};
+    std::array<StringAttr, 2> outDimNames{kRegister, kLane};
+    return conversion == LinearLayout(bases, outDimNames);
   }
 
   LogicalResult
