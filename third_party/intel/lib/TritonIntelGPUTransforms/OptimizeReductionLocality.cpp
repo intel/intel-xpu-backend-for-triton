@@ -230,7 +230,7 @@ private:
     std::array<unsigned, rank> warpsPerCTA{oldEncoding.getWarpsPerCTA()[0], 1,
                                            1, oldEncoding.getWarpsPerCTA()[1],
                                            1};
-    std::array<unsigned, rank> order{4, 0, 1, 2, 3};
+    std::array<unsigned, rank> order{1, 2, 3, 4, 0};
     CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
@@ -247,7 +247,7 @@ private:
   Value performReduction(ReduceOp op, PatternRewriter &rewriter, Value val,
                          int axis) const {
     assert(axis >= 0 && "Expecting positive axis");
-    
+
     auto newOp = rewriter.create<ReduceOp>(op.getLoc(), val, /*axis=*/axis);
     auto &newCombineOp = newOp.getCombineOp();
     rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
@@ -286,7 +286,7 @@ private:
                                               1, 1};
     std::array<unsigned, rank> warpsPerCTA{dpasEncoding.getWarpsPerCTA()[0], 1,
                                            dpasEncoding.getWarpsPerCTA()[1]};
-    std::array<unsigned, rank> order{2, 0, 1};
+    std::array<unsigned, rank> order{1, 2, 0};
     CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
