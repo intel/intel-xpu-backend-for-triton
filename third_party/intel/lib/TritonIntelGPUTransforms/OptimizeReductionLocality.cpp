@@ -23,7 +23,7 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 static CTALayoutAttr getIdentityCTALayoutAttr(PatternRewriter &rewriter,
-                                              std::size_t rank) {
+                                              size_t rank) {
   SmallVector<unsigned> ctasPerCGA(rank, 1);
   SmallVector<unsigned> ctaSplitNum(rank, 1);
   SmallVector<unsigned> ctaOrder(rank);
@@ -121,7 +121,7 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   /// And reducing on dimension 1 and converting the layout to the original one
   /// leads to the same output as the original operation.
 // clang-format on
-struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
+struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
   using OpRewritePattern<ReduceOp>::OpRewritePattern;
 
   static constexpr int preferredNonReductionAxis = 0;
@@ -197,6 +197,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
     return success();
   }
 
+private:
   Value reshapeForElementWiseReduction(ReduceOp op,
                                        PatternRewriter &rewriter) const {
     assert(op.getOperands().size() == 1 && "Expecting a single operand");
@@ -206,7 +207,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
     ArrayRef<int64_t> oldShape = oldType.getShape();
     auto oldEncoding = cast<DpasEncodingAttr>(oldType.getEncoding());
 
-    constexpr std::size_t rank = 5;
+    constexpr size_t rank = 5;
     std::array<int64_t, rank> shape{
         // Y axis
         oldShape[0],
@@ -245,6 +246,8 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
 
   Value performReduction(ReduceOp op, PatternRewriter &rewriter, Value val,
                          int axis) const {
+    assert(axis >= 0 && "Expecting positive axis");
+    
     auto newOp = rewriter.create<ReduceOp>(op.getLoc(), val, /*axis=*/axis);
     auto &newCombineOp = newOp.getCombineOp();
     rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp,
@@ -275,7 +278,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
         cast<RankedTensorType>(op.getOperands().front().getType())
             .getEncoding());
 
-    constexpr std::size_t rank = 3;
+    constexpr size_t rank = 3;
     ArrayRef<int64_t> shape = oldType.getShape();
     std::array<unsigned, rank> sizePerThread{1, dpasEncoding.getExecutionSize(),
                                              1};
@@ -301,7 +304,7 @@ struct DPasOperandPattern final : OpRewritePattern<ReduceOp> {
     ArrayRef<int64_t> oldShape = oldType.getShape();
     auto oldEncoding = cast<BlockedEncodingAttr>(oldType.getEncoding());
 
-    constexpr std::size_t rank = 2;
+    constexpr size_t rank = 2;
     std::array<int64_t, rank> shape{oldShape[0], oldShape[1] * oldShape[2]};
     std::array<unsigned, rank> sizePerThread{1,
                                              oldEncoding.getSizePerThread()[1]};
@@ -346,7 +349,7 @@ struct TritonIntelGPUOptimizeReductionLocality final
     Operation *op = getOperation();
     MLIRContext *ctx = op->getContext();
     RewritePatternSet patterns(ctx);
-    patterns.add<DPasOperandPattern>(ctx);
+    patterns.add<DpasOperandPattern>(ctx);
     if (failed(
             applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
