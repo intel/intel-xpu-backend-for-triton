@@ -176,7 +176,7 @@ def triton_key():
                 contents += [hashlib.sha256(f.read()).hexdigest()]
 
     # backend
-    libtriton_hash = hashlib.sha1()
+    libtriton_hash = hashlib.sha256()
     ext = "so" if os.name != "nt" else "pyd"
     with open(os.path.join(TRITON_PATH, "_C", "libtriton." + ext), "rb") as f:
         while True:
