@@ -2,6 +2,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -11,6 +13,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <variant>
 
 #define DEBUG_TYPE "tritonintelgpu-coalesce"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -150,7 +153,7 @@ private:
 
   static bool filterUser(Operation *op) {
     // Yield operations trigger updating the layout of the containing loop
-    // results, so don't skip them.
+    // results, don't skip them.
     if (isa<scf::YieldOp>(op))
       return false;
 
@@ -168,154 +171,123 @@ private:
     return false;
   }
 
-  // Propagate the \p root block argument operation output layout along the
-  // def-use chain.
+  // Propagate the layout to \p root operation's result to the \p forOp loop
+  // init argument that uses it, and transitively to the operations in the loop
+  // body that use that argument.
+  static void propagate(scf::ForOp forOp, Operation *root, Attribute layout,
+                        IRRewriter &rewriter) {
+    assert(llvm::any_of(root->getUsers(),
+                        [&](Operation *user) { return user == forOp; }) &&
+           "Expecting the loop to be a user of the root operation");
+
+    for (BlockArgument arg : forOp.getRegionIterArgs()) {
+      Value loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
+      for (OpResult res : root->getResults()) {
+        if (res != loopArg || !tt::isTensorPointerType(res.getType()))
+          continue;
+
+        LDBG("loopArg: " << loopArg);
+
+        // Modify the layout of the loop init argument...
+        tt::PointerType ptrType = cast<tt::PointerType>(arg.getType());
+        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+        arg.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                         ptrType.getAddressSpace()));
+
+        // ... and then propagate it to the operations in the loop.
+        propagateLayout(arg, layout, rewriter);
+      }
+    }
+  }
+
+  // Modify the given loop \p forOp and propagate the result of the enclosing
+  // loop.
+  static void propagate(scf::ForOp forOp, Attribute layout,
+                        IRRewriter &rewriter) {
+    Operation *yieldOp = forOp.getBody()->getTerminator();
+
+    rewriter.modifyOpInPlace(forOp, [&]() {
+      for (auto [opType, res] :
+           llvm::zip(yieldOp->getOperandTypes(), forOp.getResults())) {
+        if (opType == res.getType())
+          continue;
+
+        assert(tt::isTensorPointerType(res.getType()) &&
+               tt::isTensorPointerType(opType) && "Expecting blocked pointers");
+        assert(cast<RankedTensorType>(
+                   cast<tt::PointerType>(opType).getPointeeType())
+                       .getEncoding() == layout &&
+               "Unexpected layout");
+
+        auto resType = cast<tt::PointerType>(res.getType());
+        RankedTensorType tensorType = getRankedTensorType(resType);
+        res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                         resType.getAddressSpace()));
+      }
+    });
+
+    propagateLayout(forOp, layout, rewriter);
+  }
+
   static void propagateLayout(BlockArgument arg, Attribute layout,
                               IRRewriter &rewriter) {
-    llvm::errs() << "arg: " << arg << "\n";
-
-    auto users = arg.getUsers();
-    if (users.empty()) {
-      llvm::errs() << "arg has no users\n";
-      return;
-    }
-
-    for (Operation *user : users) {
-      llvm::errs() << "arg's user: " << *user << "\n\n";
+    LDBG("arg: " << arg);
+    for (Operation *user : arg.getUsers()) {
+      LDBG("arg's user: " << *user << "\n");
       if (filterUser(user)) {
-        llvm::errs() << "SKIP\n";
         continue;
       }
-
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        // Modify and propagate the result of the enclosing loop.
         auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-
-        rewriter.modifyOpInPlace(forOp, [&]() {
-          for (auto [opType, res] :
-               llvm::zip(yieldOp->getOperandTypes(), forOp.getResults())) {
-            if (opType == res.getType())
-              continue;
-
-            assert(tt::isTensorPointerType(res.getType()) &&
-                   tt::isTensorPointerType(opType) &&
-                   "Expecting blocked pointers");
-            assert(cast<RankedTensorType>(
-                       cast<tt::PointerType>(opType).getPointeeType())
-                           .getEncoding() == layout &&
-                   "Unexpected layout");
-
-            auto resType = cast<tt::PointerType>(res.getType());
-            RankedTensorType tensorType = getRankedTensorType(resType);
-            res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                             resType.getAddressSpace()));
-          }
-        });
-
-        propagateLayout(forOp, layout, rewriter);
+        propagate(forOp, layout, rewriter);
         continue;
       }
-
       changeAndPropagateLayout(user, layout, rewriter);
     }
   }
 
   static void propagateLayout(Operation *root, Attribute layout,
                               IRRewriter &rewriter) {
-    assert(root && root->getNumResults() != 0 &&
+    assert(root->getNumResults() != 0 &&
            "Expecting an operation yielding a result");
 
-    llvm::errs() << "root: " << *root << "\n";
-    auto users = root->getUsers();
-    if (users.empty()) {
-      llvm::errs() << "root has no users\n";
-      return;
-    }
-
-    for (Operation *user : users) {
-      llvm::errs() << "root's user: " << *user << "\n\n";
+    LDBG("root: " << *root);
+    for (Operation *user : root->getUsers()) {
+      LDBG("root's user: " << *user << "\n");
       if (filterUser(user)) {
-        llvm::errs() << "SKIP\n";
         continue;
       }
-
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        // Modify and propagate the result of the enclosing loop.
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-
-        rewriter.modifyOpInPlace(forOp, [&]() {
-          for (auto [opType, res] :
-               llvm::zip(yieldOp->getOperandTypes(), forOp.getResults())) {
-            if (opType == res.getType())
-              continue;
-
-            assert(tt::isTensorPointerType(res.getType()) &&
-                   tt::isTensorPointerType(opType) &&
-                   "Expecting blocked pointers");
-            assert(cast<RankedTensorType>(
-                       cast<tt::PointerType>(opType).getPointeeType())
-                           .getEncoding() == layout &&
-                   "Unexpected layout");
-
-            auto resType = cast<tt::PointerType>(res.getType());
-            RankedTensorType tensorType = getRankedTensorType(resType);
-            res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                             resType.getAddressSpace()));
-          }
-        });
-
-        propagateLayout(forOp, layout, rewriter);
-        continue;
-      }
-
       if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        for (BlockArgument arg : forOp.getRegionIterArgs()) {
-          Value loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-          for (OpResult res : root->getResults()) {
-            if (res == loopArg && tt::isTensorPointerType(res.getType())) {
-              llvm::errs() << "arg: " << arg << "\n";
-              llvm::errs() << "loopArg: " << loopArg << "\n";
-
-              // Modify the layout of the loop init argument...
-              tt::PointerType ptrType = cast<tt::PointerType>(arg.getType());
-              auto tensorType =
-                  cast<RankedTensorType>(ptrType.getPointeeType());
-              arg.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                               ptrType.getAddressSpace()));
-
-              // ... and then propagate it to the operations in the loop.
-              propagateLayout(arg, layout, rewriter);
-            }
-          }
-        }
+        propagate(forOp, root, layout, rewriter);
         continue;
       }
-
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
+        propagate(forOp, layout, rewriter);
+        continue;
+      }
       changeAndPropagateLayout(user, layout, rewriter);
     }
   }
 
-  // TODO: change the implementation to handle only operation yielding one
-  // result?
-  // Change the \p layout of the \p op result(s) and propagate the new
-  // result type to its users.
+  // Change the \p layout of the \p op result and propagate the new result type
+  // to its users.
   static void changeAndPropagateLayout(Operation *op, Attribute layout,
                                        IRRewriter &rewriter) {
-    assert(op && op->getNumResults() != 0 &&
+    assert(op && op->getNumResults() == 1 &&
            "Expecting operation yielding a result");
 
     rewriter.modifyOpInPlace(op, [&]() {
-      for (Value res : op->getResults()) {
-        if (!tt::isTensorPointerType(res.getType()))
-          continue;
+      Value res = op->getOpResult(0);
+      assert(tt::isTensorPointerType(res.getType()) &&
+             "Expecting a block pointer");
 
-        auto ptrType = cast<tt::PointerType>(res.getType());
-        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-        res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                         ptrType.getAddressSpace()));
-      }
+      auto ptrType = cast<tt::PointerType>(res.getType());
+      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                       ptrType.getAddressSpace()));
     });
-    llvm::errs() << "Coalesced op: " << *op << "\n";
+    LDBG("Coalesced op: " << *op);
 
     propagateLayout(op, layout, rewriter);
   }
@@ -400,13 +372,6 @@ public:
       if (!refTensorType || !refTensorType.getEncoding())
         return;
 
-      //      static int n = 0;
-      //    if (tt::isTensorPointerType(ptr.getType()))
-      //    n++;
-
-      //      if (n != 2)
-      //      return;
-
       int numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
       int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
       setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
@@ -414,8 +379,7 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "layoutMap:"
-             << "\n";
+      DBGS() << "layoutMap:" << "\n";
       for (auto [op, encoding] : layoutMap) {
         DBGS() << "op: " << *op << "\n";
         DBGS() << "encoding: " << encoding << "\n";
