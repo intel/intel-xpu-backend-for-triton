@@ -1010,8 +1010,12 @@ public:
   getAxisInfo(triton::MakeTensorPtrOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
-    assert(op.getShape().size() == 2 && operands.size() == 7 &&
-           "MakeTensorPtrOp should have 2D shape");
+
+    // TODO: Extend to higher dimension tensor pointers.
+    if (op.getShape().size() != 2)
+      return {};
+
+    assert(operands.size() == 7 && "MakeTensorPtrOp should have 2D shape");
 
     AxisInfo ptrInfo = operands[0]->getValue();
     AxisInfo shapeInfo0 = operands[1]->getValue();
@@ -1047,6 +1051,17 @@ public:
     AxisInfo::DimVectorT constancy{1, 1};
 
     return AxisInfo(contiguity, divisibility, constancy);
+  }
+};
+
+class AdvanceOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::AdvanceOp> {
+public:
+  using AxisInfoVisitorImpl<triton::AdvanceOp>::AxisInfoVisitorImpl;
+  AxisInfo
+  getAxisInfo(triton::AdvanceOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    return operands[0]->getValue();
   }
 };
 
@@ -1098,6 +1113,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
+  visitors.append<AdvanceOpAxisInfoVisitor>();
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
