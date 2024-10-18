@@ -82,6 +82,7 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      gpu::intel::createTritonIntelGPURewriteTensorPointer);
+  ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
   ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
                          gpu::intel::createTritonIntelGPUPrefetchBlock, int,
                          bool);

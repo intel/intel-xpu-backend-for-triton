@@ -27,6 +27,22 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUCoalesce
+    : Pass<"tritonintelgpu-coalesce", "mlir::ModuleOp"> {
+  let summary = "Intel Coalesce";
+
+  let description = [{
+    The pass analyses loads/stores with type `tensor<tt.ptr<>>` or
+    `tt.ptr<tensor<>>` and replaces the layouts of these operations with
+    coalesced layouts, i.e. cache friendly access patterns.
+    Layout conversions are inserted before and after the load/store op
+    to maintain consistency with the rest of the program.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonIntelGPUDistributeToWarps
     : Pass<"tritonintelgpu-distribute-to-warps", "mlir::ModuleOp"> {
   let summary = "distribute the thread block workload to the warps";
