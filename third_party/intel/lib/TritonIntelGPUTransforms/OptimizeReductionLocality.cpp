@@ -69,7 +69,7 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   ///                  |                t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
   ///                  v                t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
   /// ```
-  /// Blocked (#triton_gpu.blocked<{sizePerThread = [repCluster[0]*repeatCount, 1, 1, 1, 1], threadsPerWarp = [1, executionSize, 1, 1, 1], warpsPerCTA = [warpsPerCTA[0], 1, 1, warpsPerCTA[1], 1], order = [4, 0, 1, 2, 3]}>):
+  /// Blocked (#triton_gpu.blocked<{sizePerThread = [repCluster[0]*repeatCount, 1, 1, 1, 1], threadsPerWarp = [1, executionSize, 1, 1, 1], warpsPerCTA = [warpsPerCTA[0], 1, 1, warpsPerCTA[1], 1], order = [1, 2, 3, 4, 0]}>):
   /// ```
   ///                                                    warpsPerCTA[3]
   ///                    <------------------------------------------------------------------------------->
@@ -113,10 +113,10 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   ///                    <------------------------------------>
   ///                     sizePerThread[1]
   ///                    <------------------>
-  ///                  ^ t0 t0 t0 t0 ... t0 tn1 tn1 tn1 ... tn1 ^
-  ///                  | t1 t1 t1 t1 ... t1 tn2 tn2 tn2 ... tn2 |
-  /// sizePerThread[0] | t2 t2 t2 t2 ... t2 tn3 tn3 tn3 ... tn3 | warpsPerCTA[0]
-  ///                  | t3 t3 t3 t3 ... t3 tn4 tn4 tn4 ... tn4 |
+  ///                   ^ t0 t0 t0 t0 ... t0 tn1 tn1 tn1 ... tn1 ^
+  ///                   | t1 t1 t1 t1 ... t1 tn2 tn2 tn2 ... tn2 |
+  /// threadsPerWarp[0] | t2 t2 t2 t2 ... t2 tn3 tn3 tn3 ... tn3 | warpsPerCTA[0]
+  ///                   | t3 t3 t3 t3 ... t3 tn4 tn4 tn4 ... tn4 |
   /// ```
   /// And reducing on dimension 1 and converting the layout to the original one
   /// leads to the same output as the original operation.
