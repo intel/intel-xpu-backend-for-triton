@@ -59,6 +59,11 @@ SmallVector<unsigned> getWarpsPerTile(DotOp dotOp,
                                       struct IntelDPASCapability dpasCap,
                                       const ArrayRef<int64_t> shape,
                                       unsigned numWarps) {
+  auto rank = shape.size();
+  // Early exit for batched matmul
+  if (rank == 3)
+    return {(unsigned)numWarps, 1, 1};
+
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -121,6 +126,7 @@ public:
 
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
+    size_t rank = retShape.size();
     ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
     unsigned numWarps = TritonGPUDialect::getNumWarps(mod);
 
@@ -145,11 +151,12 @@ public:
     unsigned opsPerChan = dpasCap.opsChanBitWidths / dpasElemBitWidths;
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+    SmallVector<unsigned> repCluster(rank, 1);
 
     unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     auto dpasEnc = intel::DpasEncodingAttr::get(
         oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
-        dpasCap.executionSize, opsPerChan, warpsPerTile, {1, 1},
+        dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
 
     if (dpasCap.executionSize == 16 /* PVC */) {
@@ -160,7 +167,7 @@ public:
       SmallVector<int64_t> repA =
           dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
       unsigned repClusterDimM =
-          std::min(maxRepClusterM, static_cast<unsigned>(repA[0]));
+          std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
 
       unsigned maxRepClusterN =
           PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
@@ -168,12 +175,16 @@ public:
       SmallVector<int64_t> repB =
           dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
       unsigned repClusterDimN =
-          std::min(maxRepClusterN, static_cast<unsigned>(repB[1]));
+          std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
+      if (rank == 3)
+        repCluster[0] = 1;
+      repCluster[rank - 2] = repClusterDimM;
+      repCluster[rank - 1] = repClusterDimN;
 
       dpasEnc = intel::DpasEncodingAttr::get(
           oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
-          dpasCap.executionSize, opsPerChan, warpsPerTile,
-          {repClusterDimM, repClusterDimN}, threadsPerWarp);
+          dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
+          threadsPerWarp);
     }
 
     RankedTensorType newRetType =
