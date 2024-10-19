@@ -324,6 +324,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<Value> multiDimWarpId =
       LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
+  // FIXME: Using opIdx as the dimIdx will be incorrect in 3D case.
   unsigned ceilRes = mlir::ceil<unsigned>(shapePerCTA[opIdx], shape[opIdx]);
   Value outerWarpDim = urem(multiDimWarpId[opIdx], i32_val(ceilRes));
   unsigned warpsPerTile = std::min<unsigned>(warpsPerCTA[opIdx], ceilRes);

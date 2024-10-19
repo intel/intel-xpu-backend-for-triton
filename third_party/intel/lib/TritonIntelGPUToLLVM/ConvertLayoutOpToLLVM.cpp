@@ -332,20 +332,23 @@ private:
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(srcType.getShape(), 2 /*operand C*/);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    size_t outerDim = rank - 2;
+    size_t innerDim = rank - 1;
 
     int offset = 0;
     ValueTable result;
-    for (int i = 0; i < repetitions[0]; ++i) {
-      for (int j = 0; j < repetitions[1]; ++j) {
-        for (int repOuter = 0; repOuter < repCluster[0]; ++repOuter) {
-          for (int repInner = 0; repInner < repCluster[1]; ++repInner) {
+    for (int i = 0; i < repetitions[outerDim]; ++i) {
+      for (int j = 0; j < repetitions[innerDim]; ++j) {
+        for (int repOuter = 0; repOuter < repCluster[outerDim]; ++repOuter) {
+          for (int repInner = 0; repInner < repCluster[innerDim]; ++repInner) {
             Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
             for (int k = 0; k < numElemsPerOperand; ++k) {
               matVal =
                   insert_element(dotOpTy, matVal, elems[offset++], i32_val(k));
             }
-            result[{i * repCluster[0] + repOuter,
-                    j * repCluster[1] + repInner}] = matVal;
+            result[{i * repCluster[outerDim] + repOuter,
+                    j * repCluster[innerDim] + repInner}] = matVal;
           }
         }
       }
@@ -363,19 +366,20 @@ private:
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
     unsigned repOuter = 0u;
     unsigned repInner = 0u;
     unsigned repClusterOuter = 0u;
     if (opIdx == 0) {
       // operand A
-      repOuter = repetitions[0];
-      repInner = repetitions[1];
-      repClusterOuter = repCluster[0];
+      repOuter = repetitions[rank - 2];
+      repInner = repetitions[rank - 1];
+      repClusterOuter = repCluster[rank - 2];
     } else {
       // operand B
-      repOuter = repetitions[1];
-      repInner = repetitions[0];
-      repClusterOuter = repCluster[1];
+      repOuter = repetitions[rank - 1];
+      repInner = repetitions[rank - 2];
+      repClusterOuter = repCluster[rank - 1];
     }
 
     // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].

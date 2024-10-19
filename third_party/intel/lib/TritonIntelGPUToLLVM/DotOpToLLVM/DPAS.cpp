@@ -136,9 +136,13 @@ public:
         ATensorTy.getShape(), AEncoding.getOpIdx());
     SmallVector<int64_t> repB = BDpasEncoding.getDPASRepetitions(
         BTensorTy.getShape(), BEncoding.getOpIdx());
-    assert(repA[1] == repB[0] && "Unexpected rep for A and B operands");
+    assert(repA.size() == repB.size() && "A and B rank should match");
+    size_t rank = repA.size();
+    assert(repA[rank - 1] == repB[rank - 2] &&
+           "Unexpected rep for A and B operands");
 
-    unsigned repM = repA[0], repN = repB[1], repK = repA[1];
+    unsigned repM = repA[rank - 2], repN = repB[rank - 1],
+             repK = repA[rank - 1];
 
     auto dpasType = DPASAnalysis::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
