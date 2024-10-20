@@ -28,7 +28,8 @@ public:
   AxisInfo() : AxisInfo({}, {}, {}) {}
 
   AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy)
-      : AxisInfo(contiguity, divisibility, constancy, std::nullopt) {}
+      : AxisInfo(std::move(contiguity), std::move(divisibility),
+                 std::move(constancy), std::nullopt) {}
 
   AxisInfo(DimVectorT contiguity, DimVectorT divisibility, DimVectorT constancy,
            std::optional<int64_t> constantValue)

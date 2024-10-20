@@ -126,7 +126,8 @@ public:
         divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
       }
     }
-    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy), constantValue);
   }
 
 protected:
@@ -546,7 +547,8 @@ public:
       divisibility.push_back(opInfo.getDivisibility(0));
       constancy.push_back(retTy.getShape()[d]);
     }
-    return AxisInfo(contiguity, divisibility, constancy,
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -577,7 +579,8 @@ public:
               maskInfo.has_value() ? maskInfo->getConstancy(d) : 0));
     }
 
-    return AxisInfo(contiguity, divisibility, constancy);
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy));
   }
 };
 
@@ -611,7 +614,8 @@ public:
     contiguity.insert(contiguity.begin() + op.getAxis(), 1);
     divisibility.insert(divisibility.begin() + op.getAxis(), newDivisibility);
     constancy.insert(constancy.begin() + op.getAxis(), 1);
-    return AxisInfo(contiguity, divisibility, constancy,
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -640,7 +644,8 @@ public:
       constancy.push_back(opShape[d] == 1 ? retShape[d]
                                           : opInfo.getConstancy(d));
     }
-    return AxisInfo(contiguity, divisibility, constancy,
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -715,7 +720,8 @@ public:
       contiguity.push_back(1);
     }
 
-    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy), constantValue);
   }
 
 private:
@@ -843,7 +849,8 @@ public:
         constantValue = lhsInfo.getConstantValue();
     }
 
-    return AxisInfo(contiguity, divisibility, constancy, constantValue);
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy), constantValue);
   }
 };
 
@@ -996,7 +1003,8 @@ public:
         contiguity.push_back(
             std::min(lhsInfo.getContiguity(d), rhsInfo.getContiguity(d)));
       }
-      return AxisInfo(contiguity, divisibility, constancy, std::nullopt);
+      return AxisInfo(std::move(contiguity), std::move(divisibility),
+                      std::move(constancy), std::nullopt);
     }
   }
 };
@@ -1046,7 +1054,8 @@ public:
 
     AxisInfo::DimVectorT constancy{1, 1};
 
-    return AxisInfo(contiguity, divisibility, constancy);
+    return AxisInfo(std::move(contiguity), std::move(divisibility),
+                    std::move(constancy));
   }
 };
 
@@ -1130,8 +1139,8 @@ LogicalResult AxisInfoAnalysis::visitOperation(
     auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
-  curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
-                  curr.getConstantValue());
+  curr = AxisInfo(std::move(newContiguity), std::move(newDivisibility),
+                  std::move(newConstancy), curr.getConstantValue());
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
@@ -1148,7 +1157,8 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   AxisInfo::DimVectorT knownConstancy(1, 1);
   knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
   auto inductionVar =
-      AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
+      AxisInfo(std::move(knownContiguity), std::move(knownDivisibility),
+               std::move(knownConstancy));
   (void)argLattices[0]->join(inductionVar);
 }
 
@@ -1235,7 +1245,8 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
     }
   }
 
-  return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
+  return AxisInfo(std::move(knownContiguity), std::move(knownDivisibility),
+                  std::move(knownConstancy));
 }
 
 /*static*/ AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
@@ -1257,7 +1268,8 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
       rhs.getConstantValue().has_value() &&
       lhs.getConstantValue() == rhs.getConstantValue())
     constantValue = lhs.getConstantValue();
-  return AxisInfo(contiguity, divisibility, constancy, constantValue);
+  return AxisInfo(std::move(contiguity), std::move(divisibility),
+                  std::move(constancy), constantValue);
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
@@ -1344,7 +1356,7 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
     } else {
       curAxisInfo = axisInfo;
     }
-    (*axisInfoMap)[value] = curAxisInfo;
+    (*axisInfoMap)[value] = std::move(curAxisInfo);
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
