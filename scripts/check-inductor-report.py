@@ -1,7 +1,7 @@
-import sys
 import argparse
 from pathlib import Path
 import csv
+
 
 def check_report(suite, dtype, mode, test_mode, device, models_file):
     inductor_log_dir = Path('inductor_log') / suite / dtype
@@ -45,6 +45,7 @@ def check_report(suite, dtype, mode, test_mode, device, models_file):
                 exitcode = 1
                 print(f"Test is NOT PASSED: {m}")
     return exitcode
+
 
 def main():
     argparser = argparse.ArgumentParser()
