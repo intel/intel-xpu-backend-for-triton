@@ -45,6 +45,7 @@ endif()
 add_subdirectory(softmax)
 add_subdirectory(gemm)
 add_subdirectory(stream_k_gemm)
+add_subdirectory(split_k_gemm)
 add_subdirectory(flash_attention)
 
 install(TARGETS xetla_kernel LIBRARY DESTINATION .)

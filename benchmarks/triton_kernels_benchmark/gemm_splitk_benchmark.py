@@ -3,6 +3,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
+import xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
@@ -131,9 +132,9 @@ matmul = _matmul.apply
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton'],
+        line_vals=['triton', 'xetla'],
         # label name for the lines
-        line_names=['Triton'],
+        line_names=['Triton', 'XeTLA'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -148,23 +149,36 @@ def benchmark(M, N, K, provider):
     quantiles = [0.5, 0.0, 1.0]
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), n_warmup=10, n_repeat=10,
-                                                              quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles)
     elif provider == 'triton':
         c = torch.empty((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              kernel_name='_kernel')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles, kernel_name='_kernel')
+    elif provider == 'xetla':
+        c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+        acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
+        cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
+
+        name = f'gemm_splitk_shape_{M}_{K}_{N}'
+        func = getattr(xetla_kernel, name)
+        xetla_fn = lambda: func(a, b, c, acc, cnt)
+        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+
+        # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles, kernel_name='split_k_gemm_run')
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
     tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
     gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)
 
-    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
+    return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
 if __name__ == '__main__':
