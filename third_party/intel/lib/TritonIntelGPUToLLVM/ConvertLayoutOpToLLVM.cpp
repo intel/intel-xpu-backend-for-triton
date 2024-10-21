@@ -462,13 +462,26 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     //    register=2 -> (0, 2)
     //    register=4 -> (0, 4)
     //    register=8 -> (0, 8)
+    //    register=N -> (N, 0)
+    //    ...
     //  - lane=1 -> (1, 0)
     //    lane=2 -> (2, 0)
     //    lane=4 -> (4, 0)
     //    lane=8 -> (8, 0)
-    // where out dims are: [register (size 16), lane (size 16)]
+    // where out dims are: [register (size 2*N), lane (size 16)]
+    std::vector<std::vector<int32_t>> registerBases{
+        {0, 1}, {0, 2}, {0, 4}, {0, 8}};
+    {
+      // Populate register bases for N > 8.
+      std::vector<int32_t> base(2);
+      for (int32_t i = 16, n = conversion->getInDimSize(kRegister); i < n;
+           i *= 2) {
+        base.front() = i;
+        registerBases.push_back(base);
+      }
+    }
     std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
-        bases{{{kRegister, {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+        bases{{{kRegister, std::move(registerBases)},
                {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}}}}};
     std::array<StringAttr, 2> outDimNames{kRegister, kLane};
     return conversion == LinearLayout(bases, outDimNames);
@@ -572,11 +585,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                     OpAdaptor adaptor) const {
     auto srcType = cast<LLVM::LLVMStructType>(adaptor.getSrc().getType());
     ArrayRef<Type> body = srcType.getBody();
-    // TODO: Support more configurations.
-    auto mod = op->getParentOfType<ModuleOp>();
-    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    if (body.size() != threadsPerWarp)
-      return false;
     return TypeSwitch<Type, bool>(body.front())
         .Case([this](FloatType floatTy) {
           // Support via bitcasting to integer type.
@@ -714,12 +722,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   SmallVector<Value>
-  unwrapFromVector(Location loc, Value vec,
-                   ConversionPatternRewriter &rewriter) const {
+  unwrapFromVectors(Location loc, ArrayRef<Value> vecs,
+                    ConversionPatternRewriter &rewriter) const {
     SmallVector<Value> res;
-    for (unsigned i = 0, n = cast<VectorType>(vec.getType()).getShape()[0];
-         i < n; ++i)
-      res.push_back(extract_element(vec, i32_val(i)));
+    for (Value vec : vecs) {
+      for (unsigned i = 0, n = cast<VectorType>(vec.getType()).getShape()[0];
+           i < n; ++i)
+        res.push_back(extract_element(vec, i32_val(i)));
+    }
     return res;
   }
 
@@ -734,6 +744,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         loc, rewriter, targetInfo, &*rewriter.getInsertionPoint());
     Type ptrType = smemBase.getType();
 
+    int numElements = inVals.size();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     int offset = threadsPerWarp;
     Type offsetType = getTypeConverter()->getIndexType();
@@ -748,7 +759,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value wiStride =
         rewriter.create<LLVM::ConstantOp>(loc, offsetType, threadsPerWarp);
     Value sgStride = rewriter.create<LLVM::ConstantOp>(
-        loc, offsetType, threadsPerWarp * threadsPerWarp);
+        loc, offsetType, threadsPerWarp * numElements);
     Value subGroupOffset = mul(sgStride, subGroupId);
     Type elementType = opType.getElementType();
     Value subGroupBasePtr = gep(ptrType, elementType, smemBase,
@@ -765,13 +776,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
 
     // Load from matrix, trasposed.
+    // As per SIMD block semantics, we have stored the elements in a matrix of
+    // `Nxsub_group_size` size, so we need to load back in blocks of
+    // `sub_group_size` (`N/sub_group_size` loads).
     Value workItemOffset = mul(wiStride, subGroupLocalId);
     Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
                                 ValueRange{workItemOffset}, /*inbounds=*/true);
-    Value transposedVec =
-        load(vec_ty(opType.getElementType(), inVals.size()), workItemBasePtr);
-
-    return unwrapFromVector(loc, transposedVec, rewriter);
+    SmallVector<Value> transposedVecs;
+    Type loadTy = vec_ty(opType.getElementType(), threadsPerWarp);
+    for (std::size_t i = 0, n = inVals.size(); i < n; i += threadsPerWarp) {
+      transposedVecs.push_back(load(loadTy, workItemBasePtr));
+      workItemBasePtr = gep(ptrType, loadTy, workItemBasePtr,
+                            ArrayRef<LLVM::GEPArg>{offset}, /*inbounds=*/true);
+    }
+    return unwrapFromVectors(loc, transposedVecs, rewriter);
   }
 
   LogicalResult
