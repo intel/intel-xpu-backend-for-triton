@@ -7,7 +7,7 @@ import sys
 
 def check_report(suite, dtype, mode, test_mode, device, models_file, inductor_log_dir):
     inductor_log_dir_leaf = Path(inductor_log_dir) / suite / dtype
-    inductor_report_filename = f"inductor_{suite}_{dtype}_{mode}_{device}_{'inference-no-freezing' if test_mode == 'inference' else test_mode}.csv"
+    inductor_report_filename = f"inductor_{suite}_{dtype}_{mode}_{device}_{test_mode}.csv"
     inductor_report_path = Path(inductor_log_dir_leaf / inductor_report_filename)
 
     subset = []
