@@ -1,7 +1,6 @@
 #!/bin/bash
 
 install_env() {
-    set -vx
     export PATH="$HOME/miniforge3/bin:$PATH"
     conda create -n triton --override-channels -c conda-forge python=$python_version.*
     conda env update -f scripts/triton.yml

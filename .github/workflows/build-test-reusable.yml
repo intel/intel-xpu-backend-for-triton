@@ -163,12 +163,8 @@ jobs:
             echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           } | tee -a $GITHUB_ENV
 
-      - name: Run inductor test
-        run: |
-          #FIXME move back test when ready
-          ${{ env.TRITON_TEST_CMD }} --inductor #--skip-pip-install
-
       - name: Run unit tests
+        if: inputs.env_manager == 'base'
         run: |
           ${{ env.TRITON_TEST_CMD }} --unit
 
@@ -185,6 +181,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial --skip-pip-install
 
       - name: Run instrumentation tests
+        if: inputs.env_manager == 'base'
         run: |
           ${{ env.TRITON_TEST_CMD }} --instrumentation --skip-pip-install
 
@@ -203,6 +200,10 @@ jobs:
           repository: huggingface/transformers
           ref: ${{ env.TRANSFORMERS_VERSION }}
           try-tag-prefix: v
+
+      - name: Run inductor test
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install
 
       - name: Save pip cache
         if: (inputs.env_manager == 'base') && (steps.pip-cache.outputs.status == 'miss')
