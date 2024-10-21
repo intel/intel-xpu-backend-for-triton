@@ -238,7 +238,8 @@ jobs:
                 --dtype=${{ inputs.dtype }} \
                 --mode=${{ inputs.mode }} \
                 --test_mode=${{ inputs.test_mode }} \
-                --device=xpu
+                --device=xpu \
+                --workspace="${GITHUB_WORKSPACE}"
             fi
           else
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0

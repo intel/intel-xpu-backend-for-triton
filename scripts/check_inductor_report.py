@@ -5,8 +5,8 @@ import csv
 import sys
 
 
-def check_report(suite, dtype, mode, test_mode, device, models_file):
-    inductor_log_dir = Path("torch_compile_debug") / suite / dtype
+def check_report(suite, dtype, mode, test_mode, device, models_file, workspace):
+    inductor_log_dir = Path(workspace) / Path("inductor_log") / suite / dtype
     inductor_report_filename = f"inductor_{suite}_{dtype}_{mode}_{device}_{test_mode}.csv"
     inductor_report_path = Path(inductor_log_dir / inductor_report_filename)
 
@@ -57,6 +57,7 @@ def main():
     argparser.add_argument("--test_mode", required=True, choices=("performance", "accuracy"))
     argparser.add_argument("--device", help="i.e. xpu", required=True)
     argparser.add_argument("--models-file", help="Subset of models list", required=True)
+    argparser.add_argument("--workspace", help="Where to find the 'inductor_log' directory", default='.'), 
     args = argparser.parse_args()
     exitcode = check_report(args.suite, args.dtype, args.mode, args.test_mode, args.device, args.models_file)
     print(f"Report check result: {'SUCCESS' if exitcode == 0 else 'FAIL'}")
