@@ -170,7 +170,7 @@ jobs:
 
       - name: Run core tests
         run: |
-          ${{ env.TRITON_TEST_CMD }} --core --skip-pip-install
+          ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
