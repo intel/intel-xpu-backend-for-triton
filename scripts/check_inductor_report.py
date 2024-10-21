@@ -15,7 +15,7 @@ def check_report(suite, dtype, mode, test_mode, device, models_file, inductor_lo
     exitcode = 0
 
     with open(models_file, encoding="utf-8") as f:
-        subset = f.read().strip().split("\n")
+        subset = f.readlines()
 
     with open(inductor_report_path, encoding="utf-8") as f:
         reader = csv.reader(f)
