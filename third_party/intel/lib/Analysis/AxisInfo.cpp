@@ -1344,7 +1344,7 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
     } else {
       curAxisInfo = axisInfo;
     }
-    (*axisInfoMap)[value] = curAxisInfo;
+    (*axisInfoMap)[value] = std::move(curAxisInfo);
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
