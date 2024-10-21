@@ -303,12 +303,12 @@ run_instrumentation_tests() {
     return
   fi
 
-  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/_C, build Triton first"
+  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
 
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_TEST_SUITE=instrumentation \
-    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
     pytest -vvv --device xpu instrumentation/test_gpuhello.py
 }
 
