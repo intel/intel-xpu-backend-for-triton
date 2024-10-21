@@ -10,8 +10,7 @@ install_env() {
     find /usr -name libze_\* -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
     mkdir -p $HOME/miniforge3/envs/triton/lib/python$python_version/site-packages/triton/backends/intel/include
     ln -snf /opt/intel/oneapi/compiler/2024.1/include/sycl $HOME/miniforge3/envs/triton/lib/python$python_version/site-packages/triton/backends/intel/include
-    ls -l /home/runner/miniforge3/envs/triton/lib/python$python_version/site-packages/triton/backends/intel/include/
-    ls -l /home/runner/miniforge3/envs/triton/lib/python$python_version/site-packages/triton/backends/intel/include
+    ln -snf /opt/intel/oneapi/compiler/2024.1/include/sycl/CL $HOME/miniforge3/envs/triton/lib/python$python_version/site-packages/triton/backends/intel/include
 }
 
 print_env_info() {
