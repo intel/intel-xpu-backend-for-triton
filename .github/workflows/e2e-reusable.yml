@@ -228,7 +228,7 @@ jobs:
           if [[ "${{ inputs.only_one_model }}" ]]; then
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
           elif [[ "${{ inputs.models }}" == "subset" ]]; then
-            models_subset_file = "$GITHUB_WORKSPACE/.github/models/${{ inputs.test_mode }}/${{ inputs.suite }}.txt"
+            models_subset_file="$GITHUB_WORKSPACE/.github/models/${{ inputs.test_mode }}/${{ inputs.suite }}.txt"
             while read model; do
               bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
             done < $models_subset_file
