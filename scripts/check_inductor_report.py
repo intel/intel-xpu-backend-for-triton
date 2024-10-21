@@ -50,7 +50,7 @@ def check_report(suite, dtype, mode, test_mode, device, models_file):
 
 def main():
     argparser = argparse.ArgumentParser()
-    argparser.add_argument("--suite', required=True)
+    argparser.add_argument("--suite", required=True)
     argparser.add_argument("--dtype", required=True)
     argparser.add_argument("--mode", required=True, choices=("training", "inference"))
     argparser.add_argument("--test_mode", required=True, choices=("performance", "accuracy"))
