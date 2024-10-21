@@ -6,7 +6,7 @@ import sys
 
 
 def check_report(suite, dtype, mode, test_mode, device, models_file):
-    inductor_log_dir = Path("inductor_log") / suite / dtype
+    inductor_log_dir = Path("torch_compile_debug") / suite / dtype
     inductor_report_filename = f"inductor_{suite}_{dtype}_{mode}_{device}_{test_mode}.csv"
     inductor_report_path = Path(inductor_log_dir / inductor_report_filename)
 
