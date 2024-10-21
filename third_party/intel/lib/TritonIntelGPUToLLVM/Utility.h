@@ -163,6 +163,7 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
   SmallVector<unsigned> instShapeC = dpasLayout.getDPASInstShapeC();
   SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+  size_t rank = repCluster.size();
   SmallVector<unsigned> sizePerDPASInst = {sizePerThreads[0] / repCluster[0],
                                            sizePerThreads[1] / repCluster[1]};
 
@@ -245,8 +246,8 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
          "numElemPerInstPerRowPerThread should not be zero");
 
   SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(dotLayout);
-  int64_t numRepOuter = numReps[opIdx];
-  int64_t numRepK = numReps[(opIdx == 0) ? 1 : 0];
+  int64_t numRepOuter = numReps[opIdx ? 2 : 1];
+  int64_t numRepK = numReps[opIdx ? 1 : 2];
 
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
   unsigned repClusterSize = repCluster[opIdx];
@@ -329,12 +330,15 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
   SmallVector<Value> multiDimWarpId =
       mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
+  size_t rank = warpShape.size();
+  assert(rank == shapePerCTA.size() && "Rank mismatch");
   Value warpIndex =
-      (opIdx == 0)
-          ? urem(multiDimWarpId[0],
-                 i32_val(mlir::ceil<unsigned>(shapePerCTA[0], warpShape[0])))
-          : urem(multiDimWarpId[1],
-                 i32_val(mlir::ceil<unsigned>(shapePerCTA[1], warpShape[1])));
+      (opIdx == 0) ? urem(multiDimWarpId[0],
+                          i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 2],
+                                                       warpShape[rank - 2])))
+                   : urem(multiDimWarpId[1],
+                          i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 1],
+                                                       warpShape[rank - 1])));
   Value warpOffset = mul(warpIndex, i32_val(warpShape[opIdx]));
 
   // Compute the 2-dim coordinates of the first element in the warp operated
@@ -477,6 +481,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   RewriterBase::InsertionGuard guard(rewriter);
   SmallVector<Value> result;
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
+    printf("emitBaseIndexForLayoutImpl: dpasLayout\n");
     result = emitBaseIndexForDpasLayout(loc, rewriter, dpasLayout, type);
   } else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
     auto parentLayout = sliceLayout.getParent();
@@ -489,6 +494,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
     // CTAOffset has been added in emitBaseIndexForLayout of parentLayout
     return result;
   } else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    printf("emitBaseIndexForLayoutImpl: DotOperandLayout\n");
     result = emitBaseIndexForDotOpLayout(loc, rewriter, dotLayout, type);
   } else {
     return mlir::emitBaseIndexForLayoutImpl(loc, rewriter, target, layout, type,

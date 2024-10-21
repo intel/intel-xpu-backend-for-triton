@@ -330,6 +330,7 @@ public:
 
   // The 0-dimensional layout that maps everything to 0.  This is useful as a
   // starting point when doing something like
+  // i
   //
   //   LinearLayout ret = LinearLayout::empty();
   //   for (...) ret *= ...;
