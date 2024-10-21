@@ -53,8 +53,9 @@ class XPUOptions:
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
-    generate_native_code: bool = False
     backend_name: str = 'intel'
+    sanitize_overflow: bool = False
+    generate_native_code: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -139,12 +140,30 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
-                                                                           False)
-        dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
-            'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
-        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+        if os.getenv("TRITON_INTEL_QUERY_DEVICE_EXTENSIONS", "0") == "1":
+            try:
+                # FIXME: Add support for other devices.
+                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', 'pvc']
+                result = subprocess.run(ocloc_cmd, check=True, capture_output=True, text=True)
+                output = result.stdout
+                supported_extensions = set()
+                for extension in output.split(' '):
+                    supported_extensions.add(extension)
+                dev_prop[
+                    'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extensions
+                dev_prop[
+                    'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
+                dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
+                dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f'`ocloc` failed with error code {e.returncode}')
+        else:
+            dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get(
+                'has_subgroup_matrix_multiply_accumulate', False)
+            dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
+                'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+            dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
+            dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -260,6 +279,7 @@ class XPUBackend(BaseBackend):
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -318,7 +338,7 @@ class XPUBackend(BaseBackend):
                     if os.path.exists(flog.name):
                         with open(flog.name) as log_file:
                             log = log_file.read().strip()
-                            if 'spilled' in log:
+                            if 'spilled' in log and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
                                 """
                                 The exact message is something like:
                                     warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217

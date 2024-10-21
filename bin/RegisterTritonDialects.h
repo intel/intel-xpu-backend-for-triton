@@ -37,6 +37,10 @@
 
 namespace mlir {
 namespace test {
+namespace intel {
+void registerTestAxisInfoPass();
+}
+
 void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
@@ -50,6 +54,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonPasses();
   mlir::triton::gpu::registerTritonGPUPasses();
   mlir::registerTritonNvidiaGPUPasses();
+  mlir::test::intel::registerTestAxisInfoPass();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
@@ -83,6 +88,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUStreamPipeline();
   mlir::registerTritonAMDGPUStreamPipelineV2();
   mlir::registerTritonAMDGPUCanonicalizePointers();
+  mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
+  mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,

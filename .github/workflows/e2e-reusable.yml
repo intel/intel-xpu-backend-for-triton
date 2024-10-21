@@ -222,7 +222,7 @@ jobs:
           cd pytorch
 
           # if "only_one_model" is set, then test this model
-          # if "models" == "subset", then test the models from .github/models/performance/{suite}.txt
+          # if "models" == "subset", then test the models from .github/models/{accuracy,performance}/{suite}.txt
           # otherwise test all models.
 
           if [[ "${{ inputs.only_one_model }}" ]]; then
@@ -230,8 +230,7 @@ jobs:
           elif [[ "${{ inputs.models }}" == "subset" ]]; then
             while read model; do
               bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
-              grep ,$model, $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass, || ${{ inputs.test_all_subset_models }}
-            done < $GITHUB_WORKSPACE/.github/models/performance/${{ inputs.suite }}.txt
+            done < $GITHUB_WORKSPACE/.github/models/${{ inputs.test_mode }}/${{ inputs.suite }}.txt
           else
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0
           fi

@@ -154,10 +154,10 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
-    for BM in [256] \
+    for BM in [128, 256] \
     for BN in [32, 64] \
-    for s in [3] \
-    for w in [32] \
+    for s in [3, 4] \
+    for w in [8, 16, 32] \
     ]
 
 tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
@@ -214,34 +214,11 @@ def forward(q, k, v, causal, sm_scale):
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL'],
-        x_vals=[  #
-            [1, 16, 16384, 128, False],  #
-            [1, 16, 16384, 128, True],  #
-            [1, 32, 16384, 64, False],  #
-            [1, 32, 16384, 64, True],  #
-            [2, 16, 8192, 128, False],  #
-            [2, 16, 8192, 128, True],  #
-            [2, 32, 8192, 64, False],  #
-            [2, 32, 8192, 64, True],  #
-            [4, 16, 4096, 128, False],  #
-            [4, 16, 4096, 128, True],  #
-            [4, 32, 4096, 64, False],  #
-            [4, 32, 4096, 64, True],  #
-            [4, 48, 1024, 64, False],  #
-            [4, 48, 1024, 64, True],  #
-            [8, 16, 2048, 128, False],  #
-            [8, 16, 2048, 128, True],  #
-            [8, 32, 2048, 64, False],  #
-            [8, 32, 2048, 64, True],  #
-            [16, 16, 1024, 128, False],  #
-            [16, 16, 1024, 128, True],  #
-            [16, 32, 1024, 64, False],  #
-            [16, 32, 1024, 64, True],  #
-            [32, 16, 512, 128, False],  #
-            [32, 16, 512, 128, True],  #
-            [32, 32, 512, 64, False],  #
-            [32, 32, 512, 64, True],  #
-        ],
+        x_vals=[[z, h, 16384 // z, dhead, causal]
+                for z in [1, 2, 4, 8, 16, 32]
+                for (h, dhead) in [(16, 128), (32, 64)]
+                for causal in [False, True]]  #
+        + [[4, 48, 1024, 64, causal] for causal in [False, True]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -265,27 +242,22 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
-                                                                     CAUSAL, scale=sm_scale), warmup=10, rep=10,
+                                                                     CAUSAL, scale=sm_scale), m_warmup=10, n_repeat=10,
             quantiles=quantiles)
 
     elif provider == 'triton':
-        # FIXME: remove below if condition when extend attention support for Causal = True done
-        # https://github.com/intel/intel-xpu-backend-for-triton/issues/1102
-        if os.environ.get('TRITON_INTEL_ADVANCED_PATH', '0') == '1' and CAUSAL:
-            min_ms, max_ms, mean, cv = (float('inf'), ) * 4
+        triton_fn = lambda: forward(q, k, v, CAUSAL, sm_scale)
+        if benchmark_suit.USE_IPEX_OPTION:
+            torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
         else:
-            triton_fn = lambda: forward(q, k, v, CAUSAL, sm_scale)
-            if benchmark_suit.USE_IPEX_OPTION:
-                torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
-                    q, k, v, attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
-            else:
-                # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-                torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-                ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
-            atol = 1e-1 if N_CTX == 16384 else 1e-2
-            benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                                  kernel_name='_attn_fwd')
+            # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
+            torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
+            ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
+        atol = 1e-1 if N_CTX == 16384 else 1e-2
+        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
+                                                              kernel_name='_attn_fwd')
 
     elif provider == 'xetla':
         module_name = f'flash_attn_causal_{CAUSAL}'.lower()
@@ -300,7 +272,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
         xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
                                                               kernel_name='gpu::xetla::fmha::FmhaForwardKernel<')
 
     else:

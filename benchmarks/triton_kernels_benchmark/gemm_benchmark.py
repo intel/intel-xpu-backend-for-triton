@@ -6,16 +6,23 @@ This benchmark is come from the Triton tutorial 10-experimental-block-pointer.py
 To compare the performance to XeTLA kernel.
 
 """
+import os
 
 import torch
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
+from triton_kernels_benchmark.benchmark_testing import do_bench_elapsed_time, BENCHMARKING_METHOD
+
 import xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
+
+TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
+TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
+use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
 
 
 @triton.autotune(
@@ -158,15 +165,22 @@ def matmul_kernel_with_block_pointers_batched(
 
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) launches the above kernel.
-def matmul(a, b, c):
+def matmul(a, b, c, transpose_a=False, transpose_b=False):
+    a_major, a_minor = -2, -1
+    if transpose_a:
+        a_major, a_minor = a_minor, a_major
+    b_minor, b_major = -2, -1
+    if transpose_b:
+        b_major, b_minor = b_minor, b_major
+
+    assert a.shape[a_minor] == b.shape[b_minor], 'Incompatible dimensions'
+    assert a.is_contiguous(), 'Matrix A must be contiguous'
+    assert b.is_contiguous(), 'Matrix B must be contiguous'
+    M, N, K = a.shape[a_major], b.shape[b_major], a.shape[a_minor]
     # Check constraints.
     if len(a.shape) == 3 and len(b.shape) == 3:
         assert a.shape[0] == b.shape[0], 'Incompatible Batch dimension'
-        assert a.shape[2] == b.shape[1], 'Incompatible dimensions'
-        assert a.is_contiguous(), 'Matrix A must be contiguous'
-        assert b.is_contiguous(), 'Matrix B must be contiguous'
-        B, M, K = a.shape
-        B, K, N = b.shape
+        B = a.shape[0]
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (
             B,
@@ -175,25 +189,35 @@ def matmul(a, b, c):
         matmul_kernel_with_block_pointers_batched[grid](
             a, b, c,  #
             B, M, N, K,  #
-            a.stride(0), a.stride(1), a.stride(2),  #
-            b.stride(0), b.stride(1), b.stride(2),  #
+            a.stride(0), a.stride(a_major), a.stride(a_minor),  #
+            b.stride(0), b.stride(b_minor), b.stride(b_major),  #
             c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
-        assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
-        assert a.is_contiguous(), 'Matrix A must be contiguous'
-        assert b.is_contiguous(), 'Matrix B must be contiguous'
-        M, K = a.shape
-        K, N = b.shape
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel_with_block_pointers[grid](
             a, b, c,  #
             M, N, K,  #
-            a.stride(0), a.stride(1),  #
-            b.stride(0), b.stride(1),  #
+            a.stride(a_major), a.stride(a_minor),  #
+            b.stride(b_minor), b.stride(b_major),  #
             c.stride(0), c.stride(1))
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
+
+
+def get_shapes(B, M, N, K, transpose_a, transpose_b):
+    a_shape = (M, K)
+    if transpose_a:
+        a_shape = (K, M)
+
+    b_shape = (K, N)
+    if transpose_b:
+        b_shape = (N, K)
+
+    if B != 1:
+        a_shape = (B, *a_shape)
+        b_shape = (B, *b_shape)
+    return a_shape, b_shape
 
 
 # Benchmark Performance
@@ -228,9 +252,9 @@ def matmul(a, b, c):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'xetla'],
+        line_vals=['triton'] + (['xetla'] if use_xetla else ['onednn']),
         # label name for the lines
-        line_names=['Triton', 'XeTLA'],
+        line_names=['Triton'] + (['XeTLA'] if use_xetla else ['onednn']),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -239,18 +263,28 @@ def matmul(a, b, c):
         args={},
     ))
 def benchmark(B, M, N, K, provider):
-    if B == 1:
-        a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-        b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    else:
-        a = torch.rand((B, M, K), device='xpu', dtype=torch.bfloat16)
-        b = torch.rand((B, K, N), device='xpu', dtype=torch.bfloat16)
+    a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
+
+    a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
+    b = torch.rand(b_shape, device='xpu', dtype=torch.bfloat16)
 
     quantiles = [0.5, 0.0, 1.0]
 
+    torch_a = a
+    if TRANSPOSE_A:
+        torch_a = torch.transpose(torch_a, -2, -1)
+
+    torch_b = b
+    if TRANSPOSE_B:
+        torch_b = torch.transpose(torch_b, -2, -1)
+
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b), warmup=10, rep=10,
-                                                                 quantiles=quantiles)
+        do_bench = benchmark_suit.do_bench
+        if BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX':
+            # Legacy profiler shows ~6000TFLOPS GeoMean for onednn measurements, so use more reliable method
+            do_bench = do_bench_elapsed_time
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10, n_repeat=10,
+                                                  quantiles=quantiles, kernel_name='gemm_kernel')
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
@@ -258,11 +292,12 @@ def benchmark(B, M, N, K, provider):
         else:
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
-        triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+        triton_fn = lambda: matmul(a, b, c, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
+        torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles,
                                                                  kernel_name='matmul_kernel_with_block_pointers')
     elif provider == 'xetla':
         if B == 1:
@@ -274,6 +309,10 @@ def benchmark(B, M, N, K, provider):
             acc = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
             cnt = torch.empty((B, M, N), device='xpu', dtype=torch.int32)
         name = f'gemm_shape_{B}_{M}_{K}_{N}'
+        # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
+        # better performance.
+        if (B, M, N, K) == (1, 3072, 4096, 3072):
+            name = 'gemm_streamk_shape_3072_4096_3072'
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
@@ -303,11 +342,12 @@ def benchmark(B, M, N, K, provider):
             'gemm_shape_32_4096_4096_128': 'Test_32x4096x4096x128_row_row',
             'gemm_shape_4096_8_128_16384': 'Test_4096x8x128x16384_row_row',
             'gemm_shape_4096_8_16384_128': 'Test_4096x8x16384x128_row_row',
+            'gemm_streamk_shape_3072_4096_3072': 'stream_k_gemm_run',
         }
 
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                                 kernel_name=kernels_name[name])
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles, kernel_name=kernels_name[name])
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

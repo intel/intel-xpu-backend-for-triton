@@ -18,6 +18,7 @@
 #include "mlir/Conversion/GPUToLLVMSPV/GPUToLLVMSPVPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -243,6 +244,7 @@ public:
                                                targetInfo, benefit);
       intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                           benefit);
+      mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
       populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                     benefit);
       intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,

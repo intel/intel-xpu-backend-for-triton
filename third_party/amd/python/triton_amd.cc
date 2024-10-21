@@ -45,11 +45,11 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass());
   });
   m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
-    pm.addPass(createInsertInstructionSchedHintsPass());
+    pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass());
   });
   m.def("lower_instruction_sched_hints",
         [](mlir::PassManager &pm, std::string variant) {
-          pm.addPass(createLowerInstructionSchedHintsPass(variant));
+          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(variant));
         });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
@@ -255,6 +255,15 @@ void init_triton_amd(py::module &&m) {
       return true;
     default:
       return false;
+    }
+  });
+
+  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
+    for (llvm::Argument &arg : fn->args()) {
+      // Check for incompatible attributes.
+      if (arg.hasByRefAttr() || arg.hasNestAttr())
+        continue;
+      arg.addAttr(llvm::Attribute::InReg);
     }
   });
 }
