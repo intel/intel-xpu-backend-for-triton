@@ -59,7 +59,8 @@ def main():
     argparser.add_argument("--models-file", help="Subset of models list", required=True)
     argparser.add_argument("--inductor-log-dir", help="Inductor test log directory", default='inductor_log'), 
     args = argparser.parse_args()
-    exitcode = check_report(args.suite, args.dtype, args.mode, args.test_mode, args.device, args.models_file, args.inductor_log_dir)
+    exitcode = check_report(args.suite, args.dtype, args.mode, args.test_mode, args.device, args.models_file,
+                            args.inductor_log_dir)
     print(f"Report check result: {'SUCCESS' if exitcode == 0 else 'FAIL'}")
     sys.exit(exitcode)
 
