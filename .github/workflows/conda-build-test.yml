@@ -64,7 +64,7 @@ jobs:
       - name: Matrix
         id: matrix
         run: |
-          matrix='{"python": ["3.9"]}'
+          matrix='{"python": ["3.9"], "driver": ["rolling"]}'
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 
   integration-tests:
