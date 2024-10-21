@@ -215,6 +215,18 @@ void init_triton_intel(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
+  // May do this after llvm ir according to user fmath flag.
+  m.def("set_fast_math", [](mlir::ModuleOp mod) {
+    using namespace mlir;
+    MLIRContext *ctx = mod.getContext();
+    mod.walk([&](Operation *op) {
+      if (auto fmIf = dyn_cast<arith::ArithFastMathInterface>(op))
+        op->setAttr(
+            fmIf.getFastMathAttrName(),
+            arith::FastMathFlagsAttr::get(ctx, arith::FastMathFlags::fast));
+    });
+  });
+
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
     std::string triple = "spir64-unknown-unknown";
     std::string layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"

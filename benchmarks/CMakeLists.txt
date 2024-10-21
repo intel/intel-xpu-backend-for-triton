@@ -10,9 +10,11 @@ if(NOT WIN32)
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 endif()
 
-find_package(Python3 COMPONENTS Interpreter)
+find_package(Python3 REQUIRED
+  COMPONENTS Development.Module)
 find_package(Torch REQUIRED)
 find_library(TORCH_PYTHON_LIBRARY torch_python PATH "${TORCH_INSTALL_PREFIX}/lib")
+find_package(XeTLALibrary REQUIRED)
 
 if(USE_IPEX)
   string(APPEND CMAKE_CXX_FLAGS " -DUSE_IPEX")

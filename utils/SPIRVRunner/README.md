@@ -17,28 +17,44 @@ CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/FromAbove/ cmake -DCMAKE_BUILD_
 make -j
 ```
 
-## Configuring
+## Configuration
 
-`SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `x.py` and `y.py`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
+### Generate Data
 
-Kernels of different shapes require modifying parameters manually in the `SPIRVRunner`. Two places require modification:
+In order to utilize this utility, Triton application must be run with following environment variables enabled
+Provide the path to the directory where the serialized JSON, tensors and SPRI-V binary stored. It is recommended to clear triton cache.
 
-1. `launchKernel`: Add input Tensors to the function signature, add arguments as variables within the function. Arguments can be pulled from the `args` variable to `XPULauncher.__call__` method in `driver.py`. Arguments should be passed to the `sycl_kernel_launch` function. Note that we currently rely on `sycl::memcpy` to move the PyTorch Tensor to XPU. In later versions of PyTorch we should be able to delegate this responsibility to `PyTorch`, and pass the raw XPU `data_ptr()` from `PyTorch` to the kernel.
-2. `sycl_kernel_launch`: Place all `arg*` parameters into the `params` array and add an appropriate call to `set_scalar_arg` for each param, which tells `SYCL` what the arguments are for the kernel we are going to launch.
+```
+export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=< Absolute path to SPV Dumps >
+```
+
+Following input data is generated,
+
+1. args_data.json - (Kernel Arguments / Grid Configuration)
+2. tensors  (Tensors used by the kernel (.pt))
+3. SPIR-V binary (.spv)
+
 
 ## Running
 
-Once the `SPIRVRunner` has been appropriately configured for the kernel and inputs, run the binary with no arguments:
+Help:
+`./build/SPIRVRunner` < Output Tensor Name >
 
-`./build/SPIRVRunner`
+Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copied back to the CPU and written to disk. Additionally, the name must match the tensor's name (tensor_) and number as specified in the JSON file. Please refer args_data.json file.
+
+### Demo (01-vector-add.py)
+
+`SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `tensor_0.pt` and `tensor_1.pt` and output `tensor_2.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
+
+SPIRVRunner Usage:
+`./build/SPIRVRunner tensor_2`
 
 Expected output follows:
 
 ```
 Running on device: Intel(R) Data Center GPU Max 1100
-Tensor a: [98432], Float (393728 bytes)
-Tensor b: [98432], Float (393728 bytes)
 Read 3772 byte kernel.
+create kernel:add_kernel
 Loaded kernel with 0 registers and 0 register spills.
 Tensor output: [98432], Float (393728 bytes)
 Kernel return output: 1.37129
