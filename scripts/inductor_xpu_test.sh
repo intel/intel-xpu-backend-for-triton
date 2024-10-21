@@ -1,6 +1,6 @@
 #!/bin/bash
 # This script work for xpu / cuda device inductor tests
-set -xv
+
 SUITE=${1:-huggingface}     # huggingface / torchbench / timm_models
 DT=${2:-float32}            # float32 / float16 / amp_bf16 / amp_fp16
 MODE=${3:-inference}        # inference / training
