@@ -57,7 +57,7 @@ def main():
     argparser.add_argument("--test_mode", required=True, choices=("performance", "accuracy"))
     argparser.add_argument("--device", help="i.e. xpu", required=True)
     argparser.add_argument("--models-file", help="Subset of models list", required=True)
-    argparser.add_argument("--inductor-log-dir", help="Inductor test log directory", default='inductor_log'), 
+    argparser.add_argument("--inductor-log-dir", help="Inductor test log directory", default="inductor_log"), 
     args = argparser.parse_args()
     exitcode = check_report(args.suite, args.dtype, args.mode, args.test_mode, args.device, args.models_file,
                             args.inductor_log_dir)
