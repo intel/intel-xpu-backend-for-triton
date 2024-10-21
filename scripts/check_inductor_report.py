@@ -46,7 +46,6 @@ def check_report(suite, dtype, mode, test_mode, device, models_file, inductor_lo
             if test_statuses[idx] != "pass":
                 exitcode = 1
                 print(f"Test is NOT PASSED: {m}")
-    import pdb;pdb.set_trace()
     return exitcode
 
 
