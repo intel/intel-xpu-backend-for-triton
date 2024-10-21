@@ -37,7 +37,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_ipex(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
-                  sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
+                  sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -108,7 +108,7 @@ def do_bench_ipex(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=No
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu", kernel_name=None):  # pylint: disable=unused-argument
+                          device="xpu"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -160,7 +160,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
+                                       return_mode="mean", device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
