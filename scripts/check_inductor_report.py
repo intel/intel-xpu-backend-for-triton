@@ -53,7 +53,7 @@ def main():
     argparser = argparse.ArgumentParser()
     argparser.add_argument("--suite", required=True)
     argparser.add_argument("--dtype", required=True)
-    argparser.add_argument("--mode", required=True, choices=("training", "inference"))
+    argparser.add_argument("--mode", required=True)
     argparser.add_argument("--test_mode", required=True, choices=("performance", "accuracy"))
     argparser.add_argument("--device", help="i.e. xpu", required=True)
     argparser.add_argument("--models-file", help="Subset of models list", required=True)
