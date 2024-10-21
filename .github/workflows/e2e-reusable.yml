@@ -233,7 +233,7 @@ jobs:
               bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
             done < $models_subset_file
             if [[ "${{ inputs.check_all_subset_models }}" == true ]]
-              python $GITHUB_WORKSPACE/scripts/check-inductor-logs.py --models-file="$models_subset_file" \
+              python $GITHUB_WORKSPACE/scripts/check_inductor_report.py --models-file="$models_subset_file" \
                 --suite=${{ inputs.suite }} \
                 --dtype=${{ inputs.dtype }} \
                 --mode=${{ inputs.mode }} \
