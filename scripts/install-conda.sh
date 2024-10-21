@@ -7,7 +7,7 @@ install_env() {
     find /opt/intel/oneapi/ \( -name '*.so' -or -name '*.so.*' \) -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
     ln -snf /usr/include/level_zero $HOME/miniforge3/envs/triton/bin/../x86_64-conda-linux-gnu/sysroot/usr/include/level_zero
     find /usr -name libze_\* -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
-    ln -snf /opt/intel/oneapi/compiler/2024.1/include/sycl $HOME/miniforge3/envs/triton/include/sycl
+    ln -snf /opt/intel/oneapi/compiler/2024.1/include/sycl $HOME/miniforge3/envs/triton/lib/python3.9/site-packages/triton/backends/intel/include
 }
 
 print_env_info() {
