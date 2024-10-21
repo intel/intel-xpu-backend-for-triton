@@ -2,6 +2,7 @@
 import argparse
 from pathlib import Path
 import csv
+import sys
 
 
 def check_report(suite, dtype, mode, test_mode, device, models_file):
@@ -13,10 +14,10 @@ def check_report(suite, dtype, mode, test_mode, device, models_file):
     report = []
     exitcode = 0
 
-    with open(models_file) as f:
-        subset = f.read().strip().split('\n')
+    with open(models_file, encoding="utf-8") as f:
+        subset = f.read().strip().split("\n")
 
-    with open(inductor_report_path) as f:
+    with open(inductor_report_path, encoding="utf-8") as f:
         reader = csv.reader(f)
         report_with_header = []
         for l in reader:
@@ -59,7 +60,7 @@ def main():
     args = argparser.parse_args()
     exitcode = check_report(args.suite, args.dtype, args.mode, args.test_mode, args.device, args.models_file)
     print(f"Report check result: {'SUCCESS' if exitcode == 0 else 'FAIL'}")
-    exit(exitcode)
+    sys.exit(exitcode)
 
 
 if __name__ == "__main__":
