@@ -216,15 +216,19 @@ void init_triton_intel(py::module &&m) {
   });
 
   // May do this after llvm ir according to user fmath flag.
-  m.def("set_fast_math", [](mlir::ModuleOp mod) {
-    using namespace mlir;
-    MLIRContext *ctx = mod.getContext();
-    mod.walk([&](Operation *op) {
-      if (auto fmIf = dyn_cast<arith::ArithFastMathInterface>(op))
-        op->setAttr(
-            fmIf.getFastMathAttrName(),
-            arith::FastMathFlagsAttr::get(ctx, arith::FastMathFlags::fast));
-    });
+  m.def("set_fast_math", [](llvm::Module *mod) {
+    using namespace llvm;
+    for (auto &func : *mod) {
+      for (auto &bb : func) {
+        for (auto &inst : bb) {
+          if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
+            FastMathFlags FMF;
+            FMF.setFast(true);
+            inst.setFastMathFlags(FMF);
+          }
+        }
+      }
+    }
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
