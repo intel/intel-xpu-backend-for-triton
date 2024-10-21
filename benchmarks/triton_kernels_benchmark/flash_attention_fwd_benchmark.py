@@ -256,8 +256,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
             ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              kernel_name='_attn_fwd')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'xetla':
         module_name = f'flash_attn_causal_{CAUSAL}'.lower()
@@ -272,8 +271,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
         xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              kernel_name='gpu::xetla::fmha::FmhaForwardKernel<')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
