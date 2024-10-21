@@ -40,8 +40,7 @@ def TritonIntelGPUCoalesce
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
+                           "mlir::triton::gpu::TritonGPUDialect"];
 }
 
 def TritonIntelGPUDistributeToWarps

@@ -106,8 +106,8 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto lhsInfo = operands[0]->getValue();
-    auto rhsInfo = operands[1]->getValue();
+    const auto &lhsInfo = operands[0]->getValue();
+    const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT contiguity;
@@ -659,8 +659,8 @@ public:
       return AxisInfo();
     auto shape = resTy.getShape();
     short rank = resTy.getRank();
-    auto lhsInfo = operands[0]->getValue();
-    auto rhsInfo = operands[1]->getValue();
+    const auto &lhsInfo = operands[0]->getValue();
+    const auto &rhsInfo = operands[1]->getValue();
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
@@ -783,8 +783,8 @@ public:
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     auto condConstancy = operands[0]->getValue().getConstancy();
-    auto lhsInfo = operands[1]->getValue();
-    auto rhsInfo = operands[2]->getValue();
+    const auto &lhsInfo = operands[1]->getValue();
+    const auto &rhsInfo = operands[2]->getValue();
     auto rank = lhsInfo.getRank();
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
@@ -968,8 +968,8 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto lhsInfo = operands[0]->getValue();
-    auto rhsInfo = operands[1]->getValue();
+    const auto &lhsInfo = operands[0]->getValue();
+    const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
     std::optional<int64_t> constantValue;
     if (lhsInfo.getConstantValue().has_value() &&
@@ -1147,8 +1147,8 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  auto lb = getLatticeElementFor(op, op.getLowerBound())->getValue();
-  auto step = getLatticeElementFor(op, op.getStep())->getValue();
+  const auto &lb = getLatticeElementFor(op, op.getLowerBound())->getValue();
+  const auto &step = getLatticeElementFor(op, op.getStep())->getValue();
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
@@ -1344,14 +1344,14 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
     return;
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
-    auto axisInfo = analysis->getLatticeElement(value)->getValue();
+    const auto &axisInfo = analysis->getLatticeElement(value)->getValue();
     AxisInfo curAxisInfo;
     if (axisInfoMap->count(value)) {
       curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
     } else {
       curAxisInfo = axisInfo;
     }
-    (*axisInfoMap)[value] = curAxisInfo;
+    (*axisInfoMap)[value] = std::move(curAxisInfo);
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {

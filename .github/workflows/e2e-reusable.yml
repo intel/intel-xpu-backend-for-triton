@@ -27,6 +27,10 @@ on:
         description: Run all models or a subset
         type: string
         default: all
+      check_all_subset_models:
+        description: In "subset" mode, check all subset models
+        type: boolean
+        default: false
       only_one_model:
         description: Run only this one model
         type: string
@@ -224,9 +228,19 @@ jobs:
           if [[ "${{ inputs.only_one_model }}" ]]; then
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
           elif [[ "${{ inputs.models }}" == "subset" ]]; then
+            models_subset_file="$GITHUB_WORKSPACE/.github/models/${{ inputs.test_mode }}/${{ inputs.suite }}.txt"
             while read model; do
               bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
-            done < $GITHUB_WORKSPACE/.github/models/${{ inputs.test_mode }}/${{ inputs.suite }}.txt
+            done < $models_subset_file
+            if [[ "${{ inputs.check_all_subset_models }}" == true ]]; then
+              python $GITHUB_WORKSPACE/scripts/check_inductor_report.py --models-file="$models_subset_file" \
+                --suite=${{ inputs.suite }} \
+                --dtype=${{ inputs.dtype }} \
+                --mode=${{ inputs.mode }} \
+                --test_mode=${{ inputs.test_mode }} \
+                --device=xpu \
+                --inductor-log-dir="${GITHUB_WORKSPACE}/inductor_log"
+            fi
           else
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0
           fi
