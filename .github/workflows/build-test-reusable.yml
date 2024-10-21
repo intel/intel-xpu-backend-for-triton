@@ -128,18 +128,13 @@ jobs:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
-      - name: Setup PyTorch
-        if: inputs.env_manager != 'base'
-        run: |
-          pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
-
       - name: Setup Triton
         if: inputs.env_manager == 'base'
         uses: ./.github/actions/setup-triton
         with:
           build_llvm: ${{ inputs.build_llvm }}
 
-      - name: Setup Triton and Transformers
+      - name: Setup Triton, Torch and Transformers
         if: inputs.env_manager != 'base'
         uses: ./.github/actions/install-wheels
         with:
