@@ -1,6 +1,0 @@
-test/regression/test_functional_regressions.py::test_chained_matmul
-test/regression/test_functional_regressions.py::test_iv_dependent_matmul[pre_load]
-test/regression/test_functional_regressions.py::test_iv_dependent_matmul[post_load]
-test/regression/test_functional_regressions.py::test_iv_dependent_matmul[post_pre_mixed]
-test/regression/test_functional_regressions.py::test_iv_dependent_matmul[post_load_two_iters]
-test/regression/test_functional_regressions.py::test_iv_dependent_matmul[post_load_three_iters]

@@ -56,6 +56,10 @@ on:
         description: Runner label for version
         type: string
         default: runner-0.0.19
+      env_manager:
+        description: Environment manager
+        default: base
+        type: string
 
 permissions: read-all
 
@@ -69,47 +73,70 @@ jobs:
     runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail scripts/run-${{ inputs.env_manager }}.sh {0}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load conda cache
+        id: conda-cache
+        uses: ./.github/actions/load
+        env:
+          CACHE_NUMBER: 6
+        with:
+          path: $HOME/miniforge3/envs/triton
+          key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Manager Environment
+        shell: bash --noprofile --norc -eo pipefail {0}
+        run: |
+          scripts/install-${{ inputs.env_manager }}.sh --python-version ${{ inputs.python_version }}
+          echo $HOME/miniforge3/bin >>$GITHUB_PATH
+
       - name: Print inputs
         run: |
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Load pip cache
+        if: inputs.env_manager == 'base'
         id: pip-cache
         uses: ./.github/actions/load
         env:
           # Increase this value to reset cache
-          CACHE_NUMBER: 1
+          CACHE_NUMBER: 2
         with:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python ${{ inputs.python_version }}
+        if: inputs.env_manager == 'base'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
 
       - name: Setup PyTorch
+        if: inputs.env_manager == 'base'
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
-      - name: Install pass_rate dependencies
-        run: |
-          pip install defusedxml
-
       - name: Setup Triton
+        if: inputs.env_manager == 'base'
         uses: ./.github/actions/setup-triton
         with:
           build_llvm: ${{ inputs.build_llvm }}
+
+      - name: Setup Triton, Torch and Transformers
+        if: inputs.env_manager != 'base'
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          install_cmd: conda run --no-capture-output -n triton pip install
+          python_version: ${{ inputs.python_version }}
 
       - name: Create test-triton command line
         run: |
@@ -133,12 +160,13 @@ jobs:
           } | tee -a $GITHUB_ENV
 
       - name: Run unit tests
+        if: inputs.env_manager == 'base'
         run: |
           ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
         run: |
-          ${{ env.TRITON_TEST_CMD }} --core --skip-pip-install
+          ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
@@ -149,16 +177,19 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial --skip-pip-install
 
       - name: Run instrumentation tests
+        if: inputs.env_manager == 'base'
         run: |
           ${{ env.TRITON_TEST_CMD }} --instrumentation --skip-pip-install
 
       - name: Get transformers version
+        if: inputs.env_manager == 'base'
         run: |
           cd pytorch
           TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
           echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
 
       - name: Install transformers
+        if: inputs.env_manager == 'base'
         uses: ./.github/actions/install-dependency
         with:
           package: transformers
@@ -166,27 +197,27 @@ jobs:
           ref: ${{ env.TRANSFORMERS_VERSION }}
           try-tag-prefix: v
 
-      - name: Run E2E test
+      - name: Run inductor test
         run: |
-          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
-          export WORKSPACE=$GITHUB_WORKSPACE
-          cd pytorch
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
-          # TODO: Find the fastest Hugging Face model
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
-          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
-          cat $WORKSPACE/inductor_log/*/*/*.csv
-          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
+          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install
 
       - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        if: (inputs.env_manager == 'base') && (steps.pip-cache.outputs.status == 'miss')
         uses: ./.github/actions/save
         with:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
 
+      - name: Save conda cache
+        if: (inputs.env_manager != 'base') && (steps.conda-cache.outputs.status == 'miss')
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.conda-cache.outputs.path }}
+          dest: ${{ steps.conda-cache.outputs.dest }}
+
       - name: Pass rate
         run: |
+          pip install defusedxml
           source ./scripts/capture-hw-details.sh
           python3 scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
           python3 scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
