@@ -194,7 +194,7 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
   }
 }
 
-unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperands(
+unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
     ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, int opIdx) const {
   auto shapePerCTA = getShapePerCTA(*this, shape);
   auto rep = getDPASRepetitions(shapePerCTA, opIdx);
@@ -234,8 +234,8 @@ SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
 }
 
 SmallVector<unsigned>
-DpasEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                   int opIdx) const {
+DpasEncodingAttr::getShapePerCTATileForOperand(ArrayRef<int64_t> shape,
+                                               int kWidth, int opIdx) const {
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   auto threadsPerWarp = getThreadsPerWarp();
   if (opIdx == 0) {
@@ -250,7 +250,7 @@ DpasEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 }
 
 SmallVector<unsigned>
-DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
   if (opIdx == 0) {
     SmallVector<unsigned> shapeA = getDPASInstShapeA();
     unsigned subGroupSize = getSubGroupSize();
@@ -290,7 +290,7 @@ DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
 
 SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
-  SmallVector<unsigned> sizePerThread = getSizePerThreadForOperands(opIdx);
+  SmallVector<unsigned> sizePerThread = getSizePerThreadForOperand(0, opIdx);
   SmallVector<int64_t> repetitions = getDPASRepetitions(shape, opIdx);
 
   return {static_cast<unsigned>(sizePerThread[0] * repetitions[0]),
