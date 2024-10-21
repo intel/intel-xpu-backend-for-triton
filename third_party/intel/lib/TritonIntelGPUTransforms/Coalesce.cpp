@@ -380,11 +380,11 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "layoutMap:"
+      DBGS() << "\nlayoutMap:"
              << "\n";
       for (auto [op, encoding] : layoutMap) {
         DBGS() << "op: " << *op << "\n";
-        DBGS() << "encoding: " << encoding << "\n";
+        DBGS() << "encoding: " << encoding << "\n\n";
       }
       llvm::errs() << "\n\n";
     });

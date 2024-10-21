@@ -885,9 +885,11 @@ tt.func public @make_tensor_ptr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E5M2> {tt.
   %c1_i64 = arith.constant 1 : i64
   %c32_i64 = arith.constant 32 : i64
   %c128_i64 = arith.constant 128 : i64
-  // CHECK: %0 = tt.make_tensor_ptr %arg0, {{.*}} => contiguity = [128, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  // CHECK: tt.make_tensor_ptr %arg0, {{.*}} => contiguity = [128, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %0 = tt.make_tensor_ptr %arg0, [%c128_i64, %c32_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
-  // CHECK: %1 = tt.make_tensor_ptr %arg1, {{.*}} => contiguity = [32, 1], divisibility = [16, 1], constancy = [1, 1], constant_value = <none>
+  // CHECK: tt.make_tensor_ptr %arg1, {{.*}} => contiguity = [64, 1], divisibility = [16, 1], constancy = [1, 1], constant_value = <none>
   %1 = tt.make_tensor_ptr %arg1, [%c32_i64, %c32_i64], [%c1_i64, %arg2], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf8E5M2>>
+  // CHECK: tt.make_tensor_ptr %arg1, {{.*}} => contiguity = [32, 64], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  %2 = tt.make_tensor_ptr %arg1, [%arg2, %c128_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x64xf8E5M2>>
   tt.return
 }
