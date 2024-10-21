@@ -71,11 +71,10 @@ class CompilationHelper:
     def __init__(self):
         self._library_dir = None
         self._include_dir = None
-        self.libraries = ['ze_loader', 'sycl', 'torch']
+        self.libraries = ['ze_loader', 'sycl']
 
     @cached_property
     def _compute_compilation_options_lazy(self):
-        import torch
         ze_root = os.getenv("ZE_PATH", default="/usr/local")
         include_dir = [os.path.join(ze_root, "include")]
 
@@ -83,14 +82,7 @@ class CompilationHelper:
 
         dirname = os.path.dirname(os.path.realpath(__file__))
         include_dir += [os.path.join(dirname, "include")]
-        include_dir += [
-            os.path.join(torch.utils.cmake_prefix_path, "../../include"),
-            os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include"),
-        ]
         library_dir += [os.path.join(dirname, "lib")]
-        library_dir += [
-            os.path.join(torch.utils.cmake_prefix_path, "../../lib"),
-        ]
 
         self._library_dir = library_dir
         self._include_dir = include_dir
@@ -226,7 +218,6 @@ def make_launcher(constants, signature, ids):
     #include <iomanip>
     #include <level_zero/ze_api.h>
     #include <sycl/sycl.hpp>
-    #include <ATen/record_function.h>
 
     #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
     #include <Python.h>
@@ -319,7 +310,6 @@ def make_launcher(constants, signature, ids):
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-    RECORD_FUNCTION("XPU Triton kernel: " + kernel_name, {{}});
     void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
