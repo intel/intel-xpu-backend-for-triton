@@ -299,6 +299,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
+    if (dyn_cast<intel::DpasEncodingAttr>(dotLayout.getParent())) {
+      SmallVector<unsigned> order(rank);
+      std::iota(order.rbegin(), order.rend(), 0);
+      return order;
+    }
     return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
