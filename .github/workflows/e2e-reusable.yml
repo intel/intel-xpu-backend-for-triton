@@ -228,9 +228,18 @@ jobs:
           if [[ "${{ inputs.only_one_model }}" ]]; then
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
           elif [[ "${{ inputs.models }}" == "subset" ]]; then
+            models_subset_file = "$GITHUB_WORKSPACE/.github/models/${{ inputs.test_mode }}/${{ inputs.suite }}.txt"
             while read model; do
               bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0 $model
-            done < $GITHUB_WORKSPACE/.github/models/${{ inputs.test_mode }}/${{ inputs.suite }}.txt
+            done < $models_subset_file
+            if [[ "${{ inputs.test_all_subset_models }}" == true ]]
+              python $GITHUB_WORKSPACE/scripts/check-inductor-logs.py --models-file="$models_subset_file" \
+                --suite=${{ inputs.suite }} \
+                --dtype=${{ inputs.dtype }} \
+                --mode=${{ inputs.mode }} \
+                --test_mode=${{ inputs.test_mode }} \
+                --device=xpu
+            fi
           else
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0
           fi
