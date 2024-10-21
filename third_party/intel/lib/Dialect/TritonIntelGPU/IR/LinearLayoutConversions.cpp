@@ -10,6 +10,7 @@
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -565,6 +566,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
         DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesC}, {kLane, laneBasesC}},
                               ArrayRef(outDimNames).take_back(2));
+    // llvm::to_vector(llvm::reverse(ArrayRef(outDimNames).take_back(2))));
     // std::cout << (tileLayout.toString()) << std::endl;
     // The per-inst layout is repeated at each repCluster.
     // Hence, multiply with the identity layouts starting from the
@@ -575,30 +577,34 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                                            outDimNames[KDim]);
     tileLayout *= LinearLayout::identity1D(repCluster[nonKDim], kRegister,
                                            outDimNames[nonKDim]);
-    // std::cout << (tileLayout.toString()) << std::endl;
+    std::cout << (tileLayout.toString()) << std::endl;
 
     // // The identical layout is repeated among warps
     tileLayout *=
         LinearLayout::identity1D(warpsPerCTA[KDim], kWarp, outDimNames[KDim]);
     tileLayout *= LinearLayout::identity1D(warpsPerCTA[nonKDim], kWarp,
                                            outDimNames[nonKDim]);
-    // tileLayout *=
-    //     LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    if (rank == 3)
+      tileLayout *=
+          LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+    auto order =
+        llvm::to_vector(llvm::reverse(triton::gpu::getWarpOrder(layout)));
+    std::cout << "order: " << order[1] << ", " << order[0] << std::endl;
     // tileLayout *= identityND(kWarp, warpsPerCTA,
-    //                          llvm::to_vector(llvm::reverse(triton::gpu::getWarpOrder(layout))),
+    //                          llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank))),
     //                          outDimNames);
-    // std::cout << (tileLayout.toString()) << std::endl;
+    std::cout << (tileLayout.toString()) << std::endl;
   }
 
   // Lastly, the layout repeats to match the shape.
   // Operand A/B repeats through the K-dimension first then repeats
   // through the non-K dimension.
-  SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opIdx);
-  tileLayout *=
-      LinearLayout::identity1D(numReps[KDim], kRegister, outDimNames[KDim]);
-  tileLayout *= LinearLayout::identity1D(numReps[nonKDim], kRegister,
-                                         outDimNames[nonKDim]);
-  // std::cout << (tileLayout.toString()) << std::endl;
+  // SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opIdx);
+  // tileLayout *=
+  //     LinearLayout::identity1D(numReps[KDim], kRegister, outDimNames[KDim]);
+  // tileLayout *= LinearLayout::identity1D(numReps[nonKDim], kRegister,
+  //                                        outDimNames[nonKDim]);
+  // // std::cout << (tileLayout.toString()) << std::endl;
 
   return combineCtaCgaWithShape(std::move(tileLayout),
                                 CTALayoutAttr::getDefault(ctx, rank), shape);

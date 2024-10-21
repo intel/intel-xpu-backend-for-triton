@@ -604,8 +604,9 @@ struct LoadOpConversion
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
     if (!isTransposeRequired) {
-      numOperandsPer2DLoadM = isOperandA ? repCluster[opIdx] : numReps[!opIdx];
-      numOperandsPer2DloadN = isOperandA ? numReps[!opIdx] : repCluster[opIdx];
+      int dimId = opIdx ? 1 : 2;
+      numOperandsPer2DLoadM = isOperandA ? repCluster[opIdx] : numReps[dimId];
+      numOperandsPer2DloadN = isOperandA ? numReps[dimId] : repCluster[opIdx];
     } else {
       if (isOperandA)
         return failure();
@@ -1058,8 +1059,8 @@ struct StoreOpConversion
         urem(multiDimWarpId[rank - 2], i32_val(outerDimWarpNum));
     Value innerDimWarpId =
         urem(multiDimWarpId[rank - 1], i32_val(innerDimWarpNum));
-    int64_t numRepOuter = numReps[rank - 2];
-    int64_t numRepInner = numReps[rank - 1];
+    int64_t numRepOuter = numReps[1];
+    int64_t numRepInner = numReps[2];
 
     std::array<unsigned, 2> replicaStride = {
         outerDimWarpNum * repClusterShape[rank - 2],

@@ -202,39 +202,45 @@ SmallVector<unsigned> DpasEncodingAttr::getCTAsPerCGA() const {
 
 SmallVector<int64_t>
 DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
+  // Always return a 3D shape repetitions for the ease of value handling, same
+  // to mma.
   auto warpsPerCTA = getWarpsPerCTA();
   int rank = shape.size();
-  SmallVector<int64_t> res(rank);
+  SmallVector<int64_t> rep(3, 1);
   if (opIdx == 0) {
     auto shapePerWarp = getShapeA();
-    if (rank == 3)
-      res[0] =
-          std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]));
-    res[rank - 2] = std::max<int64_t>(
-        1, shape[rank - 2] / (shapePerWarp[rank - 2] * warpsPerCTA[rank - 2]));
-    res[rank - 1] =
-        std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1]);
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
+                                                    warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
   } else if (opIdx == 1) {
     auto shapePerWarp = getShapeB();
-    if (rank == 3)
-      res[0] =
-          std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]));
-    res[rank - 2] =
-        std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[rank - 2]);
-    res[rank - 1] = std::max<int64_t>(
-        1, shape[rank - 1] / (shapePerWarp[rank - 1] * warpsPerCTA[rank - 1]));
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[rank - 2]),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
+                                                    warpsPerCTA[rank - 1]))};
   } else {
     assert(opIdx == 2 && "Unexpected operand id (valid ids are 0, 1 or 2)");
     auto shapePerWarp = getShapeC();
-    if (rank == 3)
-      res[0] =
-          std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]));
-    res[rank - 2] = std::max<int64_t>(
-        1, shape[rank - 2] / (shapePerWarp[rank - 2] * warpsPerCTA[rank - 2]));
-    res[rank - 1] = std::max<int64_t>(
-        1, shape[rank - 1] / (shapePerWarp[rank - 1] * warpsPerCTA[rank - 1]));
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
+                                                    warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
+                                                    warpsPerCTA[rank - 1]))};
   }
-  return res;
+  return rep;
 }
 
 unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperands(
@@ -364,8 +370,8 @@ SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
   SmallVector<unsigned> elemsPerThread(rank);
   if (rank == 3)
     elemsPerThread[0] = repetitions[0];
-  elemsPerThread[rank - 2] = sizePerThread[rank - 2] * repetitions[rank - 2];
-  elemsPerThread[rank - 1] = sizePerThread[rank - 1] * repetitions[rank - 1];
+  elemsPerThread[rank - 2] = sizePerThread[rank - 2] * repetitions[1];
+  elemsPerThread[rank - 1] = sizePerThread[rank - 1] * repetitions[2];
 
   return elemsPerThread;
 };

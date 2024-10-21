@@ -167,7 +167,7 @@ public:
       SmallVector<int64_t> repA =
           dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
       unsigned repClusterDimM =
-          std::min(maxRepClusterM, static_cast<unsigned>(repA[rank - 2]));
+          std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
 
       unsigned maxRepClusterN =
           PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
@@ -175,7 +175,7 @@ public:
       SmallVector<int64_t> repB =
           dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
       unsigned repClusterDimN =
-          std::min(maxRepClusterN, static_cast<unsigned>(repB[rank - 1]));
+          std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
       if (rank == 3)
         repCluster[0] = 1;
       repCluster[rank - 2] = repClusterDimM;

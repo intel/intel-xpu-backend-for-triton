@@ -246,8 +246,8 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
          "numElemPerInstPerRowPerThread should not be zero");
 
   SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(dotLayout);
-  int64_t numRepOuter = numReps[opIdx];
-  int64_t numRepK = numReps[(opIdx == 0) ? 1 : 0];
+  int64_t numRepOuter = numReps[opIdx ? 2 : 1];
+  int64_t numRepK = numReps[opIdx ? 1 : 2];
 
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
   unsigned repClusterSize = repCluster[opIdx];
