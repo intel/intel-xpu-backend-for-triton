@@ -304,6 +304,16 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
+    // FIXME: delete if branch for `DpasEncodingAttr` and provide more
+    // general solution to make `getOrderForDotOperand` function compatible
+    // with Intel layouts.
+    // More details:
+    // https://github.com/intel/intel-xpu-backend-for-triton/pull/2517
+    if (dyn_cast<intel::DpasEncodingAttr>(dotLayout.getParent())) {
+      SmallVector<unsigned> order(rank);
+      std::iota(order.rbegin(), order.rend(), 0);
+      return order;
+    }
     return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
