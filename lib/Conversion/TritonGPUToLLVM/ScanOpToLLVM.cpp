@@ -76,7 +76,7 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
         acc[j] = select(mask, tempAcc[j], acc[j]);
       }
     }
-    srcValues[srcIndex] = acc;
+    srcValues[srcIndex] = std::move(acc);
   }
 }
 
@@ -224,7 +224,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
                                 srcValues[srcIndex - i * elementStride][j]);
         }
       }
-      srcValues[srcIndex - i * elementStride] = laneValue;
+      srcValues[srcIndex - i * elementStride] = std::move(laneValue);
     }
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
@@ -303,7 +303,7 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
                      srcValues[srcIndex - i * elementStride][j], laneValue[j]);
         }
       }
-      srcValues[srcIndex - i * elementStride] = laneValue;
+      srcValues[srcIndex - i * elementStride] = std::move(laneValue);
     }
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
