@@ -436,11 +436,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   constexpr static unsigned minSubGroupTransposeWidth = 8;
 
+  const TargetInfoBase &targetInfo;
+
   // Set benefit to 2 so that this pattern applies before other convert-layout
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
-  ConvertLayoutOpUsingLinearLayoutsConversion(
-      LLVMTypeConverter &typeConverter,
-      const triton::intel::TargetInfo &targetInfo, PatternBenefit benefit = 2)
+  ConvertLayoutOpUsingLinearLayoutsConversion(LLVMTypeConverter &typeConverter,
+                                              const TargetInfoBase &targetInfo,
+                                              PatternBenefit benefit = 2)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
@@ -798,9 +800,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // TODO(jlebar): Implement me.
     return failure();
   }
-
-private:
-  const triton::intel::TargetInfo &targetInfo;
 };
 
 } // namespace
