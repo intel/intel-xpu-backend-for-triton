@@ -373,7 +373,8 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "\nlayoutMap:" << "\n";
+      DBGS() << "\nlayoutMap:"
+             << "\n";
       for (auto [op, encoding] : layoutMap) {
         DBGS() << "op: " << *op << "\n";
         DBGS() << "encoding: " << encoding << "\n\n";
