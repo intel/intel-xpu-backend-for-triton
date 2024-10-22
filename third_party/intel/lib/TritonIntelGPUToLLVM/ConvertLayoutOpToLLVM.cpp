@@ -452,24 +452,41 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
 
-    LinearLayout comp = srcLayout.invertAndCompose(dstLayout);
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
     std::optional<LinearLayout> conversion = comp.divideRight(
         LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
         LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
     assert(conversion && "Expecting valid conversion");
     // Expected conversion is:
     // - register=1 -> (0, 1)
-    //    register=2 -> (0, 2)
-    //    register=4 -> (0, 4)
-    //    register=8 -> (0, 8)
-    //  - lane=1 -> (1, 0)
-    //    lane=2 -> (2, 0)
-    //    lane=4 -> (4, 0)
-    //    lane=8 -> (8, 0)
-    // where out dims are: [register (size 16), lane (size 16)]
+    // ...
+    // - register=i -> (0, 2**(i-1))
+    // ...
+    // - register=N -> (0, 2**(N-1))
+    // - lane=1 -> (0, 1)
+    // ...
+    // - lane=j -> (2**(j-1), 0)
+    // ...
+    //   lane=M -> (2**(M-1), 0)
+    // where out dims are: [register (size 2**(N-1)), lane (size 2**(M-1))]
+    //
+    // With N = M.
+    const auto buildBasis = [&](int32_t size, std::size_t index) {
+      std::vector<std::vector<int32_t>> basis;
+      std::vector<int32_t> curr(2);
+      for (int32_t i = 1; i < size; i *= 2) {
+        curr[index] = i;
+        basis.push_back(curr);
+      }
+      return basis;
+    };
+
+    constexpr std::size_t laneIndex = 0;
+    constexpr std::size_t registerIndex = 1;
+    int32_t size = conversion->getInDimSize(kLane);
     std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
-        bases{{{kRegister, {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
-               {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}}}}};
+        bases{{{kRegister, buildBasis(size, registerIndex)},
+               {kLane, buildBasis(size, laneIndex)}}};
     std::array<StringAttr, 2> outDimNames{kRegister, kLane};
     return conversion == LinearLayout(bases, outDimNames);
   }
