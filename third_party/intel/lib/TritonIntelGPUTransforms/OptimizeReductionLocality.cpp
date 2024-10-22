@@ -43,12 +43,26 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   /// Optimize reduction with DPAS-encoded input.
   ///
   /// This optimization reshapes and converts input tensor layouts to split the
-  /// reduction in three equivalent ones:
+  /// reduction in three equivalent ones.
   ///
   /// This only works if the number of items for a given thread across dimension
   /// 0 and the execution size are equal to the sub-group size.
   ///
-  /// First, we go from a DPAS layout to an equivalent blocked layout as follows:
+  /// We first want to reshape the input tensor to obtain a tensor with an
+  /// equivalent encoding in terms of how elements are distributed across the
+  /// device, but with more dimensions across the reduction axis. This way, we
+  /// will be able to split the reduction in three steps:
+  ///
+  /// 1. Reduce within the work-item
+  /// 2. Convert layout for better locality
+  /// 3. Reduce within the sub-group and work-group
+  ///
+  /// Step 1 may involve more than one dimension depending on the input encoding
+  /// (2 in this case). After step 1, each thread will hold a single element
+  /// across the reduction axis dimension, so step 2 will be cheaper.
+  ///
+  /// For step 1, we first go from a DPAS layout to an equivalent blocked layout
+  /// as follows:
   ///
   /// DPAS:
   /// ```
@@ -105,8 +119,9 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   ///                  | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
   ///                  v t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
   /// ```
-  /// After reshaping and layout conversion, we can get to the actual layout
-  /// optimization we wanted to achieve:
+  ///
+  /// Now on with step 2: After reshaping and layout conversion, we can get to
+  /// the actual layout optimization we wanted to achieve:
   /// Blocked (#triton_gpu.blocked<{sizePerThread = [1, repCluster[0]*repeatCount], threadsPerWarp = [executionSize, 1], warpsPerCTA = [warpsPerCTA[0], warpsPerCTA[1]], order = [1, 0]}>):
   /// ```
   ///                               warpsPerCTA[1]
@@ -118,8 +133,8 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   /// threadsPerWarp[0] | t2 t2 t2 t2 ... t2 tn3 tn3 tn3 ... tn3 | warpsPerCTA[0]
   ///                   | t3 t3 t3 t3 ... t3 tn4 tn4 tn4 ... tn4 |
   /// ```
-  /// And reducing on dimension 1 and converting the layout to the original one
-  /// leads to the same output as the original operation.
+  /// And on with step 3, reducing on dimension 1 and converting the layout to
+  /// the original one leads to the same output as the original operation.
 // clang-format on
 struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
   using OpRewritePattern<ReduceOp>::OpRewritePattern;
