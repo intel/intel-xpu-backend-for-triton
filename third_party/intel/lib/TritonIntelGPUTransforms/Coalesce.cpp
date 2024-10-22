@@ -100,9 +100,6 @@ private:
     perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
     LDBG("perThread: " << perThread);
 
-    //    if (perThread <= 1)
-    //      return;
-
     if (!dyn_cast<triton::LoadOp>(op)) {
       // For ops that can result in a global memory write, we should enforce
       // that each thread handles at most 128 bits, which is the widest
