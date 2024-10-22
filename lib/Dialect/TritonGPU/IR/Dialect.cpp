@@ -299,11 +299,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = getWarpsPerCTA(dotLayout.getParent()).size();
-    if (dyn_cast<intel::DpasEncodingAttr>(dotLayout.getParent())) {
-      SmallVector<unsigned> order(rank);
-      std::iota(order.rbegin(), order.rend(), 0);
-      return order;
+    if (auto mmaParent = dyn_cast<MmaEncodingTrait>(dotLayout.getParent())) {
+      return mmaParent.getOrderForDotOperand(dotLayout.getOpIdx(), rank);
     }
+    // This branch had to be left because not all types
+    // inherit `MmaEncodingTrait` interface, for example `BlockedEncodingAttr`.
     return getOrderForDotOperand(dotLayout.getOpIdx(), rank);
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -837,6 +837,12 @@ unsigned AMDMfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
+SmallVector<unsigned>
+AMDMfmaEncodingAttr::getOrderForDotOperand(unsigned opIdx,
+                                           unsigned rank) const {
+  return ::getOrderForDotOperand(opIdx, rank);
+}
+
 // Wmma encoding
 
 SmallVector<unsigned>
@@ -864,6 +870,12 @@ AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
 unsigned AMDWmmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                      Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getOrderForDotOperand(unsigned opIdx,
+                                           unsigned rank) const {
+  return ::getOrderForDotOperand(opIdx, rank);
 }
 
 SmallVector<unsigned>
@@ -951,6 +963,12 @@ unsigned NvidiaMmaEncodingAttr::getElemsPerThreadOfOperand(
 unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                        Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+
+SmallVector<unsigned>
+NvidiaMmaEncodingAttr::getOrderForDotOperand(unsigned opIdx,
+                                             unsigned rank) const {
+  return ::getOrderForDotOperand(opIdx, rank);
 }
 
 //

@@ -297,6 +297,13 @@ SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
           static_cast<unsigned>(sizePerThread[1] * repetitions[1])};
 };
 
+SmallVector<unsigned>
+DpasEncodingAttr::getOrderForDotOperand(unsigned opIdx, unsigned rank) const {
+  SmallVector<unsigned> order(rank);
+  std::iota(order.rbegin(), order.rend(), 0);
+  return order;
+}
+
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
   unsigned threadsPerWarp = getSubGroupSize();
   auto shapeC = getDPASInstShapeC();
