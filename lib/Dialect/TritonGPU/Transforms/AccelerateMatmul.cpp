@@ -406,7 +406,7 @@ public:
     auto ctx = dotOp.getContext();
 
     // Check that rhs scale is null
-    assert(dotOp.getRhsScale() == nullptr && "rhs scale NYI");
+    assert(dotOp.getRhsScale() == nullptr && "rhs scale must be null");
 
     // operands
     auto a = dotOp.getLhs();
@@ -426,11 +426,10 @@ public:
       }
     };
 
-    assert((aType == F8F6F4Type::E4M3 || aType == F8F6F4Type::E5M2 ||
-            aType == F8F6F4Type::E2M1) &&
-           "NYI: lhs supports fp4 or fp8");
+    assert(aType == F8F6F4Type::E4M3 ||
+           aType == F8F6F4Type::E5M2 && "lhs just supports fp8");
     assert(bType == F8F6F4Type::E4M3 ||
-           bType == F8F6F4Type::E5M2 && "NYI: rhs supports fp8");
+           bType == F8F6F4Type::E5M2 && "rhs just supports fp8");
 
     // TODO run accelerate matmul on A and B first to choose their layouts
     // Set return type
@@ -441,7 +440,6 @@ public:
     auto instrShape = mmaVersionToInstrShape(versionMajor, retShapePerCTA,
                                              rewriter.getBF16Type(), numWarps);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
-    // TODO Use warpsPerTileV2
     SmallVector<unsigned> warpsPerCTA = {numWarps, 1};
     auto mmaEnc = NvidiaMmaEncodingAttr::get(ctx, /*versionMajor=*/versionMajor,
                                              /*versionMinor=*/0, warpsPerCTA,
@@ -454,39 +452,27 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
-    auto toMMABf16 = [&newRetType, &rewriter, &ctx, &enumToType](
-                         TypedValue<RankedTensorType> v, int idx,
-                         F8F6F4Type type) -> TypedValue<RankedTensorType> {
+    auto toMMABf16 = [&newRetType, &rewriter, &ctx,
+                      &enumToType](TypedValue<RankedTensorType> v, int idx,
+                                   F8F6F4Type type) {
+      // MMAv2 Layout
       auto vType = v.getType();
-      if (type == F8F6F4Type::E2M1) {
-        // A bit too dynamically typed...
-        // perhaps return ints in both cases?
+      auto newVEncoding = DotOperandEncodingAttr::get(
+          ctx, idx, newRetType.getEncoding(), enumToType((type)));
+      auto newVType = RankedTensorType::get(
+          v.getType().getShape(), v.getType().getElementType(), newVEncoding);
+      v = rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
 
-        auto retEnc = dyn_cast<NvidiaMmaEncodingAttr>(newRetType.getEncoding());
-        auto newVEncoding = DotOperandEncodingAttr::get(
-            ctx, idx, newRetType.getEncoding(), /*kWidth=*/4);
-        auto newVType = RankedTensorType::get(
-            vType.getShape(), vType.getElementType(), newVEncoding);
-        return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
-      } else {
-        assert(type == F8F6F4Type::E5M2 || type == F8F6F4Type::E4M3);
-        auto newVEncoding = DotOperandEncodingAttr::get(
-            ctx, idx, newRetType.getEncoding(), /*kWidth=*/8);
-        auto newVType = RankedTensorType::get(
-            vType.getShape(), vType.getElementType(), newVEncoding);
-        v = rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
+      // Bitcast
+      auto vTypeFp8 = RankedTensorType::get(
+          vType.getShape(), rewriter.getFloat8E4M3FNType(), newVEncoding);
+      v = cast<TypedValue<RankedTensorType>>(
+          rewriter.create<BitcastOp>(v.getLoc(), vTypeFp8, v).getResult());
 
-        // Bitcast
-        auto vTypeFp8 = RankedTensorType::get(vType.getShape(),
-                                              enumToType(type), newVEncoding);
-        v = cast<TypedValue<RankedTensorType>>(
-            rewriter.create<BitcastOp>(v.getLoc(), vTypeFp8, v).getResult());
-
-        // Convert to bf16
-        auto vTypeBf16 = RankedTensorType::get(
-            vType.getShape(), rewriter.getBF16Type(), newVEncoding);
-        return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
-      }
+      // Convert to bf16
+      auto vTypeBf16 = RankedTensorType::get(
+          vType.getShape(), rewriter.getBF16Type(), newVEncoding);
+      return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
     };
     a = toMMABf16(a, 0, aType);
     b = toMMABf16(b, 1, bType);
