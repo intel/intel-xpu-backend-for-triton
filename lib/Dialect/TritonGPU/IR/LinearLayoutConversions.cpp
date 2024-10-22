@@ -827,8 +827,15 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
     return dotOperandMfmaToLinearLayout(*this, shape);
-  }
-  if (auto dpasLayout = llvm::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
+  } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
+    // FIXME [Dot LL]
+    // Do this unconditionally
+    auto largeKWidth = getKWidth() == 8;
+    if (mma.isAmpere() && largeKWidth) {
+      return ampereDotToLinearLayout(shape, *this);
+    }
+  } else if (auto dpasLayout =
+                 llvm::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
     return dotOperandDpasToLinearLayout(*this, shape);
   }
 
