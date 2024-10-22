@@ -1,4 +1,3 @@
-#include <iostream>
 #include <vector>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -8,9 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -56,8 +53,6 @@ LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,
   LinearLayout ret = LinearLayout::empty();
   for (int i = 0; i < shape.size(); i++) {
     // Start with the most-minor dimension, which is order[0].
-    // std::cout << "i: " << i << " shape[i]: " << shape[i]
-    //           << " order[i]: " << order[i] << std::endl;
     int dim = order[i];
     ret *= LinearLayout::identity1D(shape[dim], inDimName, outDimNames[dim]);
   }
@@ -280,7 +275,6 @@ LinearLayout ensureLayoutNotSmallerThan(
     return layout;
   }
 
-  // MLIRContext *ctx = shape.begin()->first.getContext();
   StringAttr kDim = *layout.getInDimNames().begin();
   assert(kDim == "register" || kDim == "offset" && "unexpected kDim");
 
@@ -291,16 +285,6 @@ LinearLayout ensureLayoutNotSmallerThan(
     assert(actualSize > desiredSize ||
            desiredSize % actualSize == 0 && "bad shape");
     ret *= LinearLayout::identity1D(desiredSize / actualSize, kDim, outDimName);
-    // std::cout << "actualSize: " << actualSize << " desiredSize: " <<
-    // desiredSize
-    //           << std::endl;
-    // std::cout << "outDimName: " << outDimName.str() << std::endl;
-    // std::cout << "identity1D: "
-    //           << LinearLayout::identity1D(desiredSize / actualSize, kDim,
-    //                                       outDimName)
-    //                  .toString()
-    //           << std::endl;
-    // std::cout << "ret: " << ret.toString() << std::endl;
     assert(ret.getOutDimSize(outDimName) >= desiredSize && "bad grow");
   }
   return ret;
@@ -324,12 +308,6 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
-  std::cout << "shape: ";
-  for (auto s : shape) {
-    std::cout << s << ", ";
-  }
-  std::cout << std::endl;
-
   llvm::SmallDenseMap<StringAttr, int64_t> labeledShape;
   for (auto [dim, size] : llvm::zip(outDimNames, shape)) {
     labeledShape[dim] = size;
@@ -338,7 +316,6 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   LinearLayout cgaLayout =
       ensureLayoutNotLargerThan(makeCgaLayout(cgaLayoutAttr), labeledShape)
           .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-  // std::cout << "\ncgaLayout: " << cgaLayout.toString() << std::endl;
 
   // Calculate the shape of the ctaLayout, which is `shape` divided by the
   // cgaLayout's size.
@@ -346,33 +323,19 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   assert(llvm::to_vector(ctaLayout.getOutDimNames()) ==
              llvm::to_vector(cgaLayout.getOutDimNames()) &&
          "bad layout");
-
-  // std::cout << "ctaShape: ";
   for (auto dim : ctaLayout.getOutDimNames()) {
     ctaShape[dim] =
         std::max(int64_t{1}, labeledShape[dim] / cgaLayout.getOutDimSize(dim));
-    // std::cout << ctaShape[dim] << ", ";
   }
-  // std::cout << std::endl;
 
-  std::cout << "ensureLayoutNotSmallerThan start" << std::endl;
   ctaLayout = ensureLayoutNotSmallerThan(ctaLayout, ctaShape);
-  // std::cout << "\nctaLayout not smaller than: " << ctaLayout.toString()
-  //           << std::endl;
-  std::cout << "ensureLayoutNotLargerThan start" << std::endl;
   ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
-  // std::cout << "\nctaLayout not larger than: " << ctaLayout.toString()
-  //           << std::endl;
 
-  // std::cout << "\ncta * cga: " << (ctaLayout * cgaLayout).toString()
-  //           << std::endl;
   LinearLayout ret =
       (std::move(ctaLayout) * std::move(cgaLayout)).transposeOuts(outDimNames);
   for (auto dim : ret.getOutDimNames()) {
     assert(ret.getOutDimSize(dim) == labeledShape[dim] && "bad shape");
   }
-  // std::cout << "\ncombineCtaCgaWithShape: " << ret.toString() << std::endl;
-  std::cout << "combineCtaCgaWithShape end" << std::endl;
   return ret;
 }
 
@@ -569,7 +532,6 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
           LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
 
   } else if (opIdx == 1) { // Operand B
-    std::cout << "\nOperand B" << std::endl;
     auto regBasesB = DPASRegBasesB(opsPerChannel, executionSize, threadsPerWarp,
                                    systolicDepth);
     auto laneBasesB =
@@ -591,13 +553,11 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
       tileLayout *=
           LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
   } else { // opIdx=2 -> Operand C
-    std::cout << "\nOperand C" << std::endl;
     auto regBasesC = DPASRegBasesC(repeatCount, executionSize, threadsPerWarp);
     auto laneBasesC =
         DPASLaneBasesC(repeatCount, executionSize, threadsPerWarp);
     tileLayout = LinearLayout({{kRegister, regBasesC}, {kLane, laneBasesC}},
                               ArrayRef(outDimNames).take_back(2));
-    // std::cout << tileLayout.toString() << std::endl;
     // The per-inst layout is repeated at each repCluster.
     // Hence, multiply with the identity layouts starting from the
     // least significant dimension.
@@ -605,18 +565,8 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     dimK = rank - 1;
     tileLayout *= LinearLayout::identity1D(repCluster[dimK], kRegister,
                                            outDimNames[dimK]);
-    // std::cout << (LinearLayout::identity1D(repCluster[dimK], kRegister,
-    //                                        outDimNames[dimK])
-    //                   .toString())
-    //           << std::endl;
-    // std::cout << (tileLayout.toString()) << std::endl;
     tileLayout *= LinearLayout::identity1D(repCluster[dimNonK], kRegister,
                                            outDimNames[dimNonK]);
-    // std::cout << (LinearLayout::identity1D(repCluster[dimNonK], kRegister,
-    //                                        outDimNames[dimNonK])
-    //                   .toString())
-    //           << std::endl;
-    // std::cout << (tileLayout.toString()) << std::endl;
 
     // // The identical layout is repeated among warps
     tileLayout *=
@@ -626,19 +576,12 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     if (rank == 3)
       tileLayout *=
           LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
-    // std::cout << (tileLayout.toString()) << std::endl;
   }
 
   // Lastly, the layout repeats to match the shape.
   // Operand A/B repeats through the K-dimension first then repeats
   // through the non-K dimension.
   SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opIdx);
-
-  std::cout << "numReps: ";
-  for (auto numRep : numReps) {
-    std::cout << numRep << ", ";
-  }
-  std::cout << std::endl;
 
   // numReps is always 3D, we should add 1 to dim id when rank is 2
   int repDimK = rank == 2 ? dimK + 1 : dimK;
@@ -647,13 +590,9 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
       LinearLayout::identity1D(numReps[repDimK], kRegister, outDimNames[dimK]);
   tileLayout *= LinearLayout::identity1D(numReps[repDimNonK], kRegister,
                                          outDimNames[dimNonK]);
-  std::cout << "rank: " << rank << std::endl;
   if (rank == 3)
     tileLayout *=
         LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
-  // std::cout << "\ntileLayout with DPASRepetition: " <<
-  // (tileLayout.toString())
-  //           << std::endl;
 
   return combineCtaCgaWithShape(std::move(tileLayout),
                                 CTALayoutAttr::getDefault(ctx, rank), shape);

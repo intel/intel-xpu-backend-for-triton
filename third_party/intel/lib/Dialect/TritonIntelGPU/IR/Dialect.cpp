@@ -1,6 +1,5 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
-#include <cstdint>
 #include <numeric>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
@@ -13,9 +12,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
 
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -105,32 +102,32 @@ SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeC() const {
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
-  auto shapeA = getDPASInstShapeA();
+  auto instShapeA = getDPASInstShapeA();
   auto repCluster = getRepCluster();
   size_t rank = repCluster.size();
   SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = shapeA[0] * repCluster[rank - 2];
-  resShape[rank - 1] = shapeA[1];
+  resShape[rank - 2] = instShapeA[0] * repCluster[rank - 2];
+  resShape[rank - 1] = instShapeA[1];
   return resShape;
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeB() const {
-  auto shapeB = getDPASInstShapeB();
+  auto instShapeB = getDPASInstShapeB();
   auto repCluster = getRepCluster();
   size_t rank = repCluster.size();
   SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = shapeB[0];
-  resShape[rank - 1] = shapeB[1] * repCluster[rank - 1];
+  resShape[rank - 2] = instShapeB[0];
+  resShape[rank - 1] = instShapeB[1] * repCluster[rank - 1];
   return resShape;
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
-  auto shapeC = getDPASInstShapeC();
+  auto instShapeC = getDPASInstShapeC();
   auto repCluster = getRepCluster();
   size_t rank = repCluster.size();
   SmallVector<unsigned> resShape(rank, 1);
-  resShape[rank - 2] = shapeC[0] * repCluster[rank - 2];
-  resShape[rank - 1] = shapeC[1] * repCluster[rank - 1];
+  resShape[rank - 2] = instShapeC[0] * repCluster[rank - 2];
+  resShape[rank - 1] = instShapeC[1] * repCluster[rank - 1];
   return resShape;
 }
 
@@ -193,12 +190,8 @@ SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
 
 SmallVector<unsigned> DpasEncodingAttr::getCTAOrder() const {
   size_t rank = getWarpsPerCTA().size();
-  // auto res = llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank)));
-  // return res;
-  if (rank == 3)
-    return {2, 1, 0};
-  else
-    return {1, 0};
+  auto res = llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank)));
+  return res;
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTAsPerCGA() const {

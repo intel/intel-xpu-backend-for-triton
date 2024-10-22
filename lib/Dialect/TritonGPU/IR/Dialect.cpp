@@ -1,7 +1,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include <cstdint>
-#include <iostream>
 #include <numeric>
 
 #include "mlir/IR/DialectImplementation.h"
@@ -384,17 +383,6 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape) {
   unsigned rank = shape.size();
-  std::cout << "!!!GPU dialect - getShapePerCTA\n";
-  std::cout << "CTASplitNum: ";
-  for (auto i : CTASplitNum) {
-    std::cout << i << " ";
-  }
-  std::cout << "\nshape: ";
-  for (auto i : shape) {
-    std::cout << i << " ";
-  }
-  std::cout << "\n";
-
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
     // This wrapping rule must be consistent with emitCTAOffsetForLayout

@@ -1,7 +1,6 @@
 #include "triton/Analysis/Allocation.h"
 
 #include <algorithm>
-#include <iostream>
 #include <limits>
 #include <numeric>
 
@@ -14,7 +13,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
@@ -65,7 +63,6 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
                                                RankedTensorType dstTy) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
-  std::cout << "- in getRepShapeForCvt\n";
 
   if (!cvtNeedsSharedMemory(srcTy, dstTy)) {
     return {};
@@ -82,10 +79,6 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
   auto dstShapePerCTA = getShapePerCTA(dstTy);
   auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
   auto dstShapePerCTATile = getShapePerCTATile(dstLayout, dstTy.getShape());
-  std::cout << "!!!shapePerCTA: " << srcShapePerCTA.size() << " "
-            << dstShapePerCTA.size() << "\n";
-  std::cout << "!!!shapePerCTATile: " << srcShapePerCTATile.size() << " "
-            << dstShapePerCTATile.size() << "\n";
 
   unsigned rank = dstTy.getRank();
   SmallVector<unsigned> repShape(rank);
@@ -112,9 +105,7 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy) {
   // Initialize vector sizes and stride
-  std::cout << "getRepShapeForCvt start\n";
   auto repShape = getRepShapeForCvt(srcTy, dstTy);
-  std::cout << "repShape rank: " << repShape.size() << "\n";
   if (repShape.empty())
     return ScratchConfig({}, {});
   ScratchConfig scratchConfig(repShape, repShape);
@@ -126,16 +117,6 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   auto [inOrd, outOrd] = getCvtOrder(srcLayout, dstLayout);
   scratchConfig.order = outOrd;
-  std::cout << "inOrd: ";
-  for (auto i : inOrd) {
-    std::cout << i << " ";
-  }
-  std::cout << "rank: " << inOrd.size() << "\n";
-  std::cout << "outOrd: ";
-  for (auto i : outOrd) {
-    std::cout << i << " ";
-  }
-  std::cout << "rank: " << outOrd.size() << "\n";
 
   unsigned srcContigPerThread =
       getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
@@ -143,7 +124,6 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
       getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
   // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
   //       that we cannot do vectorization.
-  std::cout << "no index issue in getUniqueContigPerThread\n";
   unsigned innerDim = rank - 1;
   scratchConfig.inVec = outOrd[0] != innerDim  ? 1
                         : inOrd[0] != innerDim ? 1
@@ -252,7 +232,6 @@ private:
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
     } else if (auto cvtLayout = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
-      std::cout << "getScratchValueSize from ConvertLayoutOp\n";
       auto srcTy = cvtLayout.getSrc().getType();
       auto dstTy = cvtLayout.getType();
       auto srcEncoding = srcTy.getEncoding();
@@ -260,16 +239,13 @@ private:
       if (mlir::isa<SharedEncodingAttr>(srcEncoding) ||
           mlir::isa<SharedEncodingAttr>(dstEncoding)) {
         // Conversions from/to shared memory do not need scratch memory.
-        std::cout << "-- ConvertLayoutOp from/to shared memory\n";
         return;
       }
       // ConvertLayoutOp with both input/output non-shared_layout
       // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
       //       also possible to realize it with other approaches in restricted
       //       conditions, such as warp-shuffle
-      std::cout << "-- getScratchConfigForCvt\n";
       auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-      std::cout << "-- getNumScratchElements\n";
       auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
       auto bytes =
           isa<triton::PointerType>(srcTy.getElementType())
@@ -277,8 +253,6 @@ private:
               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                           scratchAlignment);
-      std::cout << "-- ConvertLayoutOp from/to non-shared memory: " << bytes
-                << " bytes\n";
     } else if (isa<triton::AtomicRMWOp, triton::AtomicCASOp>(op)) {
       auto value = op->getOperand(0);
       // only scalar requires scratch memory

@@ -1622,7 +1622,7 @@ void init_triton_ir(py::module &&m) {
              if (haveDump) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
-               //  printingFlags.enableDebugInfo();
+               printingFlags.enableDebugInfo();
                auto printAlways = [funcToDump](Pass *, Operation *op) -> bool {
                  if (funcToDump.empty())
                    return true;

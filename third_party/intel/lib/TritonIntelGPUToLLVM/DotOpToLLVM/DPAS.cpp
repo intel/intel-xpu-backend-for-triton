@@ -1,14 +1,12 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include <iostream>
 
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cstdint>
 #include <optional>
 
 using namespace mlir;
@@ -140,8 +138,8 @@ public:
         BTensorTy.getShape(), BEncoding.getOpIdx());
     assert(repA[0] == repB[0] && "A and B should have the same batch size");
     assert(repA[2] == repB[1] && "Unexpected rep for A and B operands");
-    unsigned repM = repA[1], repN = repB[2], repK = repA[2];
     unsigned repBatch = repA[0];
+    unsigned repM = repA[1], repN = repB[2], repK = repA[2];
 
     auto dpasType = DPASAnalysis::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
@@ -177,9 +175,6 @@ public:
     });
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
-      std::cout << "valA: " << b << " " << m << " " << k << "\n";
-      std::cout << "valB: " << b << " " << n << " " << k << "\n";
-      std::cout << "valC: " << b << " " << m << " " << n << "\n";
       Value valA = ha.at({b, m, k});
       Value valB = hb.at({b, n, k});
       Value valc = fc.at({b, m, n});

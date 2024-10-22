@@ -1,8 +1,8 @@
+
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "triton/Analysis/Allocation.h"
-#include <iostream>
 
 using namespace mlir;
 
@@ -20,13 +20,10 @@ struct AllocateSharedMemory
       AllocateSharedMemory>::IntelAllocateSharedMemoryBase;
 
   void runOnOperation() override {
-    std::cout << "AllocateSharedMemory Start\n";
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
-    std::cout << "Before create Module Allocation\n";
     ModuleAllocation allocation(mod);
 
-    std::cout << "Before mod walk\n";
     mod.walk([&](FunctionOpInterface funcOp) {
       if (allocation.isRoot(funcOp) && allocation.getSharedMemorySize()) {
         LLVM::LLVMPointerType ptrTy = LLVM::LLVMPointerType::get(
@@ -34,7 +31,6 @@ struct AllocateSharedMemory
         funcOp.insertArgument(funcOp.getNumArguments(), ptrTy, {},
                               funcOp.getLoc());
       }
-      std::cout << "Before funcOp walk\n";
       funcOp.walk([&](Operation *op) {
         auto *funcAllocation = allocation.getFuncData(funcOp);
         auto oBufferId = funcAllocation->getBufferId(op);
@@ -53,7 +49,6 @@ struct AllocateSharedMemory
                     IntegerAttr::get(IntegerType::get(ctx, 32), offset));
       });
     });
-    std::cout << "Before getSharedMemorySize\n";
     int32_t initialSharedMemorySize = 0;
     if (IntegerAttr sharedAttr =
             mod->getAttrOfType<IntegerAttr>("triton_gpu.shared"))
@@ -62,7 +57,6 @@ struct AllocateSharedMemory
                  IntegerAttr::get(IntegerType::get(ctx, 32),
                                   initialSharedMemorySize +
                                       allocation.getSharedMemorySize()));
-    std::cout << "AllocateSharedMemory End\n";
   }
 };
 

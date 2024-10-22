@@ -61,8 +61,10 @@ SmallVector<unsigned> getWarpsPerTile(DotOp dotOp,
                                       unsigned numWarps) {
   auto rank = shape.size();
   // Early exit for batched matmul
+  // TODO: current strategy is same as upstream, there could be better strategy
+  // when batch < numWarps
   if (rank == 3)
-    return {(unsigned)numWarps, 1, 1};
+    return {numWarps, 1, 1};
 
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();

@@ -1,7 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
-#include <iostream>
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -40,7 +39,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    std::cout << "ConvertLayoutOpConversion" << std::endl;
     RankedTensorType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
@@ -66,7 +64,6 @@ private:
                     RankedTensorType type,
                     ArrayRef<unsigned> multiDimCTAInRepId,
                     ArrayRef<unsigned> shapePerCTATile) const {
-    std::cout << "getMultiDimOffset" << std::endl;
     auto shape = type.getShape();
     unsigned rank = shape.size();
     if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
@@ -143,7 +140,6 @@ private:
                       ArrayRef<unsigned> origRepShape,
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
                       Value smemBase) const {
-    std::cout << "processReplica" << std::endl;
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
     auto layout = type.getEncoding();
     auto rank = type.getRank();
@@ -229,7 +225,6 @@ private:
   lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
-    std::cout << "lowerDistributedToDistributed" << std::endl;
     auto loc = op.getLoc();
     auto typeConverter = getTypeConverter();
     RankedTensorType srcTy = op.getSrc().getType();
@@ -322,14 +317,12 @@ private:
     return success();
   }
 
-  // using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
   using ValueTable = std::map<std::array<unsigned, 3>, Value>;
 
   ValueTable getValuesFromDpasLayoutStruct(Location loc,
                                            ConversionPatternRewriter &rewriter,
                                            Value vals,
                                            RankedTensorType srcType) const {
-    std::cout << "getValuesFromDpasLayoutStruct" << std::endl;
     SmallVector<Value> elems = unpackLLElements(loc, vals, rewriter);
     auto dpasLayout = dyn_cast<DpasEncodingAttr>(srcType.getEncoding());
 
@@ -374,7 +367,6 @@ private:
   Value composeValuesToDotOperandLayoutStruct(
       Location loc, ConversionPatternRewriter &rewriter, const ValueTable &vals,
       RankedTensorType dstType) const {
-    std::cout << "composeValuesToDotOperandLayoutStruct" << std::endl;
     auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstType.getEncoding());
     auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
     unsigned opIdx = dotLayout.getOpIdx();
@@ -431,7 +423,6 @@ private:
   LogicalResult
   lowerDpasToDotOperand(triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                         ConversionPatternRewriter &rewriter) const {
-    std::cout << "lowerDpasToDotOperand" << std::endl;
     Location loc = op.getLoc();
     RankedTensorType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
@@ -464,7 +455,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    std::cout << "ConvertLayoutOpUsingLinearLayoutsConversion" << std::endl;
     MLIRContext *ctx = op.getContext();
 
     const auto &shape = op.getType().getShape();
@@ -513,7 +503,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
                        const LinearLayout &dstLayout, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
-    std::cout << "transferWithinThread" << std::endl;
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
