@@ -137,13 +137,8 @@ public:
         ATensorTy.getShape(), AEncoding.getOpIdx());
     SmallVector<int64_t> repB = BDpasEncoding.getDPASRepetitions(
         BTensorTy.getShape(), BEncoding.getOpIdx());
-    assert(repA.size() == repB.size() && "A and B rank should match");
-    size_t rank = repA.size();
-    assert(repA[rank - 1] == repB[rank - 2] &&
-           "Unexpected rep for A and B operands");
-
-    assert(repA[2] == repB[1]);
-    assert(repA[0] == repB[0]);
+    assert(repA[0] == repB[0] && "A and B should have the same batch size");
+    assert(repA[2] == repB[1] && "Unexpected rep for A and B operands");
     unsigned repM = repA[1], repN = repB[2], repK = repA[2];
     unsigned repBatch = repA[0];
 
@@ -196,14 +191,15 @@ public:
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
+    unsigned rank = repCluster.size();
     for (int b = 0; b < repBatch; ++b)
       for (int k = 0; k < repK; ++k)
         for (int m = 0; m < repM; ++m)
           for (int n = 0; n < repN; ++n)
-            for (int repRow = 0; repRow < repCluster[0]; ++repRow)
-              for (int repCol = 0; repCol < repCluster[1]; ++repCol)
-                generateDPASOp(b, m * repCluster[0] + repRow,
-                               n * repCluster[1] + repCol, k);
+            for (int repRow = 0; repRow < repCluster[rank - 2]; ++repRow)
+              for (int repCol = 0; repCol < repCluster[rank - 1]; ++repCol)
+                generateDPASOp(b, m * repCluster[rank - 2] + repRow,
+                               n * repCluster[rank - 1] + repCol, k);
 
     Value res = composeValuesToDotOperandLayoutStruct(fc, repBatch, repM, repN,
                                                       resElemTy);
