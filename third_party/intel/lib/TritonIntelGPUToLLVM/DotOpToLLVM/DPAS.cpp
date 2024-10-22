@@ -177,9 +177,6 @@ public:
     });
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
-      std::cout << "valA: " << b << " " << m << " " << k << "\n";
-      std::cout << "valB: " << b << " " << n << " " << k << "\n";
-      std::cout << "valC: " << b << " " << m << " " << n << "\n";
       Value valA = ha.at({b, m, k});
       Value valB = hb.at({b, n, k});
       Value valc = fc.at({b, m, n});
