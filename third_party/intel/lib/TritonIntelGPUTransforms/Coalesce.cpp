@@ -1,13 +1,10 @@
 #include "intel/include/Analysis/AxisInfo.h"
-// #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
-// #include "triton/Dialect/Triton/IR/Dialect.h"
-// #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
@@ -379,8 +376,7 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "\nlayoutMap:"
-             << "\n";
+      DBGS() << "\nlayoutMap:" << "\n";
       for (auto [op, encoding] : layoutMap) {
         DBGS() << "op: " << *op << "\n";
         DBGS() << "encoding: " << encoding << "\n\n";
