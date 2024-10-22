@@ -1,19 +1,18 @@
 #include "intel/include/Analysis/AxisInfo.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+// #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Types.h"
+// #include "triton/Dialect/Triton/IR/Dialect.h"
+// #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <variant>
 
 #define DEBUG_TYPE "tritonintelgpu-coalesce"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -104,8 +103,8 @@ private:
     perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
     LDBG("perThread: " << perThread);
 
-    if (perThread <= 1)
-      return;
+    //    if (perThread <= 1)
+    //      return;
 
     if (!dyn_cast<triton::LoadOp>(op)) {
       // For ops that can result in a global memory write, we should enforce
@@ -299,7 +298,6 @@ private:
     LDBG("Coalescing op: " << *op);
 
     OpBuilder builder(op);
-    IRRewriter rewriter(builder);
 
     // Convert operands
     // Note: for load/store with a blocked pointers argument we cannot change
@@ -312,7 +310,7 @@ private:
       if (tensorType &&
           !isa<ttg::SharedEncodingAttr>(tensorType.getEncoding())) {
         RankedTensorType newType = getNewType(tensorType, encoding);
-        newArgs.push_back(rewriter.create<ttg::ConvertLayoutOp>(
+        newArgs.push_back(builder.create<ttg::ConvertLayoutOp>(
             op->getLoc(), newType, operand));
       } else {
         assert(isa<tt::PointerType>(operand.getType()) &&
@@ -320,6 +318,7 @@ private:
         auto defOp = findDefiningMakeTensorPtrOp(operand);
         assert(defOp && "Expected a make_tensor_ptr operation");
         LDBG("Found make_tensor_ptr definition: " << *defOp);
+        IRRewriter rewriter(builder);
         changeAndPropagateLayout(*defOp, encoding, rewriter);
         newArgs.push_back(operand);
       }
@@ -335,14 +334,14 @@ private:
 
     // Construct new op with the new encoding.
     Operation *newOp =
-        rewriter.create(op->getLoc(), op->getName().getIdentifier(), newArgs,
-                        newTypes, op->getAttrs());
+        builder.create(op->getLoc(), op->getName().getIdentifier(), newArgs,
+                       newTypes, op->getAttrs());
 
     // Cast the results back to the original layout.
     for (size_t i = 0; i < op->getNumResults(); i++) {
       Value newResult = newOp->getResult(i);
       if (newTypes[i] != op->getResultTypes()[i]) {
-        newResult = rewriter.create<ttg::ConvertLayoutOp>(
+        newResult = builder.create<ttg::ConvertLayoutOp>(
             op->getLoc(), op->getResult(i).getType(), newResult);
       }
       op->getResult(i).replaceAllUsesWith(newResult);
@@ -400,11 +399,7 @@ public:
       coalesceOp(layout, op);
     }
 
-    // Verify the module's functions after the transformation.
-    for (auto op : moduleOp.getOps<tt::FuncOp>()) {
-      for (Operation &op1 : op.getOps())
-        assert(succeeded(verify(&op1)));
-    }
+    assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
 

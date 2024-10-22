@@ -46,7 +46,6 @@ inline unsigned getNumElementsPerThread(
 inline bool applyTransposedReduction() {
   return tools::getBoolEnv("TRITON_INTEL_REDUCE_TRANSPOSE");
 }
-
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_UTILS_H

@@ -1,11 +1,9 @@
+#include "intel/include/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
-#include "intel/include/Analysis/AxisInfo.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 
 #define DEBUG_TYPE "intel-axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
