@@ -264,9 +264,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   int kWidth = aEncoding.getKWidth();
 
   auto repA =
-      wmmaLayout.getRepForOperand(aTensorTy.getShape(), elemTy, kWidth, 0);
+      wmmaLayout.getRepForOperands(aTensorTy.getShape(), elemTy, kWidth, 0);
   auto repB =
-      wmmaLayout.getRepForOperand(bTensorTy.getShape(), elemTy, kWidth, 1);
+      wmmaLayout.getRepForOperands(bTensorTy.getShape(), elemTy, kWidth, 1);
 
   assert(repA[2] == repB[1]);
 
