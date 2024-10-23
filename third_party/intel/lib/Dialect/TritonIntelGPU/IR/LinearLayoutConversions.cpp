@@ -285,7 +285,7 @@ LinearLayout ensureLayoutNotSmallerThan(
   assert(kDim == "register" || kDim == "offset" && "unexpected kDim");
 
   LinearLayout ret = layout;
-  for (StringAttr outDimName : llvm::reverse(layout.getOutDimNames())) {
+  for (StringAttr outDimName : layout.getOutDimNames()) {
     int32_t actualSize = layout.getOutDimSize(outDimName);
     int32_t desiredSize = shape.lookup(outDimName);
     assert(actualSize > desiredSize ||
@@ -548,7 +548,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     auto laneBasesA =
         DPASLaneBasesA(opsPerChannel, threadsPerWarp, systolicDepth);
     tileLayout = LinearLayout({{kRegister, regBasesA}, {kLane, laneBasesA}},
-                              outDimNames);
+                              ArrayRef(outDimNames).take_back(2));
     // A only repeats by repCluster[rank - 2]
     dimNonK = rank - 2;
     dimK = rank - 1;
@@ -622,22 +622,33 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     if (rank == 3)
       tileLayout *=
           LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
-    // std::cout << (tileLayout.toString()) << std::endl;
+    std::cout << (tileLayout.toString()) << std::endl;
   }
 
   // Lastly, the layout repeats to match the shape.
   // Operand A/B repeats through the K-dimension first then repeats
   // through the non-K dimension.
-  // SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opIdx);
-  // std::cout << "numReps: " << numReps[0] << ", " << numReps[1] << std::endl;
-  // tileLayout *=
-  //     LinearLayout::identity1D(numReps[dimK], kRegister, outDimNames[dimK]);
-  // tileLayout *= LinearLayout::identity1D(numReps[dimNonK], kRegister,
-  //                                        outDimNames[dimNonK]);
-  // if (rank == 3)
-  //   tileLayout *=
-  //       LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
-  // std::cout << (tileLayout.toString()) << std::endl;
+  SmallVector<int64_t> numReps = dpas.getDPASRepetitions(shape, opIdx);
+
+  std::cout << "numReps: ";
+  for (auto numRep : numReps) {
+    std::cout << numRep << ", ";
+  }
+  std::cout << std::endl;
+
+  // numReps is always 3D, we should add 1 to dim id when rank is 2
+  int repDimK = rank == 2 ? dimK + 1 : dimK;
+  int repDimNonK = rank == 2 ? dimNonK + 1 : dimNonK;
+  tileLayout *=
+      LinearLayout::identity1D(numReps[repDimK], kRegister, outDimNames[dimK]);
+  tileLayout *= LinearLayout::identity1D(numReps[repDimNonK], kRegister,
+                                         outDimNames[dimNonK]);
+  std::cout << "rank: " << rank << std::endl;
+  if (rank == 3)
+    tileLayout *=
+        LinearLayout::identity1D(numReps[0], kRegister, outDimNames[0]);
+  std::cout << "\ntileLayout with DPASRepetition: " << (tileLayout.toString())
+            << std::endl;
 
   return combineCtaCgaWithShape(std::move(tileLayout),
                                 CTALayoutAttr::getDefault(ctx, rank), shape);

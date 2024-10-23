@@ -168,7 +168,7 @@ public:
            "A and B precision enumerators do not match");
 
     LLVM_DEBUG({
-      llvm::dbgs() << "repB = " << repBatch << "\n";
+      llvm::dbgs() << "repBatch = " << repBatch << "\n";
       llvm::dbgs() << "repM = " << repM << "\n";
       llvm::dbgs() << "repK = " << repK << "\n";
       llvm::dbgs() << "repN = " << repN << "\n";

@@ -609,11 +609,10 @@ struct LoadOpConversion
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
     if (!isTransposeRequired) {
-      int dimRep = opIdx ? 1 : 2;
       numOperandsPer2DLoadM =
-          isOperandA ? repCluster[dimOuter] : numReps[dimRep];
+          isOperandA ? repCluster[dimOuter] : numReps[opIdx ? 1 : 2];
       numOperandsPer2DloadN =
-          isOperandA ? numReps[dimRep] : repCluster[dimOuter];
+          isOperandA ? numReps[opIdx ? 1 : 2] : repCluster[dimOuter];
     } else {
       if (isOperandA)
         return failure();
@@ -671,8 +670,8 @@ struct LoadOpConversion
     unsigned warpOuterStride = warpShape[dimOuter];
     unsigned repKStride = elemsPerDPASInst[dimInner];
 
-    unsigned numRepOuter = numReps[dimOuter];
-    unsigned numRepInner = numReps[dimInner];
+    unsigned numRepOuter = numReps[opIdx ? 2 : 1];
+    unsigned numRepInner = numReps[opIdx ? 1 : 2];
 
     Value pitch;
     if (memoryRowMajor) {
