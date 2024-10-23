@@ -17,3 +17,4 @@ cd "$REPO_ROOT"
 
 curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
 curl -sSL https://github.com/pytorch/pytorch/pull/126456.diff | git apply -
+curl -sSL https://github.com/pytorch/pytorch/pull/138456.diff | git apply -
