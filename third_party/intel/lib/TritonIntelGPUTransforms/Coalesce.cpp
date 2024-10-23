@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
@@ -27,13 +28,6 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
-RankedTensorType getRankedTensorType(Type ptrTy) {
-  return tt::isTensorPointerType(ptrTy)
-             ? cast<RankedTensorType>(
-                   cast<tt::PointerType>(ptrTy).getPointeeType())
-             : dyn_cast<RankedTensorType>(ptrTy);
-}
-
 struct CoalescePass
     : public ttgi::impl::TritonIntelGPUCoalesceBase<CoalescePass> {
 private:
@@ -55,7 +49,7 @@ private:
     SmallVector<unsigned> order = argSort(contiguity);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
-    RankedTensorType refTensorType = getRankedTensorType(ptr.getType());
+    RankedTensorType refTensorType = ttgi::getRankedTensorType(ptr.getType());
     auto matchesShape = [&refTensorType](const Value &val) {
       auto rttType = dyn_cast<RankedTensorType>(val.getType());
       return rttType && rttType.getShape() == refTensorType.getShape();
@@ -279,7 +273,7 @@ private:
                "Unexpected layout");
 
         auto resType = cast<tt::PointerType>(res.getType());
-        RankedTensorType tensorType = getRankedTensorType(resType);
+        RankedTensorType tensorType = ttgi::getRankedTensorType(resType);
         res.setType(tt::PointerType::get(getNewType(tensorType, layout),
                                          resType.getAddressSpace()));
       }
@@ -362,7 +356,7 @@ public:
       if (!ptr)
         return;
 
-      RankedTensorType refTensorType = getRankedTensorType(ptr.getType());
+      RankedTensorType refTensorType = ttgi::getRankedTensorType(ptr.getType());
       if (!refTensorType || !refTensorType.getEncoding())
         return;
 
@@ -373,8 +367,7 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "\nlayoutMap:"
-             << "\n";
+      DBGS() << "\nlayoutMap:" << "\n";
       for (auto [op, encoding] : layoutMap) {
         DBGS() << "op: " << *op << "\n";
         DBGS() << "encoding: " << encoding << "\n\n";

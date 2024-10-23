@@ -1,7 +1,5 @@
-#include "intel/include/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -1025,7 +1023,6 @@ public:
 
     AxisInfo ptrInfo = operands[0]->getValue();
     int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
-    LDBG("ptrDivisibility: ");
 
     AxisInfo::DimVectorT contiguity, constancy, divisibility;
     for (int dim = 0; dim < rank; ++dim) {
