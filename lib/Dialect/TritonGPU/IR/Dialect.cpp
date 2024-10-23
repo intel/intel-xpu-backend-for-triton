@@ -1044,16 +1044,16 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  auto parentLayout = getParent();
-  assert(parentLayout && "DotOperandEncodingAttr must have a parent");
-  if (auto distributedLayout =
-          mlir::dyn_cast<DistributedEncodingTrait>(parentLayout)) {
-    return distributedLayout.getWarpsPerCTA();
-  } else {
-    llvm::report_fatal_error(
-        "DotOperandEncodingAttr non-DistributedEncodingAttr parent not "
-        "supported yet");
-  }
+  auto distributedLayout = mlir::cast<DistributedEncodingTrait>(getParent());
+  auto warps = distributedLayout.getWarpsPerCTA();
+  // FIXME: This is a temporary solution to avoid distribute-to-warps.mlir
+  // failure.
+  if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
+    return warps;
+  auto rank = warps.size();
+  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
+  warps[kDim] = 1;
+  return warps;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getWarpOrder(*this);

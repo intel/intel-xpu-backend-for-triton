@@ -900,7 +900,7 @@ private:
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
-    return multiplyDivisor(lhsDivisibility, 1 << shift);
+    return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
@@ -1010,8 +1010,12 @@ public:
   getAxisInfo(triton::MakeTensorPtrOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
-    assert(op.getShape().size() == 2 && operands.size() == 7 &&
-           "MakeTensorPtrOp should have 2D shape");
+
+    // TODO: Extend to higher dimension tensor pointers.
+    if (op.getShape().size() != 2)
+      return AxisInfo();
+
+    assert(operands.size() == 7 && "MakeTensorPtrOp should have 2D shape");
 
     AxisInfo ptrInfo = operands[0]->getValue();
     AxisInfo shapeInfo0 = operands[1]->getValue();
@@ -1344,7 +1348,7 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
     } else {
       curAxisInfo = axisInfo;
     }
-    (*axisInfoMap)[value] = curAxisInfo;
+    (*axisInfoMap)[value] = std::move(curAxisInfo);
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {
