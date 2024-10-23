@@ -326,7 +326,7 @@ tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slic
 #blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 2], order = [1, 0]}>
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 8], B = [8, 16], C = [8, 16]}>
 tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
-  %0 = tt.reshape %arg0 {allow_reorder = true} : tensor<32x32xf32, #mma> -> tensor<32x16x1x2x1xf32, #blocked>
+  %0 = tt.reshape %arg0 allow_reorder : tensor<32x32xf32, #mma> -> tensor<32x16x1x2x1xf32, #blocked>
   %1 = "tt.reduce"(%0) <{axis = 4 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %7 = arith.addf %arg1, %arg2 : f32
@@ -338,7 +338,7 @@ tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slic
     tt.reduce.return %7 : f32
   }) : (tensor<32x16x1x2xf32, #triton_gpu.slice<{dim = 4, parent = #blocked}>>) -> tensor<32x16x2xf32, #triton_gpu.slice<{dim = 2, parent = #triton_gpu.slice<{dim = 4, parent = #blocked}>}>>
   %3 = triton_gpu.convert_layout %2 : tensor<32x16x2xf32, #triton_gpu.slice<{dim = 2, parent = #triton_gpu.slice<{dim = 4, parent = #blocked}>}>> -> tensor<32x16x2xf32, #blocked1>
-  %4 = tt.reshape %3 {allow_reorder = true} : tensor<32x16x2xf32, #blocked1> -> tensor<32x32xf32, #blocked2>
+  %4 = tt.reshape %3 allow_reorder : tensor<32x16x2xf32, #blocked1> -> tensor<32x32xf32, #blocked2>
   %5 = "tt.reduce"(%4) <{axis = 1 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %7 = arith.addf %arg1, %arg2 : f32

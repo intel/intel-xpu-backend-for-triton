@@ -209,7 +209,10 @@ def get_json_package_info():
 # llvm
 def get_llvm_package_info():
     system = platform.system()
-    arch = {"x86_64": "x64", "AMD64": "64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+    try:
+        arch = {"x86_64": "x64", "AMD64": "64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+    except KeyError:
+        arch = platform.machine()
     if system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
@@ -320,18 +323,19 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
-    arch = {"x86_64": "64", "AMD64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
-    supported = {"Linux": "linux", "Windows": "win"}
-    is_supported = system in supported
-    if is_supported:
-        url = url_func(supported[system], arch, version)
+    try:
+        arch = {"x86_64": "64", "AMD64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
+    except KeyError:
+        arch = platform.machine()
+    supported = {"Linux": "linux", "Darwin": "linux", "Windows": "win"}
+    url = url_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     platform_name = "sbsa-linux" if arch == "aarch64" else "x86_64-linux"
     src_path = src_path(platform_name, version) if callable(src_path) else src_path
     src_path = os.path.join(tmp_path, src_path)
     download = not os.path.exists(src_path)
-    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None and is_supported:
+    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
         curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
         curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
         download = download or curr_version != version
