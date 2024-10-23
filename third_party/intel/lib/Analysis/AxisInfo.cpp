@@ -4,6 +4,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #define DEBUG_TYPE "intel-axis-info"
@@ -11,6 +12,8 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::intel {
+
+namespace ttgi = mlir::triton::gpu::intel;
 namespace {
 
 int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
@@ -48,12 +51,6 @@ int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
   if (lhs > maxDivisor / rhs)
     return maxDivisor;
   return lhs * rhs;
-}
-
-RankedTensorType getRankedTensorType(Type ptrTy) {
-  return isTensorPointerType(ptrTy)
-             ? cast<RankedTensorType>(cast<PointerType>(ptrTy).getPointeeType())
-             : dyn_cast<RankedTensorType>(ptrTy);
 }
 
 class AxisInfoVisitor {
@@ -415,7 +412,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = getRankedTensorType(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -470,7 +467,7 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
-    auto resTy = getRankedTensorType(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getContiguity(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -504,7 +501,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = getRankedTensorType(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -653,7 +650,7 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto resTy = getRankedTensorType(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return AxisInfo();
     auto shape = resTy.getShape();
@@ -1268,7 +1265,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = getRankedTensorType(ptr.getType());
+  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
   if (!tensorTy)
     return 1;
   auto layout = tensorTy.getEncoding();
@@ -1290,7 +1287,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = getRankedTensorType(ptr.getType());
+  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
   if (!tensorTy)
     return 1;
   auto *axisInfo = getAxisInfo(ptr);
@@ -1318,7 +1315,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
-  auto tensorTy = getRankedTensorType(mask.getType());
+  auto tensorTy = ttgi::getRankedTensorType(mask.getType());
   if (!tensorTy)
     return 1;
   auto *axisInfo = getAxisInfo(mask);

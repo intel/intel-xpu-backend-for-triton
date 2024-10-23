@@ -18,6 +18,11 @@ class ConversionPatternRewriter;
 
 namespace mlir::triton::gpu::intel {
 
+// If the given type is a pointer of tensors, return the pointee type.
+// Otherwise, attempt to cast the given type to a ranked tensor and return the
+// dynamic cast result.
+RankedTensorType getRankedTensorType(Type type);
+
 // Check if given value is divisible by the divisor.
 bool isDivisible(Value value, unsigned divisor);
 
