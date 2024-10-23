@@ -40,7 +40,7 @@ struct CoalescePass
       llvm::dbgs() << "\n";
     });
 
-    auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
+    const auto &contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
     SmallVector<unsigned> order = argSort(contiguity);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
