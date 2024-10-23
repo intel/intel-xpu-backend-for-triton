@@ -74,7 +74,7 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
         acc[j] = select(mask, tempAcc[j], acc[j]);
       }
     }
-    srcValues[srcIndex] = acc;
+    srcValues[srcIndex] = std::move(acc);
   }
 }
 
@@ -126,8 +126,8 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo,
                              ScanLoweringHelper &helper,
-                             SmallVector<Value> smemBases,
-                             SmallVector<Type> smemTypes, Value warpId,
+                             ArrayRef<Value> smemBases,
+                             ArrayRef<Type> smemTypes, Value warpId,
                              Value laneIdAxis, Value parallelLaneId) {
   Location loc = helper.getLoc();
   unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
@@ -222,7 +222,7 @@ static void AddPartialReduce(SmallVector<SmallVector<Value>> &srcValues,
                                 srcValues[srcIndex - i * elementStride][j]);
         }
       }
-      srcValues[srcIndex - i * elementStride] = laneValue;
+      srcValues[srcIndex - i * elementStride] = std::move(laneValue);
     }
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
@@ -301,7 +301,7 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
                      srcValues[srcIndex - i * elementStride][j], laneValue[j]);
         }
       }
-      srcValues[srcIndex - i * elementStride] = laneValue;
+      srcValues[srcIndex - i * elementStride] = std::move(laneValue);
     }
     // For the next chunk start back from the value containing the
     // accumulated value of all the warps.
