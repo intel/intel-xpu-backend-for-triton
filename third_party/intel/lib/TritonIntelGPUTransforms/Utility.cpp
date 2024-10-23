@@ -25,9 +25,16 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 
+RankedTensorType getRankedTensorType(Type ptrTy) {
+  return tt::isTensorPointerType(ptrTy)
+             ? cast<RankedTensorType>(
+                   cast<tt::PointerType>(ptrTy).getPointeeType())
+             : dyn_cast<RankedTensorType>(ptrTy);
+}
+
 static bool isSingleValue(Value value) {
   // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
+  if (auto tensorTy = getRankedTensorType(value.getType()))
     return tensorTy.getNumElements() == 1;
   // TODO: Handle other cases.
   // For example, when ptr is a tensor of single value.
