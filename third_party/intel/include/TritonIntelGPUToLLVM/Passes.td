@@ -11,6 +11,7 @@ def IntelDecomposeUnsupportedConversions
 def IntelAllocateSharedMemory
     : Pass<"intel-allocate-shared-memory", "mlir::ModuleOp"> {
   let summary = "Add metadata for shared memory allocation";
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 
 def ConvertTritonIntelGPUToLLVM
