@@ -461,30 +461,49 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(conversion && "Expecting valid conversion");
     // Expected conversion is:
     // - register=1 -> (0, 1)
-    //    register=2 -> (0, 2)
-    //    register=4 -> (0, 4)
-    //    register=8 -> (0, 8)
-    //    register=N -> (N, 0)
-    //    ...
-    //  - lane=1 -> (1, 0)
-    //    lane=2 -> (2, 0)
-    //    lane=4 -> (4, 0)
-    //    lane=8 -> (8, 0)
-    // where out dims are: [register (size 2*N), lane (size 16)]
-    std::vector<std::vector<int32_t>> registerBases{
-        {0, 1}, {0, 2}, {0, 4}, {0, 8}};
+    // ...
+    // - register=2**i -> (0, 2**i)
+    // ...
+    // - register=M -> (0, 2**M)
+    // ...
+    // - register=2**k -> (2**k, 0)
+    // ...
+    // - register=N -> (2**N, 0)
+    // - lane=1 -> (0, 1)
+    // ...
+    // - lane=2**j -> (2**j, 0)
+    // ...
+    //   lane=2**M -> (2**M, 0)
+    // where out dims are: [register (size 2**(N + 1)), lane (size 2**(M + 1))]
+    //
+    // With N >= M.
+    const auto buildBasis = [&](int32_t size, std::size_t index) {
+      std::vector<std::vector<int32_t>> basis;
+      std::vector<int32_t> curr(2);
+      for (int32_t i = 1; i < size; i *= 2) {
+        curr[index] = i;
+        basis.push_back(curr);
+      }
+      return basis;
+    };
+    constexpr std::size_t laneIndex = 0;
+    constexpr std::size_t registerIndex = 1;
+    int32_t laneSize = conversion->getInDimSize(kLane);
+    std::vector<std::vector<int32_t>> registerBases =
+        buildBasis(laneSize, registerIndex);
     {
-      // Populate register bases for N > 8.
+      // Populate register bases for N > M.
       std::vector<int32_t> base(2);
-      for (int32_t i = 16, n = conversion->getInDimSize(kRegister); i < n;
-           i *= 2) {
-        base.front() = i;
+      for (int32_t i = laneSize,
+                   registerSize = conversion->getInDimSize(kRegister);
+           i < registerSize; i *= 2) {
+        base[laneIndex] = i;
         registerBases.push_back(base);
       }
     }
     std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
         bases{{{kRegister, std::move(registerBases)},
-               {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}}}}};
+               {kLane, buildBasis(laneSize, laneIndex)}}};
     std::array<StringAttr, 2> outDimNames{kRegister, kLane};
     return conversion == LinearLayout(bases, outDimNames);
   }
@@ -853,18 +872,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           llvm::transform(
               outVals, std::begin(outVals),
               [&](Value val) -> Value { return inttoptr(ptrTy, val); });
-        })As a follow up to #2266, extend work in #2531 to detect more complex broadcast shuffles.
-
-Cases with more than 1 warp in the "sliced" dimension are problematic here, e.g.:
-
-```mlir
-#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1, 1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 16, 1, 1, 1], warpsPerCTA = [1, 1, 16, 1, 1, 1, 1], order = [3, 4, 5, 6, 0, 1, 2]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1, 1, 16, 1], threadsPerWarp = [16, 1, 1, 1, 1], warpsPerCTA = [1, 1, 16, 1, 1], order = [3, 4, 0, 1, 2]}>
-// ...
-triton_gpu.convert_layout %arg : tensor<16x1x16x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #blocked}>}>> -> tensor<16x1x16x16x1xf32, #blocked1>
-```
-
-Is lowered to a shufle via 
+        })
         .Default([](auto) { llvm_unreachable("Unsupported type"); });
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
@@ -967,9 +975,6 @@ Is lowered to a shufle via
     // TODO(jlebar): Implement me.
     return failure();
   }
-
-private:
-  const triton::intel::TargetInfo &targetInfo;
 };
 
 } // namespace
