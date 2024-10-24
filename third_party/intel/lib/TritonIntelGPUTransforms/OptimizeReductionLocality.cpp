@@ -87,7 +87,7 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   /// ```
   ///                                                            warpsPerCTA[5]
   ///                              <------------------------------------------------------------------------------->
-  ///                                           size[4]
+  ///                                        getShape()[4]
   ///                              <---------------------------------->
   ///                               threadsPerWarp[3]
   ///                              <---------------->
@@ -103,7 +103,7 @@ static Value createReshapeForReduction(PatternRewriter &rewriter, Location loc,
   ///         |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
   ///         v                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
   /// ```
-  /// So we can reduce on dimensions 4 and 2 to get to:
+  /// So we can reduce on dimensions 6 and 4 to get to:
   /// ```
   ///                                                            warpsPerCTA[3]
   ///                              <------------------------------------------------------------------------------->
@@ -257,10 +257,13 @@ private:
 
     constexpr size_t rank = 7;
     std::array<int64_t, rank> shape{
-        // Y axis
+        // Y axis contiguous elements handled by a single thread.
         oldEncoding.getExecutionSize(),
+        // Y axis contiguous elements handled by a single thread.
+        // Needs to be split from previous dimension to perform transpose.
         (oldEncoding.getRepeatCount() * oldEncoding.getRepCluster()[0]) /
             oldEncoding.getExecutionSize(),
+        // Y axis rest.
         oldShape[0] /
             (oldEncoding.getRepeatCount() * oldEncoding.getRepCluster()[0]),
         // X axis contiguous elements distributed within individual threads in a
