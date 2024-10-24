@@ -436,11 +436,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   constexpr static unsigned minSubGroupTransposeWidth = 8;
 
+  const TargetInfoBase &targetInfo;
+
   // Set benefit to 2 so that this pattern applies before other convert-layout
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
-  ConvertLayoutOpUsingLinearLayoutsConversion(
-      LLVMTypeConverter &typeConverter,
-      const triton::intel::TargetInfo &targetInfo, PatternBenefit benefit = 2)
+  ConvertLayoutOpUsingLinearLayoutsConversion(LLVMTypeConverter &typeConverter,
+                                              const TargetInfoBase &targetInfo,
+                                              PatternBenefit benefit = 2)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
@@ -452,7 +454,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
 
-    LinearLayout comp = srcLayout.invertAndCompose(dstLayout);
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
     std::optional<LinearLayout> conversion = comp.divideRight(
         LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
         LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
@@ -581,6 +583,154 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
+  bool isSubGroupShuffle(const LinearLayout &srcLayout,
+                         const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = srcLayout.getInDimNames().begin()->getContext();
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
+    std::optional<LinearLayout> conversion = comp.divideRight(
+        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
+        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    assert(conversion && "Expecting valid conversion");
+    // TODO: Support more kind of shuffles.
+    // Expected conversion is:
+    // - register=1 -> (0, 1)
+    // ...
+    //   register=i -> (0, i)
+    // ...
+    //   register=N -> (0, N)
+    // - lane=1 -> (0, 0)
+    // ...
+    //   lane=i -> (0, 0)
+    // ...
+    //   lane=N -> (0, 0)
+    // where out dims are: [register (size 1), lane (size N)]
+    std::vector<std::vector<int32_t>> registerBases;
+    {
+      constexpr std::size_t registerIndex = 1;
+      std::vector<int32_t> base(2);
+      for (int32_t i = 1, n = conversion->getInDimSize(kLane); i < n; i *= 2) {
+        base[registerIndex] = i;
+        registerBases.push_back(base);
+      }
+    }
+
+    std::vector<std::vector<int32_t>> laneBases(
+        conversion->getInDimSizeLog2(kLane), std::vector<int32_t>{0, 0});
+    std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
+        bases{{{kRegister, std::move(registerBases)},
+               {kLane, std::move(laneBases)}}};
+    std::array<StringAttr, 2> outDimNames{kRegister, kLane};
+    return conversion == LinearLayout(bases, outDimNames);
+  }
+
+  bool isSupportedSubGroupShuffle(ConvertLayoutOp, OpAdaptor) const {
+    // TODO: Limit when sub-group shuffles get more complex.
+    // We do not need to limit by type here as `gpu.shuffle` conversion will
+    // fail for us.
+    return true;
+  }
+
+  void performSubGroupShuffle(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                              const LinearLayout &dstLayout, OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    assert(isSubGroupShuffle(srcLayout, dstLayout) &&
+           "Expecting sub-group shuffle");
+    assert(isSupportedSubGroupShuffle(op, adaptor) &&
+           "Expecting supported sub-group shuffle");
+
+    MLIRContext *ctx = op->getContext();
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
+    std::optional<LinearLayout> conversion = comp.divideRight(
+        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
+        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    assert(conversion && "Expecting valid layout");
+    int32_t subGroupSize = conversion->getOutDimSize(kLane);
+
+    Location loc = op.getLoc();
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    assert(inVals.size() == 1 && "Expecting single element");
+
+    // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
+    // upstream level. We are not enabling support for all types here as that
+    // should be done upstream.
+    Type origElemTy = inVals.front().getType();
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](BFloat16Type) {
+          auto intTy = i16_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return bitcast(val, intTy);
+          });
+        })
+        .Case([&](IntegerType intTy) {
+          constexpr unsigned minWidth = 8;
+          if (intTy.getWidth() >= minWidth)
+            return;
+          auto dstTy = i8_ty;
+          llvm::transform(inVals, std::begin(inVals),
+                          [&](Value val) -> Value { return zext(dstTy, val); });
+        })
+        .Case([&](LLVM::LLVMPointerType) {
+          Type dstType = i64_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return ptrtoint(dstType, val);
+          });
+        });
+
+    SmallVector<Value> outVals =
+        performSubGroupShuffle(loc, inVals.front(), subGroupSize, rewriter);
+
+    // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
+    // upstream level. We are not enabling support for all types here as that
+    // should be done upstream.
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](BFloat16Type) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return bitcast(val, origElemTy); });
+        })
+        .Case([&](IntegerType intTy) {
+          // Check whether conversion took place.
+          if (intTy == outVals.front().getType())
+            return;
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return trunc(origElemTy, val); });
+        })
+        .Case([&](LLVM::LLVMPointerType ptrTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return inttoptr(ptrTy, val); });
+        });
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+  }
+
+  SmallVector<Value>
+  performSubGroupShuffle(Location loc, Value val, int32_t subGroupSize,
+                         ConversionPatternRewriter &rewriter) const {
+    SmallVector<Value> res;
+    Value width = i32_val(subGroupSize);
+    for (int32_t i = 0; i < subGroupSize; ++i)
+      res.push_back(
+          rewriter
+              .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                            mlir::gpu::ShuffleMode::IDX)
+              .getShuffleResult());
+    return res;
+  }
+
   bool isSupportedSubGroupTranspose(ConvertLayoutOp op,
                                     OpAdaptor adaptor) const {
     auto srcType = cast<LLVM::LLVMStructType>(adaptor.getSrc().getType());
@@ -608,6 +758,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                    const LinearLayout &dstLayout,
                                    OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
+    // If the operation is a supported sub-group shuffle, perform via shuffle
+    // operations.
+    if (isSubGroupShuffle(srcLayout, dstLayout) &&
+        isSupportedSubGroupShuffle(op, adaptor)) {
+      performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
+      return success();
+    }
     // If the operation is a supported sub-group transposition, perform via SLM.
     if (isSubGroupTranspose(srcLayout, dstLayout) &&
         isSupportedSubGroupTranspose(op, adaptor)) {
@@ -696,7 +853,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           llvm::transform(
               outVals, std::begin(outVals),
               [&](Value val) -> Value { return inttoptr(ptrTy, val); });
-        })
+        })As a follow up to #2266, extend work in #2531 to detect more complex broadcast shuffles.
+
+Cases with more than 1 warp in the "sliced" dimension are problematic here, e.g.:
+
+```mlir
+#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1, 1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 16, 1, 1, 1], warpsPerCTA = [1, 1, 16, 1, 1, 1, 1], order = [3, 4, 5, 6, 0, 1, 2]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1, 1, 16, 1], threadsPerWarp = [16, 1, 1, 1, 1], warpsPerCTA = [1, 1, 16, 1, 1], order = [3, 4, 0, 1, 2]}>
+// ...
+triton_gpu.convert_layout %arg : tensor<16x1x16x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #blocked}>}>> -> tensor<16x1x16x16x1xf32, #blocked1>
+```
+
+Is lowered to a shufle via 
         .Default([](auto) { llvm_unreachable("Unsupported type"); });
 
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
@@ -765,7 +933,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value subGroupBasePtr = gep(ptrType, elementType, smemBase,
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
     Value base = subGroupBasePtr;
-    // Store in matrix, non-transposed
+    // Store in matrix, transposed
     for (ArrayRef<Value> vals = inVals; !vals.empty();
          vals = vals.drop_front(vecWidth)) {
       ArrayRef<Value> curr = vals.take_front(vecWidth);
@@ -775,7 +943,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                  /*inbounds=*/true);
     }
 
-    // Load from matrix, trasposed.
+    // Load from matrix, non-trasposed.
     // As per SIMD block semantics, we have stored the elements in a matrix of
     // `Nxsub_group_size` size, so we need to load back in blocks of
     // `sub_group_size` (`N/sub_group_size` loads).
