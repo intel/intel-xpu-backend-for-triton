@@ -305,8 +305,29 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
-  if (isa<LoadOp, StoreOp>(op))
+  if (isa<LoadOp>(op)) {
+#ifdef HACK
+    // Note: currently block ptr loads are always considered not expensive and
+    // therefore they are never layout anchors.
+    Value base = op->getOperand(0);
+    auto parentLoop = op->getParentOfType<scf::ForOp>();
+    bool isInLoop = parentLoop != nullptr;
+    bool isTensorPtrLoad = mlir::triton::isTensorPointerType(base.getType());
+
+    if (!isTensorPtrLoad)
+      ttgi::isExpensiveLoadOrStore(op);
+
+    // HACK: consider block ptr loads expensive if they are in a loop.
+    return isInLoop;
+#else
     return ttgi::isExpensiveLoadOrStore(op);
+#endif
+  }
+
+  if (isa<StoreOp>(op)) {
+    return ttgi::isExpensiveLoadOrStore(op);
+  }
+
   if (isa<DotOp, AtomicCASOp>(op))
     return true;
   if (isa<AtomicRMWOp>(op))
@@ -356,6 +377,17 @@ void LayoutPropagation::initAnchorLayout() {
       }
     }
   });
+
+#if 0
+  llvm::errs() << "Initial layouts:\n";
+  for (auto &entry : layouts) {
+    llvm::errs() << entry.first << "\n";
+    for (auto &layout : entry.second.encodings) {
+      llvm::errs() << "  " << layout << "\n";
+    }
+  }
+  llvm::errs() << "\n\n";
+#endif
 }
 
 void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
@@ -969,8 +1001,28 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
 }
 
 bool canBeRemat(Operation *op) {
-  if (isa<LoadOp, StoreOp>(op))
+  if (isa<LoadOp>(op)) {
+#ifdef HACK
+    // Note: currently block ptr loads are always considered not expensive and
+    // therefore rematerializable.
+    Value base = op->getOperand(0);
+    auto parentLoop = op->getParentOfType<scf::ForOp>();
+    bool isInLoop = parentLoop != nullptr;
+    bool isTensorPtrLoad = mlir::triton::isTensorPointerType(base.getType());
+
+    if (!isTensorPtrLoad)
+      return !ttgi::isExpensiveLoadOrStore(op);
+
+    // HACK: consider block ptr loads expensive if they are in a loop.
+    return !isInLoop;
+#else
     return !ttgi::isExpensiveLoadOrStore(op);
+#endif
+  }
+
+  if (isa<StoreOp>(op))
+    return !ttgi::isExpensiveLoadOrStore(op);
+
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
   if (isa<scf::WhileOp, scf::ConditionOp>(op))

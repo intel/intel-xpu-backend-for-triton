@@ -90,9 +90,15 @@ bool isExpensiveLoadOrStore(Operation *op) {
   if (isSingleValue(base))
     return false;
 
-  // Case 2: Tensor of pointers has more threads than elements
-  // we can presume a high hit-rate that makes it cheap to load
+    // Case 2: Tensor of pointers has more threads than elements
+    // we can presume a high hit-rate that makes it cheap to load
+
+#define NEW 1
+#ifdef NEW
+  if (auto ptrType = getRankedTensorType(base.getType())) {
+#else
   if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
+#endif
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
