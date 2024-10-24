@@ -14,7 +14,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // CHECK:         tt.func @test_single(
 // CHECK-SAME:                         %[[VAL_0:.*]]: tensor<16x16xf32, #[[$ATTR_2]]>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_2]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] {allow_reorder = true, efficient_layout} : tensor<16x16xf32, #[[$ATTR_2]]> -> tensor<16x1x1x16x1x1x1xf32, #[[$ATTR_0]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<16x16xf32, #[[$ATTR_2]]> -> tensor<16x1x1x16x1x1x1xf32, #[[$ATTR_0]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 6 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -26,14 +26,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x1x1x16x1x1xf32, #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_0]]}>>) -> tensor<16x1x1x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_0]]}>}>>
 // CHECK:           %[[CONV:.*]] = triton_gpu.convert_layout %[[VAL_6]] : tensor<16x1x1x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_0]]}>}>> -> tensor<16x1x1x16x1xf32, #[[$ATTR_3]]>
-// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] {allow_reorder = true, efficient_layout} : tensor<16x1x1x16x1xf32, #[[$ATTR_3]]> -> tensor<16x1x1x16xf32, #[[$ATTR_1]]>
+// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] allow_reorder efficient_layout : tensor<16x1x1x16x1xf32, #[[$ATTR_3]]> -> tensor<16x1x1x16xf32, #[[$ATTR_1]]>
 // CHECK:           %[[VAL_11:.*]] = "tt.reduce"(%[[VAL_10]]) <{axis = 3 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_12:.*]]: f32, %[[VAL_13:.*]]: f32):
 // CHECK:             %[[VAL_14:.*]] = arith.addf %[[VAL_12]], %[[VAL_13]] : f32
 // CHECK:             tt.reduce.return %[[VAL_14]] : f32
 // CHECK:           }) : (tensor<16x1x1x16xf32, #[[$ATTR_1]]>) -> tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_1]]}>>
 // CHECK:           %[[VAL_15:.*]] = triton_gpu.convert_layout %[[VAL_11]] : tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_1]]}>> -> tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_4]]}>>
-// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] {allow_reorder = true, efficient_layout} : tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_4]]}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_2]]}>>
+// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] allow_reorder efficient_layout : tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_4]]}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_2]]}>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_2]]}>>
 // CHECK:         }
   tt.func @test_single(%arg0: tensor<16x16xf32, #mma>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
@@ -62,7 +62,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
 
 // CHECK:         tt.func @test_single_twice(
 // CHECK-SAME:                               %[[VAL_0:.*]]: tensor<32x16xf32, #[[$ATTR_5]]>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_5]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] {allow_reorder = true, efficient_layout} : tensor<32x16xf32, #[[$ATTR_5]]> -> tensor<16x1x2x16x1x1x1xf32, #[[$ATTR_3]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<32x16xf32, #[[$ATTR_5]]> -> tensor<16x1x2x16x1x1x1xf32, #[[$ATTR_3]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 6 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -74,14 +74,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x1x2x16x1x1xf32, #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_3]]}>>) -> tensor<16x1x2x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_3]]}>}>>
 // CHECK:           %[[CONV:.*]] = triton_gpu.convert_layout %[[VAL_6]] : tensor<16x1x2x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_3]]}>}>> -> tensor<16x1x2x16x1xf32, #[[$BLOCKED]]>
-// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] {allow_reorder = true, efficient_layout} : tensor<16x1x2x16x1xf32, #[[$BLOCKED]]> -> tensor<16x1x2x16xf32, #[[$ATTR_4]]>
+// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] allow_reorder efficient_layout : tensor<16x1x2x16x1xf32, #[[$BLOCKED]]> -> tensor<16x1x2x16xf32, #[[$ATTR_4]]>
 // CHECK:           %[[VAL_11:.*]] = "tt.reduce"(%[[VAL_10]]) <{axis = 3 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_12:.*]]: f32, %[[VAL_13:.*]]: f32):
 // CHECK:             %[[VAL_14:.*]] = arith.addf %[[VAL_12]], %[[VAL_13]] : f32
 // CHECK:             tt.reduce.return %[[VAL_14]] : f32
 // CHECK:           }) : (tensor<16x1x2x16xf32, #[[$ATTR_4]]>) -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_4]]}>>
 // CHECK:           %[[VAL_15:.*]] = triton_gpu.convert_layout %[[VAL_11]] : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_4]]}>> -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>>
-// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] {allow_reorder = true, efficient_layout} : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_5]]}>>
+// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] allow_reorder efficient_layout : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_5]]}>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_5]]}>>
 // CHECK:         }
   tt.func @test_single_twice(%arg0: tensor<32x16xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
@@ -110,7 +110,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
 
 // CHECK-LABEL:   tt.func @test_two_warps_red(
 // CHECK-SAME:                                %[[VAL_0:.*]]: tensor<16x32xf32, #[[$ATTR_8]]>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_8]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] {allow_reorder = true, efficient_layout} : tensor<16x32xf32, #[[$ATTR_8]]> -> tensor<16x1x1x16x1x2x1xf32, #[[$ATTR_6]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<16x32xf32, #[[$ATTR_8]]> -> tensor<16x1x1x16x1x2x1xf32, #[[$ATTR_6]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 6 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -122,14 +122,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x1x1x16x1x2xf32, #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_6]]}>>) -> tensor<16x1x1x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_6]]}>}>>
 // CHECK:           %[[CONV:.*]] = triton_gpu.convert_layout %[[VAL_6]] : tensor<16x1x1x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_6]]}>}>> -> tensor<16x1x1x16x2xf32, #[[$BLOCKED]]>
-// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] {allow_reorder = true, efficient_layout} : tensor<16x1x1x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x1x32xf32, #[[$ATTR_7]]>
+// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] allow_reorder efficient_layout : tensor<16x1x1x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x1x32xf32, #[[$ATTR_7]]>
 // CHECK:           %[[VAL_11:.*]] = "tt.reduce"(%[[VAL_10]]) <{axis = 3 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_12:.*]]: f32, %[[VAL_13:.*]]: f32):
 // CHECK:             %[[VAL_14:.*]] = arith.addf %[[VAL_12]], %[[VAL_13]] : f32
 // CHECK:             tt.reduce.return %[[VAL_14]] : f32
 // CHECK:           }) : (tensor<16x1x1x32xf32, #[[$ATTR_7]]>) -> tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_7]]}>>
 // CHECK:           %[[VAL_15:.*]] = triton_gpu.convert_layout %[[VAL_11]] : tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_7]]}>> -> tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>>
-// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] {allow_reorder = true, efficient_layout} : tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_8]]}>>
+// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] allow_reorder efficient_layout : tensor<16x1x1xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_8]]}>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_8]]}>>
 // CHECK:         }
   tt.func @test_two_warps_red(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
@@ -158,7 +158,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // CHECK-LABEL:   tt.func @test_two_warps(
 // CHECK-SAME:                            %[[VAL_0:.*]]: tensor<32x32xf32, #[[$ATTR_11]]>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] {allow_reorder = true, efficient_layout} : tensor<32x32xf32, #[[$ATTR_11]]> -> tensor<16x1x2x16x1x2x1xf32, #[[$ATTR_9]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<32x32xf32, #[[$ATTR_11]]> -> tensor<16x1x2x16x1x2x1xf32, #[[$ATTR_9]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 6 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -170,14 +170,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x1x2x16x1x2xf32, #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_9]]}>>) -> tensor<16x1x2x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_9]]}>}>>
 // CHECK:           %[[CONV:.*]] = triton_gpu.convert_layout %[[VAL_6]] : tensor<16x1x2x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_9]]}>}>> -> tensor<16x1x2x16x2xf32, #[[$BLOCKED]]>
-// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] {allow_reorder = true, efficient_layout} : tensor<16x1x2x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x2x32xf32, #[[$ATTR_10]]>
+// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] allow_reorder efficient_layout : tensor<16x1x2x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x2x32xf32, #[[$ATTR_10]]>
 // CHECK:           %[[VAL_11:.*]] = "tt.reduce"(%[[VAL_10]]) <{axis = 3 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_12:.*]]: f32, %[[VAL_13:.*]]: f32):
 // CHECK:             %[[VAL_14:.*]] = arith.addf %[[VAL_12]], %[[VAL_13]] : f32
 // CHECK:             tt.reduce.return %[[VAL_14]] : f32
 // CHECK:           }) : (tensor<16x1x2x32xf32, #[[$ATTR_10]]>) -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_10]]}>>
 // CHECK:           %[[VAL_15:.*]] = triton_gpu.convert_layout %[[VAL_11]] : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_10]]}>> -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>>
-// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] {allow_reorder = true, efficient_layout} : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>>
+// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] allow_reorder efficient_layout : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>>
 // CHECK:         }
   tt.func @test_two_warps(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
@@ -191,7 +191,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 
 // CHECK-LABEL:   tt.func @test_two_warps_twice(
 // CHECK-SAME:                                  %[[VAL_0:.*]]: tensor<64x32xf32, #[[$ATTR_11]]>) -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] {allow_reorder = true, efficient_layout} : tensor<64x32xf32, #[[$ATTR_11]]> -> tensor<16x1x4x16x1x2x1xf32, #[[$ATTR_9]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<64x32xf32, #[[$ATTR_11]]> -> tensor<16x1x4x16x1x2x1xf32, #[[$ATTR_9]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 6 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.addf %[[VAL_3]], %[[VAL_4]] : f32
@@ -203,14 +203,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x1x4x16x1x2xf32, #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_9]]}>>) -> tensor<16x1x4x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_9]]}>}>>
 // CHECK:           %[[CONV:.*]] = triton_gpu.convert_layout %[[VAL_6]] : tensor<16x1x4x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_9]]}>}>> -> tensor<16x1x4x16x2xf32, #[[$BLOCKED]]>
-// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] {allow_reorder = true, efficient_layout} : tensor<16x1x4x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x4x32xf32, #[[$ATTR_10]]>
+// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] allow_reorder efficient_layout : tensor<16x1x4x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x4x32xf32, #[[$ATTR_10]]>
 // CHECK:           %[[VAL_11:.*]] = "tt.reduce"(%[[VAL_10]]) <{axis = 3 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_12:.*]]: f32, %[[VAL_13:.*]]: f32):
 // CHECK:             %[[VAL_14:.*]] = arith.addf %[[VAL_12]], %[[VAL_13]] : f32
 // CHECK:             tt.reduce.return %[[VAL_14]] : f32
 // CHECK:           }) : (tensor<16x1x4x32xf32, #[[$ATTR_10]]>) -> tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_10]]}>>
 // CHECK:           %[[VAL_15:.*]] = triton_gpu.convert_layout %[[VAL_11]] : tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_10]]}>> -> tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>>
-// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] {allow_reorder = true, efficient_layout} : tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>>
+// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] allow_reorder efficient_layout : tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_11]]}>>
 // CHECK:         }
   tt.func @test_two_warps_twice(%arg0: tensor<64x32xf32, #mma>) -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
@@ -238,7 +238,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
 // CHECK:         tt.func @test(
 // CHECK-SAME:                  %[[VAL_0:.*]]: tensor<64x64xf32, #[[$ATTR_14]]>) -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] {allow_reorder = true, efficient_layout} : tensor<64x64xf32, #[[$ATTR_14]]> -> tensor<16x1x4x16x2x2x1xf32, #[[$ATTR_12]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<64x64xf32, #[[$ATTR_14]]> -> tensor<16x1x4x16x2x2x1xf32, #[[$ATTR_12]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 6 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.maxnumf %[[VAL_3]], %[[VAL_4]] : f32
@@ -250,14 +250,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x1x4x16x2x2xf32, #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_12]]}>>) -> tensor<16x1x4x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_12]]}>}>>
 // CHECK:           %[[CONV:.*]] = triton_gpu.convert_layout %[[VAL_6]] : tensor<16x1x4x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_12]]}>}>> -> tensor<16x1x4x16x2xf32, #[[$BLOCKED]]>
-// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] {allow_reorder = true, efficient_layout} : tensor<16x1x4x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x4x32xf32, #[[$ATTR_13]]>
+// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] allow_reorder efficient_layout : tensor<16x1x4x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x4x32xf32, #[[$ATTR_13]]>
 // CHECK:           %[[VAL_11:.*]] = "tt.reduce"(%[[VAL_10]]) <{axis = 3 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_12:.*]]: f32, %[[VAL_13:.*]]: f32):
 // CHECK:             %[[VAL_14:.*]] = arith.maxnumf %[[VAL_12]], %[[VAL_13]] : f32
 // CHECK:             tt.reduce.return %[[VAL_14]] : f32
 // CHECK:           }) : (tensor<16x1x4x32xf32, #[[$ATTR_13]]>) -> tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_13]]}>>
 // CHECK:           %[[VAL_15:.*]] = triton_gpu.convert_layout %[[VAL_11]] : tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_13]]}>> -> tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>>
-// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] {allow_reorder = true, efficient_layout} : tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
+// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] allow_reorder efficient_layout : tensor<16x1x4xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
 // CHECK:         }
   tt.func @test(%arg0: tensor<64x64xf32, #mma>) -> tensor<64xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
@@ -271,7 +271,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 
 // CHECK:         tt.func @test_repeat_layout(
 // CHECK-SAME:                                %[[VAL_0:.*]]: tensor<128x128xf32, #[[$ATTR_14]]>) -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>> {
-// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] {allow_reorder = true, efficient_layout} : tensor<128x128xf32, #[[$ATTR_14]]> -> tensor<16x1x8x16x2x2x2xf32, #[[$ATTR_12]]>
+// CHECK:           %[[VAL_1:.*]] = tt.reshape %[[VAL_0]] allow_reorder efficient_layout : tensor<128x128xf32, #[[$ATTR_14]]> -> tensor<16x1x8x16x2x2x2xf32, #[[$ATTR_12]]>
 // CHECK:           %[[VAL_2:.*]] = "tt.reduce"(%[[VAL_1]]) <{axis = 6 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_3:.*]]: f32, %[[VAL_4:.*]]: f32):
 // CHECK:             %[[VAL_5:.*]] = arith.maxnumf %[[VAL_3]], %[[VAL_4]] : f32
@@ -283,14 +283,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 // CHECK:             tt.reduce.return %[[VAL_9]] : f32
 // CHECK:           }) : (tensor<16x1x8x16x2x2xf32, #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_12]]}>>) -> tensor<16x1x8x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_12]]}>}>>
 // CHECK:           %[[CONV:.*]] = triton_gpu.convert_layout %[[VAL_6]] : tensor<16x1x8x16x2xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #[[$ATTR_12]]}>}>> -> tensor<16x1x8x16x2xf32, #[[$BLOCKED]]>
-// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] {allow_reorder = true, efficient_layout} : tensor<16x1x8x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x8x32xf32, #[[$ATTR_13]]>
+// CHECK:           %[[VAL_10:.*]] = tt.reshape %[[CONV]] allow_reorder efficient_layout : tensor<16x1x8x16x2xf32, #[[$BLOCKED]]> -> tensor<16x1x8x32xf32, #[[$ATTR_13]]>
 // CHECK:           %[[VAL_11:.*]] = "tt.reduce"(%[[VAL_10]]) <{axis = 3 : i32}> ({
 // CHECK:           ^bb0(%[[VAL_12:.*]]: f32, %[[VAL_13:.*]]: f32):
 // CHECK:             %[[VAL_14:.*]] = arith.maxnumf %[[VAL_12]], %[[VAL_13]] : f32
 // CHECK:             tt.reduce.return %[[VAL_14]] : f32
 // CHECK:           }) : (tensor<16x1x8x32xf32, #[[$ATTR_13]]>) -> tensor<16x1x8xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_13]]}>>
 // CHECK:           %[[VAL_15:.*]] = triton_gpu.convert_layout %[[VAL_11]] : tensor<16x1x8xf32, #triton_gpu.slice<{dim = 3, parent = #[[$ATTR_13]]}>> -> tensor<16x1x8xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>>
-// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] {allow_reorder = true, efficient_layout} : tensor<16x1x8xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
+// CHECK:           %[[VAL_16:.*]] = tt.reshape %[[VAL_15]] allow_reorder efficient_layout : tensor<16x1x8xf32, #triton_gpu.slice<{dim = 3, parent = #[[$BLOCKED1]]}>> -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_14]]}>>
 // CHECK:         }
   tt.func @test_repeat_layout(%arg0: tensor<128x128xf32, #mma>) -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {

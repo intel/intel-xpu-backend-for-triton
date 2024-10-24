@@ -2,6 +2,7 @@
 #include "flash_attention/fmha_forward_v5.h"
 #include "gemm/gemm.h"
 #include "softmax/softmax.h"
+#include "split_k_gemm/split_k_gemm.h"
 #include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
 #include <c10/core/ScalarType.h>
@@ -89,6 +90,29 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   auto queue = get_current_sycl_queue();
   auto evt = stream_k_gemm_run(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                                acc.data_ptr(), cnt.data_ptr(), queue);
+#ifdef USE_IPEX
+  xpu::profiler_record("xetla kernel", evt);
+#endif
+  return acc;
+}
+
+template <int m, int k, int n,
+          kslicing_impl_t kslicing_type = kslicing_impl_t::none>
+at::Tensor bf16_split_k_gemm(const at::Tensor &a, const at::Tensor &b,
+                             const at::Tensor &c, const at::Tensor &acc,
+                             const at::Tensor &cnt) {
+  CHECK_INPUT(a);
+  CHECK_INPUT(b);
+  CHECK_INPUT(c);
+  CHECK_INPUT(acc);
+#ifdef USE_IPEX
+  RECORD_FUNCTION("xetla split_k_gemm", {});
+#endif
+
+  auto queue = get_current_sycl_queue();
+  auto evt = split_k_gemm_run<m, k, n, kslicing_type>(
+      a.data_ptr(), b.data_ptr(), c.data_ptr(), acc.data_ptr(), cnt.data_ptr(),
+      queue);
 #ifdef USE_IPEX
   xpu::profiler_record("xetla kernel", evt);
 #endif
@@ -283,6 +307,16 @@ PYBIND11_MODULE(xetla_kernel, m) {
   // gemm stream k
   m.def("gemm_streamk_shape_3072_4096_3072", &bf16_stream_k_gemm,
         "bf16_gemm_streamk (XeTLA)");
+  // gemm split k
+  m.def("gemm_splitk_shape_512_32768_8192",
+        &bf16_split_k_gemm<512, 32768, 8192, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
+  m.def("gemm_splitk_shape_1024_28672_8192",
+        &bf16_split_k_gemm<1024, 28672, 8192, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
+  m.def("gemm_splitk_shape_3072_4096_3072",
+        &bf16_split_k_gemm<3072, 4096, 3072, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
   // flash_attn
   m.def("flash_attn_causal_false", &flash_attn<false, false, false>,
         "flash attn fwd (XeTLA)");

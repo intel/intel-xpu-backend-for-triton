@@ -1046,10 +1046,6 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
   auto distributedLayout = mlir::cast<DistributedEncodingTrait>(getParent());
   auto warps = distributedLayout.getWarpsPerCTA();
-  // FIXME: This is a temporary solution to avoid distribute-to-warps.mlir
-  // failure.
-  if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH"))
-    return warps;
   auto rank = warps.size();
   auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
   warps[kDim] = 1;
@@ -2764,7 +2760,7 @@ struct CanonicalizeConvertFromReshape
       return failure();
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
+    if (!op.getAllowReorder() || op.getEfficientLayout())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
@@ -2885,8 +2881,7 @@ struct CanonicalizeConvertFromConvert
 
     // cvt(reshape) -> reshape
     if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
-      if (!reshape.getAllowReorder() ||
-          reshape.getEfficientLayout().has_value() ||
+      if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
           isExpensiveView(reshape.getSrc().getType(), op.getType()))
         return failure();
 

@@ -327,7 +327,7 @@ tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slic
 #blocked3 = #triton_gpu.blocked<{sizePerThread = [16, 1, 1, 1], threadsPerWarp = [1, 1, 1, 16], warpsPerCTA = [1, 1, 1, 1], order = [3, 0, 1, 2]}>
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
-  %0 = tt.reshape %arg0 {allow_reorder = true, efficient_layout} : tensor<32x32xf32, #mma> -> tensor<16x1x2x16x2x1x1xf32, #blocked>
+  %0 = tt.reshape %arg0 allow_reorder efficient_layout : tensor<32x32xf32, #mma> -> tensor<16x1x2x16x2x1x1xf32, #blocked>
   %1 = "tt.reduce"(%0) <{axis = 6 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %8 = arith.addf %arg1, %arg2 : f32
@@ -339,14 +339,14 @@ tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slic
     tt.reduce.return %8 : f32
   }) : (tensor<16x1x2x16x2x1xf32, #triton_gpu.slice<{dim = 6, parent = #blocked}>>) -> tensor<16x1x2x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #blocked}>}>>
   %3 = triton_gpu.convert_layout %2 : tensor<16x1x2x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #blocked}>}>> -> tensor<16x1x2x16x1xf32, #blocked1>
-  %4 = tt.reshape %3 {allow_reorder = true, efficient_layout} : tensor<16x1x2x16x1xf32, #blocked1> -> tensor<16x1x2x16xf32, #blocked2>
+  %4 = tt.reshape %3 allow_reorder efficient_layout : tensor<16x1x2x16x1xf32, #blocked1> -> tensor<16x1x2x16xf32, #blocked2>
   %5 = "tt.reduce"(%4) <{axis = 3 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %8 = arith.addf %arg1, %arg2 : f32
     tt.reduce.return %8 : f32
   }) : (tensor<16x1x2x16xf32, #blocked2>) -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked2}>>
   %6 = triton_gpu.convert_layout %5 : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked2}>> -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked3}>>
-  %7 = tt.reshape %6 {allow_reorder = true, efficient_layout} : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked3}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
+  %7 = tt.reshape %6 allow_reorder efficient_layout : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked3}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
   tt.return %7 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
 }
     ```
