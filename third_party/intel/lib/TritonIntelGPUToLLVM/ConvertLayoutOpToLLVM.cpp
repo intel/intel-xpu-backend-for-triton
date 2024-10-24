@@ -462,17 +462,21 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // Expected conversion is:
     // - register=1 -> (0, 1)
     // ...
-    // - register=i -> (0, 2**(i-1))
+    // - register=2**i -> (0, 2**i)
     // ...
-    // - register=N -> (0, 2**(N-1))
+    // - register=M -> (0, 2**M)
+    // ...
+    // - register=2**k -> (2**k, 0)
+    // ...
+    // - register=N -> (2**N, 0)
     // - lane=1 -> (0, 1)
     // ...
-    // - lane=j -> (2**(j-1), 0)
+    // - lane=2**j -> (2**j, 0)
     // ...
-    //   lane=M -> (2**(M-1), 0)
-    // where out dims are: [register (size 2**(N-1)), lane (size 2**(M-1))]
+    //   lane=2**M -> (2**M, 0)
+    // where out dims are: [register (size 2**(N + 1)), lane (size 2**(M + 1))]
     //
-    // With N = M.
+    // With N >= M.
     const auto buildBasis = [&](int32_t size, std::size_t index) {
       std::vector<std::vector<int32_t>> basis;
       std::vector<int32_t> curr(2);
@@ -482,13 +486,24 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
       return basis;
     };
-
     constexpr std::size_t laneIndex = 0;
     constexpr std::size_t registerIndex = 1;
-    int32_t size = conversion->getInDimSize(kLane);
+    int32_t laneSize = conversion->getInDimSize(kLane);
+    std::vector<std::vector<int32_t>> registerBases =
+        buildBasis(laneSize, registerIndex);
+    {
+      // Populate register bases for N > M.
+      std::vector<int32_t> base(2);
+      for (int32_t i = laneSize,
+                   registerSize = conversion->getInDimSize(kRegister);
+           i < registerSize; i *= 2) {
+        base[laneIndex] = i;
+        registerBases.push_back(base);
+      }
+    }
     std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
-        bases{{{kRegister, buildBasis(size, registerIndex)},
-               {kLane, buildBasis(size, laneIndex)}}};
+        bases{{{kRegister, std::move(registerBases)},
+               {kLane, buildBasis(laneSize, laneIndex)}}};
     std::array<StringAttr, 2> outDimNames{kRegister, kLane};
     return conversion == LinearLayout(bases, outDimNames);
   }
@@ -587,15 +602,158 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
+  bool isSubGroupShuffle(const LinearLayout &srcLayout,
+                         const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = srcLayout.getInDimNames().begin()->getContext();
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
+    std::optional<LinearLayout> conversion = comp.divideRight(
+        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
+        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    assert(conversion && "Expecting valid conversion");
+    // TODO: Support more kind of shuffles.
+    // Expected conversion is:
+    // - register=1 -> (0, 1)
+    // ...
+    //   register=i -> (0, i)
+    // ...
+    //   register=N -> (0, N)
+    // - lane=1 -> (0, 0)
+    // ...
+    //   lane=i -> (0, 0)
+    // ...
+    //   lane=N -> (0, 0)
+    // where out dims are: [register (size 1), lane (size N)]
+    std::vector<std::vector<int32_t>> registerBases;
+    {
+      constexpr std::size_t registerIndex = 1;
+      std::vector<int32_t> base(2);
+      for (int32_t i = 1, n = conversion->getInDimSize(kLane); i < n; i *= 2) {
+        base[registerIndex] = i;
+        registerBases.push_back(base);
+      }
+    }
+
+    std::vector<std::vector<int32_t>> laneBases(
+        conversion->getInDimSizeLog2(kLane), std::vector<int32_t>{0, 0});
+    std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
+        bases{{{kRegister, std::move(registerBases)},
+               {kLane, std::move(laneBases)}}};
+    std::array<StringAttr, 2> outDimNames{kRegister, kLane};
+    return conversion == LinearLayout(bases, outDimNames);
+  }
+
+  bool isSupportedSubGroupShuffle(ConvertLayoutOp, OpAdaptor) const {
+    // TODO: Limit when sub-group shuffles get more complex.
+    // We do not need to limit by type here as `gpu.shuffle` conversion will
+    // fail for us.
+    return true;
+  }
+
+  void performSubGroupShuffle(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                              const LinearLayout &dstLayout, OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    assert(isSubGroupShuffle(srcLayout, dstLayout) &&
+           "Expecting sub-group shuffle");
+    assert(isSupportedSubGroupShuffle(op, adaptor) &&
+           "Expecting supported sub-group shuffle");
+
+    MLIRContext *ctx = op->getContext();
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
+    std::optional<LinearLayout> conversion = comp.divideRight(
+        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
+        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    assert(conversion && "Expecting valid layout");
+    int32_t subGroupSize = conversion->getOutDimSize(kLane);
+
+    Location loc = op.getLoc();
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    assert(inVals.size() == 1 && "Expecting single element");
+
+    // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
+    // upstream level. We are not enabling support for all types here as that
+    // should be done upstream.
+    Type origElemTy = inVals.front().getType();
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](BFloat16Type) {
+          auto intTy = i16_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return bitcast(val, intTy);
+          });
+        })
+        .Case([&](IntegerType intTy) {
+          constexpr unsigned minWidth = 8;
+          if (intTy.getWidth() >= minWidth)
+            return;
+          auto dstTy = i8_ty;
+          llvm::transform(inVals, std::begin(inVals),
+                          [&](Value val) -> Value { return zext(dstTy, val); });
+        })
+        .Case([&](LLVM::LLVMPointerType) {
+          Type dstType = i64_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return ptrtoint(dstType, val);
+          });
+        });
+
+    SmallVector<Value> outVals =
+        performSubGroupShuffle(loc, inVals.front(), subGroupSize, rewriter);
+
+    // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
+    // upstream level. We are not enabling support for all types here as that
+    // should be done upstream.
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](BFloat16Type) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return bitcast(val, origElemTy); });
+        })
+        .Case([&](IntegerType intTy) {
+          // Check whether conversion took place.
+          if (intTy == outVals.front().getType())
+            return;
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return trunc(origElemTy, val); });
+        })
+        .Case([&](LLVM::LLVMPointerType ptrTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return inttoptr(ptrTy, val); });
+        });
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+  }
+
+  SmallVector<Value>
+  performSubGroupShuffle(Location loc, Value val, int32_t subGroupSize,
+                         ConversionPatternRewriter &rewriter) const {
+    SmallVector<Value> res;
+    Value width = i32_val(subGroupSize);
+    for (int32_t i = 0; i < subGroupSize; ++i)
+      res.push_back(
+          rewriter
+              .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                            mlir::gpu::ShuffleMode::IDX)
+              .getShuffleResult());
+    return res;
+  }
+
   bool isSupportedSubGroupTranspose(ConvertLayoutOp op,
                                     OpAdaptor adaptor) const {
     auto srcType = cast<LLVM::LLVMStructType>(adaptor.getSrc().getType());
     ArrayRef<Type> body = srcType.getBody();
-    // TODO: Support more configurations.
-    auto mod = op->getParentOfType<ModuleOp>();
-    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    if (body.size() != threadsPerWarp)
-      return false;
     return TypeSwitch<Type, bool>(body.front())
         .Case([this](FloatType floatTy) {
           // Support via bitcasting to integer type.
@@ -619,6 +777,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                    const LinearLayout &dstLayout,
                                    OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter) const {
+    // If the operation is a supported sub-group shuffle, perform via shuffle
+    // operations.
+    if (isSubGroupShuffle(srcLayout, dstLayout) &&
+        isSupportedSubGroupShuffle(op, adaptor)) {
+      performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
+      return success();
+    }
     // If the operation is a supported sub-group transposition, perform via SLM.
     if (isSubGroupTranspose(srcLayout, dstLayout) &&
         isSupportedSubGroupTranspose(op, adaptor)) {
@@ -733,12 +898,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   SmallVector<Value>
-  unwrapFromVector(Location loc, Value vec,
-                   ConversionPatternRewriter &rewriter) const {
+  unwrapFromVectors(Location loc, ArrayRef<Value> vecs,
+                    ConversionPatternRewriter &rewriter) const {
     SmallVector<Value> res;
-    for (unsigned i = 0, n = cast<VectorType>(vec.getType()).getShape()[0];
-         i < n; ++i)
-      res.push_back(extract_element(vec, i32_val(i)));
+    for (Value vec : vecs) {
+      for (unsigned i = 0, n = cast<VectorType>(vec.getType()).getShape()[0];
+           i < n; ++i)
+        res.push_back(extract_element(vec, i32_val(i)));
+    }
     return res;
   }
 
@@ -753,6 +920,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         loc, rewriter, targetInfo, &*rewriter.getInsertionPoint());
     Type ptrType = smemBase.getType();
 
+    int numElements = inVals.size();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     int offset = threadsPerWarp;
     Type offsetType = getTypeConverter()->getIndexType();
@@ -767,7 +935,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value wiStride =
         rewriter.create<LLVM::ConstantOp>(loc, offsetType, threadsPerWarp);
     Value sgStride = rewriter.create<LLVM::ConstantOp>(
-        loc, offsetType, threadsPerWarp * threadsPerWarp);
+        loc, offsetType, threadsPerWarp * numElements);
     Value subGroupOffset = mul(sgStride, subGroupId);
     Type elementType = opType.getElementType();
     Value subGroupBasePtr = gep(ptrType, elementType, smemBase,
@@ -784,13 +952,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
 
     // Load from matrix, non-trasposed.
+    // As per SIMD block semantics, we have stored the elements in a matrix of
+    // `Nxsub_group_size` size, so we need to load back in blocks of
+    // `sub_group_size` (`N/sub_group_size` loads).
     Value workItemOffset = mul(wiStride, subGroupLocalId);
     Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
                                 ValueRange{workItemOffset}, /*inbounds=*/true);
-    Value transposedVec =
-        load(vec_ty(opType.getElementType(), inVals.size()), workItemBasePtr);
-
-    return unwrapFromVector(loc, transposedVec, rewriter);
+    SmallVector<Value> transposedVecs;
+    Type loadTy = vec_ty(opType.getElementType(), threadsPerWarp);
+    for (std::size_t i = 0, n = inVals.size(); i < n; i += threadsPerWarp) {
+      transposedVecs.push_back(load(loadTy, workItemBasePtr));
+      workItemBasePtr = gep(ptrType, loadTy, workItemBasePtr,
+                            ArrayRef<LLVM::GEPArg>{offset}, /*inbounds=*/true);
+    }
+    return unwrapFromVectors(loc, transposedVecs, rewriter);
   }
 
   LogicalResult

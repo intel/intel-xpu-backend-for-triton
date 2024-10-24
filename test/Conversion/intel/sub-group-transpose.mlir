@@ -297,3 +297,132 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 16 
     tt.return %0 : tensor<64x16x4xf32, #blocked1>
   }
 }
+
+// -----
+
+// Test transposition with 32 elements per work-item.
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test(
+  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
+  tt.func @test(%arg0: tensor<32x16xf32, #blocked>) -> tensor<32x16xf32, #blocked1> {
+    // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
+    // CHECK:           %[[ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[BASE:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[ZERO]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[VAL_54:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
+    // CHECK:           %[[VAL_55:.*]] = llvm.zext %[[VAL_54]] : i32 to i64
+    // CHECK:           %[[VAL_56:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id()
+    // CHECK:           %[[VAL_57:.*]] = llvm.zext %[[VAL_56]] : i32 to i64
+    // CHECK-DAG:       %[[VAL_19:.*]] = llvm.mlir.constant(512 : i64) : i64
+    // CHECK-DAG:       %[[VAL_20:.*]] = llvm.mlir.constant(16 : i64) : i64
+    // CHECK:           %[[VAL_58:.*]] = llvm.mul %[[VAL_19]], %[[VAL_55]] : i64
+    // CHECK:           %[[VAL_59:.*]] = llvm.getelementptr inbounds %[[BASE]]{{\[}}%[[VAL_58]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_59]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_60:.*]] = llvm.getelementptr inbounds %[[VAL_59]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_60]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_60]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_61]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_62:.*]] = llvm.getelementptr inbounds %[[VAL_61]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_62]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_76:.*]] = llvm.mul %[[VAL_20]], %[[VAL_57]] : i64
+    // CHECK:           %[[VAL_77:.*]] = llvm.getelementptr inbounds %[[VAL_59]]{{\[}}%[[VAL_76]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
+    // CHECK:           llvm.load %[[VAL_77]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           %[[VAL_78:.*]] = llvm.getelementptr inbounds %[[VAL_77]][16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi32>
+    // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
+    %0 = triton_gpu.convert_layout %arg0 : tensor<32x16xf32, #blocked> -> tensor<32x16xf32, #blocked1>
+    tt.return %0 : tensor<32x16xf32, #blocked1>
+  }
+}
+
+// -----
+
+// Test transposition with 32 elements per work-item with a different layout.
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test(
+  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
+  tt.func @test(%arg0: tensor<16x32xf32, #blocked>) -> tensor<16x32xf32, #blocked1> {
+    // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
+    // CHECK:           %[[ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[BASE:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[ZERO]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[VAL_54:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
+    // CHECK:           %[[VAL_55:.*]] = llvm.zext %[[VAL_54]] : i32 to i64
+    // CHECK:           %[[VAL_56:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id()
+    // CHECK:           %[[VAL_57:.*]] = llvm.zext %[[VAL_56]] : i32 to i64
+    // CHECK-DAG:       %[[VAL_19:.*]] = llvm.mlir.constant(512 : i64) : i64
+    // CHECK-DAG:       %[[VAL_20:.*]] = llvm.mlir.constant(16 : i64) : i64
+    // CHECK:           %[[VAL_58:.*]] = llvm.mul %[[VAL_19]], %[[VAL_55]] : i64
+    // CHECK:           %[[VAL_59:.*]] = llvm.getelementptr inbounds %[[BASE]]{{\[}}%[[VAL_58]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_59]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_60:.*]] = llvm.getelementptr inbounds %[[VAL_59]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_60]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_60]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_61]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_62:.*]] = llvm.getelementptr inbounds %[[VAL_61]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_62]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_76:.*]] = llvm.mul %[[VAL_20]], %[[VAL_57]] : i64
+    // CHECK:           %[[VAL_77:.*]] = llvm.getelementptr inbounds %[[VAL_59]]{{\[}}%[[VAL_76]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
+    // CHECK:           llvm.load %[[VAL_77]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           %[[VAL_78:.*]] = llvm.getelementptr inbounds %[[VAL_77]][16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi32>
+    // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
+    %0 = triton_gpu.convert_layout %arg0 : tensor<16x32xf32, #blocked> -> tensor<16x32xf32, #blocked1>
+    tt.return %0 : tensor<16x32xf32, #blocked1>
+  }
+}
+
+// -----
+
+// Test transposition with 32 elements per work-item and two warps in each dimension.
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test(
+  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
+  tt.func @test(%arg0: tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked1> {
+    // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
+    // CHECK:           %[[ZERO:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[BASE:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[ZERO]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[VAL_54:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
+    // CHECK:           %[[VAL_55:.*]] = llvm.zext %[[VAL_54]] : i32 to i64
+    // CHECK:           %[[VAL_56:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id()
+    // CHECK:           %[[VAL_57:.*]] = llvm.zext %[[VAL_56]] : i32 to i64
+    // CHECK-DAG:       %[[VAL_19:.*]] = llvm.mlir.constant(512 : i64) : i64
+    // CHECK-DAG:       %[[VAL_20:.*]] = llvm.mlir.constant(16 : i64) : i64
+    // CHECK:           %[[VAL_58:.*]] = llvm.mul %[[VAL_19]], %[[VAL_55]] : i64
+    // CHECK:           %[[VAL_59:.*]] = llvm.getelementptr inbounds %[[BASE]]{{\[}}%[[VAL_58]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_59]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_60:.*]] = llvm.getelementptr inbounds %[[VAL_59]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_60]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_61:.*]] = llvm.getelementptr inbounds %[[VAL_60]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_61]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_62:.*]] = llvm.getelementptr inbounds %[[VAL_61]]{{\[}}16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<8xi32>
+    // CHECK:           llvm.call spir_funccc @_Z31intel_sub_group_block_write_ui8PU3AS3jDv8_j(%[[VAL_62]]
+    // CHECK-SAME:          (!llvm.ptr<3>, vector<8xi32>) -> ()
+    // CHECK:           %[[VAL_76:.*]] = llvm.mul %[[VAL_20]], %[[VAL_57]] : i64
+    // CHECK:           %[[VAL_77:.*]] = llvm.getelementptr inbounds %[[VAL_59]]{{\[}}%[[VAL_76]]] : (!llvm.ptr<3>, i64) -> !llvm.ptr<3>, i32
+    // CHECK:           llvm.load %[[VAL_77]] : !llvm.ptr<3> -> vector<16xi32>
+    // CHECK:           %[[VAL_78:.*]] = llvm.getelementptr inbounds %[[VAL_77]][16] : (!llvm.ptr<3>) -> !llvm.ptr<3>, vector<16xi32>
+    // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : i32 to f32
+    %0 = triton_gpu.convert_layout %arg0 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, #blocked1>
+    tt.return %0 : tensor<32x64xf32, #blocked1>
+  }
+}
