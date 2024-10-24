@@ -45,11 +45,11 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass());
   });
   m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
-    pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass());
+    pm.addPass(createInsertInstructionSchedHintsPass());
   });
   m.def("lower_instruction_sched_hints",
         [](mlir::PassManager &pm, std::string variant) {
-          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(variant));
+          pm.addPass(createLowerInstructionSchedHintsPass(variant));
         });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
@@ -68,8 +68,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUCanonicalizePointersPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
-  ADD_PASS_WRAPPER_0("add_stream_pipeline",
-                     mlir::createTritonAMDGPUStreamPipelinePass);
   ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
                      mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
 }

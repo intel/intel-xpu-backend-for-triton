@@ -44,6 +44,10 @@ on:
           - all
           - subset
         default: all
+      check_all_subset_models:
+        description: In "subset" mode, check all subset models
+        type: boolean
+        default: false
       only_one_model:
         description: Run only this one model
         type: string
@@ -125,6 +129,7 @@ jobs:
       test_mode: accuracy
       dtype: ${{ matrix.dtype }}
       models: ${{ inputs.models }}
+      check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
       only_one_model: ${{ inputs.only_one_model }}
       runner_label: ${{ inputs.runner_label }}
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
