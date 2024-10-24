@@ -1,3 +1,5 @@
+#include <iostream>
+
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -154,6 +156,7 @@ private:
 
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
+
     Value res;
     if (!isOuter) {
       res = SharedToDotOperandDPAS::intel::convertLayout(

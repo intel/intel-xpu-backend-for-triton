@@ -511,8 +511,11 @@ struct LoadOpConversion
 
     DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
     auto dotOrder = dotLayout.getThreadOrder();
-    const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-    assert((valueRowMajor || (dotOrder[0] == 0 && dotOrder[1] == 1)) &&
+    size_t rank = dotOrder.size();
+    const bool valueRowMajor =
+        (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
+    assert((valueRowMajor ||
+            (dotOrder[rank - 2] == 0 && dotOrder[rank - 1] == 1)) &&
            "Only row_major or column_major is allowed");
     const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
@@ -584,27 +587,32 @@ struct LoadOpConversion
     auto repCluster = dpasLayout.getRepCluster();
     SmallVector<unsigned> warpShape =
         isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
+
+    unsigned dimOuter = opIdx ? rank - 1 : rank - 2;
+    unsigned dimInner = opIdx ? rank - 2 : rank - 1;
     unsigned outerDimRequiredWarpNum =
-        mlir::ceil<unsigned>(tensorShape[opIdx], warpShape[opIdx]);
+        mlir::ceil<unsigned>(tensorShape[dimOuter], warpShape[dimOuter]);
     unsigned outerDimWarpNum =
-        std::min<unsigned>(warpsPerCTA[opIdx], outerDimRequiredWarpNum);
+        std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
     Value outerDimWarpId =
-        urem(multiDimWarpId[opIdx], i32_val(outerDimWarpNum));
+        urem(multiDimWarpId[dimOuter], i32_val(outerDimWarpNum));
 
     auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
-    unsigned tileWidth = elemsPerDPASInst[dotOrder[0]];
-    unsigned tileHeight = elemsPerDPASInst[dotOrder[1]];
+    unsigned tileWidth = elemsPerDPASInst[dotOrder[rank - 2]];
+    unsigned tileHeight = elemsPerDPASInst[dotOrder[rank - 1]];
     unsigned vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
     if (!isTransposeRequired) {
-      numOperandsPer2DLoadM = isOperandA ? repCluster[opIdx] : numReps[!opIdx];
-      numOperandsPer2DloadN = isOperandA ? numReps[!opIdx] : repCluster[opIdx];
+      numOperandsPer2DLoadM =
+          isOperandA ? repCluster[dimOuter] : numReps[opIdx ? 1 : 2];
+      numOperandsPer2DloadN =
+          isOperandA ? numReps[opIdx ? 1 : 2] : repCluster[dimOuter];
     } else {
       if (isOperandA)
         return failure();
@@ -620,7 +628,7 @@ struct LoadOpConversion
       // Note: the tileHeight and numOperandsPer2DLoadM are the column size
       // now.
       numOperandsPer2DLoadM =
-          (threadsPerWarp <= tileHeight) ? repCluster[1] : 1;
+          (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
       numOperandsPer2DloadN = 1;
@@ -647,7 +655,7 @@ struct LoadOpConversion
       std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
 
     unsigned numLoadPerOutRepCluster =
-        mlir::ceil<unsigned>(repCluster[opIdx], numOperandsOuterDimPerLoad);
+        mlir::ceil<unsigned>(repCluster[dimOuter], numOperandsOuterDimPerLoad);
 
     unsigned numValuesPerLoad = packedElemsPerLanePerDPASInst *
                                 numOperandsOuterDimPerLoad *
@@ -656,13 +664,14 @@ struct LoadOpConversion
         LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
 
     // The stride for the replicates.
-    unsigned repOuterStride = warpShape[opIdx] * outerDimWarpNum;
-    unsigned repStride = elemsPerDPASInst[opIdx] * numOperandsOuterDimPerLoad;
-    unsigned warpOuterStride = warpShape[opIdx];
-    unsigned repKStride = elemsPerDPASInst[opIdx == 0 ? 1 : 0];
+    unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
+    unsigned repStride =
+        elemsPerDPASInst[dimOuter] * numOperandsOuterDimPerLoad;
+    unsigned warpOuterStride = warpShape[dimOuter];
+    unsigned repKStride = elemsPerDPASInst[dimInner];
 
-    unsigned numRepOuter = numReps[opIdx];
-    unsigned numRepInner = numReps[!opIdx];
+    unsigned numRepOuter = numReps[opIdx ? 2 : 1];
+    unsigned numRepInner = numReps[opIdx ? 1 : 2];
 
     Value pitch;
     if (memoryRowMajor) {
@@ -1010,6 +1019,7 @@ struct StoreOpConversion
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
+    size_t rank = tensorShape.size();
     unsigned numElems = getTotalElemsPerThread(tensorType);
     SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
@@ -1047,21 +1057,23 @@ struct StoreOpConversion
     // A warp stride for the replicates.
     SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
     unsigned outerDimWarpNum = std::min<unsigned>(
-        warpsPerCTA[0],
-        mlir::ceil<unsigned>(tensorShape[0], repClusterShape[0]));
+        warpsPerCTA[rank - 2],
+        mlir::ceil<unsigned>(tensorShape[rank - 2], repClusterShape[rank - 2]));
     unsigned innerDimWarpNum = std::min<unsigned>(
-        warpsPerCTA[1],
-        mlir::ceil<unsigned>(tensorShape[1], repClusterShape[1]));
-    Value outerDimWarpId = urem(multiDimWarpId[0], i32_val(outerDimWarpNum));
-    Value innerDimWarpId = urem(multiDimWarpId[1], i32_val(innerDimWarpNum));
-    int64_t numRepOuter = numReps[0];
-    int64_t numRepInner = numReps[1];
+        warpsPerCTA[rank - 1],
+        mlir::ceil<unsigned>(tensorShape[rank - 1], repClusterShape[rank - 1]));
+    Value outerDimWarpId =
+        urem(multiDimWarpId[rank - 2], i32_val(outerDimWarpNum));
+    Value innerDimWarpId =
+        urem(multiDimWarpId[rank - 1], i32_val(innerDimWarpNum));
+    int64_t numRepOuter = numReps[1];
+    int64_t numRepInner = numReps[2];
 
     std::array<unsigned, 2> replicaStride = {
-        outerDimWarpNum * repClusterShape[0],
-        innerDimWarpNum * repClusterShape[1]};
-    std::array<unsigned, 2> warpStride = {repClusterShape[0],
-                                          repClusterShape[1]};
+        outerDimWarpNum * repClusterShape[rank - 2],
+        innerDimWarpNum * repClusterShape[rank - 1]};
+    std::array<unsigned, 2> warpStride = {repClusterShape[rank - 2],
+                                          repClusterShape[rank - 1]};
 
     Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
     Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));

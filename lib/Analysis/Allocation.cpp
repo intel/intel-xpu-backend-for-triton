@@ -1,6 +1,7 @@
 #include "triton/Analysis/Allocation.h"
 
 #include <algorithm>
+#include <iostream>
 #include <limits>
 #include <numeric>
 
@@ -13,6 +14,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
