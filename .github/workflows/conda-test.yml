@@ -40,9 +40,8 @@ on:
         type: boolean
         default: false
 
-  pull_request:
-    branches:
-      - main
+  schedule:
+    - cron: "5 2 * * *"
 
 permissions: read-all
 
