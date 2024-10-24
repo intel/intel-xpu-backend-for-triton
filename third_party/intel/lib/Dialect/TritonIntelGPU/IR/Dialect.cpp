@@ -186,17 +186,24 @@ unsigned DpasEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
-  SmallVector<unsigned> res{1, 1};
+  size_t rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> res(rank, 1);
   return res;
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTAOrder() const {
-  SmallVector<unsigned> res{1, 0};
-  return res;
+  size_t rank = getWarpsPerCTA().size();
+  // auto res = llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank)));
+  // return res;
+  if (rank == 3)
+    return {2, 1, 0};
+  else
+    return {1, 0};
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTAsPerCGA() const {
-  SmallVector<unsigned> res{1, 1};
+  size_t rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> res(rank, 1);
   return res;
 }
 
@@ -370,8 +377,8 @@ SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
   SmallVector<unsigned> elemsPerThread(rank);
   if (rank == 3)
     elemsPerThread[0] = repetitions[0];
-  elemsPerThread[rank - 2] = sizePerThread[rank - 2] * repetitions[1];
-  elemsPerThread[rank - 1] = sizePerThread[rank - 1] * repetitions[2];
+  elemsPerThread[rank - 2] = sizePerThread[0] * repetitions[1];
+  elemsPerThread[rank - 1] = sizePerThread[1] * repetitions[2];
 
   return elemsPerThread;
 };

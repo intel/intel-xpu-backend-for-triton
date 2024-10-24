@@ -186,9 +186,7 @@ private:
     auto sharedLayout =
         cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
 
-    sharedLayout.dump();
-    std::cout << "!!! sharedLayout order: "
-              << "\n";
+    std::cout << "!!! sharedLayout order: ";
     for (auto o : sharedLayout.getOrder()) {
       std::cout << o << " ";
     }

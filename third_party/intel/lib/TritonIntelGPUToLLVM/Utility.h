@@ -16,6 +16,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
+#include <iostream>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
@@ -573,6 +574,7 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset) {
+  std::cout << "emitIndices" << std::endl;
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
   std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);

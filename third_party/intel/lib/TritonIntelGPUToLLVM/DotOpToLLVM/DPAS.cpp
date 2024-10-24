@@ -1,6 +1,7 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include <iostream>
 
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
@@ -176,6 +177,9 @@ public:
     });
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
+      std::cout << "valA: " << b << " " << m << " " << k << "\n";
+      std::cout << "valB: " << b << " " << n << " " << k << "\n";
+      std::cout << "valC: " << b << " " << m << " " << n << "\n";
       Value valA = ha.at({b, m, k});
       Value valB = hb.at({b, n, k});
       Value valc = fc.at({b, m, n});
@@ -186,7 +190,7 @@ public:
           TritonGEN::PrecisionTypeAttr::get(B.getContext(), BPrecision);
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
-      fc.at({m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
+      fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
           loc, dTy, valc, valA, valB, pA, pB, RC);
     };
 

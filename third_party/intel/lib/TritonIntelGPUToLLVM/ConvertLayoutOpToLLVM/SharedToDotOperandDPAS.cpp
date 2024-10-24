@@ -186,6 +186,9 @@ template <unsigned opIdx>
 Value DpasMatmulLoader<opIdx>::loadMatrix(
     int repBatch, int repOuter, int repInner, const ArrayRef<Value> ptrs,
     LLVM::LLVMStructType structTy, Type smemTy, Value cSwizzleOffset) const {
+  std::cout << "-- loadMatrix: repBatch: " << repBatch
+            << ", repOuter: " << repOuter << ", repInner: " << repInner
+            << std::endl;
   Type elemTy = structTy.getBody()[0];
   assert(
       llvm::any_of(structTy.getBody(), [&](Type ty) { return ty == elemTy; }) &&
@@ -195,7 +198,11 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(
   Value offsetOuter = mul(i32_val(repOuter), repNonKDimStride);
   Value offsetInner = mul(i32_val(repInner), repKDimStride);
   Value offset = add(offsetOuter, offsetInner);
-  // offset = add(offset, offsetBatch);
+  // FIXME: repBatchSize and
+  if (repBatch > 0) {
+    Value offsetBatch = mul(i32_val(repBatch), repBatchDimStride);
+    offset = add(offset, offsetBatch);
+  }
 
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
   size_t elemNum = structTy.getBody().size();
@@ -206,6 +213,7 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(
     llvmStruct = insert_val(structTy, llvmStruct, val, i);
   }
 
+  std::cout << "-- loadMatrix end --" << std::endl;
   return llvmStruct;
 }
 
@@ -234,6 +242,7 @@ Value composeValuesToDotOperandLayoutStruct(
   Type structTy = LLVM::LLVMStructType::getLiteral(
       ctx, SmallVector<Type>(elems.size(), elemTy));
 
+  std::cout << "packLLElements: elems size: " << elems.size() << std::endl;
   return packLLElements(loc, typeConverter, elems, rewriter, structTy);
 }
 
@@ -268,6 +277,12 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
 
   auto sharedLayout = cast<SharedEncodingAttr>(descTy.getEncoding());
   ArrayRef<unsigned> order = sharedLayout.getOrder();
+
+  std::cout << "getLoadMatrixFn: sharedLayout order: ";
+  for (auto i : order) {
+    std::cout << i << " ";
+  }
+  std::cout << std::endl;
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &smemObj, &instrShape, &vals](int batch, int outer,
@@ -353,6 +368,9 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   int64_t numRepOuter = numReps[opIdx ? 2 : 1];
   int64_t numRepK = numReps[opIdx ? 1 : 2];
 
+  std::cout << "!!! numRepBatch: " << numRepBatch
+            << ", numRepOuter: " << numRepOuter << ", numRepK: " << numRepK
+            << "\n";
   for (int b = 0; b < numRepBatch; ++b)
     for (int m = 0; m < numRepOuter; ++m)
       for (int k = 0; k < numRepK; ++k)
