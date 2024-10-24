@@ -7,7 +7,7 @@
 #sliced = #triton_gpu.slice<{dim = 1, parent = #blocked}>
 #sliced1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
 
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, triton_gpu.target = "xpu", "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f16(
   // CHECK-SAME:                                      %[[VAL_0:.*]]: !llvm.struct<(f16)>,
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f16)>
@@ -184,7 +184,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #sliced = #triton_gpu.slice<{dim = 1, parent = #blocked}>
 #sliced1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
 
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, triton_gpu.target = "xpu", "triton_gpu.threads-per-warp" = 32 : i32} {
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f32(
   // CHECK-SAME:                                       %[[VAL_0:.*]]: !llvm.struct<(f32)>,
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f32)>
