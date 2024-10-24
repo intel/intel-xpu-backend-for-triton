@@ -734,7 +734,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
               .getShuffleResult());
     return res;
   }
-      
+
   bool isSupportedSubGroupTranspose(ConvertLayoutOp op,
                                     OpAdaptor adaptor) const {
     auto srcType = cast<LLVM::LLVMStructType>(adaptor.getSrc().getType());
