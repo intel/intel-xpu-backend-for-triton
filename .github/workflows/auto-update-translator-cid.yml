@@ -86,7 +86,6 @@ jobs:
       - name: Search the latest valid Translator cid
         if: ${{ env.TARGET_PRID == null }}
         run: |
-          env
           ./scripts/check-update-translator-cid.sh $CID_LATEST $CID_CURRENT
           if git status --porcelain ./lib/Target/SPIRV/spirv-llvm-translator.conf | grep '^ M'; then
             echo "MODIFIED=true" >> $GITHUB_ENV
