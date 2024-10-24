@@ -11,7 +11,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include <optional>
-#include <type_traits>
 
 namespace mlir::triton::intel {
 
