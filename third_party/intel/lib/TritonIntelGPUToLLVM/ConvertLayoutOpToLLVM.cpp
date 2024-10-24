@@ -773,7 +773,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Value subGroupBasePtr = gep(ptrType, elementType, smemBase,
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
     Value base = subGroupBasePtr;
-    // Store in matrix, non-transposed
+    // Store in matrix, transposed
     for (ArrayRef<Value> vals = inVals; !vals.empty();
          vals = vals.drop_front(vecWidth)) {
       ArrayRef<Value> curr = vals.take_front(vecWidth);
@@ -783,7 +783,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                  /*inbounds=*/true);
     }
 
-    // Load from matrix, trasposed.
+    // Load from matrix, non-trasposed.
     Value workItemOffset = mul(wiStride, subGroupLocalId);
     Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
                                 ValueRange{workItemOffset}, /*inbounds=*/true);
