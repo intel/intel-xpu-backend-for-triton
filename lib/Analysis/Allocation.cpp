@@ -1,6 +1,7 @@
 #include "triton/Analysis/Allocation.h"
 
 #include <algorithm>
+#include <iostream>
 #include <limits>
 #include <numeric>
 
@@ -173,9 +174,13 @@ private:
   using GraphT = DenseMap<BufferT *, DenseSet<BufferT *>>;
 
   void run() {
+    std::cout << "!!!! getValueAndSizes start\n";
     getValuesAndSizes();
+    std::cout << "!!!! resolveLiveness start\n";
     resolveLiveness();
+    std::cout << "!!!! computeOffsets start\n";
     computeOffsets();
+    std::cout << "!!!! AllocationAnalysis end\n";
   }
 
   /// Initializes explicitly defined shared memory values for a given operation.

@@ -1,7 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
-#include <iostream>
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -112,7 +111,6 @@ private:
     }
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
       assert(rank == 2 || rank == 3);
-      std::cout << "!!!getMultiDimOffset: dpasLayout" << std::endl;
       auto multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;

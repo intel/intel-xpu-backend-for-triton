@@ -1,3 +1,5 @@
+#include <iostream>
+
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -57,6 +59,7 @@ struct LocalAllocOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    std::cout << "LocalAllocOpConversion start\n";
     if (!op.isSharedMemoryAlloc())
       return failure();
     Location loc = op->getLoc();
@@ -91,6 +94,7 @@ struct LocalAllocOpConversion
     }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
+    std::cout << "LocalAllocOpConversion end\n";
     return success();
   }
 
@@ -122,6 +126,7 @@ public:
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    std::cout << "LocalLoadOpConversion start\n";
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
@@ -129,10 +134,12 @@ public:
     if (isa<SharedEncodingAttr>(srcLayout) &&
         isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
             dstLayout)) {
+      std::cout << "shared -> distributed\n";
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
     if (isa<DotOperandEncodingAttr>(dstLayout)) {
+      std::cout << "shared -> dot_operand\n";
       return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
     }
     return failure();
@@ -154,6 +161,9 @@ private:
 
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
+    std::cout << "!!! smemObj strides rank: " << smemObj.getStrides().size()
+              << "\n";
+
     Value res;
     if (!isOuter) {
       res = SharedToDotOperandDPAS::intel::convertLayout(
@@ -175,6 +185,14 @@ private:
     auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
     auto sharedLayout =
         cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
+
+    sharedLayout.dump();
+    std::cout << "!!! sharedLayout order: "
+              << "\n";
+    for (auto o : sharedLayout.getOrder()) {
+      std::cout << o << " ";
+    }
+    std::cout << std::endl;
 
     int K;
     if (dotLayout.getOpIdx() == 0) // $a

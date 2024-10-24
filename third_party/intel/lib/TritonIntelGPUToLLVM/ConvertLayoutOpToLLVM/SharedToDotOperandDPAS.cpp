@@ -2,6 +2,7 @@
 #include "../Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "llvm/Support/ErrorHandling.h"
+#include <iostream>
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
 using mlir::triton::gpu::getShapePerCTA;
@@ -334,7 +335,6 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<Value> multiDimWarpId =
       LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
-  // FIXME: Using opIdx as the dimIdx will be incorrect in 3D case.
   unsigned rank = shape.size();
   unsigned dimOuter = opIdx ? (rank - 1) : (rank - 2);
   unsigned ceilRes =
@@ -373,6 +373,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value threadId) {
   auto descTy = cast<MemDescType>(tensor.getType());
+  std::cout << "!!! SharedToDotOperandDPAS::intel::convertLayout\n";
   switch (opIdx) {
   case 0:
     return loadOperand<0>(rewriter, loc, descTy, encoding, smemObj,
