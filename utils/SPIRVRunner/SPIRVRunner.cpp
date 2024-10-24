@@ -59,6 +59,7 @@ struct KernelArguments {
   int threads_per_warp;
   int shared_memory;
   std::string kernel_name;
+  std::string build_flags;
   std::string spv_name;
   ordered_json jsonData;
   std::vector<char *> dev_buffers;
@@ -94,6 +95,7 @@ struct KernelArguments {
     shared_memory = jsonData.at("shared_memory");
     threads_per_warp = jsonData.at("threads_per_warp");
     kernel_name = jsonData.at("kernel_name");
+    build_flags = jsonData.at("build_flags");
     spv_name =
         spirv_dump_dir + "/" + jsonData.at("spv_name").get<std::string>();
     out_tensor_name = outtensorname;
@@ -123,8 +125,9 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
 /** SYCL Functions **/
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable>, sycl::kernel,
            int32_t, int32_t>
-loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
-           const size_t binary_size, const size_t deviceId) {
+loadBinary(const std::string &kernel_name, const std::string &build_flags,
+           uint8_t *binary_ptr, const size_t binary_size,
+           const size_t deviceId) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
 
@@ -140,9 +143,8 @@ loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   const auto l0_context =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  const char *build_flags = "";
   auto l0_module = checkSyclErrors(create_module(
-      l0_context, l0_device, binary_ptr, binary_size, build_flags));
+      l0_context, l0_device, binary_ptr, binary_size, build_flags.c_str()));
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
 
   ze_kernel_properties_t props;
@@ -372,10 +374,15 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
 
 int main(int argc, char **argv) {
   try {
+    std::string print_output_kernel_tensor = "--print-output-kernel-tensor";
     if (argc < 2) {
       std::cout << "Help: " << std::endl;
-      std::cout << "<Executable> <Output Tensor Name> \n";
+      std::cout << "<Executable> <Output Tensor Name>" << std::endl;
       std::cout << "./build/SPIRVRunner tensor_2" << std::endl;
+      std::cout << "To print the output kernel tensor to stdout, use:"
+                << std::endl;
+      std::cout << "./build/SPIRVRunner tensor_2 " << print_output_kernel_tensor
+                << std::endl;
       throw std::runtime_error("Input arguments are missing \n");
     }
 
@@ -395,7 +402,7 @@ int main(int argc, char **argv) {
     std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
     auto [kernel_bundle, kernel, n_regs, n_spills] =
-        loadBinary(tritonArgDict.kernel_name,
+        loadBinary(tritonArgDict.kernel_name, tritonArgDict.build_flags,
                    reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
 
     // TODO: missing number of registers
@@ -403,7 +410,10 @@ int main(int argc, char **argv) {
               << n_spills << " register spills." << std::endl;
 
     auto output = launchKernel(q, kernel, tritonArgDict);
-    std::cout << "Kernel return output: " << output[0] << std::endl;
+
+    if (argc == 3 && argv[2] == print_output_kernel_tensor) {
+      std::cout << "Kernel return output: " << output[0] << std::endl;
+    }
 
     auto output_tensor = tritonArgDict.spirv_dump_dir + "/cpp_outs.pt";
     write_tensor(output_tensor, output);
