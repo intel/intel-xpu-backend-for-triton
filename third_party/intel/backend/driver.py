@@ -441,6 +441,7 @@ def serialize_kernel_metadata(arg, args_dict):
     args_dict['shared_memory'] = arg.shared
     args_dict['kernel_name'] = arg.name
     args_dict['spv_name'] = f"{arg.name}.spv"
+    args_dict['build_flags'] = arg.build_flags
 
 
 def serialize_args(args, constants, signature):
