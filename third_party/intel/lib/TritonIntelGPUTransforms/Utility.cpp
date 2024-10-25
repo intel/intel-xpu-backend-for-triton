@@ -11,6 +11,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -93,8 +94,22 @@ bool isExpensiveLoadOrStore(Operation *op) {
     // Case 2: Tensor of pointers has more threads than elements
     // we can presume a high hit-rate that makes it cheap to load
 
+    // IDEA: Block pointers loads are expensive if:
+    //   - they cannot be lowered to 2D block reads (they feed a dot operation)
+    //   - temporarily we can look at the "triton_intel_gpu.block_io" attribute,
+    //   if it has it it can be lowered to 2D block reads
+    //
+    //
+
 #define NEW 1
 #ifdef NEW
+  Attribute blockIOAttr =
+      op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+  if (blockIOAttr) {
+    llvm::errs() << "load op: " << *op << " is not expensive\n";
+    return false;
+  }
+
   if (auto ptrType = getRankedTensorType(base.getType())) {
 #else
   if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
