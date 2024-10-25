@@ -4,7 +4,9 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-materialize-block-pointer"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -131,9 +133,12 @@ private:
   getDotLayout(tt::LoadOp loadOp) const {
     Value ptr = loadOp.getPtr();
     if (!tt::isTensorPointerType(ptr.getType()))
-      return nullptr;
+      return std::nullopt;
 
     RankedTensorType tensorType = ttgi::getRankedTensorType(ptr.getType());
+    if (!tensorType)
+      return std::nullopt;
+
     auto dotLayout = ttgi::getDotEncoding(tensorType);
     if (dotLayout)
       return dotLayout;
@@ -154,13 +159,15 @@ private:
     };
 
     Operation::user_range users = loadOp->getUsers();
-    if (allUsersAreConvertOps(users) && allUserHaveIdenticalLayout(users)) {
+    if (!users.empty() && allUsersAreConvertOps(users) &&
+        allUserHaveIdenticalLayout(users)) {
       Attribute firstUserLayout =
           cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
+      return llvm::dyn_cast_if_present<ttg::DotOperandEncodingAttr>(
+          firstUserLayout);
     }
 
-    return nullptr;
+    return std::nullopt;
   }
 };
 
