@@ -223,6 +223,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
 
+  unsigned rank = shape.size();
   unsigned numRowsPerPackedValue = 0u, numColsPerPackedValue = 0u;
   unsigned numColsPerLaneForPackedValue = 0u, numOpsPerPackedValue = 0u;
   switch (opIdx) {
@@ -232,7 +233,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
     // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
     numOpsPerPackedValue = opsPerChannel == 4 ? 2 : 1;
-    unsigned packedColNum = shapeA[1] / numOpsPerPackedValue;
+    unsigned packedColNum = shapeA[rank - 1] / numOpsPerPackedValue;
     // Each value name represent multiple rows if warpSize > packedColNum
     numRowsPerPackedValue = mlir::ceil(warpSize, packedColNum);
     numColsPerPackedValue = std::min(warpSize, packedColNum);
@@ -256,9 +257,9 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   int64_t numRepK = numReps[opIdx ? 1 : 2];
 
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
-  unsigned repClusterSize = repCluster[opIdx];
+  unsigned repClusterSize = repCluster[opIdx ? rank - 1 : rank - 2];
 
-  for (unsigned dimOuter = 0; dimOuter < numRepOuter; ++dimOuter)
+  for (unsigned repOuter = 0; repOuter < numRepOuter; ++repOuter)
     for (unsigned k = 0; k < numRepK; ++k)
       for (unsigned rep = 0; rep < repClusterSize; ++rep) {
         for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
@@ -268,9 +269,9 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
               (opIdx == 0) ? elemId % numOpsPerPackedValue : 0;
           unsigned packedElemId = elemId / numOpsPerPackedValue;
           unsigned repRowIndex =
-              shapePerCTATile[0] * (opIdx == 0 ? dimOuter : k);
+              shapePerCTATile[rank - 2] * (opIdx == 0 ? repOuter : k);
           unsigned repColIndex =
-              shapePerCTATile[1] * (opIdx == 0 ? k : dimOuter);
+              shapePerCTATile[rank - 1] * (opIdx == 0 ? k : repOuter);
           unsigned repClusterRowIndex = opIdx == 0 ? rep * instShape[0] : 0;
           unsigned repClusterColIndex = opIdx == 0 ? 0 : rep * instShape[1];
           unsigned packedElemRowIndex =
@@ -279,10 +280,17 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
           unsigned packedElemColIndex =
               (packedElemId % numColsPerLaneForPackedValue) *
               numColsPerPackedValue;
-          offsets.push_back({repRowIndex + repClusterRowIndex +
-                                 packedElemRowIndex + opsRowIndex,
-                             repColIndex + repClusterColIndex +
-                                 packedElemColIndex + opsColIndex});
+          if (rank == 3)
+            offsets.push_back({0,
+                               repRowIndex + repClusterRowIndex +
+                                   packedElemRowIndex + opsRowIndex,
+                               repColIndex + repClusterColIndex +
+                                   packedElemColIndex + opsColIndex});
+          else
+            offsets.push_back({repRowIndex + repClusterRowIndex +
+                                   packedElemRowIndex + opsRowIndex,
+                               repColIndex + repClusterColIndex +
+                                   packedElemColIndex + opsColIndex});
         }
       }
 
@@ -560,6 +568,7 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
+  std::cout << "~! emitOffsetForLayout\n";
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout))
     return emitOffsetForDpasLayout(dpasLayout, type);
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))

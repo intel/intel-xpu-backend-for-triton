@@ -1,5 +1,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include <iostream>
 #include <numeric>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
@@ -140,6 +141,8 @@ SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
   unsigned elemsPerThread = elemsNum / threadsPerWarp;
   auto repCluster = getRepCluster();
   // The Value is shard to lanes to threads per DPAS instruction.
+  if (rank == 3)
+    res[0] = repCluster[0];
   res[rank - 2] = elemsPerThread * repCluster[rank - 2];
   res[rank - 1] = repCluster[rank - 1];
   return res;
@@ -164,16 +167,25 @@ DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
   assert((rank == 2 || rank == 3) && "Unexpected rank of mma layout");
 
-  SmallVector<unsigned> elemsPerThread(rank);
+  SmallVector<unsigned> elemsPerThread(rank, 1);
   auto shapePerCTATile = getShapePerCTATile(shape);
   unsigned tilesRow =
       ceil<unsigned>(shape[rank - 2], shapePerCTATile[rank - 2]);
   unsigned tilesCol =
       ceil<unsigned>(shape[rank - 1], shapePerCTATile[rank - 1]);
   auto sizePerThread = getSizePerThread();
+  if (rank == 3)
+    elemsPerThread[0] =
+        sizePerThread[0] * ceil<unsigned>(shape[0], shapePerCTATile[0]);
   elemsPerThread[rank - 2] = sizePerThread[rank - 2] * tilesRow;
   elemsPerThread[rank - 1] = sizePerThread[rank - 1] * tilesCol;
 
+  // if (rank == 3)
+  //   std::cout << "elemsPerThread: " << elemsPerThread[0] << ", " <<
+  //   elemsPerThread[1] << ", " << elemsPerThread[2] << std::endl;
+  // else
+  //   std::cout << "elemsPerThread: " << elemsPerThread[0] << ", " <<
+  //   elemsPerThread[1] << std::endl;
   return elemsPerThread;
 }
 
@@ -382,14 +394,14 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() {
   SmallVector<unsigned> contigPerThread(rank, 1);
 
   unsigned threadsPerWarp = getSubGroupSize();
-  auto shapeC = getDPASInstShapeC();
+  auto instShapeC = getDPASInstShapeC();
   // The software vectorization vectorized the value as C array: int a[N] -> int
   // a[N][threadsPerWarp]
-  if (threadsPerWarp > shapeC[1]) {
+  if (threadsPerWarp > instShapeC[1]) {
     return contigPerThread;
-  } else if (threadsPerWarp == shapeC[1]) {
+  } else if (threadsPerWarp == instShapeC[1]) {
     auto repCluster = getRepCluster();
-    contigPerThread[rank - 2] = shapeC[0] * repCluster[rank - 2];
+    contigPerThread[rank - 2] = instShapeC[0] * repCluster[rank - 2];
     return contigPerThread;
   } else {
     // threadsPerWarp < shapeC[1]

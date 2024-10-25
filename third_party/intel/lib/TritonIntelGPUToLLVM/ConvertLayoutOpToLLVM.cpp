@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
+#include <iostream>
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -115,12 +116,14 @@ private:
           loc, rewriter, targetInfo, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;
       ::emitOffsetForDpasLayoutPerCTA(
-          dpasLayout, offsets, multiDimCTAInRepId[0] * shapePerCTATile[0],
-          multiDimCTAInRepId[1] * shapePerCTATile[1]);
+          dpasLayout, offsets,
+          multiDimCTAInRepId[rank - 2] * shapePerCTATile[rank - 2],
+          multiDimCTAInRepId[rank - 1] * shapePerCTATile[rank - 1]);
 
       SmallVector<Value> multiDimOffset(rank);
       if (rank == 3)
-        multiDimOffset[0] = multiDimBase[0];
+        multiDimOffset[0] = add(multiDimBase[0], i32_val(multiDimCTAInRepId[0] *
+                                                         shapePerCTATile[0]));
       multiDimOffset[rank - 2] =
           add(multiDimBase[rank - 2], i32_val(offsets[elemId][rank - 2]));
       multiDimOffset[rank - 1] =
