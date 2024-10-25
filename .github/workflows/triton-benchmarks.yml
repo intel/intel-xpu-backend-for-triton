@@ -1,4 +1,5 @@
 name: Triton benchmarks
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -19,6 +20,10 @@ on:
           - ELAPSED_TIME
           - UPSTREAM_PYTORCH_PROFILER
         default: PYTORCH_LEGACY_PROFILER_USING_IPEX
+      run_name:
+        description: Run name
+        type: string
+        default: "Triton benchmarks"
   schedule:
     - cron: "5 23 * * *"
   pull_request:
