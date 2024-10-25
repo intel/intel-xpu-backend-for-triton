@@ -17,11 +17,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 // Below headers will allow registration to ROCm passes
-#ifndef WIN32
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/TritonGPUConversion.h"
-#endif
 
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
