@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-import xetla_kernel
+import triton_kernels_benchmark.xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
@@ -262,7 +262,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
 
     elif provider == 'xetla':
         module_name = f'flash_attn_causal_{CAUSAL}'.lower()
-        func = getattr(xetla_kernel, module_name)
+        func = getattr(triton_kernels_benchmark.xetla_kernel, module_name)
         out = torch.empty_like(q, device='xpu', dtype=dtype)
         size_score = Z * H * N_CTX * N_CTX
         size_attn_mask = Z * N_CTX * N_CTX

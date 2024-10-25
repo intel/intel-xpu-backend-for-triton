@@ -15,7 +15,7 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark.benchmark_testing import do_bench_elapsed_time, BENCHMARKING_METHOD
 
-import xetla_kernel
+import triton_kernels_benchmark.xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
@@ -313,7 +313,7 @@ def benchmark(B, M, N, K, provider):
         # better performance.
         if (B, M, N, K) == (1, 3072, 4096, 3072):
             name = 'gemm_streamk_shape_3072_4096_3072'
-        func = getattr(xetla_kernel, name)
+        func = getattr(triton_kernels_benchmark.xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 

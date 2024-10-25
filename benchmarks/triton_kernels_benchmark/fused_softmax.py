@@ -13,7 +13,7 @@ import triton.language as tl
 from triton.runtime import driver
 
 import triton_kernels_benchmark as benchmark_suit
-import xetla_kernel
+import triton_kernels_benchmark.xetla_kernel
 
 
 @torch.jit.script
@@ -140,7 +140,7 @@ def benchmark(M, N, provider):
 
     elif provider == "xetla":
         name = f"softmax_shape_{M}_{N}"
-        func = getattr(xetla_kernel, name)
+        func = getattr(triton_kernels_benchmark.xetla_kernel, name)
         out = torch.empty_like(x, device="xpu")
         xetla_fn = lambda: func(x, out, 0)
         torch_fn = lambda: torch.softmax(x, axis=-1)

@@ -3,7 +3,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-import xetla_kernel
+import triton_kernels_benchmark.xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
@@ -165,7 +165,7 @@ def benchmark(M, N, K, provider):
         cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
 
         name = f'gemm_splitk_shape_{M}_{K}_{N}'
-        func = getattr(xetla_kernel, name)
+        func = getattr(triton_kernels_benchmark.xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
