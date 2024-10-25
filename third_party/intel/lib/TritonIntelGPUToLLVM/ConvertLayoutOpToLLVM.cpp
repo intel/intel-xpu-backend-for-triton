@@ -448,7 +448,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   // Return a vector such as:
   // [[0, 1], [0, 2], [0, 4], ..., [0, laneSize / 2], [laneSize, 0], ...,
-  // [registerSize / 2, 0]]
+  // [registerSize / 2, 0]],
+  // i.e., mapping registers to lanes till laneSize and performing an ID
+  // conversion afterwards.
   static std::vector<std::vector<int32_t>>
   buildSubGroupTransposeRegisterBases(int32_t registerSize, int32_t laneSize) {
     std::vector<std::vector<int32_t>> bases;
@@ -468,6 +470,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   // Return a vector such as:
   // [[0, 1], [0, 2], [0, 4], ..., [0, laneSize / 2], [1, 0], ...,
   // [registerSize / (2 * laneSize), 0]]
+  // i.e., mapping registers to lanes till laneSize and repeating the pattern
+  // afterwards.
   static std::vector<std::vector<int32_t>>
   buildSubGroupShuffleRegisterBases(int32_t registerSize, int32_t laneSize) {
     std::vector<std::vector<int32_t>> bases;
@@ -485,7 +489,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   // Return a vector such as:
-  // [[1, 0], [2, 0], [4, 0], ..., [laneSize / 2, 0]]
+  // [[1, 0], [2, 0], [4, 0], ..., [laneSize / 2, 0]],
+  // i.e., mapping lanes to registers.
   static std::vector<std::vector<int32_t>>
   buildSubGroupTransposeLaneBases(int32_t laneSize) {
     std::vector<std::vector<int32_t>> bases;
