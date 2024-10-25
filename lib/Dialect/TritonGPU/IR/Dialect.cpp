@@ -238,6 +238,11 @@ static SmallVector<unsigned> eraseOrder(ArrayRef<unsigned> order,
 }
 
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
+  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+      return getWarpOrder(dotLayout.getParent());
+    }
+  }
   auto order = getOrder(layout);
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mmaLayout.isHopper()) {

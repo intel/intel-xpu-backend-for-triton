@@ -1008,46 +1008,46 @@ public:
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
 
-    // TODO: Extend to higher dimension tensor pointers.
-    if (op.getShape().size() != 2)
+    auto ptrTy = cast<PointerType>(op.getResult().getType());
+    auto tensorType = cast<RankedTensorType>(ptrTy.getPointeeType());
+    ArrayRef<int64_t> blkShape = tensorType.getShape();
+    unsigned rank = op.getShape().size();
+
+    // TODO: Support higher rank tensors.
+    if (rank > 2)
       return AxisInfo();
 
-    assert(operands.size() == 7 && "MakeTensorPtrOp should have 2D shape");
+    SmallVector<AxisInfo> strideInfo;
+    for (int i = rank + 1; i <= rank * 2; ++i)
+      strideInfo.emplace_back(operands[i]->getValue());
 
     AxisInfo ptrInfo = operands[0]->getValue();
-    AxisInfo shapeInfo0 = operands[1]->getValue();
-    AxisInfo shapeInfo1 = operands[2]->getValue();
-    AxisInfo strideInfo0 = operands[3]->getValue();
-    AxisInfo strideInfo1 = operands[4]->getValue();
+    int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
 
-    std::optional<int64_t> shape0 = shapeInfo0.getConstantValue();
-    std::optional<int64_t> shape1 = shapeInfo1.getConstantValue();
-    std::optional<int64_t> stride0 = strideInfo0.getConstantValue();
-    std::optional<int64_t> stride1 = strideInfo1.getConstantValue();
-
-    AxisInfo::DimVectorT contiguity{
-        shape0.has_value() && (stride0 == 1) ? shape0.value() : 1,
-        shape1.has_value() && (stride1 == 1) ? shape1.value() : 1};
-
-    int64_t ptrDivisibility = ptrInfo.getDivisibility()[0];
-    int64_t strideDivisibility0 = strideInfo0.getDivisibility()[0];
-    int64_t strideDivisibility1 = strideInfo1.getDivisibility()[0];
-
-    LDBG("ptrDivisibility: " << ptrDivisibility);
-    LDBG("strideDivisibility0: " << strideDivisibility0);
-    LDBG("strideDivisibility1: " << strideDivisibility1);
-
-    AxisInfo::DimVectorT divisibility{1, 1};
-    if (ptrDivisibility > 1) {
-      if (contiguity[0] > 1)
-        divisibility[0] = std::min(ptrDivisibility, strideDivisibility1);
-      if (contiguity[1] > 1)
-        divisibility[1] = std::min(ptrDivisibility, strideDivisibility0);
+    AxisInfo::DimVectorT contiguity, constancy, divisibility;
+    for (int dim = 0; dim < rank; ++dim) {
+      contiguity.push_back(
+          strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
+      divisibility.push_back(
+          contiguity[dim] > 1
+              ? std::min(ptrDivisibility,
+                         strideInfo[dim == 0 ? 1 : 0].getDivisibility()[0])
+              : 1);
+      constancy.push_back(1);
     }
 
-    AxisInfo::DimVectorT constancy{1, 1};
-
     return AxisInfo(contiguity, divisibility, constancy);
+  }
+};
+
+class AdvanceOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::AdvanceOp> {
+public:
+  using AxisInfoVisitorImpl<triton::AdvanceOp>::AxisInfoVisitorImpl;
+  AxisInfo
+  getAxisInfo(triton::AdvanceOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    return operands[0]->getValue();
   }
 };
 
@@ -1099,6 +1099,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
   visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
+  visitors.append<AdvanceOpAxisInfoVisitor>();
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(

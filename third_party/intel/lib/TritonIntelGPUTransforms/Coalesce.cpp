@@ -1,13 +1,16 @@
 #include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "mlir/Analysis/SliceAnalysis.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "tritonintelgpu-coalesce"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -20,18 +23,20 @@ namespace mlir::triton::gpu::intel {
 
 using namespace mlir;
 namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace {
 
 struct CoalescePass
     : public ttgi::impl::TritonIntelGPUCoalesceBase<CoalescePass> {
+private:
   void
   setCoalescedEncoding(tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                        Operation *op, int numWarps, int threadsPerWarp,
                        llvm::MapVector<Operation *, Attribute> &layoutMap) {
     Value ptr = getMemAccessPtr(op);
-    auto refTensorType = cast<RankedTensorType>(ptr.getType());
+    LDBG("ptr: " << ptr);
 
     LDBG("Considering op: " << *op);
     LLVM_DEBUG({
@@ -44,6 +49,7 @@ struct CoalescePass
     SmallVector<unsigned> order = argSort(contiguity);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
+    RankedTensorType refTensorType = ttgi::getRankedTensorType(ptr.getType());
     auto matchesShape = [&refTensorType](const Value &val) {
       auto rttType = dyn_cast<RankedTensorType>(val.getType());
       return rttType && rttType.getShape() == refTensorType.getShape();
@@ -67,12 +73,11 @@ struct CoalescePass
       }
     }
 
-    auto shapePerCTA = triton::gpu::getShapePerCTA(refTensorType);
+    auto shapePerCTA = ttg::getShapePerCTA(refTensorType);
     LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
 
     int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
-
     unsigned perThread =
         ttgi::getNumElementsPerThread(op, order, axisInfoAnalysis);
     LDBG("perThread for op: " << perThread);
@@ -102,33 +107,207 @@ struct CoalescePass
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
 
-    auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
-    layoutMap[op] = triton::gpu::BlockedEncodingAttr::get(
+    auto CTALayout = ttg::getCTALayout(refTensorType.getEncoding());
+    layoutMap[op] = ttg::BlockedEncodingAttr::get(
         &getContext(), refTensorType.getShape(), sizePerThread, order, numWarps,
         threadsPerWarp, CTALayout);
   }
 
-  static Type getNewType(Type type, Attribute encoding) {
-    RankedTensorType tensorType = cast<RankedTensorType>(type);
+  static RankedTensorType getNewType(RankedTensorType tensorType,
+                                     Attribute encoding) {
     return RankedTensorType::get(tensorType.getShape(),
                                  tensorType.getElementType(), encoding);
   }
 
+  // Find the defining makeTensorPtrOp operation of the given value.
+  static std::optional<tt::MakeTensorPtrOp>
+  findDefiningMakeTensorPtrOp(Value val) {
+    if (auto arg = dyn_cast<BlockArgument>(val)) {
+      Operation *parentOp = val.getParentBlock()->getParentOp();
+      assert(isa<scf::ForOp>(parentOp) && "Expected a scf::ForOp");
+      auto loopArg =
+          cast<scf::ForOp>(parentOp).getInitArgs()[arg.getArgNumber() - 1];
+      return findDefiningMakeTensorPtrOp(loopArg);
+    }
+
+    if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
+      return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
+    if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
+      return makePtrOp;
+
+    return std::nullopt;
+  }
+
+  static bool filterUser(Operation *op) {
+    // Yield operations trigger updating the layout of the containing loop
+    // results, don't skip them.
+    if (isa<scf::YieldOp>(op))
+      return false;
+
+    // Skip operations that don't yield a result and contain no regions.
+    if (op->getNumResults() == 0 && op->getNumRegions() == 0)
+      return true;
+
+    // Operations that do not yield a block pointer aren't interesting.
+    if (op->getNumRegions() == 0 &&
+        llvm::none_of(op->getResultTypes(), [](Type resType) {
+          return tt::isTensorPointerType(resType);
+        }))
+      return true;
+
+    return false;
+  }
+
+  // Change the \p layout of the \p op result and propagate the new result type
+  // to its users.
+  void changeAndPropagateLayout(Operation *op, Attribute layout,
+                                IRRewriter &rewriter) const {
+    assert(op && op->getNumResults() == 1 &&
+           "Expecting operation yielding a result");
+
+    rewriter.modifyOpInPlace(op, [&]() {
+      Value res = op->getOpResult(0);
+      assert(tt::isTensorPointerType(res.getType()) &&
+             "Expecting a block pointer");
+
+      auto ptrType = cast<tt::PointerType>(res.getType());
+      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                       ptrType.getAddressSpace()));
+    });
+    LDBG("Coalesced op: " << *op);
+
+    propagateLayout(op, layout, rewriter);
+  }
+
+  // Propagate the layout of the \p root operation's result to its users.
+  void propagateLayout(Operation *root, Attribute layout,
+                       IRRewriter &rewriter) const {
+    assert(root->getNumResults() != 0 &&
+           "Expecting an operation yielding a result");
+
+    LDBG("root: " << *root);
+    for (Operation *user : root->getUsers()) {
+      if (filterUser(user))
+        continue;
+
+      LDBG("root's user: " << *user << "\n");
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        propagateLayoutToArgsAndBody(forOp, root, layout, rewriter);
+        continue;
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
+        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        continue;
+      }
+      changeAndPropagateLayout(user, layout, rewriter);
+    }
+  }
+
+  // Propagate the layout of the \p arg block argument to its users.
+  void propagateLayout(BlockArgument arg, Attribute layout,
+                       IRRewriter &rewriter) const {
+    LDBG("arg: " << arg);
+    for (Operation *user : arg.getUsers()) {
+      if (filterUser(user))
+        continue;
+
+      LDBG("arg's user: " << *user << "\n");
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
+        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        continue;
+      }
+      changeAndPropagateLayout(user, layout, rewriter);
+    }
+  }
+
+  // Propagate the layout of the \p root operation's result to the \p forOp loop
+  // init argument that uses it, and transitively to the operations in the loop
+  // body that use that argument.
+  void propagateLayoutToArgsAndBody(scf::ForOp forOp, Operation *root,
+                                    Attribute layout,
+                                    IRRewriter &rewriter) const {
+    assert(llvm::any_of(root->getUsers(),
+                        [&](Operation *user) { return user == forOp; }) &&
+           "Expecting the loop to be a user of the root operation");
+
+    for (BlockArgument arg : forOp.getRegionIterArgs()) {
+      Value loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
+      for (OpResult res : root->getResults()) {
+        if (res != loopArg || !tt::isTensorPointerType(res.getType()))
+          continue;
+
+        LDBG("loopArg: " << loopArg);
+
+        // Modify the layout of the loop init argument...
+        tt::PointerType ptrType = cast<tt::PointerType>(arg.getType());
+        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+        arg.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                         ptrType.getAddressSpace()));
+
+        // ... and then propagate it to the operations in the loop.
+        propagateLayout(arg, layout, rewriter);
+      }
+    }
+  }
+
+  // Modify the given loop \p forOp and propagate the result of the enclosing
+  // loop.
+  void propagateLayoutToLoopResults(scf::ForOp forOp, Attribute layout,
+                                    IRRewriter &rewriter) const {
+    Operation *yieldOp = forOp.getBody()->getTerminator();
+
+    rewriter.modifyOpInPlace(forOp, [&]() {
+      for (auto [opType, res] :
+           llvm::zip(yieldOp->getOperandTypes(), forOp.getResults())) {
+        if (opType == res.getType())
+          continue;
+
+        assert(tt::isTensorPointerType(res.getType()) &&
+               tt::isTensorPointerType(opType) && "Expecting blocked pointers");
+        assert(cast<RankedTensorType>(
+                   cast<tt::PointerType>(opType).getPointeeType())
+                       .getEncoding() == layout &&
+               "Unexpected layout");
+
+        auto resType = cast<tt::PointerType>(res.getType());
+        RankedTensorType tensorType = ttgi::getRankedTensorType(resType);
+        res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                         resType.getAddressSpace()));
+      }
+    });
+
+    propagateLayout(forOp, layout, rewriter);
+  }
+
   void coalesceOp(Attribute encoding, Operation *op) {
+    LDBG("Coalescing op: " << *op);
+
     OpBuilder builder(op);
+
     // Convert operands
-    // For load/store with tensor pointers, we don't have to change the
-    // operands' type, we do this by changing the outputs' type of
-    // `make_tensor_ptr`
+    // Note: for load/store with a blocked pointers argument we cannot change
+    // the operand type, instead we change the output type of
+    // `make_tensor_ptr` and propagate the new output type along the def-use
+    // chain.
     SmallVector<Value, 4> newArgs;
-    for (auto operand : op->getOperands()) {
+    for (Value operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
-          !isa<triton::gpu::SharedEncodingAttr>(tensorType.getEncoding())) {
-        Type newType = getNewType(tensorType, encoding);
-        newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
+          !isa<ttg::SharedEncodingAttr>(tensorType.getEncoding())) {
+        RankedTensorType newType = getNewType(tensorType, encoding);
+        newArgs.push_back(builder.create<ttg::ConvertLayoutOp>(
             op->getLoc(), newType, operand));
       } else {
+        assert(isa<tt::PointerType>(operand.getType()) &&
+               "Expecting operand to have blocked pointer type");
+        auto defOp = findDefiningMakeTensorPtrOp(operand);
+        assert(defOp && "Expected a make_tensor_ptr operation");
+        LDBG("Found make_tensor_ptr definition: " << *defOp);
+        IRRewriter rewriter(builder);
+        changeAndPropagateLayout(*defOp, encoding, rewriter);
         newArgs.push_back(operand);
       }
     }
@@ -136,27 +315,34 @@ struct CoalescePass
     // Convert output types
     SmallVector<Type, 4> newTypes;
     for (auto t : op->getResultTypes()) {
-      bool isAsync = isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op);
-      newTypes.push_back(isAsync ? t : getNewType(t, encoding));
+      assert(!isa<ttg::AsyncCopyGlobalToLocalOp>(op) &&
+             "AsyncCopyGlobalToLocalOp not supported for Intel GPU");
+      newTypes.push_back(getNewType(cast<RankedTensorType>(t), encoding));
     }
 
-    // Construct new op with the new encoding
+    // Construct new op with the new encoding.
     Operation *newOp =
         builder.create(op->getLoc(), op->getName().getIdentifier(), newArgs,
                        newTypes, op->getAttrs());
 
-    // Cast the results back to the original layout
+    // Cast the results back to the original layout.
     for (size_t i = 0; i < op->getNumResults(); i++) {
       Value newResult = newOp->getResult(i);
       if (newTypes[i] != op->getResultTypes()[i]) {
-        newResult = builder.create<triton::gpu::ConvertLayoutOp>(
+        newResult = builder.create<ttg::ConvertLayoutOp>(
             op->getLoc(), op->getResult(i).getType(), newResult);
       }
       op->getResult(i).replaceAllUsesWith(newResult);
     }
+
+    LDBG("Old op: " << *op);
+    LDBG("newOp: " << *newOp);
     op->erase();
+
+    assert(succeeded(verify(newOp)) && "Operation verification failed");
   }
 
+public:
   void runOnOperation() override {
     // Run axis info analysis
     ModuleOp moduleOp = getOperation();
@@ -169,18 +355,25 @@ struct CoalescePass
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
         return;
-      // We only convert `tensor<tt.ptr<>>` load/store
-      bool isPtrTensor = false;
-      if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType()))
-        isPtrTensor = isa<tt::PointerType>(tensorType.getElementType());
-      if (!isPtrTensor)
+
+      RankedTensorType refTensorType = ttgi::getRankedTensorType(ptr.getType());
+      if (!refTensorType || !refTensorType.getEncoding())
         return;
-      auto mod = curr->getParentOfType<ModuleOp>();
-      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-      int threadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+      int numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
+      int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
       setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
                            layoutMap);
+    });
+
+    LLVM_DEBUG({
+      DBGS() << "\nlayoutMap:"
+             << "\n";
+      for (auto [op, encoding] : layoutMap) {
+        DBGS() << "op: " << *op << "\n";
+        DBGS() << "encoding: " << encoding << "\n\n";
+      }
+      llvm::errs() << "\n\n";
     });
 
     // For each memory op that has a layout L1:
@@ -190,9 +383,11 @@ struct CoalescePass
     //    produces a tensor with layout L2
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
-    for (auto &kv : layoutMap) {
-      coalesceOp(kv.second, kv.first);
+    for (auto [op, layout] : layoutMap) {
+      coalesceOp(layout, op);
     }
+
+    assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
 

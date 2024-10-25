@@ -3272,21 +3272,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
 
-    if epilogue == 'softmax' and (in_dtype != 'float32' or input_precision == "tf32"):
-        if not is_cuda():
-            pass
-        else:
-            ptx = pgm.asm["ptx"]
-            start = ptx.find("shfl.sync.bfly")
-            end = ptx.find("cvt.rn.f16.f32")
-            red_code = ptx[start:end]
-            assert len(red_code) > 0
-
-            # skip this check on hopper because there are some functions whose name contain "shared" in ptx.
-            # TODO: we should eliminate these unused functions in ptx code.
-            if not (capability[0] >= 9):
-                assert "shared" not in red_code
-            assert "bar.sync" not in red_code
     # torch result
     if in_dtype == 'int8':
         z_ref = np.matmul(x.astype(np.float32), y.astype(np.float32())).astype(np.int32)
@@ -3365,16 +3350,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
-@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps", [
-    (M, N, K, col_a, col_b, type_a, type_b, 4)
-    for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
-    for col_a, col_b in itertools.product([True, False], repeat=2)
-    # We don't test e5m2 as it seems to overflow more easily
-    # Tested locally and it works fine other than for ~10 entries out of 10_000
-    # which are of the size of 10**30
-    for type_a in ["e4m3"]
-    for type_b in ["e4m3"]
-])
+@pytest.mark.parametrize("M, N, K, col_a, col_b, type_a, type_b, num_warps",
+                         [(M, N, K, col_a, col_b, type_a, type_b, 4)
+                          for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
+                          for col_a, col_b in itertools.product([True, False], repeat=2)
+                          for type_a in ["e2m1", "e4m3", "e5m2"]
+                          for type_b in ["e4m3", "e5m2"]])
 def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
     if not is_cuda():
         pytest.xfail("scaled_dot only supported on CUDA")
@@ -3405,7 +3386,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
         a_scale = tl.load(scale_a_ptr)
         c = tl.dot_scaled(a, a_scale, type_a, b, None, type_b)
         out_ptr = out + tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
-        tl.store(out_ptr, c)
+        tl.store(out_ptr, c.to(tl.bfloat16))
 
     @triton.jit
     def mxfp_to_bf16_kernel(
@@ -3482,7 +3463,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
 
         # Need to implement fp4 -> fp8 cast to support 1 byte types
         comp_dtype = torch.bfloat16
-        out_dtype = torch.float32
 
         x = x.contiguous()
         x_upcast = x.new_empty(scale.shape[:-1] + (32 * scale.shape[-1], ), dtype=comp_dtype)
@@ -3491,36 +3471,65 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
         BLOCK_SIZE = 512
         grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE, )
         mxfp_to_bf16_kernel[grid](x, scale, x_upcast, scale.numel(), e_bits, m_bits, BLOCK_SIZE, num_warps=num_warps)
+        assert x_upcast.isfinite().all()
 
         y_upcast = y.view(type_fp8_y).to(comp_dtype)
-        return torch.matmul(x_upcast.to(out_dtype), y_upcast.to(out_dtype))
+
+        class AccumulateInFp32:
+
+            def __enter__(self):
+                self.prev_value = torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+                torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = self.prev_value
+
+        with AccumulateInFp32():
+            return torch.matmul(x_upcast.to(comp_dtype), y_upcast.to(comp_dtype))
 
     torch.manual_seed(0)
 
-    def create_uint8(shape):
-        return torch.randint(0xff, shape, dtype=torch.uint8, device=device)
+    def create_uint8(shape, col_major=False, max_val=255):
+        if col_major:
+            shape = shape[:-2] + (shape[-1], shape[-2])
+        ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
+        if col_major:
+            ret = ret.mT
+        return ret
 
-    x = create_uint8((K, M)).T if col_a else create_uint8((M, K))
-    y = create_uint8((N, K)).T if col_b else create_uint8((K, N))
-    scale_x = create_uint8((M, K // 32))
+    DIV_FACTOR = 2 if type_a == "e2m1" else 1
+    x = create_uint8((M, K // DIV_FACTOR), col_major=col_a)
+    y = create_uint8((K, N), col_major=col_b)
 
-    z = x.new_empty((M, N), dtype=torch.float32)
+    # sample scales that don't overflow as otherwise it's implementation defined (underflowing is alright)
+    # We substract a reasonably high number (64) so that the sum of all the mxfp elements does not overflow
+    m_bytes = int(type_a[1])
+    bias_type_a = 1 << (m_bytes - 1) - 1
+    max_exponent_type_a = (1 << m_bytes) - 1 - bias_type_a
+    scale_x = create_uint8((M, K // 32), max_val=255 - max_exponent_type_a - 64)
+
+    def make_finite(x, dtype):
+        # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
+        # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
+        if dtype not in ("e5m2", "e4m3"):
+            return x
+        mask = 0x7C if dtype == "e5m2" else 0x7F
+        finite = torch.arange(x.numel(), device=device, dtype=torch.uint8).reshape_as(x) % mask
+        x_finite = torch.where(x & mask == mask, finite | (0x80 & x), x)
+        x.copy_(x_finite)
+        return x
+
+    x = make_finite(x, type_a)
+    y = make_finite(y, type_b)
+
+    z = x.new_empty((M, N), dtype=torch.bfloat16)
     pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), z, M, N, K, type_a, type_b,
                                   num_warps=num_warps)
 
     z_ref = dot_scale_ref(x, scale_x, y, type_a, type_b)
 
-    # dot_scale_ref computes the result in higher precision
-    # so we equalise all the non-finite values
-    # This also fixes a bug in our upcasting from e5m2 to bf16 where inf is not preserved
-    non_finite_z = ~z.isfinite()
-    z_ref[non_finite_z] = z[non_finite_z]
-    non_finite_ref = ~z_ref.isfinite()
-    z[non_finite_ref] = z_ref[non_finite_ref]
-
-    # generous rtol set because the ref is more precise than the fused
-    # (computes in higher dtype) and we are sampling the whole range of floats
-    torch.testing.assert_close(z, z_ref, equal_nan=True, atol=1e-5, rtol=1e-2)
+    # generous rtol as we are sampling the whole range of floats
+    torch.testing.assert_close(z, z_ref, atol=1e-5, rtol=1e-2)
 
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']

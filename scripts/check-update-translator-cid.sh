@@ -26,13 +26,22 @@ cd $TRITON_PROJ
 FOUND=false
 for cid in $COMMIT_IDS; do
     echo "$cid" > ./lib/Target/SPIRV/spirv-llvm-translator.conf
-    if ! ./scripts/compile-triton.sh --clean; then
-        echo "Triton compile failed for translator commit $cid"
+
+    BUILD_STATUS=PASS
+    echo "::group::Building Triton for $cid"
+    ./scripts/compile-triton.sh --clean || BUILD_STATUS=FAIL
+    echo "::endgroup::"
+
+    if [ $BUILD_STATUS != PASS ]; then
         continue
     fi
 
-    # execute default tests
-    if ./scripts/test-triton.sh --skip-pytorch-install; then
+    TEST_STATUS=PASS
+    echo "::group::Testing Triton for $cid"
+    ./scripts/test-triton.sh --skip-pytorch-install || TEST_STATUS=FAIL
+    echo "::endgroup::"
+
+    if [ $TEST_STATUS = PASS ]; then
         echo "Tests passed for translator commit $cid"
         echo "A newer commit found: $cid"
         FOUND=true
