@@ -568,7 +568,6 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  std::cout << "~! emitOffsetForLayout\n";
   if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout))
     return emitOffsetForDpasLayout(dpasLayout, type);
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
@@ -657,7 +656,9 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   // Order
   auto inOrder = triton::gpu::getOrder(srcEncoding);
   auto outOrder = triton::gpu::getOrder(resSharedLayout);
+  unsigned rank = outOrder.size();
   assert(maxPhase == 1 ||
+         //  outVec * maxPhase <= srcShape[outOrder[rank-2]] &&
          outVec * maxPhase <= srcShape[outOrder[0]] &&
              "Swizzling would generate out of bounds memory accesses");
   // Tensor indices held by the current thread, as LLVM values

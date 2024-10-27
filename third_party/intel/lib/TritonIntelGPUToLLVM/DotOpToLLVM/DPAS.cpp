@@ -299,7 +299,8 @@ private:
 
     size_t totalElems = elems.size();
     size_t numElemsPerOperand =
-        totalElems / ((outer * inner) * (repClusterOuter * repClusterInner));
+        totalElems /
+        ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
 
     int offset = 0;
