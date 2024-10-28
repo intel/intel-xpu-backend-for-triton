@@ -365,7 +365,7 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   }
 
   if (!triton_args.host_outbuffer.defined()) {
-    std::string message = "Output tensor isn't configurated; \
+    std::string message = "Output tensor isn't configured; \
         the second positional parameter is ";
     throw std::runtime_error(message + triton_args.out_tensor_name);
   }
