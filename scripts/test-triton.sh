@@ -302,7 +302,7 @@ run_instrumentation_tests() {
     return
   fi
 
-  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
+  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
 
   cd $TRITON_PROJ/python/test/unit
 
