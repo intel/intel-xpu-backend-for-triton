@@ -455,9 +455,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kBlock = str_attr("block");
 
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion = comp.divideRight(
-        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    std::optional<LinearLayout> conversion =
+        comp.quotient(kBlock)->quotient(kWarp);
     assert(conversion && "Expecting valid conversion");
     // Expected conversion is:
     // - register=1 -> (0, 1)
@@ -516,85 +515,87 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    std::optional<LinearLayout> srcLayout =
-        toLinearLayout(shape, srcTy.getEncoding());
-    std::optional<LinearLayout> dstLayout =
-        toLinearLayout(shape, dstTy.getEncoding());
-    if (!srcLayout.has_value() || !dstLayout.has_value()) {
+
+    auto conversion = minimalCvtLayout(srcTy, dstTy);
+    if (!conversion.has_value()) {
+      return rewriter.notifyMatchFailure(
+          op, "NYI. srcTy and/or dstTy don't implement LLs yet");
+    }
+    LinearLayout srcLayout =
+        *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    LinearLayout dstLayout =
+        *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+
+    StringAttr kBlock = str_attr("block");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kRegister = str_attr("register");
+
+    assert(to_vector(conversion->getInDimNames()) ==
+           to_vector(conversion->getOutDimNames()));
+    auto dims = conversion->getInDimNames();
+    if (llvm::is_contained(dims, str_attr("block"))) {
+      // Case 1: Transfer between values in different CTAs.
+      //          This requires moving values through distributed shared memory.
+      return rewriter.notifyMatchFailure(
+          op, "NYI: Transfer between different CTAs");
+    } else if (llvm::is_contained(dims, str_attr("warp"))) {
+      return rewriter.notifyMatchFailure(
+          op, "NYI: Transfer between different warps");
+    } else if (llvm::is_contained(dims, str_attr("lane"))) {
+      // Case 2: Transfer between values in the same CTA, in which case we move
+      //         values through shared memory.
+      // If the operation is a supported sub-group shuffle, perform via shuffle
+      // operations.
+      if (isSubGroupShuffle(srcLayout, dstLayout) &&
+          isSupportedSubGroupShuffle(op, adaptor)) {
+        performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
+      // If the operation is a supported sub-group transposition, perform via
+      // SLM.
+      if (isSubGroupTranspose(srcLayout, dstLayout) &&
+          isSupportedSubGroupTranspose(op, adaptor)) {
+        performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
+      // TODO(jlebar): Implement me.
       return failure();
+    } else if (llvm::is_contained(dims, str_attr("register"))) {
+      // Case 4. Transfer between values in the same thread, in which case we
+      //         simply reorder the elements of adaptor.getSrc().
+      return transferWithinThread(
+          op, dstLayout.getFreeVariableMasks()[kRegister],
+          dstLayout.getInDimSize(kRegister), *conversion, adaptor, rewriter);
+    } else {
+      // The two layouts are equivalent. We should probably remove these in
+      // RemoveLayoutConversion.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
     }
-
-    // There are four cases to handle.
-    //
-    //  1. Transfer between values in the same thread, in which case we simply
-    //     reorder the elements of adaptor.getSrc().
-    //  2. Transfer between values in the same warp, in which case we try to
-    //     move values using warp shuffles, though if the pattern is complicated
-    //     enough we may fall back to using shared memory (case 3).
-    //  3. Transfer between values in the same CTA, in which case we move values
-    //     through shared memory.
-    //  4. Transfer between values in different CTAs, in which case we move
-    //     values through distributed shared memory.
-    //
-    // We can tell which case we're in by examining `conversion`.
-    // For example, if the block -> block mapping is an identity layout: {1, 2,
-    // 4, ...}, then there's no movement between data in different CTAs, and we
-    // know we're not in case 4.
-    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
-      return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
-                                  rewriter);
-    }
-
-    if (cvtNeedsWarpShuffle(srcTy, dstTy)) { // Case 2.
-      return transferWithinLane(op, *srcLayout, *dstLayout, adaptor, rewriter);
-    }
-
-    // TODO: match transferWithinBlockOrGroup from
-    // TritonGPUToLLVM/ConvertLayoutOpToLLVM.cpp
-    return transferWithinBlockGroup(op, *srcLayout, *dstLayout, adaptor,
-                                    rewriter);
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                       const LinearLayout &dstLayout, OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, int32_t regMasks, int32_t numRegs,
+                       const LinearLayout &conversion, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    // There are three possible cases:
-    //
-    // 1. `srcLayout` has the same number of registers as `dstLayout`.
-    // 2. `srcLayout` has fewer registers than `dstLayout`.
-    // 3. `srcLayout` has more registers than `dstLayout`.
-    //
-    // In the second case `srcLayout . dstLayout^-1` is not surjective
-    // because not all destination registers are covered.
-    // Since the goal is to cover all of the destination
-    // registers, we can instead use `dstLayout . srcLayout^-1`.
-    LinearLayout conversion = dstLayout.invertAndCompose(srcLayout);
-    auto dstToSrc = conversion.divideRight(
-        LinearLayout::identity1D(conversion.getInDimSize(kLane), kLane, kLane) *
-        LinearLayout::identity1D(conversion.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(conversion.getInDimSize(kBlock), kBlock,
-                                 kBlock));
-
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-    assert(ArrayRef(to_vector(dstToSrc->getInDimNames())) ==
-           ArrayRef{kRegister});
-    assert(ArrayRef(to_vector(dstToSrc->getOutDimNames())) ==
-           ArrayRef{kRegister});
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals;
-    outVals.resize(dstToSrc->getInDimSize(kRegister));
-    for (int i = 0; i < dstToSrc->getInDimSize(kRegister); i++) {
-      auto srcIdx = dstToSrc->apply({{kRegister, i}});
-      outVals[i] = inVals[srcIdx.begin()->second];
+    SmallVector<Value> outVals(numRegs);
+    for (int i = 0; i < outVals.size(); i++) {
+      // Remove free masks from the register index
+      // For example, if idx = 0b00111, and masks = 0b00100, then we get
+      // 0b00011. It means that register 7 (0b111) has the same value as
+      // register 3 (0b011).
+      auto idx = i & (~regMasks);
+      auto srcIdx = conversion.hasInDim(kRegister)
+                        ? conversion.apply({{kRegister, idx}}).begin()->second
+                        : idx;
+      outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -611,9 +612,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kBlock = str_attr("block");
 
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion = comp.divideRight(
-        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    std::optional<LinearLayout> conversion =
+        comp.quotient(kBlock)->quotient(kWarp);
     assert(conversion && "Expecting valid conversion");
     // TODO: Support more kind of shuffles.
     // Expected conversion is:
@@ -667,11 +667,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion = comp.divideRight(
-        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
-    assert(conversion && "Expecting valid layout");
-    int32_t subGroupSize = conversion->getOutDimSize(kLane);
+    LinearLayout conversion = *comp.quotient(kBlock)->quotient(kWarp);
+    int32_t subGroupSize = conversion.getOutDimSize(kLane);
 
     Location loc = op.getLoc();
 
@@ -770,28 +767,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           return true;
         })
         .Default(false);
-  }
-
-  LogicalResult transferWithinLane(ConvertLayoutOp op,
-                                   const LinearLayout &srcLayout,
-                                   const LinearLayout &dstLayout,
-                                   OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter) const {
-    // If the operation is a supported sub-group shuffle, perform via shuffle
-    // operations.
-    if (isSubGroupShuffle(srcLayout, dstLayout) &&
-        isSupportedSubGroupShuffle(op, adaptor)) {
-      performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
-      return success();
-    }
-    // If the operation is a supported sub-group transposition, perform via SLM.
-    if (isSubGroupTranspose(srcLayout, dstLayout) &&
-        isSupportedSubGroupTranspose(op, adaptor)) {
-      performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
-      return success();
-    }
-    // TODO(jlebar): Implement me.
-    return failure();
   }
 
   bool isValidTypeForSubGroupTranspose(Type type) const {
@@ -966,14 +941,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                             ArrayRef<LLVM::GEPArg>{offset}, /*inbounds=*/true);
     }
     return unwrapFromVectors(loc, transposedVecs, rewriter);
-  }
-
-  LogicalResult
-  transferWithinBlockGroup(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                           const LinearLayout &dstLayout, OpAdaptor adaptor,
-                           ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
   }
 };
 
