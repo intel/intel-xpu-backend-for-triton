@@ -660,13 +660,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // - register=2**k -> (2**(k-M), 0)
     // ...
     // - register=2**N -> (2**(N-M), 0)
+    // - lane=1 -> (0, 0)
+    // ...
+    // - lane=2**j -> (0, 0)
+    // ...
+    //   lane=2**M -> (0, 0)
     // where out dims are: [register (size 2**(N - M)), lane (size 2**(M + 1))]
     //
     // With N >= M.
     int32_t registerInDimSize = conversion->getInDimSize(kRegister);
     int32_t laneOutDimSize = conversion->getOutDimSize(kLane);
-    return conversion->getBases().lookup(kRegister) ==
-           buildSubGroupShuffleRegisterBases(registerInDimSize, laneOutDimSize);
+    return conversion->sublayoutIsZero({kLane}, {kRegister, kLane}) &&
+           conversion->getBases().lookup(kRegister) ==
+               buildSubGroupShuffleRegisterBases(registerInDimSize,
+                                                 laneOutDimSize);
   }
 
   bool isSupportedSubGroupShuffle(ConvertLayoutOp, OpAdaptor) const {
