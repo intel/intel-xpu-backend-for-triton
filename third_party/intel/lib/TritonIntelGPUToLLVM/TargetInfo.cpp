@@ -248,4 +248,10 @@ int TargetInfo::getSharedAddressSpace() const {
   return TritonGEN::TritonGENMemorySpace::kWorkgroup;
 }
 
+bool TargetInfo::supportVectorizedAtomics() const {
+  // Note: not currently tested or used, but AMD generally supports vectorized
+  // atomics.
+  return true;
+}
+
 } // namespace mlir::triton::intel
