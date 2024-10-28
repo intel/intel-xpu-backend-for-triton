@@ -38,7 +38,7 @@ int getWmmaVersion(StringRef archGen) {
   return 0;
 }
 
-SmallVector<unsigned, 2>
+SmallVector<unsigned, 3>
 warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
              std::pair<int64_t, int64_t> shapePerWarp) {
   auto rank = shape.size();
@@ -60,7 +60,7 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
       return {(unsigned)numWarps, 1};
 
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
-  SmallVector<unsigned, 2> ret = {1, 1};
+  SmallVector<unsigned, 3> ret = {1, 1};
   do {
     if (ret[0] * ret[1] >= numWarps)
       break;
