@@ -86,34 +86,22 @@ bool isExpensiveLoadOrStore(Operation *op) {
          "Expecting Triton LoadOp or StoreOp");
   Value base = op->getOperand(0);
 
-  // Case 1: A size 1 tensor is not expensive since all threads will load the
-  // same
+  // A size 1 tensor is not expensive since all threads will load the same
+  // value.
   if (isSingleValue(base))
     return false;
 
-    // Case 2: Tensor of pointers has more threads than elements
-    // we can presume a high hit-rate that makes it cheap to load
-
-    // IDEA: Block pointers loads are expensive if:
-    //   - they cannot be lowered to 2D block reads (they feed a dot operation)
-    //   - temporarily we can look at the "triton_intel_gpu.block_io" attribute,
-    //   if it has it it can be lowered to 2D block reads
-    //
-    //
-
-#define NEW 1
-#ifdef NEW
+  // Loads that use a block pointer are expensive if they cannot be lowered to
+  // 2D block read operations. Temporarily leverage the
+  // "triton_intel_gpu.block_io" attribute to filter out inexpensive loads.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-  if (blockIOAttr) {
-    llvm::errs() << "load op: " << *op << " is not expensive\n";
+  if (blockIOAttr)
     return false;
-  }
 
+  // Loads that use more threads than elements can be presumed to have a high
+  // hit-rate that makes them cheap to load.
   if (auto ptrType = getRankedTensorType(base.getType())) {
-#else
-  if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
-#endif
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
