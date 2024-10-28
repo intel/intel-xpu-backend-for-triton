@@ -102,7 +102,9 @@ public:
           return;
 
         const bool isRowMajor = fastChangeDim == rank - 1;
-        if (auto dotLayout = getDotLayout(loadOp)) {
+        std::optional<ttg::DotOperandEncodingAttr> dotLayout =
+            getDotLayout(loadOp);
+        if (dotLayout) {
           // Check if the load is being used by a tt.dot operation, and if so is
           // this the first operand and is it a transposed row major matrix. If
           // so, skip the block ptr attribute as performance is worse than if we
@@ -163,8 +165,9 @@ private:
         allUserHaveIdenticalLayout(users)) {
       Attribute firstUserLayout =
           cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return llvm::dyn_cast_if_present<ttg::DotOperandEncodingAttr>(
-          firstUserLayout);
+      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
+        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
+      return std::nullopt;
     }
 
     return std::nullopt;
