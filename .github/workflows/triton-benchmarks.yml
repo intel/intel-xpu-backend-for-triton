@@ -131,6 +131,18 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
+      - name: Run Triton GEMM kernel benchmark (disable IGC address payload optimization)
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          IGC_allowDecompose2DBlockFuncs=0 \
+          python gemm_benchmark.py --reports $REPORTS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base-no-address-payload-opt.csv
+
+          source ../../scripts/capture-hw-details.sh
+          TAG="${TAG}-diasable-address-payload-opt"
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-base-no-address-payload-opt.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
       - name: Run Triton GEMM kernel benchmark - default path
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
