@@ -210,7 +210,7 @@ def get_json_package_info():
 def get_llvm_package_info():
     system = platform.system()
     try:
-        arch = {"x86_64": "x64", "AMD64": "64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+        arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
     if system == "Darwin":
