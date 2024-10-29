@@ -59,13 +59,6 @@ SmallVector<unsigned> getWarpsPerTile(DotOp dotOp,
                                       struct IntelDPASCapability dpasCap,
                                       const ArrayRef<int64_t> shape,
                                       unsigned numWarps) {
-  auto rank = shape.size();
-  // Early exit for batched matmul
-  // TODO: current strategy is same as upstream, there could be better strategy
-  // when batch < numWarps
-  if (rank == 3)
-    return {numWarps, 1, 1};
-
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -76,29 +69,39 @@ SmallVector<unsigned> getWarpsPerTile(DotOp dotOp,
     if (isa<DotOp>(op) && (op != dotOp))
       return {numWarps, 1};
 
-  SmallVector<unsigned> ret{1, 1};
-  SmallVector<int64_t> shapePerWarp{dpasCap.repeatCount, dpasCap.executionSize};
+  size_t rank = shape.size();
+  SmallVector<unsigned> ret(rank, 1);
+
+  if (rank == 3) {
+    int batchWarp = numWarps;
+    while (batchWarp > shape[0])
+      batchWarp /= 2;
+    ret[0] = batchWarp;
+    numWarps /= batchWarp;
+  }
 
   // Try to find a proper tiling shape for the dot operation.
   // It doubles the warp number in col or row in each time based on column to
   // width ratio.
   // By this, we can minimize the duplication of the dot operands A and B.
+  SmallVector<int64_t> shapePerWarp{dpasCap.repeatCount, dpasCap.executionSize};
   uint32_t rowColRatio =
       ceil<uint32_t>(dpasCap.repeatCount, dpasCap.executionSize);
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
 
+  int rowDim = rank - 2, colDim = rank - 1;
   do {
-    if (ret[0] * ret[1] >= numWarps)
+    if (ret[rowDim] * ret[colDim] >= numWarps)
       break;
-    if (shape[0] / (shapePerWarp[0] * colRowRatio) / ret[0] >=
-        shape[1] / (shapePerWarp[1] * rowColRatio) / ret[1]) {
-      if (ret[0] < shape[0] / shapePerWarp[0])
-        ret[0] *= 2;
+    if (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
+        shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim]) {
+      if (ret[rowDim] < shape[rowDim] / shapePerWarp[0])
+        ret[rowDim] *= 2;
       else
-        ret[1] *= 2;
+        ret[colDim] *= 2;
     } else {
-      ret[1] *= 2;
+      ret[colDim] *= 2;
     }
   } while (true);
 

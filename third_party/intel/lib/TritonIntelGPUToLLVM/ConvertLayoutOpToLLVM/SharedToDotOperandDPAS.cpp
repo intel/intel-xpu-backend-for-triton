@@ -206,9 +206,8 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(
   Value offsetOuter = mul(i32_val(repOuter), repNonKDimStride);
   Value offsetInner = mul(i32_val(repInner), repKDimStride);
   Value offset = add(offsetOuter, offsetInner);
-  SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
-  // 3DTODO: check if repBatch * warpsPerCTA[0] is correct for the offset.
   if (repBatch > 0) {
+    SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     Value offsetBatch =
         mul(i32_val(repBatch * warpsPerCTA[0]), repBatchDimStride);
     offset = add(offset, offsetBatch);
