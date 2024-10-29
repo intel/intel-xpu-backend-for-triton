@@ -3548,7 +3548,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
             if out_dtype_str == "float16":
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
-        input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
+        input_precision = "tf32" if (is_cuda() or is_xpu()) and in_dtype_str == 'float32' else "ieee"
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
         if not is_interpreter() and torch.cuda.is_available(
