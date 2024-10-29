@@ -141,7 +141,7 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           TAG="${TAG}-diasable-address-payload-opt"
-          python ../../scripts/build_report.py $REPORTS/matmul-performance-base-no-address-payload-opt.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-base-no-address-payload-opt.csv $REPORTS/gemm-triton-base-no-address-payload-opt.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark - default path
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
