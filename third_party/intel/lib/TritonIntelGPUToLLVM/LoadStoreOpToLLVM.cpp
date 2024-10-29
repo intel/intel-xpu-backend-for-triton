@@ -349,7 +349,6 @@ struct PrefetchOpConversion
     Type eltTy = tensorType.getElementType();
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
-    assert(tensorShape.size() == 2 && "Only 2D tensors are prefetch supported");
 
     if (!memoryRowMajor) {
       // Swap the shape to make it row major and then get the tiling

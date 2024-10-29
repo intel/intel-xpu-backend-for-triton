@@ -1,8 +1,6 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Support/LLVM.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using ValueTable = std::map<std::array<int, 3>, Value>;

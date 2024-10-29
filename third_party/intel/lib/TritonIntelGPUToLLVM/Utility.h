@@ -16,7 +16,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
-#include <iostream>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 
@@ -656,9 +655,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   // Order
   auto inOrder = triton::gpu::getOrder(srcEncoding);
   auto outOrder = triton::gpu::getOrder(resSharedLayout);
-  unsigned rank = outOrder.size();
   assert(maxPhase == 1 ||
-         //  outVec * maxPhase <= srcShape[outOrder[rank-2]] &&
          outVec * maxPhase <= srcShape[outOrder[0]] &&
              "Swizzling would generate out of bounds memory accesses");
   // Tensor indices held by the current thread, as LLVM values

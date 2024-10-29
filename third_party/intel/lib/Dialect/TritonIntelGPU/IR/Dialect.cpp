@@ -1,6 +1,5 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
-#include <iostream>
 #include <numeric>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
@@ -153,8 +152,6 @@ DpasEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   auto shapeC = getShapeC();
   SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
   size_t rank = shapeC.size();
-  assert(rank == shapeC.size() &&
-         "ShapeC and WarpsPerCTA must have the same rank");
   SmallVector<unsigned> shapePerCTATile(rank);
   for (size_t i = 0; i < rank; ++i) {
     shapePerCTATile[i] = shapeC[i] * warpsPerCTA[i];
@@ -307,7 +304,6 @@ SmallVector<unsigned>
 DpasEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
                                                    int opIdx) const {
   auto parentShapePerCTATile = getShapePerCTATile(shape);
-  // auto threadsPerWarp = getThreadsPerWarp();
   size_t rank = parentShapePerCTATile.size();
   if (opIdx == 0) {
     auto shapeA = getShapeA();
