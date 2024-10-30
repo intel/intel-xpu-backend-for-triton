@@ -60,10 +60,6 @@ cuobjdump
 nvdisasm
 ptxas
 
-cuobjdump.exe
-nvdisasm.exe
-ptxas.exe
-
 # Third-party include
 third_party/nvidia/backend/include
 third_party/nvidia/backend/lib/cupti
