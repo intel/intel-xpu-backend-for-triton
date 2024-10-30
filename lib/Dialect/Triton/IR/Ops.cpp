@@ -529,6 +529,7 @@ struct CanonicalizeReshapeReduceOpPattern final : OpRewritePattern<ReduceOp> {
         reshapes.begin(),
         [loc = reduceOp.getLoc(), &rewriter](auto pair) -> Value {
           auto &[value, resultType] = pair;
+          // Set allow_reorder to support different tensor layouts.
           return rewriter.create<ReshapeOp>(loc, resultType, value,
                                             /*allow_reorder=*/true);
         });
