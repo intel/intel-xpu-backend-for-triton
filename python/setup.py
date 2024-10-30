@@ -447,7 +447,6 @@ class CMakeBuild(build_ext):
         if platform.system() == "Windows":
             vs_path = find_visual_studio(["[17.0,18.0)", "[16.0,17.0)"])
             env = set_env_vars(vs_path)
-            print(vs_path)
             if not vs_path:
                 raise EnvironmentError("Visual Studio 2019 or 2022 not found.")
         # lit is used by the test suite
