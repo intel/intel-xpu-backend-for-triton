@@ -268,8 +268,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #sliced1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                  %[[VAL_0:.*]]: !llvm.struct<(f64, f64)>,
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_non_sliced_multi_register(
+  // CHECK-SAME:                                                            %[[VAL_0:.*]]: !llvm.struct<(f64, f64)>,
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f64, f64)>
   // CHECK:           %[[VAL_3:.*]] = llvm.extractvalue %[[VAL_0]][1] : !llvm.struct<(f64, f64)>
   // CHECK:           %[[VAL_5:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -337,7 +337,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
   // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_95]])
   // CHECK:           %[[VAL_98:.*]] = llvm.mlir.constant(15 : i32) : i32
   // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_98]])
-  tt.func @test(%arg0: tensor<32xf64, #sliced>) -> tensor<32xf64, #sliced1> {
+  tt.func @test_non_sliced_multi_register(%arg0: tensor<32xf64, #sliced>) -> tensor<32xf64, #sliced1> {
     %0 = triton_gpu.convert_layout %arg0 : tensor<32xf64, #sliced> -> tensor<32xf64, #sliced1>
     tt.return %0 : tensor<32xf64, #sliced1>
   }
@@ -353,9 +353,9 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 #sliced1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL:     llvm.func spir_kernelcc @test
+  // CHECK-LABEL:     llvm.func spir_kernelcc @test_non_sliced_multi_register_multi_warp
   // CHECK-COUNT-64:    llvm.call spir_funccc @_Z17sub_group_shuffleij
-  tt.func @test(%arg0: tensor<128xi32, #sliced>) -> tensor<128xi32, #sliced1> {
+  tt.func @test_non_sliced_multi_register_multi_warp(%arg0: tensor<128xi32, #sliced>) -> tensor<128xi32, #sliced1> {
     %0 = triton_gpu.convert_layout %arg0 : tensor<128xi32, #sliced> -> tensor<128xi32, #sliced1>
     tt.return %0 : tensor<128xi32, #sliced1>
   }
