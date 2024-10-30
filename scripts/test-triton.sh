@@ -19,6 +19,7 @@ TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
 TEST_BENCHMARK_ATTENTION=false
 TEST_INSTRUMENTATION=false
+TEST_INDUCTOR=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -68,6 +69,10 @@ while [ -v 1 ]; do
       TEST_INSTRUMENTATION=true
       shift
       ;;
+    --inductor)
+      TEST_INDUCTOR=true
+      shift
+      ;;
     --venv)
       VENV=true
       shift
@@ -111,7 +116,7 @@ while [ -v 1 ]; do
 done
 
 # Only run interpreter test when $TEST_INTERPRETER is true
-if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ]; then
+if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ] && [ "$TEST_INDUCTOR" = false ]; then
   TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -306,6 +311,23 @@ run_instrumentation_tests() {
     pytest -vvv --device xpu instrumentation/test_gpuhello.py
 }
 
+run_inductor_tests() {
+  test -d pytorch || (
+    git clone https://github.com/pytorch/pytorch
+    rev=$(cat .github/pins/pytorch-upstream.txt)
+    cd pytorch
+    git checkout $rev
+  )
+
+  pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+
+  # TODO: Find the fastest Hugging Face model
+  ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
+
+  cat inductor_log.csv
+  grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
+}
+
 test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
@@ -334,6 +356,9 @@ test_triton() {
   fi
   if [ "$TEST_INSTRUMENTATION" == true ]; then
     run_instrumentation_tests
+  fi
+  if [ "$TEST_INDUCTOR" == true ]; then
+    run_inductor_tests
   fi
 }
 
