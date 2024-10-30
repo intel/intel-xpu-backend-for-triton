@@ -495,6 +495,57 @@ LogicalResult ReduceOp::verifyRegions() {
   return verifyRegionsImpl<ReduceReturnOp>(*this);
 }
 
+namespace {
+/// Replace reduction operations with equivalent reshape operations.
+///
+/// This pattern replaces reductions whose input tensor size is 1 in the
+/// reduction dimension:
+/// ```mlir
+/// "tt.reduce"(%0, ...) <{axis = N}> ({...})
+/// : (tensor<S0x...xSN-1x1xSN+1x...>, ...) -> tensor<S0x...xSN-1xSN+1x...>
+/// ```
+/// With equivalent reshape operations (one per operand):
+/// ```mlir
+/// tt.reshape %0 allow_reorder
+///     : tensor<S0x...xSN-1x1xSN+1x...> -> tensor<S0x...xSN-1xSN+1x...>
+/// "tt.reduce"(%0) <{axis = N}> ({...})
+/// {...}
+///     : (tensor<S0x...xSN-1x1xSN+1x...>, ...) -> tensor<S0x...xSN-1xSN+1x...>
+/// ```
+struct CanonicalizeReshapeReduceOpPattern final : OpRewritePattern<ReduceOp> {
+  using OpRewritePattern<ReduceOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ReduceOp reduceOp,
+                                PatternRewriter &rewriter) const final {
+    Type resultType = reduceOp->getResultTypes().front();
+    // `tensor<NxTy>->Ty` case. `tt.reshape` does not support scalar result
+    // types, so we simply skip this case.
+    if (!isa<RankedTensorType>(resultType))
+      return failure();
+    RankedTensorType inputType = reduceOp.getInputTypes().front();
+    int32_t axis = reduceOp.getAxis();
+    if (inputType.getShape()[axis] != 1)
+      return failure();
+    SmallVector<Value> reshapes(reduceOp.getNumOperands());
+    llvm::transform(
+        llvm::zip_equal(reduceOp.getSrcs(), reduceOp->getResultTypes()),
+        reshapes.begin(),
+        [loc = reduceOp.getLoc(), &rewriter](auto pair) -> Value {
+          auto &[value, resultType] = pair;
+          return rewriter.create<ReshapeOp>(loc, resultType, value,
+                                            /*allow_reorder=*/true);
+        });
+    rewriter.replaceOp(reduceOp, reshapes);
+    return success();
+  }
+};
+} // namespace
+
+void ReduceOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                           MLIRContext *context) {
+  results.add<CanonicalizeReshapeReduceOpPattern>(context);
+}
+
 llvm::SmallVector<RankedTensorType> ReduceOp::getInputTypes() {
   return getInputTypesImpl(this->getOperands());
 }
