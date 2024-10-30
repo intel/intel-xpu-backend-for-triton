@@ -508,9 +508,6 @@ namespace {
 /// ```mlir
 /// tt.reshape %0 allow_reorder
 ///     : tensor<S0x...xSN-1x1xSN+1x...> -> tensor<S0x...xSN-1xSN+1x...>
-/// "tt.reduce"(%0) <{axis = N}> ({...})
-/// {...}
-///     : (tensor<S0x...xSN-1x1xSN+1x...>, ...) -> tensor<S0x...xSN-1xSN+1x...>
 /// ```
 struct CanonicalizeReshapeReduceOpPattern final : OpRewritePattern<ReduceOp> {
   using OpRewritePattern<ReduceOp>::OpRewritePattern;
