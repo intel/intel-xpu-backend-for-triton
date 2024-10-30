@@ -11,7 +11,6 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -162,23 +161,25 @@ getWarpsPerCTA(const ArrayRef<int64_t> tensorShape,
 
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
-  explicit LoadStoreConversionBase(const triton::intel::TargetInfo &targetInfo,
-                                   ModuleAxisInfoAnalysis &axisAnalysisPass)
+  explicit LoadStoreConversionBase(
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
-    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-    if (!tensorTy)
-      return 1;
     return axisAnalysisPass.getPtrContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
-    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+    auto tensorTy = getRankedTensorType(ptr.getType());
     if (!tensorTy)
       return 1;
-    auto contiguity = getContiguity(ptr);
-    auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
+
+    unsigned contiguity = getContiguity(ptr);
+    unsigned pointeeBitWidth =
+        isTensorPointerType(ptr.getType())
+            ? tensorTy.getElementType().getIntOrFloatBitWidth()
+            : triton::getPointeeBitWidth(tensorTy);
     // The maximum vector size is 128 bits.
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
@@ -194,7 +195,7 @@ struct LoadStoreConversionBase {
       ArrayRef<int32_t> boundaryCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
-    auto rank = tensorType.getRank();
+    size_t rank = tensorType.getRank();
     // The block pointer struct is expected to have the following layout:
     //    Struct {
     //      Value offset[rank];
@@ -290,7 +291,7 @@ struct LoadStoreConversionBase {
   }
 
 protected:
-  ModuleAxisInfoAnalysis &axisAnalysisPass;
+  const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
   const triton::intel::TargetInfo &targetInfo;
 };
 
@@ -300,10 +301,11 @@ struct PrefetchOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::gpu::intel::PrefetchOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  PrefetchOpConversion(TritonGPUToLLVMTypeConverter &converter,
-                       const triton::intel::TargetInfo &targetInfo,
-                       ModuleAxisInfoAnalysis &axisAnalysisPass,
-                       PatternBenefit benefit)
+  PrefetchOpConversion(
+      TritonGPUToLLVMTypeConverter &converter,
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
             converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
@@ -476,10 +478,11 @@ struct LoadOpConversion
 
   using ValueTable = std::map<std::pair<int, int>, Value>;
 
-  LoadOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
-                   const triton::intel::TargetInfo &targetInfo,
-                   ModuleAxisInfoAnalysis &axisAnalysisPass,
-                   PatternBenefit benefit)
+  LoadOpConversion(
+      TritonIntelGPUToLLVMTypeConverter &converter,
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
@@ -809,6 +812,10 @@ struct LoadOpConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (isTensorPointerType(op.getPtr().getType()) &&
+        rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded())
+      return success();
+
     auto loc = op->getLoc();
     auto typeConverter = getTypeConverter();
     auto *ctx = rewriter.getContext();
@@ -819,26 +826,23 @@ struct LoadOpConversion
     unsigned numElems = getTotalElemsPerThread(op.getType());
     unsigned vec = 1;
 
-    SmallVector<Value> ptrElems;
-    SmallVector<Value> maskElems;
-
+    SmallVector<Value> ptrElems, maskElems, otherElems;
     bool otherIsSplatConstInt = false;
     int64_t splatVal = 0;
-    SmallVector<Value> otherElems;
 
     if (isTensorPointerType(op.getPtr().getType())) {
-      if (rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded()) {
-        return success();
-      } else {
-        // TODO: (johnlu) set the vector size > 1; Need to prove the memory is
-        // contiguous on the fast changing dim when fallback to gather load.
-        Type resultType = op.getType();
-        auto tensorType = cast<RankedTensorType>(resultType);
-        std::tie(ptrElems, maskElems, otherElems) =
-            convertBlockPtrToTensorOfPtr(
-                loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-                op.getBoundaryCheck(), op.getPadding());
-      }
+      Value ptr = op.getPtr();
+      Value mask = op.getMask();
+      Value llMask = adaptor.getMask();
+      vec = getVectorSize(ptr);
+      if (llMask)
+        vec = std::min<size_t>(vec, getMaskAlignment(mask));
+
+      Type resultType = op.getType();
+      auto tensorType = cast<RankedTensorType>(resultType);
+      std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
+          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+          op.getBoundaryCheck(), op.getPadding());
     } else {
       // original values
       Value ptr = op.getPtr();
@@ -913,7 +917,7 @@ struct LoadOpConversion
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
-                rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+                rewriter, loc, typeConverter->getIndexType(), s);
             v = insert_element(vecTy, v, falseVal, sVal);
           }
           v = bitcast(v, IntegerType::get(ctx, width));
@@ -925,7 +929,7 @@ struct LoadOpConversion
           }
 
           Value iiVal = createIndexAttrConstant(
-              rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
+              rewriter, loc, typeConverter->getIndexType(), ii);
           if (nWords > 1) {
             other_ = insert_element(retTy, other_, v, iiVal);
           } else {
@@ -984,10 +988,11 @@ struct StoreOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::StoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  StoreOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
-                    const triton::intel::TargetInfo &targetInfo,
-                    ModuleAxisInfoAnalysis &axisAnalysisPass,
-                    PatternBenefit benefit)
+  StoreOpConversion(
+      TritonIntelGPUToLLVMTypeConverter &converter,
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
@@ -1117,13 +1122,16 @@ struct StoreOpConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op->getLoc();
-    MLIRContext *ctx = rewriter.getContext();
+    if (isTensorPointerType(op.getPtr().getType()))
+      if (rewriteTensorPointerStore(op, adaptor, rewriter).succeeded())
+        return success();
 
-    Value ptr = op.getPtr();
+    Location loc = op->getLoc();
+    MLIRContext *ctx = rewriter.getContext();
     Value value = op.getValue();
 
-    auto valueTy = value.getType();
+    Value ptr = op.getPtr();
+    Type valueTy = value.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     SmallVector<Value> ptrElems;
@@ -1131,17 +1139,12 @@ struct StoreOpConversion
     unsigned vec = 1;
 
     if (isTensorPointerType(ptr.getType())) {
-      if (rewriteTensorPointerStore(op, adaptor, rewriter).succeeded()) {
-        return success();
-      } else {
-        // fallback to scatter store.
-        auto tensorType = cast<RankedTensorType>(valueTy);
-        SmallVector<Value> dummyOther;
-        std::tie(ptrElems, maskElems, dummyOther) =
-            convertBlockPtrToTensorOfPtr(loc, adaptor.getPtr(), tensorType,
-                                         valueElemTy, rewriter,
-                                         op.getBoundaryCheck());
-      }
+      // fallback to scatter store.
+      auto tensorType = cast<RankedTensorType>(valueTy);
+      SmallVector<Value> dummyOther;
+      std::tie(ptrElems, maskElems, dummyOther) = convertBlockPtrToTensorOfPtr(
+          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+          op.getBoundaryCheck());
     } else {
       Value llPtr = adaptor.getPtr();
       Value llMask = adaptor.getMask();
@@ -1245,10 +1248,11 @@ struct AtomicCASOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  AtomicCASOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
-                        const triton::intel::TargetInfo &targetInfo,
-                        ModuleAxisInfoAnalysis &axisAnalysisPass,
-                        PatternBenefit benefit)
+  AtomicCASOpConversion(
+      TritonIntelGPUToLLVMTypeConverter &converter,
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter,
                                                              benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
@@ -1362,10 +1366,11 @@ struct AtomicRMWOpConversion
   using ConvertTritonGPUOpToLLVMPattern<
       triton::AtomicRMWOp>::ConvertTritonGPUOpToLLVMPattern;
 
-  AtomicRMWOpConversion(TritonIntelGPUToLLVMTypeConverter &converter,
-                        const triton::intel::TargetInfo &targetInfo,
-                        ModuleAxisInfoAnalysis &axisAnalysisPass,
-                        PatternBenefit benefit)
+  AtomicRMWOpConversion(
+      TritonIntelGPUToLLVMTypeConverter &converter,
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
                                                              benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
@@ -1625,7 +1630,8 @@ struct AtomicRMWOpConversion
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     const TargetInfo &targetInfo, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
+    const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, PrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
