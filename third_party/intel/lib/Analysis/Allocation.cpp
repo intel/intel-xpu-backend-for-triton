@@ -1,4 +1,4 @@
-#include "triton/Analysis/Allocation.h"
+#include "intel/include/Analysis/Allocation.h"
 
 #include <algorithm>
 #include <limits>
@@ -33,7 +33,7 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 // Shared Memory Allocation Analysis
 //===----------------------------------------------------------------------===//
-namespace triton {
+namespace triton::intel {
 
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;
@@ -586,34 +586,11 @@ private:
   BufferRangeMapT bufferRange;
 };
 
-} // namespace triton
+} // namespace triton::intel
 
 template <>
-void Allocation::run<triton::AllocationAnalysis>(FuncAllocMapT &funcAllocMap) {
-  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+void Allocation::run<triton::intel::AllocationAnalysis>(
+    FuncAllocMapT &funcAllocMap) {
+  triton::intel::AllocationAnalysis(getOperation(), &funcAllocMap, this);
 }
-
-std::map<Operation *, SmallVector<Allocation::BufferId>>
-Allocation::getLiveBuffers() {
-  std::map<Operation *, SmallVector<BufferId>> liveBuffers;
-
-  Operation *rootOperation = getOperation();
-  mlir::Liveness liveness(rootOperation);
-  auto analyzeOperation = [&](Operation *op) -> void {
-    auto scratchBuffer = getBufferId(op);
-    if (scratchBuffer != InvalidBufferId)
-      liveBuffers[op].push_back(scratchBuffer);
-    for (auto result : op->getOpResults()) {
-      auto bufferId = getBufferId(result);
-      if (bufferId == Allocation::InvalidBufferId)
-        continue;
-      auto liveOperations = liveness.resolveLiveness(result);
-      for (auto depOp : liveOperations)
-        liveBuffers[depOp].push_back(bufferId);
-    }
-  };
-  rootOperation->walk(analyzeOperation);
-  return liveBuffers;
-}
-
 } // namespace mlir

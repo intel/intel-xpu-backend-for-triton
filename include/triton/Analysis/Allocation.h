@@ -102,7 +102,7 @@ public:
   explicit Allocation(Operation *operation) : operation(operation) {}
 
   /// Runs allocation analysis on the given top-level operation.
-  void run(FuncAllocMapT &funcAllocMap);
+  template <typename AllocationAnalysis> void run(FuncAllocMapT &funcAllocMap);
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -240,6 +240,9 @@ private:
   friend class triton::AllocationAnalysis;
 };
 
+template <>
+void Allocation::run<triton::AllocationAnalysis>(FuncAllocMapT &funcAllocMap);
+
 /// Static analysis that computes the allocation of shared memory buffers
 /// of the entire call graph.
 /// The allocation is performed in a post-order walk of the call graph.
@@ -250,17 +253,19 @@ class ModuleAllocation : public CallGraph<Allocation> {
 public:
   using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
 
-  explicit ModuleAllocation(ModuleOp moduleOp)
-      : CallGraph<Allocation>(moduleOp) {
-    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+  template <typename AllocationAnalysis = triton::AllocationAnalysis>
+  static ModuleAllocation get(ModuleOp moduleOp) {
+    ModuleAllocation res(moduleOp);
+    res.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order node walk callback
         [&](FunctionOpInterface funcOp) {
-          auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
+          auto [iter, inserted] = res.funcMap.try_emplace(funcOp, funcOp);
           if (inserted)
-            iter->second.run(funcMap);
+            iter->second.template run<AllocationAnalysis>(res.funcMap);
         });
+    return res;
   }
 
   size_t getSharedMemorySize() {
@@ -285,6 +290,9 @@ public:
   }
 
 private:
+  explicit ModuleAllocation(ModuleOp moduleOp)
+      : CallGraph<Allocation>(moduleOp) {}
+
   FuncOffsetMapT sharedMemoryValue;
 };
 

@@ -25,7 +25,7 @@ struct TestMembarPass
     Operation *operation = getOperation();
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     // Print all ops after membar pass
-    ModuleAllocation allocation(moduleOp);
+    ModuleAllocation allocation = ModuleAllocation::get(moduleOp);
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::NVIDIA::canSkipBarSync);
     membarPass.run();
