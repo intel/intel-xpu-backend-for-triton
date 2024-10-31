@@ -1,0 +1,88 @@
+name: Conda Test
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: choice
+        options:
+          - source
+          - wheels
+        default: source
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: "Build and test"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+
+  schedule:
+    - cron: "5 2 * * *"
+
+permissions: read-all
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: Linux
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Matrix
+        id: matrix
+        run: |
+          matrix='{"python": ["3.9"], "driver": ["rolling"]}'
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
+  integration-tests:
+    name: Integration tests matrix
+    needs: prepare
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    uses: ./.github/workflows/conda-test-reusable.yml
+    with:
+      driver_version: ${{ matrix.driver }}
+      runner_label: ${{ inputs.runner_label }}
+      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
+      python_version: ${{ matrix.python }}
+      upload_test_reports: ${{ inputs.upload_test_reports || false }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
+      skip_list: conda
+      run_name: ${{ inputs.run_name }}
+      enable_unskip: ${{ inputs.enable_unskip || false }}
+      env_manager: conda

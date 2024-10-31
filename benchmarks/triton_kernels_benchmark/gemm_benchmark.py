@@ -14,8 +14,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark.benchmark_testing import do_bench_elapsed_time, BENCHMARKING_METHOD
-
-import xetla_kernel
+from triton_kernels_benchmark import xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
@@ -283,7 +282,7 @@ def benchmark(B, M, N, K, provider):
         if BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX':
             # Legacy profiler shows ~6000TFLOPS GeoMean for onednn measurements, so use more reliable method
             do_bench = do_bench_elapsed_time
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), warmup=10, rep=10,
+        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10, n_repeat=10,
                                                   quantiles=quantiles, kernel_name='gemm_kernel')
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
@@ -296,7 +295,8 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles,
                                                                  kernel_name='matmul_kernel_with_block_pointers')
     elif provider == 'xetla':
         if B == 1:
@@ -308,6 +308,10 @@ def benchmark(B, M, N, K, provider):
             acc = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
             cnt = torch.empty((B, M, N), device='xpu', dtype=torch.int32)
         name = f'gemm_shape_{B}_{M}_{K}_{N}'
+        # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
+        # better performance.
+        if (B, M, N, K) == (1, 3072, 4096, 3072):
+            name = 'gemm_streamk_shape_3072_4096_3072'
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
@@ -337,11 +341,12 @@ def benchmark(B, M, N, K, provider):
             'gemm_shape_32_4096_4096_128': 'Test_32x4096x4096x128_row_row',
             'gemm_shape_4096_8_128_16384': 'Test_4096x8x128x16384_row_row',
             'gemm_shape_4096_8_16384_128': 'Test_4096x8x16384x128_row_row',
+            'gemm_streamk_shape_3072_4096_3072': 'stream_k_gemm_run',
         }
 
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                                 kernel_name=kernels_name[name])
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles, kernel_name=kernels_name[name])
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

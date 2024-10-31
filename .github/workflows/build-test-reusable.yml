@@ -159,7 +159,6 @@ jobs:
           echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
 
       - name: Install transformers
-        if: ${{ inputs.python_version != '3.12' }}
         uses: ./.github/actions/install-dependency
         with:
           package: transformers
@@ -168,17 +167,8 @@ jobs:
           try-tag-prefix: v
 
       - name: Run E2E test
-        if: ${{ inputs.python_version != '3.12' }}
         run: |
-          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
-          export WORKSPACE=$GITHUB_WORKSPACE
-          cd pytorch
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
-          # TODO: Find the fastest Hugging Face model
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
-          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
-          cat $WORKSPACE/inductor_log/*/*/*.csv
-          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
+          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

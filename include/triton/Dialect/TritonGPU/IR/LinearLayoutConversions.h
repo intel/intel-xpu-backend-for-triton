@@ -44,10 +44,6 @@ std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth = std::nullopt);
 
-// Given a linear layout with input dims and output dims containing a "block"
-// dimension, determines if the layout moves data across block boundaries.
-bool isCrossCTAConversion(const LinearLayout &layout);
-
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
 // output dimensions.
@@ -250,6 +246,13 @@ chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
                      ArrayRef<unsigned> repShape,
                      ArrayRef<unsigned> paddedRepShape,
                      ArrayRef<unsigned> order, int swizzleByteSize);
+
+// FIXME
+// Exposing to use it in LinearLayoutConversionsTest.cpp
+// Remove it once we fully activate the DotOperand conversion via LLs
+class DotOperandEncodingAttr;
+LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
+                                     DotOperandEncodingAttr dot);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

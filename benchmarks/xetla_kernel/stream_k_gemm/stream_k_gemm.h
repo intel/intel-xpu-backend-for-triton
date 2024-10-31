@@ -36,9 +36,6 @@ sycl::event stream_k_gemm_run(void *_A, void *_B, void *_C, void *_Acc,
   using data_type_c = float;
   using data_type_acc = float;
 
-  auto context = queue.get_info<sycl::info::queue::context>();
-  auto device = queue.get_info<sycl::info::queue::device>();
-
   data_type_a *A = static_cast<data_type_a *>(_A);
   data_type_b *B = static_cast<data_type_b *>(_B);
   data_type_c *C = static_cast<data_type_c *>(_C);
@@ -52,7 +49,7 @@ sycl::event stream_k_gemm_run(void *_A, void *_B, void *_C, void *_Acc,
   constexpr uint32_t sg_tile_k = 32;
 
   // StreamK parameters - xecores available for stream_k dispatch
-  uint32_t avail_xecores = 32;
+  uint32_t avail_xecores = 64;
 
   // Org the compute shape for sub-matrix
   using tile_shape =

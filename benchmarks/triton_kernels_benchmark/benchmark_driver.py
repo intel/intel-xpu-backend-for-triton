@@ -10,15 +10,15 @@ from triton.runtime.cache import get_cache_manager
 from triton.runtime.build import _build, quiet
 
 import torch
-import intel_extension_for_pytorch
+
+from .benchmark_testing import USE_IPEX_OPTION
 
 _dirname = os.getenv("ZE_PATH", default="/usr/local")
 
 include_dir = [
     os.path.join(_dirname, "include"),
     os.path.join(torch.utils.cmake_prefix_path, "../../include"),
-    os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include"),
-    os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include")
+    os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include")
 ]
 
 oneapi_root = os.getenv("ONEAPI_ROOT")
@@ -28,12 +28,15 @@ if oneapi_root:
         os.path.join(oneapi_root, "compiler/latest/include/sycl")
     ]
 
-library_dir = [
-    os.path.join(_dirname, "lib"),
-    os.path.join(torch.utils.cmake_prefix_path, "../../lib"),
-    os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib")
-]
-libraries = ["ze_loader", "sycl", "torch", "intel-ext-pt-gpu"]
+library_dir = [os.path.join(_dirname, "lib"), os.path.join(torch.utils.cmake_prefix_path, "../../lib")]
+libraries = ["ze_loader", "sycl", "torch"]
+
+if USE_IPEX_OPTION:
+    import intel_extension_for_pytorch
+
+    include_dir.append(os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include"))
+    library_dir.append(os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib"))
+    libraries.append("intel-ext-pt-gpu")
 
 
 def compile_module_from_src(src, name):
@@ -141,6 +144,14 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     fmt = "iiiOOOOOO" + args_format
     args_list = ", " + ", ".join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ""
 
+    record_function_header = "#include <ATen/record_function.h>"
+    ipex_header = ""
+    xpu_profiler_record = ""
+    if USE_IPEX_OPTION:
+        record_function_header = "#include <torch/extension.h>"
+        ipex_header = "#include <ipex.h>"
+        xpu_profiler_record = "xpu::profiler_record(kernel_name, event);"
+
     # generate glue code
     src = f"""
     #include <cstddef>
@@ -149,8 +160,8 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     #include <iomanip>
     #include <level_zero/ze_api.h>
     #include <sycl/sycl.hpp>
-    #include <torch/extension.h>
-    #include <ipex.h>
+    {record_function_header}
+    {ipex_header}
 
     #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
     #include <Python.h>
@@ -291,7 +302,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       }}
       }};
     auto event = stream.submit(cgf);
-    xpu::profiler_record(kernel_name, event);
+    {xpu_profiler_record}
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
@@ -388,19 +399,78 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     return src
 
 
+def serialize_kernel_metadata(arg, args_dict):
+    args_dict["num_warps"] = arg.num_warps
+    args_dict["threads_per_warp"] = arg.threads_per_warp
+    args_dict["shared_memory"] = arg.shared
+    args_dict["kernel_name"] = arg.name
+    args_dict["spv_name"] = f"{arg.name}.spv"
+    args_dict["build_flags"] = arg.build_flags
+
+
+def serialize_args(args, constants, signature):
+    import numbers
+    dir_path = os.getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+        print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
+
+    cnt = 0
+    args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    args_dict["argument_list"] = []
+    counts = {"tensors": 0, "scalars": 0, "karg_cnt": 0}
+    cnt = 4
+    for arg in args[cnt:]:
+        if type(arg).__name__ == "KernelMetadata":
+            serialize_kernel_metadata(arg, args_dict)
+
+        if isinstance(arg, torch.Tensor):
+            cpu_tensor = arg.cpu()
+            tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
+            with open(tensor_path, "wb") as f:
+                torch.save(cpu_tensor, f)
+            new_arg = {
+                "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
+                signature[counts["karg_cnt"]]
+            }
+            args_dict["argument_list"].append(new_arg)
+            counts["karg_cnt"] += 1
+            counts["tensors"] += 1
+
+        if isinstance(arg, numbers.Number):
+            if counts["karg_cnt"] not in constants:
+                new_arg = {
+                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": args[cnt], "ctype":
+                    signature[counts["karg_cnt"]]
+                }
+                args_dict["argument_list"].append(new_arg)
+            counts["karg_cnt"] += 1
+            counts["scalars"] += 1
+        cnt += 1
+    # Dump argument info as a JSON file
+    json_path = os.path.join(dir_path, "args_data.json")
+    with open(json_path, "w", encoding="utf-8") as json_file:
+        import json
+        json.dump(args_dict, json_file, indent=4)
+
+
 class XPULauncher:
 
     def __init__(self, src, metadata):  # pylint: disable=unused-argument
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else {}
         cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
-        constants = {cst_key(key): value for key, value in constants.items()}
-        signature = {cst_key(key): value for key, value in src.signature.items()}
-        src = make_launcher(constants, signature, ids)
+        self.constants = {cst_key(key): value for key, value in constants.items()}
+        self.signature = {cst_key(key): value for key, value in src.signature.items()}
+        src = make_launcher(self.constants, self.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 
     def __call__(self, *args, **kwargs):
+        # Serialize KernelArguments for SPIR-V Runner
+        serialize_kernel_args = os.getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS", None)
+        if serialize_kernel_args:
+            serialize_args(args, self.constants, self.signature)
         self.launch(*args, **kwargs)
 
 

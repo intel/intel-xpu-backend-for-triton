@@ -29,7 +29,7 @@ def min_dot_size(target: GPUTarget):
 class HIPOptions:
     num_warps: int = 4
     waves_per_eu: int = 1
-    num_stages: int = 0
+    num_stages: int = 2
     num_ctas: int = 1
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
@@ -58,7 +58,7 @@ class HIPOptions:
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         # Ignore user-defined warp size for gfx9
-        warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch else 64
+        warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
         libs = ["ocml", "ockl"]
         for lib in libs:
@@ -170,25 +170,24 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        use_new_pipeliner = os.getenv("TRITON_HIP_USE_NEW_STREAM_PIPELINE", "1") == "1"
         if amd.has_matrix_core_feature(options.arch):
-            if use_new_pipeliner:
-                # In the old pipeliner we only support num_stages = 0/1, which means something
-                # different than the NVIDIA side. In the new pipeliner we unify the num_stages
-                # interpretation. Default to use 2 stages if not explicitly set.
-                num_stages = options.num_stages if options.num_stages != 0 else 2
-                amd.passes.ttgpuir.add_stream_pipelinev2(pm, num_stages)
-            else:
-                if options.num_stages == 0:
-                    amd.passes.ttgpuir.add_stream_pipeline(pm)
+            assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
+                                             "We used to trigger software pipelining with "
+                                             "num_stages == 0. Now it will not happen anymore; "
+                                             "please update to use num_stages == 2 for "
+                                             "equivalent behavior in the past.")
+            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if use_new_pipeliner or options.num_stages != 0:
+        if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-        amd.passes.ttgpuir.add_canonicalize_pointers(pm)
+        if os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1":
+            amd.passes.ttgpuir.add_canonicalize_pointers(pm)
+            passes.common.add_canonicalizer(pm)
+            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -233,12 +232,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.instruction_sched_variant)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
-        # This pass (`add_builtin_func_to_llvmir`) serves as a temporary workaround to address the issue of excessive basic block
-        # count caused by predicated loads/stores. In certain kernels, the addition of these blocks can cause the MLIR
-        # canonicalizer to never finish when attempting to merge blocks. The permanent solution under consideration
-        # involves using MUBUF instructions that have built-in out-of-bounds checks, which would eliminate the need
-        # for conditional branching around memory accesses.
-        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm)
+        amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)

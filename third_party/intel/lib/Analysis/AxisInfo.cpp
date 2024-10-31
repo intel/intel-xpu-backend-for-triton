@@ -4,6 +4,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #define DEBUG_TYPE "intel-axis-info"
@@ -11,6 +12,8 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::intel {
+
+namespace ttgi = mlir::triton::gpu::intel;
 namespace {
 
 int64_t gcdImpl(int64_t a, int64_t b, int64_t *x, int64_t *y) {
@@ -99,8 +102,8 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto lhsInfo = operands[0]->getValue();
-    auto rhsInfo = operands[1]->getValue();
+    const auto &lhsInfo = operands[0]->getValue();
+    const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
     assert(operands.size() == 2 && "Expected two operands");
     AxisInfo::DimVectorT contiguity;
@@ -409,7 +412,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -464,7 +467,7 @@ public:
 private:
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
-    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getContiguity(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -498,7 +501,7 @@ private:
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                        int dim) override {
-    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return BinaryOpVisitorImpl<OpTy>::getConstancy(op, lhs, rhs, dim);
     auto shape = resTy.getShape();
@@ -647,13 +650,13 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto resTy = dyn_cast<RankedTensorType>(op.getType());
+    auto resTy = ttgi::getRankedTensorType(op.getType());
     if (!resTy)
       return AxisInfo();
     auto shape = resTy.getShape();
     short rank = resTy.getRank();
-    auto lhsInfo = operands[0]->getValue();
-    auto rhsInfo = operands[1]->getValue();
+    const auto &lhsInfo = operands[0]->getValue();
+    const auto &rhsInfo = operands[1]->getValue();
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
@@ -776,8 +779,8 @@ public:
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     auto condConstancy = operands[0]->getValue().getConstancy();
-    auto lhsInfo = operands[1]->getValue();
-    auto rhsInfo = operands[2]->getValue();
+    const auto &lhsInfo = operands[1]->getValue();
+    const auto &rhsInfo = operands[2]->getValue();
     auto rank = lhsInfo.getRank();
 
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
@@ -894,7 +897,7 @@ private:
       lhsDivisibility = 1;
     }
     auto numBits = log2Int(lhsDivisibility);
-    return multiplyDivisor(lhsDivisibility, 1 << shift);
+    return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 
   int64_t getConstancy(arith::ShLIOp op, const AxisInfo &lhs,
@@ -961,8 +964,8 @@ public:
   AxisInfo
   getAxisInfo(OpTy op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    auto lhsInfo = operands[0]->getValue();
-    auto rhsInfo = operands[1]->getValue();
+    const auto &lhsInfo = operands[0]->getValue();
+    const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
     std::optional<int64_t> constantValue;
     if (lhsInfo.getConstantValue().has_value() &&
@@ -992,6 +995,59 @@ public:
       }
       return AxisInfo(contiguity, divisibility, constancy, std::nullopt);
     }
+  }
+};
+
+class MakeTensorPtrOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::MakeTensorPtrOp> {
+public:
+  using AxisInfoVisitorImpl<triton::MakeTensorPtrOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::MakeTensorPtrOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    LDBG("MakeTensorPtrOpAxisInfoVisitor: " << *op);
+
+    auto ptrTy = cast<PointerType>(op.getResult().getType());
+    auto tensorType = cast<RankedTensorType>(ptrTy.getPointeeType());
+    ArrayRef<int64_t> blkShape = tensorType.getShape();
+    unsigned rank = op.getShape().size();
+
+    // TODO: Support higher rank tensors.
+    if (rank > 2)
+      return AxisInfo();
+
+    SmallVector<AxisInfo> strideInfo;
+    for (int i = rank + 1; i <= rank * 2; ++i)
+      strideInfo.emplace_back(operands[i]->getValue());
+
+    AxisInfo ptrInfo = operands[0]->getValue();
+    int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
+
+    AxisInfo::DimVectorT contiguity, constancy, divisibility;
+    for (int dim = 0; dim < rank; ++dim) {
+      contiguity.push_back(
+          strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
+      divisibility.push_back(
+          contiguity[dim] > 1
+              ? std::min(ptrDivisibility,
+                         strideInfo[dim == 0 ? 1 : 0].getDivisibility()[0])
+              : 1);
+      constancy.push_back(1);
+    }
+
+    return AxisInfo(contiguity, divisibility, constancy);
+  }
+};
+
+class AdvanceOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::AdvanceOp> {
+public:
+  using AxisInfoVisitorImpl<triton::AdvanceOp>::AxisInfoVisitorImpl;
+  AxisInfo
+  getAxisInfo(triton::AdvanceOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    return operands[0]->getValue();
   }
 };
 
@@ -1042,11 +1098,14 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
+  visitors.append<MakeTensorPtrOpAxisInfoVisitor>();
+  visitors.append<AdvanceOpAxisInfoVisitor>();
 }
 
 LogicalResult AxisInfoAnalysis::visitOperation(
     Operation *op, ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
     ArrayRef<dataflow::Lattice<AxisInfo> *> results) {
+  LDBG("visitOperation: << " << *op);
   // TODO: For sure not the right way to do this
   // but why is scf.if not initialized otherwise?
   for (auto op : operands)
@@ -1083,8 +1142,11 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  auto lb = getLatticeElementFor(op, op.getLowerBound())->getValue();
-  auto step = getLatticeElementFor(op, op.getStep())->getValue();
+  ProgramPoint programPoint(op);
+  const auto lb =
+      getLatticeElementFor(&programPoint, op.getLowerBound())->getValue();
+  const auto step =
+      getLatticeElementFor(&programPoint, op.getStep())->getValue();
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
@@ -1204,7 +1266,7 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
   if (!tensorTy)
     return 1;
   auto layout = tensorTy.getEncoding();
@@ -1226,7 +1288,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
   if (!tensorTy)
     return 1;
   auto *axisInfo = getAxisInfo(ptr);
@@ -1254,7 +1316,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
 }
 
 unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
-  auto tensorTy = dyn_cast<RankedTensorType>(mask.getType());
+  auto tensorTy = ttgi::getRankedTensorType(mask.getType());
   if (!tensorTy)
     return 1;
   auto *axisInfo = getAxisInfo(mask);
@@ -1280,14 +1342,14 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
     return;
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
-    auto axisInfo = analysis->getLatticeElement(value)->getValue();
+    const auto &axisInfo = analysis->getLatticeElement(value)->getValue();
     AxisInfo curAxisInfo;
     if (axisInfoMap->count(value)) {
       curAxisInfo = AxisInfo::join(axisInfo, axisInfoMap->lookup(value));
     } else {
       curAxisInfo = axisInfo;
     }
-    (*axisInfoMap)[value] = curAxisInfo;
+    (*axisInfoMap)[value] = std::move(curAxisInfo);
   };
   funcOp.walk([&](Operation *op) {
     for (auto value : op->getResults()) {

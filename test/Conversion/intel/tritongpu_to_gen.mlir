@@ -506,7 +506,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     // CHECK-NEXT: [[STRUCT2:%.*]] = llvm.insertvalue [[ARG0_1]], [[STRUCT1]][1]
     // CHECK-NEXT: [[T0:%.*]] = llvm.extractvalue [[STRUCT2]][0]
     // CHECK-NEXT: [[T1:%.*]] = llvm.extractvalue [[STRUCT2]][1]
-    %0 = tt.reshape %arg {allow_reorder = true} : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
+    %0 = tt.reshape %arg allow_reorder : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
     // CHECK:      [[RES:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // CHECK-NEXT: [[RES1:%.*]] = llvm.insertvalue [[T0]], [[RES]][0]
     // CHECK-NEXT: [[RES2:%.*]] = llvm.insertvalue [[T1]], [[RES1]][1]
@@ -1752,7 +1752,6 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   // CHECK-NOT: llvm.store
   // CHECK-NOT: llvm.load
   // CHECK: llvm.insertvalue
-  // CHECK: llvm.extractvalue
   tt.func public @convert_single_element() attributes {noinline = false} {
     %cst = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked1>
     %0 = triton_gpu.convert_layout %cst : tensor<1xf32, #blocked1> -> tensor<1xf32, #blocked>

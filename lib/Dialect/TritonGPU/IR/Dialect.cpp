@@ -238,6 +238,11 @@ static SmallVector<unsigned> eraseOrder(ArrayRef<unsigned> order,
 }
 
 SmallVector<unsigned> getWarpOrder(Attribute layout) {
+  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+      return getWarpOrder(dotLayout.getParent());
+    }
+  }
   auto order = getOrder(layout);
   if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
     if (mmaLayout.isHopper()) {
@@ -1044,16 +1049,12 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
-  auto parentLayout = getParent();
-  assert(parentLayout && "DotOperandEncodingAttr must have a parent");
-  if (auto distributedLayout =
-          mlir::dyn_cast<DistributedEncodingTrait>(parentLayout)) {
-    return distributedLayout.getWarpsPerCTA();
-  } else {
-    llvm::report_fatal_error(
-        "DotOperandEncodingAttr non-DistributedEncodingAttr parent not "
-        "supported yet");
-  }
+  auto distributedLayout = mlir::cast<DistributedEncodingTrait>(getParent());
+  auto warps = distributedLayout.getWarpsPerCTA();
+  auto rank = warps.size();
+  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
+  warps[kDim] = 1;
+  return warps;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getWarpOrder(*this);
@@ -2764,7 +2765,7 @@ struct CanonicalizeConvertFromReshape
       return failure();
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder() || op.getEfficientLayout().has_value())
+    if (!op.getAllowReorder() || op.getEfficientLayout())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
@@ -2885,8 +2886,7 @@ struct CanonicalizeConvertFromConvert
 
     // cvt(reshape) -> reshape
     if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
-      if (!reshape.getAllowReorder() ||
-          reshape.getEfficientLayout().has_value() ||
+      if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
           isExpensiveView(reshape.getSrc().getType(), op.getType()))
         return failure();
 
