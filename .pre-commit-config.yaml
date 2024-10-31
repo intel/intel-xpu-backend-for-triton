@@ -118,6 +118,7 @@ repos:
           - --disable=line-too-long
           # Disable import-error: not everything can be imported when pre-commit runs
           - --disable=import-error
+          - --disable=no-name-in-module
           # Disable unused-import: ruff has a corresponding check and supports "noqa: F401"
           - --disable=unused-import
           # Disable invalid_name: benchmarks use a lot of UPPER_SNAKE arguments

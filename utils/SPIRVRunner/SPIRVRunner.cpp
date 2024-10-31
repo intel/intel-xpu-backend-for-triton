@@ -59,6 +59,7 @@ struct KernelArguments {
   int threads_per_warp;
   int shared_memory;
   std::string kernel_name;
+  std::string build_flags;
   std::string spv_name;
   ordered_json jsonData;
   std::vector<char *> dev_buffers;
@@ -94,6 +95,7 @@ struct KernelArguments {
     shared_memory = jsonData.at("shared_memory");
     threads_per_warp = jsonData.at("threads_per_warp");
     kernel_name = jsonData.at("kernel_name");
+    build_flags = jsonData.at("build_flags");
     spv_name =
         spirv_dump_dir + "/" + jsonData.at("spv_name").get<std::string>();
     out_tensor_name = outtensorname;
@@ -123,8 +125,9 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
 /** SYCL Functions **/
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable>, sycl::kernel,
            int32_t, int32_t>
-loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
-           const size_t binary_size, const size_t deviceId) {
+loadBinary(const std::string &kernel_name, const std::string &build_flags,
+           uint8_t *binary_ptr, const size_t binary_size,
+           const size_t deviceId) {
   int32_t n_regs = 0;
   int32_t n_spills = 0;
 
@@ -140,9 +143,8 @@ loadBinary(const std::string &kernel_name, uint8_t *binary_ptr,
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   const auto l0_context =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-  const char *build_flags = "";
   auto l0_module = checkSyclErrors(create_module(
-      l0_context, l0_device, binary_ptr, binary_size, build_flags));
+      l0_context, l0_device, binary_ptr, binary_size, build_flags.c_str()));
   auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
 
   ze_kernel_properties_t props;
@@ -240,7 +242,8 @@ void set_argument(sycl::handler &cgh, int index, ordered_json &item) {
 }
 
 static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
-                               KernelArguments triton_args) {
+                               KernelArguments triton_args,
+                               bool get_kernel_time) {
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
 
@@ -288,7 +291,18 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     assert(narg == expected_num_params);
     cgh.parallel_for(parallel_work_size, kernel_ptr);
   };
-  stream.submit(cgf);
+  if (get_kernel_time) {
+    sycl::event event = stream.submit(cgf);
+    event.wait();
+    uint64_t start =
+        event.get_profiling_info<sycl::info::event_profiling::command_start>();
+    uint64_t end =
+        event.get_profiling_info<sycl::info::event_profiling::command_end>();
+    double duration = static_cast<double>(end - start) / 1000000;
+    std::cout << "Kernel execution time: " << duration << " ms" << std::endl;
+  } else {
+    stream.submit(cgf);
+  }
   stream.wait_and_throw();
 }
 
@@ -315,7 +329,7 @@ at::TensorOptions getTensorOptions(const std::string &dtype) {
 }
 
 at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
-                        KernelArguments triton_args) {
+                        KernelArguments triton_args, bool get_kernel_time) {
 
   auto tensor_ptr = [](const torch::Tensor &t) -> void * {
     return static_cast<void *>(t.data_ptr());
@@ -350,8 +364,14 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
     }
   }
 
+  if (!triton_args.host_outbuffer.defined()) {
+    std::string message = "Output tensor isn't configured; \
+        the second positional parameter is ";
+    throw std::runtime_error(message + triton_args.out_tensor_name);
+  }
+
   // Launch SYCL kernel
-  sycl_kernel_launch(stream, kernel, triton_args);
+  sycl_kernel_launch(stream, kernel, triton_args, get_kernel_time);
 
   // copy back
   stream
@@ -370,17 +390,43 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   return triton_args.host_outbuffer;
 }
 
+bool check_option_amoung_argv(int argc, char **argv, std::string option) {
+  bool res = false;
+  if (argc > 2) {
+    // optional parameters can be in any order
+    for (int i = 2; i < argc; i++) {
+      if (argv[i] == option) {
+        res = true;
+        break;
+      }
+    }
+  }
+  return res;
+}
+
 int main(int argc, char **argv) {
   try {
+    std::string enable_profiling = "--enable-profiling";
     if (argc < 2) {
       std::cout << "Help: " << std::endl;
-      std::cout << "<Executable> <Output Tensor Name> \n";
+      std::cout << "<Executable> <Output Tensor Name>" << std::endl;
       std::cout << "./build/SPIRVRunner tensor_2" << std::endl;
+      std::cout << "To get kernel time, use:" << std::endl;
+      std::cout << "./build/SPIRVRunner tensor_2 " << enable_profiling
+                << std::endl;
       throw std::runtime_error("Input arguments are missing \n");
     }
 
     // initialize sycl runtime
-    sycl::queue q = sycl::queue(sycl::gpu_selector_v, exception_handler);
+    bool get_kernel_time =
+        check_option_amoung_argv(argc, argv, enable_profiling);
+    sycl::queue q;
+    if (get_kernel_time) {
+      sycl::property_list prop_list{sycl::property::queue::enable_profiling()};
+      q = sycl::queue(sycl::gpu_selector_v, exception_handler, prop_list);
+    } else {
+      q = sycl::queue(sycl::gpu_selector_v, exception_handler);
+    }
 
     std::cout << "Running on device: "
               << q.get_device().get_info<sycl::info::device::name>() << "\n";
@@ -395,15 +441,14 @@ int main(int argc, char **argv) {
     std::cout << "Read " << spirv.size() << " byte kernel." << std::endl;
 
     auto [kernel_bundle, kernel, n_regs, n_spills] =
-        loadBinary(tritonArgDict.kernel_name,
+        loadBinary(tritonArgDict.kernel_name, tritonArgDict.build_flags,
                    reinterpret_cast<uint8_t *>(spirv.data()), spirv.size(), 0);
 
     // TODO: missing number of registers
     std::cout << "Loaded kernel with " << n_regs << " registers and "
               << n_spills << " register spills." << std::endl;
 
-    auto output = launchKernel(q, kernel, tritonArgDict);
-    std::cout << "Kernel return output: " << output[0] << std::endl;
+    auto output = launchKernel(q, kernel, tritonArgDict, get_kernel_time);
 
     auto output_tensor = tritonArgDict.spirv_dump_dir + "/cpp_outs.pt";
     write_tensor(output_tensor, output);

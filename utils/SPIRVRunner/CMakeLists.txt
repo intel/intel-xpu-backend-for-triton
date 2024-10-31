@@ -3,7 +3,16 @@ project(reproducer)
 set(CMAKE_CXX_COMPILER icpx)
 set(BUILD_SHARED_LIBS OFF)
 
-list(APPEND CMAKE_PREFIX_PATH "/opt/intel/oneapi/tbb/latest/lib/cmake/tbb/")
+if(DEFINED ENV{ONEAPI_ROOT})
+  set(ONEAPI_ROOT "$ENV{ONEAPI_ROOT}")
+endif()
+if(NOT ONEAPI_ROOT)
+  set(ONEAPI_ROOT "/opt/intel/oneapi")
+endif()
+
+message(STATUS "ONEAPI_ROOT: ${ONEAPI_ROOT}")
+
+list(APPEND CMAKE_PREFIX_PATH "${ONEAPI_ROOT}/tbb/latest/lib/cmake/tbb/")
 
 find_package(Torch REQUIRED)
 
@@ -19,7 +28,8 @@ ExternalProject_Add(
 )
 set(JSON_INCLUDE_DIR ${CMAKE_BINARY_DIR}/nlohmann_json/src/json/include/)
 
-# Add preview-breaking-changes for ABI compatibility with SYCL library linked by PyTorch: https://github.com/pytorch/pytorch/commit/92bebb46fa9fd60523d8aeb7b5f1a3f488c4cd93
+# Add preview-breaking-changes for ABI compatibility with SYCL library linked by PyTorch:
+# https://github.com/pytorch/pytorch/commit/92bebb46fa9fd60523d8aeb7b5f1a3f488c4cd93
 set(COMPILE_FLAGS "-fsycl -Wall -fpreview-breaking-changes")
 set(LINK_FLAGS "-fsycl -lze_loader")
 
@@ -27,7 +37,8 @@ set(SYCL_FUNCTIONS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/in
 
 set(TARGET_NAME SPIRVRunner)
 add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp)
-target_include_directories(${TARGET_NAME} PRIVATE "/opt/intel/oneapi/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
+target_include_directories(${TARGET_NAME} PRIVATE
+    "${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
 set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS}")
 set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 add_dependencies(${TARGET_NAME} json)

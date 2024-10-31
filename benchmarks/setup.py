@@ -6,8 +6,6 @@ import sys
 # TODO: update once there is replacement for clean:
 #  https://github.com/pypa/setuptools/discussions/2838
 from distutils import log  # pylint: disable=[deprecated-module]
-from distutils.dir_util import remove_tree  # pylint: disable=[deprecated-module]
-from distutils.command.clean import clean as _clean  # pylint: disable=[deprecated-module]
 
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext as _build_ext
@@ -24,10 +22,10 @@ class CMakeExtension(Extension):
 
 class CMakeBuild():
 
-    def __init__(self, debug=False, dry_run=False):
+    def __init__(self, build_lib, build_temp, debug=False, dry_run=False):
         self.current_dir = os.path.abspath(os.path.dirname(__file__))
-        self.build_temp = self.current_dir + "/build/temp"
-        self.extdir = self.current_dir + "/triton_kernels_benchmark"
+        self.build_temp = build_temp
+        self.extdir = build_lib + "/triton_kernels_benchmark"
         self.build_type = self.get_build_type(debug)
         self.cmake_prefix_paths = [torch.utils.cmake_prefix_path]
         self.use_ipex = False
@@ -101,35 +99,50 @@ class CMakeBuild():
         self.check_call(["cmake"] + build_args)
         self.check_call(["cmake"] + install_args)
 
-    def clean(self):
-        if os.path.exists(self.build_temp):
-            remove_tree(self.build_temp, dry_run=self.dry_run)
-        else:
-            log.warn("'%s' does not exist -- can't clean it", os.path.relpath(self.build_temp,
-                                                                              os.path.dirname(__file__)))
-
 
 class build_ext(_build_ext):
 
     def run(self):
-        cmake = CMakeBuild(debug=self.debug, dry_run=self.dry_run)
+        cmake = CMakeBuild(
+            build_lib=self.build_lib,
+            build_temp=self.build_temp,
+            debug=self.debug,
+            dry_run=self.dry_run,
+        )
         cmake.run()
         super().run()
 
 
-class clean(_clean):
+def get_git_commit_hash(length=8):
+    try:
+        cmd = ["git", "rev-parse", f"--short={length}", "HEAD"]
+        return f"+git{subprocess.check_output(cmd).strip().decode('utf-8')}"
+    except (
+            FileNotFoundError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+    ):
+        return ""
 
-    def run(self):
-        cmake = CMakeBuild(dry_run=self.dry_run)
-        cmake.clean()
-        super().run()
 
-
-setup(name="triton-kernels-benchmark", packages=[
-    "triton_kernels_benchmark",
-], package_dir={
-    "triton_kernels_benchmark": "triton_kernels_benchmark",
-}, package_data={"triton_kernels_benchmark": ["xetla_kernel.cpython-*.so"]}, cmdclass={
-    "build_ext": build_ext,
-    "clean": clean,
-}, ext_modules=[CMakeExtension("triton_kernels_benchmark")])
+setup(
+    name="triton-kernels-benchmark",
+    version="3.1.0" + get_git_commit_hash(),
+    packages=["triton_kernels_benchmark"],
+    install_requires=[
+        "torch",
+        "pandas",
+        "tabulate",
+        "matplotlib",
+    ],
+    package_dir={"triton_kernels_benchmark": "triton_kernels_benchmark"},
+    package_data={"triton_kernels_benchmark": ["xetla_kernel.cpython-*.so"]},
+    cmdclass={
+        "build_ext": build_ext,
+    },
+    ext_modules=[CMakeExtension("triton_kernels_benchmark.xetla_kernel")],
+    extras_require={
+        "ipex": ["numpy<=2.0", "intel-extension-for-pytorch==2.1.10"],
+        "pytorch": ["torch>=2.6"],
+    },
+)

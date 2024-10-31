@@ -62,12 +62,86 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto elems = unpackLLElements(loc, value, rewriter);
   int offset{};
   ValueTableV2 vals;
+
+  // FIXME [Dot LL]
+  // [ez] Generalize the logic below for kWidth * elemBitWidth > 32
+  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
+  auto largeK = dot.getKWidth() == 8 &&
+                cast<NvidiaMmaEncodingAttr>(dot.getParent()).isAmpere();
+  if (largeK) {
+    llvm::SmallVector<unsigned> si;
+
+    // For kWidth = 8, split the mma into 4 mmas with "stride 4" along K
+    if (dot.getOpIdx() == 0) {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3], [8, 9, 10, 11]
+      //   [4, 5, 6, 7], [12, 13, 14, 15]
+      //
+      // Each element in the layout consists of two bf16 values.
+      // For example, the row [0, 1, 2, 3] expands to:
+      //
+      //   [[0/0, 0/1], [1/0, 1/1], [2/0, 2/1], [3/0, 3/1]]
+      //
+      // Here, 0/0 refers to the first half of element 0, and 0/1 refers to the
+      // second half, matching kWidth = 8.
+      //
+      // To derive four independent MMA operations, a stride of 4 is applied to
+      // the original register layout:
+      //
+      //   1st MMA: [0, 4, 8, 12]
+      //   2nd MMA: [1, 5, 9, 13]
+      //   3rd MMA: [2, 6, 10, 14]
+      //   4th MMA: [3, 7, 11, 15]
+      si = llvm::SmallVector<unsigned>{0, 4, 8,  12, 1, 5, 9,  13,
+                                       2, 6, 10, 14, 3, 7, 11, 15};
+    } else {
+      // Original register layout:
+      //
+      //   [0, 1, 2, 3]^T, [4, 5, 6, 7]^T
+      //
+      // A stride of 4 is applied to derive four independent MMA operations:
+      //
+      //   1st MMA: [0, 4]
+      //   2nd MMA: [1, 5]
+      //   3rd MMA: [2, 6]
+      //   4th MMA: [3, 7]
+      si = llvm::SmallVector<unsigned>{0, 4, 1, 5, 2, 6, 3, 7};
+    }
+
+    auto step = si.size();
+    SmallVector<Value> perm(step);
+    for (auto i = 0; i < elems.size() / step; ++i) {
+      for (auto j = 0; j < step; ++j) {
+        perm[j] = elems[i * step + si[j]];
+      }
+      std::copy(perm.begin(), perm.end(), elems.begin() + i * step);
+    }
+
+    if (dot.getOpIdx() == 1) {
+      // there are kWidth * 2 elems packed as bf16x2
+      int elemsInTile = dot.getKWidth();
+      // n0 and n1 are unrolled in the legacy path
+      // Unrolling n1 makes some sense, but unrolling n0 makes absolutely no
+      // sense IMO
+      n0 *= 2;
+      n1 *= 2;
+      for (auto b = 0; b < batch; ++b)
+        for (auto j = 0; j < n1 / elemsInTile; ++j)
+          for (auto i = 0; i < n0; ++i)
+            for (auto k = 0; k < elemsInTile; ++k) {
+              vals[{b, i, elemsInTile * j + k}] = elems[offset++];
+            }
+      return vals;
+    }
+  }
+
   for (auto b = 0; b < batch; ++b)
     for (auto i = 0; i < n0; ++i) {
       for (auto j = 0; j < n1; j++) {
         vals[{b, 2 * i, 2 * j}] = elems[offset++];
-        vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
         vals[{b, 2 * i + 1, 2 * j}] = elems[offset++];
+        vals[{b, 2 * i, 2 * j + 1}] = elems[offset++];
         vals[{b, 2 * i + 1, 2 * j + 1}] = elems[offset++];
       }
     }

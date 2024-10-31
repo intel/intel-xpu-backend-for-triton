@@ -168,13 +168,15 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
     // Check this is has `triton_intel_gpu.dpas` encoding.
     Value operand = operands.front();
     auto type = cast<RankedTensorType>(operand.getType());
+    // Only support reduction after 2D-dot for now.
+    if (type.getRank() != 2)
+      return failure();
     auto encoding =
         llvm::dyn_cast_or_null<DpasEncodingAttr>(type.getEncoding());
     if (!encoding)
       return failure();
 
     // Axis 1 will lead to within-warp reduction.
-    assert(type.getRank() == 2 && "Expecting 2D tensor");
     if (op.getAxis() != preferredReductionAxis)
       return failure();
 
