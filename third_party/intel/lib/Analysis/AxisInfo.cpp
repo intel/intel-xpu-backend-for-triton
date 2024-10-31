@@ -558,6 +558,11 @@ public:
     // If pointers and mask both have constancy properties, those properties
     // will also extend to output.
     AxisInfo ptrInfo = operands[0]->getValue();
+
+    llvm::errs() << "ptrInfo: ";
+    ptrInfo.print(llvm::dbgs());
+    llvm::dbgs() << "\n";
+
     std::optional<AxisInfo> maskInfo;
     if (operands.size() > 1) {
       maskInfo = operands[1]->getValue();
@@ -1030,13 +1035,24 @@ public:
           strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
       divisibility.push_back(
           contiguity[dim] > 1
-              ? std::min(ptrDivisibility,
-                         strideInfo[dim == 0 ? 1 : 0].getDivisibility()[0])
+              ? std::min(
+                    ptrDivisibility,
+                    (rank == 2 ? strideInfo[dim == 0 ? 1 : 0] : strideInfo[dim])
+                        .getDivisibility()[0])
               : 1);
       constancy.push_back(1);
     }
 
-    return AxisInfo(contiguity, divisibility, constancy);
+    auto axisInfo = AxisInfo(contiguity, divisibility, constancy);
+
+    LLVM_DEBUG({
+      std::string axisStr;
+      llvm::raw_string_ostream os(axisStr);
+      axisInfo.print(os);
+      LDBG("-- " << axisStr);
+    });
+
+    return axisInfo;
   }
 };
 
