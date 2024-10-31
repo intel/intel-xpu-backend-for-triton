@@ -42,11 +42,10 @@ public:
     }
   }
 
-  AxisInfo *getAxisInfo(Value value) const {
+  AxisInfo *getAxisInfo(Value value) {
     auto funcOp =
         value.getParentRegion()->getParentOfType<FunctionOpInterface>();
-    auto *axisInfoMap =
-        const_cast<ModuleAxisInfoAnalysis *>(this)->getFuncData(funcOp);
+    auto *axisInfoMap = getFuncData(funcOp);
     if (!axisInfoMap) {
       return nullptr;
     }
@@ -57,9 +56,9 @@ public:
     return &(it->second);
   }
 
-  unsigned getPtrContiguity(Value ptr) const;
-  unsigned getPtrAlignment(Value ptr) const;
-  unsigned getMaskAlignment(Value mask) const;
+  unsigned getPtrContiguity(Value ptr);
+  unsigned getPtrAlignment(Value ptr);
+  unsigned getMaskAlignment(Value mask);
 
 private:
   void initialize(FunctionOpInterface funcOp);
