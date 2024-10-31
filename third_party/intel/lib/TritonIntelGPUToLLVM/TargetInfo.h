@@ -60,6 +60,8 @@ public:
                   StringRef file, StringRef func, int line) const override;
   int getSharedAddressSpace() const override;
 
+  bool supportVectorizedAtomics() const override;
+
 private:
 };
 } // namespace mlir::triton::intel

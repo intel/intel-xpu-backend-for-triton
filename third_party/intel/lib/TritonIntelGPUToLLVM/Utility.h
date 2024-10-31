@@ -163,8 +163,10 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
   SmallVector<unsigned> instShapeC = dpasLayout.getDPASInstShapeC();
   SmallVector<unsigned> sizePerThreads = getSizePerThread(dpasLayout);
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
-  SmallVector<unsigned> sizePerDPASInst = {sizePerThreads[0] / repCluster[0],
-                                           sizePerThreads[1] / repCluster[1]};
+  size_t rank = repCluster.size();
+  SmallVector<unsigned> sizePerDPASInst = {
+      sizePerThreads[rank - 2] / repCluster[rank - 2],
+      sizePerThreads[rank - 1] / repCluster[rank - 1]};
 
   unsigned rowsPerElem = dpasLayout.getSubGroupSize() / instShapeC[1];
   unsigned colsPerElem = 1;
@@ -175,15 +177,21 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
     for (unsigned elemId = 0; elemId < elemNumberPerRep; ++elemId) {
       // Follows the C++ order for the dpas layout.
       SmallVector<unsigned> repOffset = {
-          (repId / repCluster[1]) * instShapeC[0],
-          (repId % repCluster[1]) * instShapeC[1]};
+          (repId / repCluster[rank - 1]) * instShapeC[0],
+          (repId % repCluster[rank - 1]) * instShapeC[1]};
 
       SmallVector<unsigned> elemOffset = {
           (elemId / sizePerDPASInst[1]) * rowsPerElem,
           (elemId % sizePerDPASInst[1]) * colsPerElem};
 
-      offsets.push_back({repOffset[0] + elemOffset[0] + ctaOffsetX,
-                         repOffset[1] + elemOffset[1] + ctaOffsetY});
+      if (rank == 3)
+        offsets.push_back({0, repOffset[0] + elemOffset[0] + ctaOffsetX,
+                           repOffset[1] + elemOffset[1] + ctaOffsetY});
+      else {
+        assert((rank == 2) && "unexpected rank number for Dpas layout");
+        offsets.push_back({repOffset[0] + elemOffset[0] + ctaOffsetX,
+                           repOffset[1] + elemOffset[1] + ctaOffsetY});
+      }
     }
   }
 }
@@ -216,6 +224,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
 
+  unsigned rank = shape.size();
   unsigned numRowsPerPackedValue = 0u, numColsPerPackedValue = 0u;
   unsigned numColsPerLaneForPackedValue = 0u, numOpsPerPackedValue = 0u;
   switch (opIdx) {
@@ -225,7 +234,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
     // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
     numOpsPerPackedValue = opsPerChannel == 4 ? 2 : 1;
-    unsigned packedColNum = shapeA[1] / numOpsPerPackedValue;
+    unsigned packedColNum = shapeA[rank - 1] / numOpsPerPackedValue;
     // Each value name represent multiple rows if warpSize > packedColNum
     numRowsPerPackedValue = mlir::ceil(warpSize, packedColNum);
     numColsPerPackedValue = std::min(warpSize, packedColNum);
@@ -245,13 +254,13 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
          "numElemPerInstPerRowPerThread should not be zero");
 
   SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(dotLayout);
-  int64_t numRepOuter = numReps[opIdx];
-  int64_t numRepK = numReps[(opIdx == 0) ? 1 : 0];
+  int64_t numRepOuter = numReps[opIdx ? 2 : 1];
+  int64_t numRepK = numReps[opIdx ? 1 : 2];
 
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
-  unsigned repClusterSize = repCluster[opIdx];
+  unsigned repClusterSize = repCluster[opIdx ? rank - 1 : rank - 2];
 
-  for (unsigned dimOuter = 0; dimOuter < numRepOuter; ++dimOuter)
+  for (unsigned repOuter = 0; repOuter < numRepOuter; ++repOuter)
     for (unsigned k = 0; k < numRepK; ++k)
       for (unsigned rep = 0; rep < repClusterSize; ++rep) {
         for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
@@ -261,9 +270,9 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
               (opIdx == 0) ? elemId % numOpsPerPackedValue : 0;
           unsigned packedElemId = elemId / numOpsPerPackedValue;
           unsigned repRowIndex =
-              shapePerCTATile[0] * (opIdx == 0 ? dimOuter : k);
+              shapePerCTATile[rank - 2] * (opIdx == 0 ? repOuter : k);
           unsigned repColIndex =
-              shapePerCTATile[1] * (opIdx == 0 ? k : dimOuter);
+              shapePerCTATile[rank - 1] * (opIdx == 0 ? k : repOuter);
           unsigned repClusterRowIndex = opIdx == 0 ? rep * instShape[0] : 0;
           unsigned repClusterColIndex = opIdx == 0 ? 0 : rep * instShape[1];
           unsigned packedElemRowIndex =
@@ -272,10 +281,19 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
           unsigned packedElemColIndex =
               (packedElemId % numColsPerLaneForPackedValue) *
               numColsPerPackedValue;
-          offsets.push_back({repRowIndex + repClusterRowIndex +
-                                 packedElemRowIndex + opsRowIndex,
-                             repColIndex + repClusterColIndex +
-                                 packedElemColIndex + opsColIndex});
+          if (rank == 3)
+            offsets.push_back({0,
+                               repRowIndex + repClusterRowIndex +
+                                   packedElemRowIndex + opsRowIndex,
+                               repColIndex + repClusterColIndex +
+                                   packedElemColIndex + opsColIndex});
+          else {
+            assert((rank == 2) && "unexpected rank number for Dot layout");
+            offsets.push_back({repRowIndex + repClusterRowIndex +
+                                   packedElemRowIndex + opsRowIndex,
+                               repColIndex + repClusterColIndex +
+                                   packedElemColIndex + opsColIndex});
+          }
         }
       }
 
@@ -288,9 +306,10 @@ emitOffsetForDpasLayout(const DpasEncodingAttr &dpasLayout,
   ArrayRef<int64_t> shape = type.getShape();
   SmallVector<SmallVector<unsigned>> offsets;
   SmallVector<unsigned> shapePerCTA = getShapePerCTATile(dpasLayout);
+  size_t rank = shape.size();
 
-  for (unsigned i = 0; i < shape[0]; i += shapePerCTA[0]) {
-    for (unsigned j = 0; j < shape[1]; j += shapePerCTA[1]) {
+  for (unsigned i = 0; i < shape[rank - 2]; i += shapePerCTA[rank - 2]) {
+    for (unsigned j = 0; j < shape[rank - 1]; j += shapePerCTA[rank - 1]) {
       emitOffsetForDpasLayoutPerCTA(dpasLayout, offsets, i, j);
     }
   }
@@ -329,13 +348,17 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
   SmallVector<Value> multiDimWarpId =
       mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
+  size_t rank = warpShape.size();
+  assert(rank == shapePerCTA.size() && "Rank mismatch");
   Value warpIndex =
-      (opIdx == 0)
-          ? urem(multiDimWarpId[0],
-                 i32_val(mlir::ceil<unsigned>(shapePerCTA[0], warpShape[0])))
-          : urem(multiDimWarpId[1],
-                 i32_val(mlir::ceil<unsigned>(shapePerCTA[1], warpShape[1])));
-  Value warpOffset = mul(warpIndex, i32_val(warpShape[opIdx]));
+      (opIdx == 0) ? urem(multiDimWarpId[rank - 2],
+                          i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 2],
+                                                       warpShape[rank - 2])))
+                   : urem(multiDimWarpId[rank - 1],
+                          i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 1],
+                                                       warpShape[rank - 1])));
+  Value warpOffset =
+      mul(warpIndex, i32_val(warpShape[opIdx ? rank - 1 : rank - 2]));
 
   // Compute the 2-dim coordinates of the first element in the warp operated
   // own by this thread.
@@ -351,7 +374,7 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
     // Unlike the operand B, to pack the value to i16 for scalar bit width
     // <=16.
     unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
-    unsigned packedColNum = shapeA[1] / packedOpsPerLane;
+    unsigned packedColNum = shapeA[rank - 1] / packedOpsPerLane;
     if (warpSize < packedColNum)
       llvm::report_fatal_error(
           "DpasEncodingAttr sub-group size could not "
@@ -371,12 +394,18 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
     laneRowIndex = mul(laneRowIndex, i32_val(opsPerChannel));
     laneColIndex = urem(laneId, i32_val(executionSize));
   } break;
+  default: {
+    llvm::report_fatal_error("Only support opIdx 1 or 0 for DotOpLayout.");
+  }
   }
 
-  auto multiDimBase =
-      (opIdx == 0)
-          ? SmallVector<Value>{add(laneRowIndex, warpOffset), laneColIndex}
-          : SmallVector<Value>{laneRowIndex, add(laneColIndex, warpOffset)};
+  SmallVector<Value> multiDimBase(rank);
+  if (rank == 3)
+    multiDimBase[0] = multiDimWarpId[0];
+  multiDimBase[rank - 2] =
+      (opIdx == 0) ? add(laneRowIndex, warpOffset) : laneRowIndex;
+  multiDimBase[rank - 1] =
+      (opIdx == 0) ? laneColIndex : add(laneColIndex, warpOffset);
 
   return multiDimBase;
 }
@@ -390,6 +419,7 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   Value warpId = udiv(threadId, warpSize);
   Value laneId = urem(threadId, warpSize);
 
+  size_t rank = type.getShape().size();
   auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
   ArrayRef<int64_t> shape = type.getShape();
 
@@ -400,19 +430,25 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   // Compute the 2-dim coordinates of the warp containing the tensor element
   // operated on by this thread.
   SmallVector<unsigned> warpShape = dpasLayout.getShapeC();
-  Value rowWarpId = urem(multiDimWarpId[0],
-                         i32_val(mlir::ceil<unsigned>(shape[0], warpShape[0])));
-  Value colWarpId = urem(multiDimWarpId[1],
-                         i32_val(mlir::ceil<unsigned>(shape[1], warpShape[1])));
-  Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[0]));
-  Value colWarpOffset = mul(colWarpId, i32_val(warpShape[1]));
+  Value rowWarpId =
+      urem(multiDimWarpId[rank - 2],
+           i32_val(mlir::ceil<unsigned>(shape[rank - 2], warpShape[rank - 2])));
+  Value colWarpId =
+      urem(multiDimWarpId[rank - 1],
+           i32_val(mlir::ceil<unsigned>(shape[rank - 1], warpShape[rank - 1])));
+  Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[rank - 2]));
+  Value colWarpOffset = mul(colWarpId, i32_val(warpShape[rank - 1]));
 
   // Compute the 2-dim coordinates of the first element in the warp operated
   // on by this thread.
   SmallVector<unsigned> threadsPerWarp = getThreadsPerWarp(dpasLayout);
-  SmallVector<Value> multiDimBase = {
-      add(udiv(laneId, i32_val(threadsPerWarp[1])), rowWarpOffset),
-      add(urem(laneId, i32_val(threadsPerWarp[1])), colWarpOffset)};
+  SmallVector<Value> multiDimBase(rank);
+  if (rank == 3)
+    multiDimBase[0] = multiDimWarpId[0];
+  multiDimBase[rank - 2] =
+      add(udiv(laneId, i32_val(threadsPerWarp[rank - 1])), rowWarpOffset);
+  multiDimBase[rank - 1] =
+      add(urem(laneId, i32_val(threadsPerWarp[rank - 1])), colWarpOffset);
   return multiDimBase;
 }
 

@@ -112,17 +112,24 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
-      assert(rank == 2);
+      assert((rank == 2 || rank == 3) &&
+             "unexpected rank number for Dpas layout");
       auto multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;
       ::emitOffsetForDpasLayoutPerCTA(
-          dpasLayout, offsets, multiDimCTAInRepId[0] * shapePerCTATile[0],
-          multiDimCTAInRepId[1] * shapePerCTATile[1]);
+          dpasLayout, offsets,
+          multiDimCTAInRepId[rank - 2] * shapePerCTATile[rank - 2],
+          multiDimCTAInRepId[rank - 1] * shapePerCTATile[rank - 1]);
 
-      SmallVector<Value> multiDimOffset = {
-          add(multiDimBase[0], i32_val(offsets[elemId][0])),
-          add(multiDimBase[1], i32_val(offsets[elemId][1]))};
+      SmallVector<Value> multiDimOffset(rank);
+      if (rank == 3)
+        multiDimOffset[0] = add(multiDimBase[0], i32_val(multiDimCTAInRepId[0] *
+                                                         shapePerCTATile[0]));
+      multiDimOffset[rank - 2] =
+          add(multiDimBase[rank - 2], i32_val(offsets[elemId][rank - 2]));
+      multiDimOffset[rank - 1] =
+          add(multiDimBase[rank - 1], i32_val(offsets[elemId][rank - 1]));
 
       return multiDimOffset;
     }
@@ -315,7 +322,7 @@ private:
     return success();
   }
 
-  using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+  using ValueTable = std::map<std::array<unsigned, 3>, Value>;
 
   ValueTable getValuesFromDpasLayoutStruct(Location loc,
                                            ConversionPatternRewriter &rewriter,
@@ -334,20 +341,26 @@ private:
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(srcType.getShape(), 2 /*operand C*/);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    size_t outerDim = rank - 2;
+    size_t innerDim = rank - 1;
 
     int offset = 0;
     ValueTable result;
-    for (int i = 0; i < repetitions[0]; ++i) {
-      for (int j = 0; j < repetitions[1]; ++j) {
-        for (int repOuter = 0; repOuter < repCluster[0]; ++repOuter) {
-          for (int repInner = 0; repInner < repCluster[1]; ++repInner) {
-            Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
-            for (int k = 0; k < numElemsPerOperand; ++k) {
-              matVal =
-                  insert_element(dotOpTy, matVal, elems[offset++], i32_val(k));
+    for (unsigned b = 0; b < repetitions[0]; ++b) {
+      for (int i = 0; i < repetitions[1]; ++i) {
+        for (int j = 0; j < repetitions[2]; ++j) {
+          for (int repOuter = 0; repOuter < repCluster[outerDim]; ++repOuter) {
+            for (int repInner = 0; repInner < repCluster[innerDim];
+                 ++repInner) {
+              Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
+              for (int k = 0; k < numElemsPerOperand; ++k) {
+                matVal = insert_element(dotOpTy, matVal, elems[offset++],
+                                        i32_val(k));
+              }
+              result[{b, i * repCluster[outerDim] + repOuter,
+                      j * repCluster[innerDim] + repInner}] = matVal;
             }
-            result[{i * repCluster[0] + repOuter,
-                    j * repCluster[1] + repInner}] = matVal;
           }
         }
       }
@@ -365,35 +378,39 @@ private:
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    unsigned repBatch = repetitions[0];
     unsigned repOuter = 0u;
     unsigned repInner = 0u;
     unsigned repClusterOuter = 0u;
     if (opIdx == 0) {
       // operand A
-      repOuter = repetitions[0];
-      repInner = repetitions[1];
-      repClusterOuter = repCluster[0];
+      repOuter = repetitions[1];
+      repInner = repetitions[2];
+      repClusterOuter = repCluster[rank - 2];
     } else {
       // operand B
-      repOuter = repetitions[1];
-      repInner = repetitions[0];
-      repClusterOuter = repCluster[1];
+      repOuter = repetitions[2];
+      repInner = repetitions[1];
+      repClusterOuter = repCluster[rank - 1];
     }
 
     // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].
     SmallVector<Value> elems;
-    for (int m = 0; m < repOuter; ++m) {
-      for (int k = 0; k < repInner; ++k) {
-        for (int repOuterIdx = 0; repOuterIdx < repClusterOuter;
-             ++repOuterIdx) {
-          unsigned offsetM = m * repClusterOuter + repOuterIdx;
-          unsigned offsetN = k;
-          Value matVal = vals.at({offsetM, offsetN});
-          VectorType vecType = cast<mlir::VectorType>(matVal.getType());
-          Type valTy = vecType.getElementType();
-          for (int i = 0; i < vecType.getNumElements(); ++i) {
-            Value val = extract_element(valTy, matVal, i32_val(i));
-            elems.push_back(val);
+    for (unsigned b = 0; b < repBatch; ++b) {
+      for (int m = 0; m < repOuter; ++m) {
+        for (int k = 0; k < repInner; ++k) {
+          for (int repOuterIdx = 0; repOuterIdx < repClusterOuter;
+               ++repOuterIdx) {
+            unsigned offsetM = m * repClusterOuter + repOuterIdx;
+            unsigned offsetN = k;
+            Value matVal = vals.at({b, offsetM, offsetN});
+            VectorType vecType = cast<mlir::VectorType>(matVal.getType());
+            Type valTy = vecType.getElementType();
+            for (int i = 0; i < vecType.getNumElements(); ++i) {
+              Value val = extract_element(valTy, matVal, i32_val(i));
+              elems.push_back(val);
+            }
           }
         }
       }
@@ -446,6 +463,62 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
+  // Return a vector such as:
+  // [[0, 1], [0, 2], [0, 4], ..., [0, laneSize / 2], [laneSize, 0], ...,
+  // [registerSize / 2, 0]],
+  // i.e., mapping registers to lanes till laneSize and performing an ID
+  // conversion afterwards.
+  static std::vector<std::vector<int32_t>>
+  buildSubGroupTransposeRegisterBases(int32_t registerSize, int32_t laneSize) {
+    std::vector<std::vector<int32_t>> bases;
+    std::vector<int32_t> curr(2);
+    for (int32_t i = 1; i < laneSize; i *= 2) {
+      curr[1] = i;
+      bases.push_back(curr);
+    }
+    curr[1] = 0;
+    for (int32_t i = laneSize; i < registerSize; i *= 2) {
+      curr[0] = i;
+      bases.push_back(curr);
+    }
+    return bases;
+  }
+
+  // Return a vector such as:
+  // [[0, 1], [0, 2], [0, 4], ..., [0, laneSize / 2], [1, 0], ...,
+  // [registerSize / (2 * laneSize), 0]]
+  // i.e., mapping registers to lanes till laneSize and repeating the pattern
+  // afterwards.
+  static std::vector<std::vector<int32_t>>
+  buildSubGroupShuffleRegisterBases(int32_t registerSize, int32_t laneSize) {
+    std::vector<std::vector<int32_t>> bases;
+    std::vector<int32_t> curr(2);
+    for (int32_t i = 1; i < laneSize; i *= 2) {
+      curr[1] = i;
+      bases.push_back(curr);
+    }
+    curr[1] = 0;
+    for (int32_t i = laneSize, val = 1; i < registerSize; i *= 2, val *= 2) {
+      curr[0] = val;
+      bases.push_back(curr);
+    }
+    return bases;
+  }
+
+  // Return a vector such as:
+  // [[1, 0], [2, 0], [4, 0], ..., [laneSize / 2, 0]],
+  // i.e., mapping lanes to registers.
+  static std::vector<std::vector<int32_t>>
+  buildSubGroupTransposeLaneBases(int32_t laneSize) {
+    std::vector<std::vector<int32_t>> bases;
+    std::vector<int32_t> curr(2);
+    for (int32_t i = 1; i < laneSize; i *= 2) {
+      curr[0] = i;
+      bases.push_back(curr);
+    }
+    return bases;
+  }
+
   bool isSubGroupTranspose(const LinearLayout &srcLayout,
                            const LinearLayout &dstLayout) const {
     MLIRContext *ctx = srcLayout.getInDimNames().begin()->getContext();
@@ -455,9 +528,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kBlock = str_attr("block");
 
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion = comp.divideRight(
-        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    std::optional<LinearLayout> conversion =
+        comp.quotient(kBlock)->quotient(kWarp);
     assert(conversion && "Expecting valid conversion");
     // Expected conversion is:
     // - register=1 -> (0, 1)
@@ -477,35 +549,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // where out dims are: [register (size 2**(N + 1)), lane (size 2**(M + 1))]
     //
     // With N >= M.
-    const auto buildBasis = [&](int32_t size, std::size_t index) {
-      std::vector<std::vector<int32_t>> basis;
-      std::vector<int32_t> curr(2);
-      for (int32_t i = 1; i < size; i *= 2) {
-        curr[index] = i;
-        basis.push_back(curr);
-      }
-      return basis;
-    };
-    constexpr std::size_t laneIndex = 0;
-    constexpr std::size_t registerIndex = 1;
-    int32_t laneSize = conversion->getInDimSize(kLane);
-    std::vector<std::vector<int32_t>> registerBases =
-        buildBasis(laneSize, registerIndex);
-    {
-      // Populate register bases for N > M.
-      std::vector<int32_t> base(2);
-      for (int32_t i = laneSize,
-                   registerSize = conversion->getInDimSize(kRegister);
-           i < registerSize; i *= 2) {
-        base[laneIndex] = i;
-        registerBases.push_back(base);
-      }
-    }
-    std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
-        bases{{{kRegister, std::move(registerBases)},
-               {kLane, buildBasis(laneSize, laneIndex)}}};
-    std::array<StringAttr, 2> outDimNames{kRegister, kLane};
-    return conversion == LinearLayout(bases, outDimNames);
+    int32_t registerInDimSize = conversion->getInDimSize(kRegister);
+    int32_t laneInDimSize = conversion->getInDimSize(kLane);
+    return conversion->getBases().lookup(kRegister) ==
+               buildSubGroupTransposeRegisterBases(registerInDimSize,
+                                                   laneInDimSize) &&
+           conversion->getBases().lookup(kLane) ==
+               buildSubGroupTransposeLaneBases(laneInDimSize);
   }
 
   LogicalResult
@@ -516,85 +566,87 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    std::optional<LinearLayout> srcLayout =
-        toLinearLayout(shape, srcTy.getEncoding());
-    std::optional<LinearLayout> dstLayout =
-        toLinearLayout(shape, dstTy.getEncoding());
-    if (!srcLayout.has_value() || !dstLayout.has_value()) {
+
+    auto conversion = minimalCvtLayout(srcTy, dstTy);
+    if (!conversion.has_value()) {
+      return rewriter.notifyMatchFailure(
+          op, "NYI. srcTy and/or dstTy don't implement LLs yet");
+    }
+    LinearLayout srcLayout =
+        *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    LinearLayout dstLayout =
+        *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+
+    StringAttr kBlock = str_attr("block");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kRegister = str_attr("register");
+
+    assert(to_vector(conversion->getInDimNames()) ==
+           to_vector(conversion->getOutDimNames()));
+    auto dims = conversion->getInDimNames();
+    if (llvm::is_contained(dims, str_attr("block"))) {
+      // Case 1: Transfer between values in different CTAs.
+      //          This requires moving values through distributed shared memory.
+      return rewriter.notifyMatchFailure(
+          op, "NYI: Transfer between different CTAs");
+    } else if (llvm::is_contained(dims, str_attr("warp"))) {
+      return rewriter.notifyMatchFailure(
+          op, "NYI: Transfer between different warps");
+    } else if (llvm::is_contained(dims, str_attr("lane"))) {
+      // Case 2: Transfer between values in the same CTA, in which case we move
+      //         values through shared memory.
+      // If the operation is a supported sub-group shuffle, perform via shuffle
+      // operations.
+      if (isSubGroupShuffle(srcLayout, dstLayout) &&
+          isSupportedSubGroupShuffle(op, adaptor)) {
+        performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
+      // If the operation is a supported sub-group transposition, perform via
+      // SLM.
+      if (isSubGroupTranspose(srcLayout, dstLayout) &&
+          isSupportedSubGroupTranspose(op, adaptor)) {
+        performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
+      // TODO(jlebar): Implement me.
       return failure();
+    } else if (llvm::is_contained(dims, str_attr("register"))) {
+      // Case 4. Transfer between values in the same thread, in which case we
+      //         simply reorder the elements of adaptor.getSrc().
+      return transferWithinThread(
+          op, dstLayout.getFreeVariableMasks()[kRegister],
+          dstLayout.getInDimSize(kRegister), *conversion, adaptor, rewriter);
+    } else {
+      // The two layouts are equivalent. We should probably remove these in
+      // RemoveLayoutConversion.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
     }
-
-    // There are four cases to handle.
-    //
-    //  1. Transfer between values in the same thread, in which case we simply
-    //     reorder the elements of adaptor.getSrc().
-    //  2. Transfer between values in the same warp, in which case we try to
-    //     move values using warp shuffles, though if the pattern is complicated
-    //     enough we may fall back to using shared memory (case 3).
-    //  3. Transfer between values in the same CTA, in which case we move values
-    //     through shared memory.
-    //  4. Transfer between values in different CTAs, in which case we move
-    //     values through distributed shared memory.
-    //
-    // We can tell which case we're in by examining `conversion`.
-    // For example, if the block -> block mapping is an identity layout: {1, 2,
-    // 4, ...}, then there's no movement between data in different CTAs, and we
-    // know we're not in case 4.
-    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
-      return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
-                                  rewriter);
-    }
-
-    if (cvtNeedsWarpShuffle(srcTy, dstTy)) { // Case 2.
-      return transferWithinLane(op, *srcLayout, *dstLayout, adaptor, rewriter);
-    }
-
-    // TODO: match transferWithinBlockOrGroup from
-    // TritonGPUToLLVM/ConvertLayoutOpToLLVM.cpp
-    return transferWithinBlockGroup(op, *srcLayout, *dstLayout, adaptor,
-                                    rewriter);
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                       const LinearLayout &dstLayout, OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, int32_t regMasks, int32_t numRegs,
+                       const LinearLayout &conversion, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    // There are three possible cases:
-    //
-    // 1. `srcLayout` has the same number of registers as `dstLayout`.
-    // 2. `srcLayout` has fewer registers than `dstLayout`.
-    // 3. `srcLayout` has more registers than `dstLayout`.
-    //
-    // In the second case `srcLayout . dstLayout^-1` is not surjective
-    // because not all destination registers are covered.
-    // Since the goal is to cover all of the destination
-    // registers, we can instead use `dstLayout . srcLayout^-1`.
-    LinearLayout conversion = dstLayout.invertAndCompose(srcLayout);
-    auto dstToSrc = conversion.divideRight(
-        LinearLayout::identity1D(conversion.getInDimSize(kLane), kLane, kLane) *
-        LinearLayout::identity1D(conversion.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(conversion.getInDimSize(kBlock), kBlock,
-                                 kBlock));
-
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-    assert(ArrayRef(to_vector(dstToSrc->getInDimNames())) ==
-           ArrayRef{kRegister});
-    assert(ArrayRef(to_vector(dstToSrc->getOutDimNames())) ==
-           ArrayRef{kRegister});
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals;
-    outVals.resize(dstToSrc->getInDimSize(kRegister));
-    for (int i = 0; i < dstToSrc->getInDimSize(kRegister); i++) {
-      auto srcIdx = dstToSrc->apply({{kRegister, i}});
-      outVals[i] = inVals[srcIdx.begin()->second];
+    SmallVector<Value> outVals(numRegs);
+    for (int i = 0; i < outVals.size(); i++) {
+      // Remove free masks from the register index
+      // For example, if idx = 0b00111, and masks = 0b00100, then we get
+      // 0b00011. It means that register 7 (0b111) has the same value as
+      // register 3 (0b011).
+      auto idx = i & (~regMasks);
+      auto srcIdx = conversion.hasInDim(kRegister)
+                        ? conversion.apply({{kRegister, idx}}).begin()->second
+                        : idx;
+      outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -611,40 +663,34 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kBlock = str_attr("block");
 
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion = comp.divideRight(
-        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
+    std::optional<LinearLayout> conversion =
+        comp.quotient(kBlock)->quotient(kWarp);
     assert(conversion && "Expecting valid conversion");
     // TODO: Support more kind of shuffles.
     // Expected conversion is:
     // - register=1 -> (0, 1)
     // ...
-    //   register=i -> (0, i)
+    // - register=2**i -> (0, 2**i)
     // ...
-    //   register=N -> (0, N)
+    // - register=M -> (0, 2**M)
+    // ...
+    // - register=2**k -> (2**(k-M), 0)
+    // ...
+    // - register=2**N -> (2**(N-M), 0)
     // - lane=1 -> (0, 0)
     // ...
-    //   lane=i -> (0, 0)
+    // - lane=2**j -> (0, 0)
     // ...
-    //   lane=N -> (0, 0)
-    // where out dims are: [register (size 1), lane (size N)]
-    std::vector<std::vector<int32_t>> registerBases;
-    {
-      constexpr std::size_t registerIndex = 1;
-      std::vector<int32_t> base(2);
-      for (int32_t i = 1, n = conversion->getInDimSize(kLane); i < n; i *= 2) {
-        base[registerIndex] = i;
-        registerBases.push_back(base);
-      }
-    }
-
-    std::vector<std::vector<int32_t>> laneBases(
-        conversion->getInDimSizeLog2(kLane), std::vector<int32_t>{0, 0});
-    std::array<std::pair<StringAttr, std::vector<std::vector<int32_t>>>, 2>
-        bases{{{kRegister, std::move(registerBases)},
-               {kLane, std::move(laneBases)}}};
-    std::array<StringAttr, 2> outDimNames{kRegister, kLane};
-    return conversion == LinearLayout(bases, outDimNames);
+    //   lane=2**M -> (0, 0)
+    // where out dims are: [register (size 2**(N - M)), lane (size 2**(M + 1))]
+    //
+    // With N >= M.
+    int32_t registerInDimSize = conversion->getInDimSize(kRegister);
+    int32_t laneOutDimSize = conversion->getOutDimSize(kLane);
+    return conversion->sublayoutIsZero({kLane}, {kRegister, kLane}) &&
+           conversion->getBases().lookup(kRegister) ==
+               buildSubGroupShuffleRegisterBases(registerInDimSize,
+                                                 laneOutDimSize);
   }
 
   bool isSupportedSubGroupShuffle(ConvertLayoutOp, OpAdaptor) const {
@@ -667,17 +713,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion = comp.divideRight(
-        LinearLayout::identity1D(comp.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(comp.getInDimSize(kBlock), kBlock, kBlock));
-    assert(conversion && "Expecting valid layout");
-    int32_t subGroupSize = conversion->getOutDimSize(kLane);
+    LinearLayout conversion = *comp.quotient(kBlock)->quotient(kWarp);
+    int32_t subGroupSize = conversion.getOutDimSize(kLane);
 
     Location loc = op.getLoc();
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    assert(inVals.size() == 1 && "Expecting single element");
 
     // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
     // upstream level. We are not enabling support for all types here as that
@@ -706,7 +748,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         });
 
     SmallVector<Value> outVals =
-        performSubGroupShuffle(loc, inVals.front(), subGroupSize, rewriter);
+        performSubGroupShuffle(loc, inVals, subGroupSize, rewriter);
 
     // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
     // upstream level. We are not enabling support for all types here as that
@@ -737,16 +779,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   SmallVector<Value>
-  performSubGroupShuffle(Location loc, Value val, int32_t subGroupSize,
+  performSubGroupShuffle(Location loc, ArrayRef<Value> inVals,
+                         int32_t subGroupSize,
                          ConversionPatternRewriter &rewriter) const {
     SmallVector<Value> res;
     Value width = i32_val(subGroupSize);
-    for (int32_t i = 0; i < subGroupSize; ++i)
-      res.push_back(
-          rewriter
-              .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
-                                            mlir::gpu::ShuffleMode::IDX)
-              .getShuffleResult());
+    for (Value val : inVals) {
+      for (int32_t i = 0; i < subGroupSize; ++i)
+        res.push_back(
+            rewriter
+                .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                              mlir::gpu::ShuffleMode::IDX)
+                .getShuffleResult());
+    }
     return res;
   }
 
@@ -770,28 +815,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           return true;
         })
         .Default(false);
-  }
-
-  LogicalResult transferWithinLane(ConvertLayoutOp op,
-                                   const LinearLayout &srcLayout,
-                                   const LinearLayout &dstLayout,
-                                   OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter) const {
-    // If the operation is a supported sub-group shuffle, perform via shuffle
-    // operations.
-    if (isSubGroupShuffle(srcLayout, dstLayout) &&
-        isSupportedSubGroupShuffle(op, adaptor)) {
-      performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
-      return success();
-    }
-    // If the operation is a supported sub-group transposition, perform via SLM.
-    if (isSubGroupTranspose(srcLayout, dstLayout) &&
-        isSupportedSubGroupTranspose(op, adaptor)) {
-      performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
-      return success();
-    }
-    // TODO(jlebar): Implement me.
-    return failure();
   }
 
   bool isValidTypeForSubGroupTranspose(Type type) const {
@@ -966,14 +989,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                             ArrayRef<LLVM::GEPArg>{offset}, /*inbounds=*/true);
     }
     return unwrapFromVectors(loc, transposedVecs, rewriter);
-  }
-
-  LogicalResult
-  transferWithinBlockGroup(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                           const LinearLayout &dstLayout, OpAdaptor adaptor,
-                           ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
   }
 };
 
