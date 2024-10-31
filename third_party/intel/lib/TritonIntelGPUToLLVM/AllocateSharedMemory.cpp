@@ -22,7 +22,8 @@ struct AllocateSharedMemory
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
-    ModuleAllocation allocation = ModuleAllocation::get(mod);
+    ModuleAllocation allocation =
+        ModuleAllocation::get<triton::intel::AllocationAnalysis>(mod);
 
     mod.walk([&](FunctionOpInterface funcOp) {
       if (allocation.isRoot(funcOp) && allocation.getSharedMemorySize()) {

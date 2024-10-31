@@ -17,6 +17,9 @@ namespace mlir {
 
 namespace triton {
 class AllocationAnalysis;
+namespace intel {
+class AllocationAnalysis;
+}
 
 // To convert a tensor from one layout to another, we need to allocate a
 // temporary buffer (i.e., scratch buffer) in shared memory. The conversion may
@@ -238,6 +241,7 @@ private:
   size_t sharedMemorySize = 0;
 
   friend class triton::AllocationAnalysis;
+  friend class triton::intel::AllocationAnalysis;
 };
 
 template <>
