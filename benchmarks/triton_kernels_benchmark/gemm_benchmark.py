@@ -14,8 +14,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark.benchmark_testing import do_bench_elapsed_time, BENCHMARKING_METHOD
-
-import xetla_kernel
+from triton_kernels_benchmark import xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
@@ -99,6 +98,10 @@ def matmul_kernel_with_block_pointers(
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=s, num_warps=32) for s in [2]
+    ] + [
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 1024, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            num_stages=s, num_warps=32) for s in [2, 3]
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
