@@ -4,7 +4,9 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-materialize-block-pointer"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -12,6 +14,7 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
@@ -37,7 +40,7 @@ public:
       return;
 
     MLIRContext *context = &getContext();
-    mod.walk([context](tt::LoadOp loadOp) {
+    mod.walk([context, this](tt::LoadOp loadOp) {
       LDBG("Considering op: " << loadOp);
 
       Value ptr = loadOp.getPtr();
@@ -51,7 +54,6 @@ public:
       LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
       auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
       auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      auto dotLayout = ttgi::getDotEncoding(tensorType);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
       unsigned rank = shape.size();
@@ -100,11 +102,13 @@ public:
           return;
 
         const bool isRowMajor = fastChangeDim == rank - 1;
+        std::optional<ttg::DotOperandEncodingAttr> dotLayout =
+            getDotLayout(loadOp);
         if (dotLayout) {
-          // Check if the load is being used in a dot layout, and if so is this
-          // the first op and is it a transposed row major matrix. If so, skip
-          // the block ptr attribute as performance is worse than if we remove
-          // the tensor pointer
+          // Check if the load is being used by a tt.dot operation, and if so is
+          // this the first operand and is it a transposed row major matrix. If
+          // so, skip the block ptr attribute as performance is worse than if we
+          // remove the tensor pointer.
           LDBG("dotLayout: " << *dotLayout);
           const unsigned opIdx = dotLayout->getOpIdx();
           auto dotOrder = dotLayout->getThreadOrder();
@@ -121,6 +125,52 @@ public:
                                                             : "column_major"));
       }
     });
+  }
+
+private:
+  // Return the load layout if it is a dot layout. If it is not, check if the
+  // load result is converted to a dot layout. If so, return the dot layout,
+  // otherwise return nullopt.
+  std::optional<ttg::DotOperandEncodingAttr>
+  getDotLayout(tt::LoadOp loadOp) const {
+    Value ptr = loadOp.getPtr();
+    if (!tt::isTensorPointerType(ptr.getType()))
+      return std::nullopt;
+
+    RankedTensorType tensorType = ttgi::getRankedTensorType(ptr.getType());
+    if (!tensorType)
+      return std::nullopt;
+
+    auto dotLayout = ttgi::getDotEncoding(tensorType);
+    if (dotLayout)
+      return dotLayout;
+
+    auto allUsersAreConvertOps = [](Operation::user_range users) {
+      return llvm::all_of(users, [](Operation *user) {
+        return isa<ttg::ConvertLayoutOp>(user);
+      });
+    };
+
+    auto allUserHaveIdenticalLayout = [](Operation::user_range users) {
+      Attribute firstUserLayout =
+          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
+      return llvm::all_of(users, [&firstUserLayout](Operation *user) {
+        return firstUserLayout ==
+               cast<ttg::ConvertLayoutOp>(user).getType().getEncoding();
+      });
+    };
+
+    Operation::user_range users = loadOp->getUsers();
+    if (!users.empty() && allUsersAreConvertOps(users) &&
+        allUserHaveIdenticalLayout(users)) {
+      Attribute firstUserLayout =
+          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
+      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
+        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
+      return std::nullopt;
+    }
+
+    return std::nullopt;
   }
 };
 
