@@ -77,41 +77,41 @@ static CTALayoutAttr getIdentityCTALayoutAttr(PatternRewriter &rewriter,
   /// ```
   /// Blocked (#triton_gpu.blocked<{sizePerThread = [executionSize, 1, 1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, executionSize, 1, 1, 1], warpsPerCTA = [1, 1, warpsPerCTA[0], 1, 1, warpsPerCTA[1], 1], order = [3, 4, 5, 6, 0, 1, 2]}>):
   /// ```
-  ///                                                            warpsPerCTA[5]
-  ///                              <------------------------------------------------------------------------------->
-  ///                                        getShape()[4]
-  ///                              <---------------------------------->
-  ///                               threadsPerWarp[3]
-  ///                              <---------------->
-  ///         ^                  ^ t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn ^
-  ///         |                  | t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
-  ///         | sizePerThread[0] | t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
-  ///         |                  | t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
-  ///         |                  v t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
-  ///         |                    ..................................................................................|
-  ///         |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn | warpsPerCTA[2]
-  ///         |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
-  /// size[1] |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
-  ///         |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
-  ///         v                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  ///                                                                  warpsPerCTA[5]
+  ///                                    <------------------------------------------------------------------------------->
+  ///                                              getShape()[4]
+  ///                                    <---------------------------------->
+  ///                                     threadsPerWarp[3]
+  ///                                    <---------------->
+  ///               ^                  ^ t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn ^
+  ///               |                  | t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  ///               | sizePerThread[0] | t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  ///               |                  | t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  ///               |                  v t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  ///               |                    ..................................................................................|
+  ///               |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn | warpsPerCTA[2]
+  ///               |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  /// getShape()[1] |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  ///               |                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
+  ///               v                    t0 t1 t2 t3 ... tn t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn tn1 tn2 tn3 tn4 ... tnn |
   /// ```
   /// So we can reduce on dimensions 6 and 4 to get to:
   /// ```
-  ///                                                            warpsPerCTA[3]
-  ///                              <------------------------------------------------------------------------------->
-  ///                               threadsPerWarp[3]
-  ///                              <---------------->
-  ///         ^                  ^ t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn ^
-  ///         |                  | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
-  ///         | sizePerThread[0] | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
-  ///         |                  | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
-  ///         |                  v t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
-  ///         |                    .......................................|
-  ///         |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn | warpsPerCTA[2]
-  ///         |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
-  /// size[1] |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
-  ///         |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
-  ///         v                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  ///                                                 warpsPerCTA[3]
+  ///                                    <------------------------------------->
+  ///                                     threadsPerWarp[3]
+  ///                                    <---------------->
+  ///               ^                  ^ t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn ^
+  ///               |                  | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  ///               | sizePerThread[0] | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  ///               |                  | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  ///               |                  v t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  ///               |                    .......................................|
+  ///               |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn | warpsPerCTA[2]
+  ///               |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  /// getShape()[1] |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  ///               |                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
+  ///               v                    t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... tnn |
   /// ```
   ///
   /// Now on with step 2: After reshaping and layout conversion, we can get to
@@ -128,6 +128,8 @@ static CTALayoutAttr getIdentityCTALayoutAttr(PatternRewriter &rewriter,
   ///                   | t3 t3 t3 t3 ... t3 tn4 tn4 tn4 ... tn4 |
   /// ```
   /// And on with step 3, after reducing on dimension 3, we'd get:
+  /// Blocked (#triton_gpu.blocked<{sizePerThread = [1, 1, 1, executionSize], threadsPerWarp = [executionSize, 1, 1, 1], warpsPerCTA = [1, 1, warpsPerCTA[0], warpsPerCTA[1]], order = [3, 0, 1, 2]}>):
+  /// Sliced (#triton_gpu.sliced<{dim = 3, parent = #blocked}>)
   /// ```
   ///                   ^ t0 ^
   ///                   | t1 |
