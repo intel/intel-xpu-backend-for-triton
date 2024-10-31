@@ -283,7 +283,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
 
   auto sharedLayout = cast<SharedEncodingAttr>(descTy.getEncoding());
   ArrayRef<unsigned> order = sharedLayout.getOrder();
-  unsigned rank = order.size();
+  size_t rank = order.size();
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &smemObj, &shapePerWarp, &multiDimWarpId,

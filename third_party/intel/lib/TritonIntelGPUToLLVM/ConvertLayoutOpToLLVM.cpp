@@ -112,7 +112,8 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
-      assert(rank == 2 || rank == 3);
+      assert((rank == 2 || rank == 3) &&
+             "unexpected rank number for Dpas layout");
       auto multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;

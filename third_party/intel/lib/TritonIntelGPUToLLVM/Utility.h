@@ -187,9 +187,11 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
       if (rank == 3)
         offsets.push_back({0, repOffset[0] + elemOffset[0] + ctaOffsetX,
                            repOffset[1] + elemOffset[1] + ctaOffsetY});
-      else
+      else {
+        assert((rank == 2) && "unexpected rank number for Dpas layout");
         offsets.push_back({repOffset[0] + elemOffset[0] + ctaOffsetX,
                            repOffset[1] + elemOffset[1] + ctaOffsetY});
+      }
     }
   }
 }
@@ -285,11 +287,13 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
                                    packedElemRowIndex + opsRowIndex,
                                repColIndex + repClusterColIndex +
                                    packedElemColIndex + opsColIndex});
-          else
+          else {
+            assert((rank == 2) && "unexpected rank number for Dot layout");
             offsets.push_back({repRowIndex + repClusterRowIndex +
                                    packedElemRowIndex + opsRowIndex,
                                repColIndex + repClusterColIndex +
                                    packedElemColIndex + opsColIndex});
+          }
         }
       }
 
@@ -415,7 +419,7 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   Value warpId = udiv(threadId, warpSize);
   Value laneId = urem(threadId, warpSize);
 
-  unsigned rank = type.getShape().size();
+  size_t rank = type.getShape().size();
   auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
   ArrayRef<int64_t> shape = type.getShape();
 
