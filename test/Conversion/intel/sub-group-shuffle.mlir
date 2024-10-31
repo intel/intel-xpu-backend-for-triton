@@ -257,3 +257,106 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     tt.return %0 : tensor<32xf32, #sliced1>
   }
 }
+
+// -----
+
+// Case of more than one element per thread in the non-sliced dimension.
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#sliced = #triton_gpu.slice<{dim = 1, parent = #blocked}>
+#sliced1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_non_sliced_multi_register(
+  // CHECK-SAME:                                                            %[[VAL_0:.*]]: !llvm.struct<(f64, f64)>,
+  // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f64, f64)>
+  // CHECK:           %[[VAL_3:.*]] = llvm.extractvalue %[[VAL_0]][1] : !llvm.struct<(f64, f64)>
+  // CHECK:           %[[VAL_5:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_5]])
+  // CHECK:           %[[VAL_8:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_8]])
+  // CHECK:           llvm.mlir.constant(true) : i1
+  // CHECK:           %[[VAL_11:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_11]])
+  // CHECK:           %[[VAL_14:.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_14]])
+  // CHECK:           %[[VAL_17:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_17]])
+  // CHECK:           %[[VAL_20:.*]] = llvm.mlir.constant(5 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_20]])
+  // CHECK:           %[[VAL_23:.*]] = llvm.mlir.constant(6 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_23]])
+  // CHECK:           %[[VAL_26:.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_26]])
+  // CHECK:           %[[VAL_29:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_29]])
+  // CHECK:           %[[VAL_32:.*]] = llvm.mlir.constant(9 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_32]])
+  // CHECK:           %[[VAL_35:.*]] = llvm.mlir.constant(10 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_35]])
+  // CHECK:           %[[VAL_38:.*]] = llvm.mlir.constant(11 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_38]])
+  // CHECK:           %[[VAL_41:.*]] = llvm.mlir.constant(12 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_41]])
+  // CHECK:           %[[VAL_44:.*]] = llvm.mlir.constant(13 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_44]])
+  // CHECK:           %[[VAL_47:.*]] = llvm.mlir.constant(14 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_47]])
+  // CHECK:           %[[VAL_50:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_2]], %[[VAL_50]])
+  // CHECK:           %[[VAL_53:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_53]])
+  // CHECK:           %[[VAL_56:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_56]])
+  // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_59]])
+  // CHECK:           %[[VAL_62:.*]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_62]])
+  // CHECK:           %[[VAL_65:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_65]])
+  // CHECK:           %[[VAL_68:.*]] = llvm.mlir.constant(5 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_68]])
+  // CHECK:           %[[VAL_71:.*]] = llvm.mlir.constant(6 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_71]])
+  // CHECK:           %[[VAL_74:.*]] = llvm.mlir.constant(7 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_74]])
+  // CHECK:           %[[VAL_77:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_77]])
+  // CHECK:           %[[VAL_80:.*]] = llvm.mlir.constant(9 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_80]])
+  // CHECK:           %[[VAL_83:.*]] = llvm.mlir.constant(10 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_83]])
+  // CHECK:           %[[VAL_86:.*]] = llvm.mlir.constant(11 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_86]])
+  // CHECK:           %[[VAL_89:.*]] = llvm.mlir.constant(12 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_89]])
+  // CHECK:           %[[VAL_92:.*]] = llvm.mlir.constant(13 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_92]])
+  // CHECK:           %[[VAL_95:.*]] = llvm.mlir.constant(14 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_95]])
+  // CHECK:           %[[VAL_98:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffledj(%[[VAL_3]], %[[VAL_98]])
+  tt.func @test_non_sliced_multi_register(%arg0: tensor<32xf64, #sliced>) -> tensor<32xf64, #sliced1> {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<32xf64, #sliced> -> tensor<32xf64, #sliced1>
+    tt.return %0 : tensor<32xf64, #sliced1>
+  }
+}
+
+// -----
+
+// Case of more than one element per thread and 2 warps in the non-sliced dimension.
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 1], order = [0, 1]}>
+#sliced = #triton_gpu.slice<{dim = 1, parent = #blocked}>
+#sliced1 = #triton_gpu.slice<{dim = 1, parent = #blocked1}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:     llvm.func spir_kernelcc @test_non_sliced_multi_register_multi_warp
+  // CHECK-COUNT-64:    llvm.call spir_funccc @_Z17sub_group_shuffleij
+  tt.func @test_non_sliced_multi_register_multi_warp(%arg0: tensor<128xi32, #sliced>) -> tensor<128xi32, #sliced1> {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<128xi32, #sliced> -> tensor<128xi32, #sliced1>
+    tt.return %0 : tensor<128xi32, #sliced1>
+  }
+}
