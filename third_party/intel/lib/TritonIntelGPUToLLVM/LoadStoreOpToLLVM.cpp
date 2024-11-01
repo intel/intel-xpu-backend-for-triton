@@ -827,46 +827,34 @@ struct LoadOpConversion
         rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded())
       return success();
 
-    auto loc = op->getLoc();
-    auto typeConverter = getTypeConverter();
-    auto *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+    TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    MLIRContext *ctx = rewriter.getContext();
+    Value ptr = op.getPtr();
+    Value mask = op.getMask();
+    Value llMask = adaptor.getMask();
 
     // Determine the vectorization size
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned numElems = getTotalElemsPerThread(op.getType());
-    unsigned vec = 1;
+    unsigned vec = getVectorSize(ptr);
+    if (llMask)
+      vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     SmallVector<Value> ptrElems, maskElems, otherElems;
     bool otherIsSplatConstInt = false;
     int64_t splatVal = 0;
 
-    if (isTensorPointerType(op.getPtr().getType())) {
-      Value ptr = op.getPtr();
-      Value mask = op.getMask();
-      Value llMask = adaptor.getMask();
-      vec = getVectorSize(ptr);
-      if (llMask)
-        vec = std::min<size_t>(vec, getMaskAlignment(mask));
-
-      Type resultType = op.getType();
-      auto tensorType = cast<RankedTensorType>(resultType);
+    if (isTensorPointerType(ptr.getType())) {
+      auto tensorType = cast<RankedTensorType>(op.getType());
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
           loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
           op.getBoundaryCheck(), op.getPadding());
     } else {
-      // original values
-      Value ptr = op.getPtr();
       Value other = op.getOther();
-      Value mask = op.getMask();
-
-      // adaptor values
       Value llPtr = adaptor.getPtr();
-      Value llMask = adaptor.getMask();
       Value llOther = adaptor.getOther();
-      vec = getVectorSize(ptr);
-      if (llMask)
-        vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
       // Get the LLVM values for pointers
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -1141,19 +1129,23 @@ struct StoreOpConversion
         return success();
 
     Location loc = op->getLoc();
+    TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
-    Value value = op.getValue();
-
     Value ptr = op.getPtr();
+    Value mask = op.getMask();
+    Value llMask = adaptor.getMask();
+
+    // Determine the vectorization size
+    Value value = op.getValue();
     Type valueTy = value.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    SmallVector<Value> ptrElems;
-    SmallVector<Value> maskElems;
-    unsigned vec = 1;
+    SmallVector<Value> ptrElems, maskElems;
+    unsigned vec = getVectorSize(ptr);
+    if (llMask)
+      vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     if (isTensorPointerType(ptr.getType())) {
-      // fallback to scatter store.
       auto tensorType = cast<RankedTensorType>(valueTy);
       SmallVector<Value> dummyOther;
       std::tie(ptrElems, maskElems, dummyOther) = convertBlockPtrToTensorOfPtr(
@@ -1161,19 +1153,11 @@ struct StoreOpConversion
           op.getBoundaryCheck());
     } else {
       Value llPtr = adaptor.getPtr();
-      Value llMask = adaptor.getMask();
-
-      vec = getVectorSize(ptr);
 
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
 
-      // Determine the vectorization size
       if (llMask) {
-        Value mask = op.getMask();
         maskElems = unpackLLElements(loc, llMask, rewriter);
-
-        unsigned maskAlign = getMaskAlignment(mask);
-        vec = std::min(vec, maskAlign);
       }
     }
 
@@ -1183,7 +1167,7 @@ struct StoreOpConversion
     assert(!maskElems.size() ||
            valueElems.size() == maskElems.size() && "Mask size mismatch");
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
