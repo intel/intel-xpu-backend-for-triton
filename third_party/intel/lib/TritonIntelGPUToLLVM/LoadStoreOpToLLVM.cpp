@@ -167,7 +167,8 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
   unsigned getContiguity(Value ptr) const {
-    return axisAnalysisPass.getPtrContiguity(ptr);
+    return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+        .getPtrContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
@@ -185,7 +186,8 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getMaskAlignment(Value mask) const {
-    return axisAnalysisPass.getMaskAlignment(mask);
+    return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+        .getMaskAlignment(mask);
   }
 
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>

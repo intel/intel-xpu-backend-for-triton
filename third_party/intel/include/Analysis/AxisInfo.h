@@ -12,7 +12,6 @@ namespace mlir::triton::intel {
 // axis info based on the axis info of all the callers.  In the future, we can
 // perform optimization using function cloning so that each call site will have
 // unique axis info.
-// using AxisInfoMapT = DenseMap<Value, AxisInfo>;
 class ModuleAxisInfoAnalysis : public triton::ModuleAxisInfoAnalysis {
 public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
@@ -42,11 +41,10 @@ public:
     }
   }
 
-  AxisInfo *getAxisInfo(Value value) const {
+  AxisInfo *getAxisInfo(Value value) {
     auto funcOp =
         value.getParentRegion()->getParentOfType<FunctionOpInterface>();
-    auto *axisInfoMap =
-        const_cast<ModuleAxisInfoAnalysis *>(this)->getFuncData(funcOp);
+    auto *axisInfoMap = getFuncData(funcOp);
     if (!axisInfoMap) {
       return nullptr;
     }
@@ -57,9 +55,9 @@ public:
     return &(it->second);
   }
 
-  unsigned getPtrContiguity(Value ptr) const;
-  unsigned getPtrAlignment(Value ptr) const;
-  unsigned getMaskAlignment(Value mask) const;
+  unsigned getPtrContiguity(Value ptr);
+  unsigned getPtrAlignment(Value ptr);
+  unsigned getMaskAlignment(Value mask);
 
 private:
   void initialize(FunctionOpInterface funcOp);

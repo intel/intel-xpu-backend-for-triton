@@ -1175,7 +1175,7 @@ void AxisInfoAnalysis::visitForOpInductionVar(
 
 } // anonymous namespace
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) const {
+unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
   if (!tensorTy)
     return 1;
@@ -1197,7 +1197,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) const {
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) const {
+unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
   if (!tensorTy)
     return 1;
@@ -1227,7 +1227,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) const {
   return alignment;
 }
 
-unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) const {
+unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto tensorTy = ttgi::getRankedTensorType(mask.getType());
   if (!tensorTy)
     return 1;
