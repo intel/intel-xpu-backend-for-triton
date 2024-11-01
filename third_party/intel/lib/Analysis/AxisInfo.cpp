@@ -1159,112 +1159,6 @@ void AxisInfoAnalysis::visitForOpInductionVar(
 
 } // anonymous namespace
 
-template <class T>
-void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
-                                            DimVectorT *contiguity,
-                                            DimVectorT *divisibility,
-                                            DimVectorT *constancy) {
-  // liast of attributes that we care about
-  SmallVector<std::pair<DimVectorT *, std::string>> retVecs;
-  retVecs.push_back({contiguity, "tt.contiguity"});
-  retVecs.push_back({divisibility, "tt.divisibility"});
-  retVecs.push_back({constancy, "tt.constancy"});
-  // initialize attributes one by one
-  for (auto [vec, attrName] : retVecs) {
-    Attribute attr = funcOp.getArgAttr(argNumber, attrName);
-    if (auto int_attr = dyn_cast_or_null<IntegerAttr>(attr))
-      *vec = DimVectorT(contiguity->size(), int_attr.getValue().getZExtValue());
-    if (auto dense_attr = dyn_cast_or_null<DenseElementsAttr>(attr)) {
-      auto vals = dense_attr.getValues<int>();
-      *vec = DimVectorT(vals.begin(), vals.end());
-    }
-  }
-}
-
-/*static*/ AxisInfo AxisInfo::getPessimisticValueState(Value value) {
-  auto rank = 1;
-  if (TensorType ty = dyn_cast<TensorType>(value.getType()))
-    rank = ty.getRank();
-  if (triton::PointerType ty = dyn_cast<triton::PointerType>(value.getType()))
-    if (TensorType elemTy = dyn_cast<TensorType>(ty.getPointeeType()))
-      rank = elemTy.getRank();
-
-  DimVectorT knownContiguity(rank, 1);
-  DimVectorT knownDivisibility(rank, 1);
-  DimVectorT knownConstancy(rank, 1);
-
-  BlockArgument blockArg = dyn_cast<BlockArgument>(value);
-
-  if (blockArg && blockArg.getOwner()->isEntryBlock()) {
-    Operation *op = blockArg.getOwner()->getParentOp();
-    if (auto fun = dyn_cast<FunctionOpInterface>(op))
-      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                   &knownContiguity, &knownDivisibility,
-                                   &knownConstancy);
-    // llvm codegen check alignment to generate vector load/store
-    // would be nice if this wasn't the case
-    else if (auto fun = dyn_cast<LLVM::LLVMFuncOp>(op))
-      initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
-                                   &knownContiguity, &knownDivisibility,
-                                   &knownConstancy);
-    else if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-    }
-  } else if (Operation *op = value.getDefiningOp()) {
-    if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
-      // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
-      knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownConstancy = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-      knownContiguity = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
-    }
-    // Other operations are conservatively initialized with the lowest possible
-    // divisibility, contiguity, and constancy unless they have specified.
-    if (Attribute attr = op->getDiscardableAttr("tt.divisibility")) {
-      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
-      knownDivisibility = DimVectorT(vals.begin(), vals.end());
-    }
-    if (Attribute attr = op->getDiscardableAttr("tt.contiguity")) {
-      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
-      knownContiguity = DimVectorT(vals.begin(), vals.end());
-    }
-    if (Attribute attr = op->getDiscardableAttr("tt.constancy")) {
-      auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
-      knownConstancy = DimVectorT(vals.begin(), vals.end());
-    }
-  }
-
-  return AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
-}
-
-/*static*/ AxisInfo AxisInfo::join(const AxisInfo &lhs, const AxisInfo &rhs) {
-  // If one argument is not initialized, return the other.
-  if (lhs.getRank() == 0)
-    return rhs;
-  if (rhs.getRank() == 0)
-    return lhs;
-  DimVectorT contiguity;
-  DimVectorT divisibility;
-  DimVectorT constancy;
-  for (auto d = 0; d < lhs.getRank(); ++d) {
-    contiguity.push_back(gcd(lhs.getContiguity(d), rhs.getContiguity(d)));
-    divisibility.push_back(gcd(lhs.getDivisibility(d), rhs.getDivisibility(d)));
-    constancy.push_back(gcd(lhs.getConstancy(d), rhs.getConstancy(d)));
-  }
-  std::optional<int64_t> constantValue;
-  if (lhs.getConstantValue().has_value() &&
-      rhs.getConstantValue().has_value() &&
-      lhs.getConstantValue() == rhs.getConstantValue())
-    constantValue = lhs.getConstantValue();
-  return AxisInfo(contiguity, divisibility, constancy, constantValue);
-}
-
 unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
   if (!tensorTy)
@@ -1298,7 +1192,9 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto order = triton::gpu::getOrder(layout);
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+  unsigned elemNumBits = isTensorPointerType(ptr.getType())
+                             ? tensorTy.getElementType().getIntOrFloatBitWidth()
+                             : triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
