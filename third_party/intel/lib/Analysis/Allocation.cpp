@@ -329,7 +329,7 @@ private:
   /// Each buffer is allocated only once.
   void resolveExplicitBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto valueBufferIter : allocation->valueBuffer) {
+    for (auto valueBufferIter : allocation->getValueBuffer()) {
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
       bufferRange[buffer] = getLiveness(value);
@@ -341,7 +341,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto aliasBufferIter : allocation->aliasBuffer) {
+    for (auto aliasBufferIter : allocation->getAliasBuffer()) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
       auto range = getLiveness(value);
@@ -374,8 +374,8 @@ private:
                                              operationId.lookup(op) + 1)});
       }
     };
-    processScratchMemory(allocation->opScratch);
-    processScratchMemory(allocation->opVirtual);
+    processScratchMemory(allocation->getOpScratch());
+    processScratchMemory(allocation->getOpVirtual());
   }
 
   /// Resolves liveness of all values involved under the root operation.
@@ -539,7 +539,7 @@ private:
   void allocate(const SmallVector<BufferT *> &buffers,
                 const GraphT &interference) {
     // Reset shared memory size
-    allocation->sharedMemorySize = 0;
+    allocation->setSharedMemorySize(0);
     // First-fit graph coloring
     // Neighbors are nodes that interfere with each other.
     // We color a node by finding the index of the first available
@@ -574,8 +574,8 @@ private:
       }
       if (colors.lookup(x) != 0)
         x->setOffsetAligned(newOffset);
-      allocation->sharedMemorySize =
-          std::max(allocation->sharedMemorySize, x->offset + x->size);
+      allocation->setSharedMemorySize(
+          std::max(allocation->getSharedMemorySize(), x->offset + x->size));
     }
   }
 
@@ -593,4 +593,5 @@ void Allocation::run<triton::intel::AllocationAnalysis>(
     FuncAllocMapT &funcAllocMap) {
   triton::intel::AllocationAnalysis(getOperation(), &funcAllocMap, this);
 }
+
 } // namespace mlir
