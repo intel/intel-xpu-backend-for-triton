@@ -559,10 +559,6 @@ public:
     // will also extend to output.
     AxisInfo ptrInfo = operands[0]->getValue();
 
-    llvm::errs() << "ptrInfo: ";
-    ptrInfo.print(llvm::dbgs());
-    llvm::dbgs() << "\n";
-
     std::optional<AxisInfo> maskInfo;
     if (operands.size() > 1) {
       maskInfo = operands[1]->getValue();
