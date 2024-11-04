@@ -1071,7 +1071,7 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
     kernel[(1, )](x, y, out, out_ref, BLOCK=shape[0], num_ctas=num_ctas)
 
-    if is_xpu():
+    if is_xpu() and 'tl.math.div_rn(x,y)' in expr_prec:
         # use cpu result as reference, see https://github.com/llvm/llvm-project/issues/88222
         out_ref = torch.div(x.cpu().to(torch.float64), y.cpu().to(torch.float64)).to(torch.float32).to(device=device)
     assert torch.all(out == out_ref)  # bitwise exact
