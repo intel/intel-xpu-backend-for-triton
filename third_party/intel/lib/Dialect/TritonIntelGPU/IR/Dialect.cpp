@@ -247,7 +247,7 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
                                                   warpsPerCTA[rank - 1]))};
 }
 
-unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperands(
+unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
     ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, int opIdx) const {
   auto shapePerCTA = getShapePerCTA(*this, shape);
   auto rep = getDPASRepetitions(shapePerCTA, opIdx);
@@ -298,8 +298,8 @@ SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
 }
 
 SmallVector<unsigned>
-DpasEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                   int opIdx) const {
+DpasEncodingAttr::getShapePerCTATileForOperand(ArrayRef<int64_t> shape,
+                                               int kWidth, int opIdx) const {
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   size_t rank = parentShapePerCTATile.size();
   assert((rank == 2 || rank == 3) && "unexpected rank number for Dpas layout");
@@ -325,7 +325,7 @@ DpasEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
 }
 
 SmallVector<unsigned>
-DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
+DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
   ArrayRef<unsigned> repCluster = getRepCluster();
   size_t rank = repCluster.size();
   assert((rank == 2 || rank == 3) && "unexpected rank number for Dpas layout");
@@ -367,7 +367,7 @@ DpasEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
 
 SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
     ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
-  SmallVector<unsigned> sizePerThread = getSizePerThreadForOperands(opIdx);
+  SmallVector<unsigned> sizePerThread = getSizePerThreadForOperand(0, opIdx);
   SmallVector<int64_t> repetitions = getDPASRepetitions(shape, opIdx);
 
   size_t rank = shape.size();

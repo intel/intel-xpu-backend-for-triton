@@ -3475,10 +3475,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, device):
         tl.store(mxfp_ptr + offsets, tl.ravel(mxfp), mask=offsets < N * 32)
 
     def dot_scale_ref(x, scale, y, type_x, type_y):
-        e_bits, m_bits = {"e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
+        e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
         type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
 
-        # Need to implement fp4 -> fp8 cast to support 1 byte types
         comp_dtype = torch.bfloat16
 
         x = x.contiguous()

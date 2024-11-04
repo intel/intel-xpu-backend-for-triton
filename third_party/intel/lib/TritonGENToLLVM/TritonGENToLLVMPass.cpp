@@ -175,37 +175,6 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  VectorType resTy = op.getRes().getType();
-  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
-  bool needsResElemSizeEqualTo32 =
-      op.getElemSizeInBits() == 32 || op.getVnniTransform();
-  assert((!needsResElemSizeEqualTo32 || resElemTySize == 32) &&
-         "Expecting 32-bit element type");
-  if (!needsResElemSizeEqualTo32 && resElemTySize != 16)
-    return false;
-
-  if (op.getVnniTransform())
-    return true;
-
-  if (op.getTranspose() && op.getTileHeight() != 16)
-    return false;
-
-  uint32_t tileWidth = op.getTileWidth();
-  switch (op.getElemSizeInBits()) {
-  case 8:
-    return (tileWidth == 32);
-  case 16:
-    return (tileWidth == 16);
-  case 32:
-    return (tileWidth == 8 || tileWidth == 16);
-  default:
-    llvm_unreachable("unexpected element size");
-  }
-
-  return false;
-}
-
 [[maybe_unused]] static Value
 createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                         ConversionPatternRewriter &rewriter) {
@@ -819,13 +788,6 @@ struct TritonMatrix2DBlockLoadLowering
       LLVM::CallOp callOp =
           createBlock2DReadWithAddressPayloadUpdate(op, rewriter);
       rewriter.replaceOp(op, callOp);
-      return success();
-    }
-
-    if (!isOCLBuiltinAvailable(op)) {
-      op.emitWarning() << "OpenCL API not available for this operation. Got "
-                       << *op;
-      rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
 

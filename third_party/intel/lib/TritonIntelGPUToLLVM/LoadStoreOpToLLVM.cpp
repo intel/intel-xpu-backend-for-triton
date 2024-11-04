@@ -823,12 +823,12 @@ struct LoadOpConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (isTensorPointerType(op.getPtr().getType()) &&
-        rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded())
-      return success();
+    if (isTensorPointerType(op.getPtr().getType()))
+      if (rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded())
+        return success();
 
     Location loc = op->getLoc();
-    TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    auto typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
     Value mask = op.getMask();
@@ -847,6 +847,7 @@ struct LoadOpConversion
     int64_t splatVal = 0;
 
     if (isTensorPointerType(ptr.getType())) {
+      // fallback to gather load.
       auto tensorType = cast<RankedTensorType>(op.getType());
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
           loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
@@ -1129,15 +1130,14 @@ struct StoreOpConversion
         return success();
 
     Location loc = op->getLoc();
-    TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    auto *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value llMask = adaptor.getMask();
 
     // Determine the vectorization size
-    Value value = op.getValue();
-    Type valueTy = value.getType();
+    Type valueTy = op.getValue().getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     SmallVector<Value> ptrElems, maskElems;
@@ -1146,6 +1146,7 @@ struct StoreOpConversion
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     if (isTensorPointerType(ptr.getType())) {
+      // fallback to scatter store.
       auto tensorType = cast<RankedTensorType>(valueTy);
       SmallVector<Value> dummyOther;
       std::tie(ptrElems, maskElems, dummyOther) = convertBlockPtrToTensorOfPtr(
@@ -1153,12 +1154,9 @@ struct StoreOpConversion
           op.getBoundaryCheck());
     } else {
       Value llPtr = adaptor.getPtr();
-
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
-
-      if (llMask) {
+      if (llMask)
         maskElems = unpackLLElements(loc, llMask, rewriter);
-      }
     }
 
     Value llValue = adaptor.getValue();
@@ -1552,8 +1550,8 @@ struct AtomicRMWOpConversion
 
     rmwVal = bitcast(rmwVal, valueElemTy);
 
-    // Align pointer by 4 bytes by zeroing lower address bits. Atomically read
-    // a vector of two fp16 values as a single i32. The second lowest bit is
+    // Align pointer by 4 bytes by zeroing lower address bits. Atomically read a
+    // vector of two fp16 values as a single i32. The second lowest bit is
     // extracted to later be used as an index to extract the required vector
     // element.
     assert(isa<LLVM::LLVMPointerType>(rmwPtr.getType()));
