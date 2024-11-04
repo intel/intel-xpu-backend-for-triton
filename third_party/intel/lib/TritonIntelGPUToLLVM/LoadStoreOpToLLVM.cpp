@@ -11,7 +11,6 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -194,7 +193,7 @@ struct LoadStoreConversionBase {
       ArrayRef<int32_t> boundaryCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
-    auto rank = tensorType.getRank();
+    size_t rank = tensorType.getRank();
     // The block pointer struct is expected to have the following layout:
     //    Struct {
     //      Value offset[rank];
@@ -818,9 +817,13 @@ struct LoadOpConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op->getLoc();
+    if (isTensorPointerType(op.getPtr().getType()))
+      if (rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded())
+        return success();
+
+    Location loc = op->getLoc();
     auto typeConverter = getTypeConverter();
-    auto *ctx = rewriter.getContext();
+    MLIRContext *ctx = rewriter.getContext();
 
     // Determine the vectorization size
     Type valueElemTy =
@@ -828,26 +831,17 @@ struct LoadOpConversion
     unsigned numElems = getTotalElemsPerThread(op.getType());
     unsigned vec = 1;
 
-    SmallVector<Value> ptrElems;
-    SmallVector<Value> maskElems;
-
+    SmallVector<Value> ptrElems, maskElems, otherElems;
     bool otherIsSplatConstInt = false;
     int64_t splatVal = 0;
-    SmallVector<Value> otherElems;
 
     if (isTensorPointerType(op.getPtr().getType())) {
-      if (rewriteTensorPointerLoad(op, adaptor, rewriter).succeeded()) {
-        return success();
-      } else {
-        // TODO: (johnlu) set the vector size > 1; Need to prove the memory is
-        // contiguous on the fast changing dim when fallback to gather load.
-        Type resultType = op.getType();
-        auto tensorType = cast<RankedTensorType>(resultType);
-        std::tie(ptrElems, maskElems, otherElems) =
-            convertBlockPtrToTensorOfPtr(
-                loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
-                op.getBoundaryCheck(), op.getPadding());
-      }
+      // TODO: (johnlu) set the vector size > 1; Need to prove the memory is
+      // contiguous on the fast changing dim when fallback to gather load.
+      auto tensorType = cast<RankedTensorType>(op.getType());
+      std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
+          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+          op.getBoundaryCheck(), op.getPadding());
     } else {
       // original values
       Value ptr = op.getPtr();
@@ -922,7 +916,7 @@ struct LoadOpConversion
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
-                rewriter, loc, this->getTypeConverter()->getIndexType(), s);
+                rewriter, loc, typeConverter->getIndexType(), s);
             v = insert_element(vecTy, v, falseVal, sVal);
           }
           v = bitcast(v, IntegerType::get(ctx, width));
@@ -934,7 +928,7 @@ struct LoadOpConversion
           }
 
           Value iiVal = createIndexAttrConstant(
-              rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
+              rewriter, loc, typeConverter->getIndexType(), ii);
           if (nWords > 1) {
             other_ = insert_element(retTy, other_, v, iiVal);
           } else {
@@ -1129,31 +1123,27 @@ struct StoreOpConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op->getLoc();
-    MLIRContext *ctx = rewriter.getContext();
+    if (isTensorPointerType(op.getPtr().getType()))
+      if (rewriteTensorPointerStore(op, adaptor, rewriter).succeeded())
+        return success();
 
+    Location loc = op->getLoc();
+    MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
     Value value = op.getValue();
-
-    auto valueTy = value.getType();
+    Type valueTy = value.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    SmallVector<Value> ptrElems;
-    SmallVector<Value> maskElems;
+    SmallVector<Value> ptrElems, maskElems;
     unsigned vec = 1;
 
     if (isTensorPointerType(ptr.getType())) {
-      if (rewriteTensorPointerStore(op, adaptor, rewriter).succeeded()) {
-        return success();
-      } else {
-        // fallback to scatter store.
-        auto tensorType = cast<RankedTensorType>(valueTy);
-        SmallVector<Value> dummyOther;
-        std::tie(ptrElems, maskElems, dummyOther) =
-            convertBlockPtrToTensorOfPtr(loc, adaptor.getPtr(), tensorType,
-                                         valueElemTy, rewriter,
-                                         op.getBoundaryCheck());
-      }
+      // fallback to scatter store.
+      auto tensorType = cast<RankedTensorType>(valueTy);
+      SmallVector<Value> dummyOther;
+      std::tie(ptrElems, maskElems, dummyOther) = convertBlockPtrToTensorOfPtr(
+          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+          op.getBoundaryCheck());
     } else {
       Value llPtr = adaptor.getPtr();
       Value llMask = adaptor.getMask();
@@ -1459,7 +1449,8 @@ struct AtomicRMWOpConversion
       // emit unsupported feature error.
       if (valueElemNBits == 16) {
         op.emitWarning(
-            "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
+            "'tt.atomic_rmw' op fp16 datatype is not supported in the "
+            "target "
             "HW, software emulation is an experimental feature (use at own "
             "risk)");
         endBlock =
@@ -1561,10 +1552,10 @@ struct AtomicRMWOpConversion
 
     rmwVal = bitcast(rmwVal, valueElemTy);
 
-    // Align pointer by 4 bytes by zeroing lower address bits. Atomically read
-    // a vector of two fp16 values as a single i32. The second lowest bit is
-    // extracted to later be used as an index to extract the required vector
-    // element.
+    // Align pointer by 4 bytes by zeroing lower address bits. Atomically
+    // read a vector of two fp16 values as a single i32. The second lowest
+    // bit is extracted to later be used as an index to extract the required
+    // vector element.
     assert(isa<LLVM::LLVMPointerType>(rmwPtr.getType()));
     auto intPtr = ptrtoint(i64_ty, rmwPtr);
     auto lowPtrBits = and_(intPtr, i64_val(3));
