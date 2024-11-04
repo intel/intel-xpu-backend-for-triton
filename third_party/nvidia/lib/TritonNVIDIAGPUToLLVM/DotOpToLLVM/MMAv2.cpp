@@ -1,6 +1,9 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -58,7 +61,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int n0, int n1,
     RankedTensorType type) {
-
   auto elems = unpackLLElements(loc, value, rewriter);
   int offset{};
   ValueTableV2 vals;
@@ -404,9 +406,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
-  // shape / shape_per_cta
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
+
+  // FIXME [Dot LL]
+  // max(repN / 2, 1) is wrong for repN = 1!
+  // This is also wrong in
+  // NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, std::max(repN / 2, 1),
       repK, bTensorTy);
