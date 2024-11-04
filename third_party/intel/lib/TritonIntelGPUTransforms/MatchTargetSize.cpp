@@ -722,10 +722,10 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type,
     if (isa<ttgi::WarpEncodingAttr>(layout)) {
       // 32 = 2 * 16(subgroupSize) which is for large load/store
       // max 2d block prefetch width is 16 for 32-bit datatype
-      subSize[1] = std::min(static_cast<int64_t>(sizeInBits == 32 ? 16L : 32L),
+      subSize[1] = std::min(sizeInBits == 32 ? 16LL : 32LL),
                             shape[1]);
       // max 2d block load height is 32
-      subSize[0] = std::min(static_cast<int64_t>(32L), shape[0]);
+      subSize[0] = std::min(32LL, shape[0]);
     } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
       const TargetArchNativeSizes::BlockMemShape &memShape =
           nativeSizes.getBlockMemShape(sizeInBits);
