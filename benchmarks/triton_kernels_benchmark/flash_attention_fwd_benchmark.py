@@ -182,7 +182,7 @@ def forward(q, k, v, causal, sm_scale):
     grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
     n_ctx = q.shape[2]
     if n_ctx <= 512:
-        grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0]*q.shape[1])
+        grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0] * q.shape[1])
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
     if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
