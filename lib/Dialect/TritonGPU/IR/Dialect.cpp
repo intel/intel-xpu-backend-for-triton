@@ -1061,8 +1061,17 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return ::getWarpOrder(*this);
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadOrder() const {
-  return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
-                               /*kMajor*/ true);
+  // FIXME: delete if branch for `DpasEncodingAttr` and provide more
+  // general solution to make `getOrderForDotOperand` function compatible
+  // with Intel layouts.
+  // More details:
+  // https://github.com/intel/intel-xpu-backend-for-triton/pull/2517
+  if (mlir::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
+    return ::getOrder(*this);
+  } else {
+    return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
+                                 /*kMajor*/ true);
+  }
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
     ArrayRef<int64_t> tensorShape) const {
