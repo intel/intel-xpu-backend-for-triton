@@ -1449,8 +1449,7 @@ struct AtomicRMWOpConversion
       // emit unsupported feature error.
       if (valueElemNBits == 16) {
         op.emitWarning(
-            "'tt.atomic_rmw' op fp16 datatype is not supported in the "
-            "target "
+            "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "
             "risk)");
         endBlock =
@@ -1552,10 +1551,10 @@ struct AtomicRMWOpConversion
 
     rmwVal = bitcast(rmwVal, valueElemTy);
 
-    // Align pointer by 4 bytes by zeroing lower address bits. Atomically
-    // read a vector of two fp16 values as a single i32. The second lowest
-    // bit is extracted to later be used as an index to extract the required
-    // vector element.
+    // Align pointer by 4 bytes by zeroing lower address bits. Atomically read a
+    // vector of two fp16 values as a single i32. The second lowest bit is
+    // extracted to later be used as an index to extract the required vector
+    // element.
     assert(isa<LLVM::LLVMPointerType>(rmwPtr.getType()));
     auto intPtr = ptrtoint(i64_ty, rmwPtr);
     auto lowPtrBits = and_(intPtr, i64_val(3));
