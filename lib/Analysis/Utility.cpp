@@ -700,8 +700,10 @@ std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
   auto srcLayoutWithFreeRegs = srcLayout->resize(kRegister, numRegs);
   auto dstLayoutWithFreeRegs = dstLayout->resize(kRegister, numRegs);
   // comp describes the layout function to create dst from src.
-  LinearLayout comp =
-      dstLayoutWithFreeRegs.invertAndCompose(srcLayoutWithFreeRegs);
+  // FIXME: make sure `resize` works for Intel layouts
+  // LinearLayout comp =
+  //    dstLayoutWithFreeRegs.invertAndCompose(srcLayoutWithFreeRegs);
+  LinearLayout comp = dstLayout->invertAndCompose(*srcLayout);
   // We try to quotient by the largest subspace first
   auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
   for (auto dim : dims) {
