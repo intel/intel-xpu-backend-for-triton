@@ -40,6 +40,7 @@ env:
   BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
   USE_IPEX: ${{ github.event_name != 'workflow_dispatch' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && 'pr') || (github.event_name == 'schedule' && 'ci') || 'test' }}
+  IGC_allowDecompose2DBlockFuncs: 0
 
 jobs:
   build:
