@@ -1,0 +1,135 @@
+name: gemm test reusable workflow
+run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.runner_label || 'default'}}
+
+on:
+  workflow_call:
+    inputs:
+      device:
+        description: Device
+        type: string
+        default: max1550
+      driver_version:
+        description: Driver version
+        type: string
+        default: rolling
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: string
+        default: "source"
+      python_version:
+        description: Python version
+        type: string
+        required: true
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: Build and test
+      build_llvm:
+        description: Build LLVM
+        type: boolean
+        default: false
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+      runner_version:
+        description: Runner label for version
+        type: string
+        default: runner-0.0.19
+
+permissions: read-all
+
+env:
+  TRITON_DISABLE_LINE_INFO: 1
+  TEST_UNSKIP: ${{ inputs.enable_unskip }}
+
+jobs:
+  integration-tests:
+    name: Integration tests
+    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Python ${{ inputs.python_version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
+
+      - name: Install pass_rate dependencies
+        run: |
+          pip install defusedxml
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: ${{ inputs.build_llvm }}
+
+      - name: Run GEMM Script
+        run: |
+          python3 test.py
+
+      - name: Report environment details
+        run: |
+          source ./scripts/capture-hw-details.sh --quiet
+          cat <<EOF | tee .env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ inputs.python_version }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
+          EOF

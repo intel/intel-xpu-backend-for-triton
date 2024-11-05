@@ -1,0 +1,129 @@
+name: Build and test gemm
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: "max1550"
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: choice
+        options:
+          - source
+          - wheels
+        default: source
+      upload_test_reports:
+        description: Upload test reports
+        type: boolean
+        default: false
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: "gemm test"
+      enable_unskip:
+        description: Ignore pytest.skip
+        type: boolean
+        default: false
+
+permissions: read-all
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: Linux
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 2
+        with:
+          path: $HOME/.cache/pip
+          key: pip-3.10-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Install Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run pre-commit checks
+        run: |
+          set -x
+          pip install --upgrade pre-commit
+
+          # TODO: ignore the first yapf failure until https://github.com/google/yapf/issues/1164 is fixed
+          python3 -m pre_commit run --all-files --verbose yapf &> /dev/null || true
+          # If first run of yapf worked and made changes reset the tree to the original state
+          git reset --hard
+
+          python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+  prepare:
+    name: Prepare
+    runs-on: Linux
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Matrix
+        id: matrix
+        run: |
+          if [[ -n "${{ inputs.runner_label }}" ]]; then
+            matrix='{"python": ["3.9"]}'
+          else
+            matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
+          fi
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
+  integration-tests:
+    name: Integration tests matrix
+    needs: prepare
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    uses: ./.github/workflows/gemm-test-reusable.yml
+    with:
+      driver_version: ${{ matrix.driver }}
+      runner_label: ${{ inputs.runner_label }}
+      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_mode: ${{ inputs.pytorch_mode || 'source' }}
+      python_version: ${{ matrix.python }}
+      upload_test_reports: ${{ inputs.upload_test_reports || false }}
+      ignore_errors: ${{ inputs.ignore_errors || false }}
+      skip_list: ${{ inputs.skip_list }}
+      run_name: ${{ inputs.run_name }}
+      enable_unskip: ${{ inputs.enable_unskip || false }}
