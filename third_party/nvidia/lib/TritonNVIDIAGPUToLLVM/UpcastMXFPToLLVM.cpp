@@ -115,7 +115,7 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    if (fpType == F8F6F4Type::E2M1) {
+    if (fpType == ScaleDotElemType::E2M1) {
       xVals = unpackFP4Elements(loc, rewriter, xVals, laneId);
     }
 
