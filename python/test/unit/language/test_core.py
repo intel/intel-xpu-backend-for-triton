@@ -3385,6 +3385,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, type_a, type_b, num_warps, mma, kpack
             pytest.skip(f"scaled_dot({type_a}, {type_b}) not yet implemented for HIP")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
+    if is_xpu():
+        pytest.skip("scaled_dot isn't supported on XPU")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, out,
