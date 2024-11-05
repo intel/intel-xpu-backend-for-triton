@@ -8,10 +8,6 @@ on:
         description: Device
         type: string
         default: max1550
-      driver_version:
-        description: Driver version
-        type: string
-        default: rolling
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -66,7 +62,7 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
-    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}"]', inputs.device, inputs.runner_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
