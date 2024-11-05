@@ -12,7 +12,6 @@ namespace mlir::triton::intel {
 // axis info based on the axis info of all the callers.  In the future, we can
 // perform optimization using function cloning so that each call site will have
 // unique axis info.
-
 class ModuleAxisInfoAnalysis : public triton::ModuleAxisInfoAnalysis {
 public:
   explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
