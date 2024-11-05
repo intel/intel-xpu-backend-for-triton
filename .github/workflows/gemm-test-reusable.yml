@@ -62,7 +62,7 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
-    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}"]', inputs.device, inputs.runner_version)) }}
+    runs-on: ${{ inputs.runner_label || 'max1550' }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
