@@ -11,7 +11,7 @@ on:
       runner_label:
         description: Runner label, keep empty for default
         type: string
-        default: ""
+        default: "max1550"
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
