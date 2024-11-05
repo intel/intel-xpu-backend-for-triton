@@ -191,14 +191,38 @@ public:
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
     unsigned rank = repCluster.size();
+    bool aggressiveReusing =
+        triton::tools::getBoolEnv("TRITON_INTEL_AGGRESSIVE_DPAS_REUSE");
+    // Use the smaller of the two dimensions as the outer loop for better DPAS
+    // operands locality.
+    unsigned repNumM = repM * repCluster[rank - 2];
+    unsigned repNumN = repN * repCluster[rank - 1];
+    unsigned repOuter = repNumM > repNumN ? repNumN : repNumM;
+    unsigned repInner = repNumM > repNumN ? repNumM : repNumN;
     for (int b = 0; b < repBatch; ++b)
-      for (int k = 0; k < repK; ++k)
-        for (int m = 0; m < repM; ++m)
-          for (int n = 0; n < repN; ++n)
-            for (int repRow = 0; repRow < repCluster[rank - 2]; ++repRow)
-              for (int repCol = 0; repCol < repCluster[rank - 1]; ++repCol)
-                generateDPASOp(b, m * repCluster[rank - 2] + repRow,
-                               n * repCluster[rank - 1] + repCol, k);
+      for (int k = 0; k < repK; ++k) {
+        for (int outer = 0; outer < repOuter; ++outer) {
+          if (aggressiveReusing && ((outer % 2) == 1)) {
+            // Change the inner loop direction in odd outer loop iteration if
+            // aggressive reuse DPAS operands.
+            for (int inner = repInner - 1; inner >= 0; --inner) {
+              if (repNumM > repNumN) {
+                generateDPASOp(b, inner, outer, k);
+              } else {
+                generateDPASOp(b, outer, inner, k);
+              }
+            }
+          } else {
+            for (int inner = 0; inner < repInner; ++inner) {
+              if (repNumM > repNumN) {
+                generateDPASOp(b, inner, outer, k);
+              } else {
+                generateDPASOp(b, outer, inner, k);
+              }
+            }
+          }
+        }
+      }
 
     Value res = composeValuesToDotOperandLayoutStruct(fc, repBatch, repM, repN,
                                                       resElemTy);
