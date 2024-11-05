@@ -39,6 +39,11 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
+  
+  push:
+    branches:
+      - '**'
+
 
 permissions: read-all
 
