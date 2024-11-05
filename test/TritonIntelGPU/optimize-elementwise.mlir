@@ -40,3 +40,28 @@ tt.func @test_convert_layout_splat(%arg0: tensor<128xf32, #triton_gpu.slice<{dim
   // CHECK:           tt.return %[[VAL_4]] : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_3]]}>>
   tt.return %2 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
 }
+
+// -----
+
+// CHECK: #[[$ATTR_4:.+]] = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+// CHECK: #[[$ATTR_5:.+]] = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// CHECK-LABEL:   tt.func @test_chain(
+// CHECK-SAME:                        %[[VAL_0:.*]]: tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_4]]}>>, %[[VAL_1:.*]]: tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_4]]}>>,
+// CHECK-SAME:                        %[[VAL_2:.*]]: f32
+tt.func @test_chain(%arg0: tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>, %arg1: tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>, %arg2: f32) -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>> {
+  // CHECK:           %[[VAL_3:.*]] = arith.addf %[[VAL_0]], %[[VAL_1]] : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_4]]}>>
+  %0 = triton_gpu.convert_layout %arg0 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  %1 = triton_gpu.convert_layout %arg1 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  // CHECK:           %[[VAL_4:.*]] = tt.splat %[[VAL_2]] : f32 -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_4]]}>>
+  %2 = tt.splat %arg2 : f32 -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  %3 = arith.addf %0, %1 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  // CHECK:           %[[VAL_5:.*]] = arith.addf %[[VAL_4]], %[[VAL_3]] : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_4]]}>>
+  // CHECK:           %[[VAL_6:.*]] = triton_gpu.convert_layout %[[VAL_5]] : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_4]]}>> -> tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_5]]}>>
+  %4 = arith.addf %2, %3 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  // CHECK:           tt.return %[[VAL_6]] : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #[[$ATTR_5]]}>>
+  tt.return %4 : tensor<128xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+}
