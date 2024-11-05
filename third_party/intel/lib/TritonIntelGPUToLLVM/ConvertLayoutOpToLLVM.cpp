@@ -451,8 +451,6 @@ private:
 
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
-  constexpr static unsigned minSubGroupTransposeWidth = 8;
-
   const TargetInfoBase &targetInfo;
 
   // Set benefit to 2 so that this pattern applies before other convert-layout
@@ -461,101 +459,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                               const TargetInfoBase &targetInfo,
                                               PatternBenefit benefit = 2)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
-  }
-
-  // Return a vector such as:
-  // [[0, 1], [0, 2], [0, 4], ..., [0, laneSize / 2], [laneSize, 0], ...,
-  // [registerSize / 2, 0]],
-  // i.e., mapping registers to lanes till laneSize and performing an ID
-  // conversion afterwards.
-  static std::vector<std::vector<int32_t>>
-  buildSubGroupTransposeRegisterBases(int32_t registerSize, int32_t laneSize) {
-    std::vector<std::vector<int32_t>> bases;
-    std::vector<int32_t> curr(2);
-    for (int32_t i = 1; i < laneSize; i *= 2) {
-      curr[1] = i;
-      bases.push_back(curr);
-    }
-    curr[1] = 0;
-    for (int32_t i = laneSize; i < registerSize; i *= 2) {
-      curr[0] = i;
-      bases.push_back(curr);
-    }
-    return bases;
-  }
-
-  // Return a vector such as:
-  // [[0, 1], [0, 2], [0, 4], ..., [0, laneSize / 2], [1, 0], ...,
-  // [registerSize / (2 * laneSize), 0]]
-  // i.e., mapping registers to lanes till laneSize and repeating the pattern
-  // afterwards.
-  static std::vector<std::vector<int32_t>>
-  buildSubGroupShuffleRegisterBases(int32_t registerSize, int32_t laneSize) {
-    std::vector<std::vector<int32_t>> bases;
-    std::vector<int32_t> curr(2);
-    for (int32_t i = 1; i < laneSize; i *= 2) {
-      curr[1] = i;
-      bases.push_back(curr);
-    }
-    curr[1] = 0;
-    for (int32_t i = laneSize, val = 1; i < registerSize; i *= 2, val *= 2) {
-      curr[0] = val;
-      bases.push_back(curr);
-    }
-    return bases;
-  }
-
-  // Return a vector such as:
-  // [[1, 0], [2, 0], [4, 0], ..., [laneSize / 2, 0]],
-  // i.e., mapping lanes to registers.
-  static std::vector<std::vector<int32_t>>
-  buildSubGroupTransposeLaneBases(int32_t laneSize) {
-    std::vector<std::vector<int32_t>> bases;
-    std::vector<int32_t> curr(2);
-    for (int32_t i = 1; i < laneSize; i *= 2) {
-      curr[0] = i;
-      bases.push_back(curr);
-    }
-    return bases;
-  }
-
-  bool isSubGroupTranspose(const LinearLayout &srcLayout,
-                           const LinearLayout &dstLayout) const {
-    MLIRContext *ctx = srcLayout.getInDimNames().begin()->getContext();
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion =
-        comp.quotient(kBlock)->quotient(kWarp);
-    assert(conversion && "Expecting valid conversion");
-    // Expected conversion is:
-    // - register=1 -> (0, 1)
-    // ...
-    // - register=2**i -> (0, 2**i)
-    // ...
-    // - register=M -> (0, 2**M)
-    // ...
-    // - register=2**k -> (2**k, 0)
-    // ...
-    // - register=N -> (2**N, 0)
-    // - lane=1 -> (0, 1)
-    // ...
-    // - lane=2**j -> (2**j, 0)
-    // ...
-    //   lane=2**M -> (2**M, 0)
-    // where out dims are: [register (size 2**(N + 1)), lane (size 2**(M + 1))]
-    //
-    // With N >= M.
-    int32_t registerInDimSize = conversion->getInDimSize(kRegister);
-    int32_t laneInDimSize = conversion->getInDimSize(kLane);
-    return conversion->getBases().lookup(kRegister) ==
-               buildSubGroupTransposeRegisterBases(registerInDimSize,
-                                                   laneInDimSize) &&
-           conversion->getBases().lookup(kLane) ==
-               buildSubGroupTransposeLaneBases(laneInDimSize);
   }
 
   LogicalResult
@@ -598,15 +501,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       //         values through shared memory.
       // If the operation is a supported sub-group shuffle, perform via shuffle
       // operations.
-      if (isSubGroupShuffle(srcLayout, dstLayout) &&
-          isSupportedSubGroupShuffle(op, adaptor)) {
+      if (intel::cvtIsSubGroupShuffle(srcTy, dstTy)) {
         performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
       // If the operation is a supported sub-group transposition, perform via
       // SLM.
-      if (isSubGroupTranspose(srcLayout, dstLayout) &&
-          isSupportedSubGroupTranspose(op, adaptor)) {
+      if (intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
         performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
@@ -654,59 +555,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  bool isSubGroupShuffle(const LinearLayout &srcLayout,
-                         const LinearLayout &dstLayout) const {
-    MLIRContext *ctx = srcLayout.getInDimNames().begin()->getContext();
-    StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
-    std::optional<LinearLayout> conversion =
-        comp.quotient(kBlock)->quotient(kWarp);
-    assert(conversion && "Expecting valid conversion");
-    // TODO: Support more kind of shuffles.
-    // Expected conversion is:
-    // - register=1 -> (0, 1)
-    // ...
-    // - register=2**i -> (0, 2**i)
-    // ...
-    // - register=M -> (0, 2**M)
-    // ...
-    // - register=2**k -> (2**(k-M), 0)
-    // ...
-    // - register=2**N -> (2**(N-M), 0)
-    // - lane=1 -> (0, 0)
-    // ...
-    // - lane=2**j -> (0, 0)
-    // ...
-    //   lane=2**M -> (0, 0)
-    // where out dims are: [register (size 2**(N - M)), lane (size 2**(M + 1))]
-    //
-    // With N >= M.
-    int32_t registerInDimSize = conversion->getInDimSize(kRegister);
-    int32_t laneOutDimSize = conversion->getOutDimSize(kLane);
-    return conversion->sublayoutIsZero({kLane}, {kRegister, kLane}) &&
-           conversion->getBases().lookup(kRegister) ==
-               buildSubGroupShuffleRegisterBases(registerInDimSize,
-                                                 laneOutDimSize);
-  }
-
-  bool isSupportedSubGroupShuffle(ConvertLayoutOp, OpAdaptor) const {
-    // TODO: Limit when sub-group shuffles get more complex.
-    // We do not need to limit by type here as `gpu.shuffle` conversion will
-    // fail for us.
-    return true;
-  }
-
   void performSubGroupShuffle(ConvertLayoutOp op, const LinearLayout &srcLayout,
                               const LinearLayout &dstLayout, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
-    assert(isSubGroupShuffle(srcLayout, dstLayout) &&
+    assert(intel::cvtIsSubGroupShuffle(op.getSrc().getType(), op.getType()) &&
            "Expecting sub-group shuffle");
-    assert(isSupportedSubGroupShuffle(op, adaptor) &&
-           "Expecting supported sub-group shuffle");
 
     MLIRContext *ctx = op->getContext();
     StringAttr kLane = str_attr("lane");
@@ -795,46 +648,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return res;
   }
 
-  bool isSupportedSubGroupTranspose(ConvertLayoutOp op,
-                                    OpAdaptor adaptor) const {
-    auto srcType = cast<LLVM::LLVMStructType>(adaptor.getSrc().getType());
-    ArrayRef<Type> body = srcType.getBody();
-    return TypeSwitch<Type, bool>(body.front())
-        .Case([this](FloatType floatTy) {
-          // Support via bitcasting to integer type.
-          return isValidTypeForSubGroupTranspose(
-              IntegerType::get(floatTy.getContext(), floatTy.getWidth()));
-        })
-        .Case([this](IntegerType intTy) {
-          // Support via extending to supported type.
-          return isValidTypeForSubGroupTranspose(intTy) ||
-                 intTy.getWidth() < minSubGroupTransposeWidth;
-        })
-        .Case([](LLVM::LLVMPointerType) {
-          // Support via ptrtoint
-          return true;
-        })
-        .Default(false);
-  }
-
-  bool isValidTypeForSubGroupTranspose(Type type) const {
-    return TypeSwitch<Type, bool>(type)
-        .Case([](IntegerType intTy) {
-          unsigned width = intTy.getWidth();
-          return width == 8 || width == 16 || width == 32 || width == 64;
-        })
-        .Default(false);
-  }
-
   void performSubGroupTranspose(ConvertLayoutOp op,
                                 const LinearLayout &srcLayout,
                                 const LinearLayout &dstLayout,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
-    assert(isSubGroupTranspose(srcLayout, dstLayout) &&
+    assert(intel::cvtIsSubGroupTranspose(op.getSrc().getType(), op.getType()) &&
            "Expecting sub-group transpose");
-    assert(isSupportedSubGroupTranspose(op, adaptor) &&
-           "Expecting supported sub-group transpose");
 
     Location loc = op.getLoc();
 
@@ -848,17 +668,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         .Case([&](FloatType floatTy) {
           // TODO: Support FP4.
           Type dstType = int_ty(floatTy.getWidth());
-          assert(isValidTypeForSubGroupTranspose(dstType) &&
+          assert(intel::isValidElementTypeForSubGroupTranspose(dstType) &&
                  "Expecting valid type");
           llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
             return bitcast(val, dstType);
           });
         })
         .Case([&](IntegerType intTy) {
-          if (isValidTypeForSubGroupTranspose(intTy))
+          if (intel::isValidElementTypeForSubGroupTranspose(intTy))
             return;
-          assert(intTy.getWidth() < minSubGroupTransposeWidth &&
-                 "Expecting type to extend to i8");
           Type dstType = i8_ty;
           llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
             return zext(dstType, val);
@@ -866,7 +684,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         })
         .Case([&](LLVM::LLVMPointerType) {
           Type dstType = i64_ty;
-          assert(isValidTypeForSubGroupTranspose(dstType) &&
+          assert(intel::isValidElementTypeForSubGroupTranspose(dstType) &&
                  "i64 type should be supported");
           llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
             return ptrtoint(dstType, val);
