@@ -365,4 +365,46 @@ tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slic
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPUOptimizeElementwiseParallelism
+    : Pass<"tritonintelgpu-optimize-elementwise-parallelism", "mlir::ModuleOp"> {
+  let summary =
+      "Improve parallelism of elementwise operations utilizing more hardware resources";
+
+  let description = [{
+    Detect elementwise operations with an encoding causing sub-par parallelism,
+    i.e., with data duplication across threads, and convert the operands to a
+    more optimal encoding if the cost of doing so is not too high according to
+    some heuristics. As of now, the cost should be 0, meaning we only support
+    postponing layout conversions and modify scalar splat operations.
+
+    As an example, this pass would modify the following code:
+```mlir
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+tt.func @test_two_convert_layout(%arg0: tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>, %arg1: tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>> {
+  %0 = triton_gpu.convert_layout %arg0 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  %1 = triton_gpu.convert_layout %arg1 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  %2 = arith.addf %0, %1 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  tt.return %2 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+}
+```
+    Obtaining:
+```mlir
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+module {
+  tt.func @test_two_convert_layout(%arg0: tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>, %arg1: tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>> {
+    %0 = arith.addf %arg0, %arg1 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>
+    %1 = triton_gpu.convert_layout %0 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+    tt.return %1 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  }
+}
+```
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
