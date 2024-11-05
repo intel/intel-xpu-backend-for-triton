@@ -213,7 +213,7 @@ class XPUBackend(BaseBackend):
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
-            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
 
         # Annotate module with information required by subsequent transformations.
@@ -277,7 +277,7 @@ class XPUBackend(BaseBackend):
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
-            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
         # FIXME: Advanced path drops tensor layouts, so this will crash on some
         # operations being used, e.g., convert_layout.
