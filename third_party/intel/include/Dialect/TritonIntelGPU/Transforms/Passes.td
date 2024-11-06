@@ -373,9 +373,9 @@ def TritonIntelGPUOptimizeElementwiseParallelism
   let description = [{
     Detect elementwise operations with an encoding causing sub-par parallelism,
     i.e., with data duplication across threads, and convert the operands to a
-    more optimal encoding if the cost of doing so is not too high according to
-    some heuristics. As of now, the cost should be 0, meaning we only support
-    postponing layout conversions and modify scalar splat operations.
+    more optimal encoding if the cost of doing so is heuristically estimated to
+    be sufficiently low. As of now, the cost should be 0, meaning we only
+    support postponing layout conversions and modify scalar splat operations.
 
     As an example, this pass would modify the following code:
 ```mlir
