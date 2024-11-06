@@ -376,11 +376,6 @@ class CUDABackend(BaseBackend):
             if os.path.exists(fbin):
                 os.remove(fbin)
 
-        if os.path.exists(fsrc.name):
-            os.remove(fsrc.name)
-        if os.path.exists(flog.name):
-            os.remove(flog.name)
-
         return cubin
 
     def add_stages(self, stages, options):
