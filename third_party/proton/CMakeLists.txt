@@ -18,6 +18,9 @@ endif()
 include_directories(${JSON_INCLUDE_DIR})
 include_directories(${PROTON_SRC_DIR}/include)
 include_directories(${PROTON_EXTERN_DIR})
+include_directories(/opt/intel/oneapi/pti/0.9/include)
+include_directories(/opt/intel/oneapi/compiler/latest/include)
+include_directories(/opt/intel/oneapi/compiler/latest/include/sycl)
 
 if(PYTHON_INCLUDE_DIRS)
   # We have PYTHON_INCLUDE_DIRS set--this is what we expect when building
@@ -49,4 +52,6 @@ include_directories(${CUPTI_INCLUDE_DIR})
 include_directories(SYSTEM ${ROCTRACER_INCLUDE_DIR})
 target_compile_definitions(proton PRIVATE __HIP_PLATFORM_AMD__)
 
+set_target_properties(proton PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
+# set_target_properties(proton PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 target_link_libraries(proton PRIVATE ${Python_LIBRARIES} ${PROTON_PYTHON_LDFLAGS})

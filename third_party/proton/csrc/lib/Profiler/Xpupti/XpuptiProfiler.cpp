@@ -5,7 +5,9 @@
 // #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/XpuptiApi.h"
 #include "Utility/Map.h"
+
 #include <pti/pti_view.h>
+#include <sycl/sycl.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -24,6 +26,50 @@ thread_local std::deque<size_t>
 
 namespace {
 
+std::vector<std::array<uint8_t, 16>> deviceUUIDs_ = {};
+
+// FIXME: Should it be in DeviceInfo class?
+// Inspired by Kineto: `XpuptiActivityProfiler.cpp`
+void enumDeviceUUIDs() {
+  if (!deviceUUIDs_.empty()) {
+    return;
+  }
+  auto platform_list = sycl::platform::get_platforms();
+  // Enumerated GPU devices from the specific platform.
+  for (const auto &platform : platform_list) {
+    if (platform.get_backend() != sycl::backend::ext_oneapi_level_zero) {
+      continue;
+    }
+    auto device_list = platform.get_devices();
+    for (const auto &device : device_list) {
+      if (device.is_gpu()) {
+        if (device.has(sycl::aspect::ext_intel_device_info_uuid)) {
+          deviceUUIDs_.push_back(
+              device.get_info<sycl::ext::intel::info::device::uuid>());
+        } else {
+          std::cerr << "Warnings: UUID is not supported for this XPU device. "
+                       "The device index of records will be 0."
+                    << std::endl;
+          deviceUUIDs_.push_back(std::array<uint8_t, 16>{});
+        }
+      }
+    }
+  }
+}
+
+uint8_t getDeviceIdxFromUUID(const uint8_t deviceUUID[16]) {
+  std::array<unsigned char, 16> key;
+  memcpy(key.data(), deviceUUID, 16);
+  auto it = std::find(deviceUUIDs_.begin(), deviceUUIDs_.end(), key);
+  if (it == deviceUUIDs_.end()) {
+    std::cerr
+        << "Warnings: Can't find the legal XPU device from the given UUID."
+        << std::endl;
+    return static_cast<uint8_t>(0);
+  }
+  return static_cast<uint8_t>(std::distance(deviceUUIDs_.begin(), it));
+}
+
 std::shared_ptr<Metric>
 convertActivityToMetric(xpupti::Pti_Activity *activity) {
   std::shared_ptr<Metric> metric;
@@ -34,9 +80,7 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
       metric = std::make_shared<KernelMetric>(
           static_cast<uint64_t>(kernel->_start_timestamp),
           static_cast<uint64_t>(kernel->_end_timestamp), 1,
-          // FIXME: Correct mapping function needed between types uint8_t[16]
-          // and uint64_t
-          static_cast<uint64_t>(kernel->_device_uuid[0]),
+          static_cast<uint64_t>(getDeviceIdxFromUUID(kernel->_device_uuid)),
           static_cast<uint64_t>(DeviceType::CUDA));
     } // else: not a valid kernel activity
     break;
