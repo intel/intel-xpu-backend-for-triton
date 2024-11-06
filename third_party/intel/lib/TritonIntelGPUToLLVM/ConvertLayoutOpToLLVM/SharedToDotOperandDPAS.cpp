@@ -3,7 +3,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 
-using ValueTable = std::map<std::pair<int, int>, Value>;
+using ValueTable = std::map<std::array<int, 3>, Value>;
 using mlir::triton::gpu::getShapePerCTA;
 using mlir::triton::gpu::SharedEncodingAttr;
 using mlir::triton::gpu::intel::DpasEncodingAttr;
@@ -16,17 +16,22 @@ public:
   DpasMatmulLoader(DpasEncodingAttr dpasLayout, MemDescType descTy,
                    unsigned warpsPerTile, ArrayRef<Value> smemStrides,
                    const SmallVector<unsigned> &warpShape,
+                   SmallVector<Value> multiDimWarpId,
                    ConversionPatternRewriter &rewriter,
                    const LLVMTypeConverter *typeConverter, Location loc)
       : dpasLayout(dpasLayout), descTy(descTy), smemStrides(smemStrides),
-        rewriter(rewriter), loc(loc) {
+        multiDimWarpId(multiDimWarpId), rewriter(rewriter), loc(loc) {
     static_assert(opIdx == 0 || opIdx == 1);
 
-    unsigned kDim = (opIdx == 0) ? 1 : 0;
+    size_t rank = warpShape.size();
+    unsigned kDim = opIdx ? rank - 2 : rank - 1;
+    unsigned nonKDim = opIdx ? rank - 1 : rank - 2;
+    // Assume that smem is create with layout offset {2, 1, 0}
+    repBatchDimStride = smemStrides[0];
     repKDimStride = mul(i32_val(warpShape[kDim]), smemStrides[kDim]);
     repNonKDimStride =
-        mul(i32_val(warpShape[kDim ^ 1] * warpsPerTile), smemStrides[kDim ^ 1]);
-    warpMatStride = mul(i32_val(warpShape[kDim ^ 1]), smemStrides[kDim ^ 1]);
+        mul(i32_val(warpShape[nonKDim] * warpsPerTile), smemStrides[nonKDim]);
+    warpMatStride = mul(i32_val(warpShape[nonKDim]), smemStrides[nonKDim]);
 
     unsigned threadsPerWarp = getThreadsPerWarp();
 
@@ -44,9 +49,9 @@ public:
   SmallVector<Value> computeLdsMatOffs(Value warpOff, Value lane,
                                        Value cSwizzleOffset);
   // Load the matrix value.
-  Value loadMatrix(int repOuter, int repInner, const ArrayRef<Value> ptrs,
-                   LLVM::LLVMStructType structTy, Type smemTy,
-                   Value cSwizzleOffset) const;
+  Value loadMatrix(int repBatch, int repOuter, int repInner,
+                   const ArrayRef<Value> ptrs, LLVM::LLVMStructType structTy,
+                   Type smemTy, Value cSwizzleOffset) const;
 
 private:
   unsigned getThreadsPerWarp() const {
@@ -57,6 +62,8 @@ private:
   MemDescType descTy;
 
   SmallVector<Value> smemStrides;
+  SmallVector<Value> multiDimWarpId;
+  Value repBatchDimStride;
   Value repNonKDimStride;
   Value repKDimStride;
 
@@ -77,6 +84,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   unsigned executionSize = dpasLayout.getExecutionSize();
   unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
   unsigned threadsPerWarp = getThreadsPerWarp();
+  unsigned rank = dpasLayout.getRepCluster().size();
 
   Value laneRowIndex, laneColIndex;
   unsigned rowsPerInst = 0u, rowsPerWarp = 0u, packedOpsPerLane = 0u;
@@ -87,7 +95,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
     // Unlike the operand B, to pack the value to i16 for scalar bit width <=16.
     packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
-    unsigned packedColNum = shapeA[1] / packedOpsPerLane;
+    unsigned packedColNum = shapeA[rank - 1] / packedOpsPerLane;
     assert(threadsPerWarp >= packedColNum &&
            "DpasEncodingAttr sub-group size could not "
            "be smaller than the threads required per row for A operand.");
@@ -128,9 +136,11 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   SmallVector<unsigned> instShape = opIdx == 0 ? dpasLayout.getDPASInstShapeA()
                                                : dpasLayout.getDPASInstShapeB();
   ArrayRef<int64_t> shareMemoryShape = descTy.getShape();
+  SmallVector<int64_t> shapePerCTA = getShapePerCTA(descTy);
 
   SmallVector<Value> offs(numPtrs);
-  const unsigned repClusterSize = dpasLayout.getRepCluster()[opIdx];
+  const unsigned repClusterSize =
+      dpasLayout.getRepCluster()[opIdx ? rank - 1 : rank - 2];
   unsigned index = 0u;
   for (unsigned repIdx = 0; repIdx < repClusterSize; ++repIdx) {
     unsigned repIndex = repIdx * instShape[opIdx];
@@ -154,8 +164,8 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
 
         // round the offset into the tensor's shape limitation. (Rounded
         // broadcast)
-        iBase = urem(iBase, i32_val(shareMemoryShape[0]));
-        jBase = urem(jBase, i32_val(shareMemoryShape[1]));
+        iBase = urem(iBase, i32_val(shareMemoryShape[rank - 2]));
+        jBase = urem(jBase, i32_val(shareMemoryShape[rank - 1]));
 
         // inner index offset
         Value jOff = zeroVal;
@@ -164,10 +174,17 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
         jOff = add(jOff, udiv(cSwizzleOffset, vecVal));
         jOff = mul(xor_(jOff, phase), vecVal);
 
-        Value i = add(mul(iBase, smemStrides[0]), iOff);
-        Value j = add(mul(jBase, smemStrides[1]), jOff);
+        Value i = add(mul(iBase, smemStrides[rank - 2]), iOff);
+        Value j = add(mul(jBase, smemStrides[rank - 1]), jOff);
 
-        offs[index++] = add(i, j);
+        Value baseOff;
+        if (shapePerCTA.size() == 3 && shapePerCTA[0] > 1) {
+          Value batchOffset =
+              mul(multiDimWarpId[0], i32_val(shapePerCTA[1] * shapePerCTA[2]));
+          offs[index++] = add(batchOffset, add(i, j));
+        } else {
+          offs[index++] = add(i, j);
+        }
       }
     }
   }
@@ -176,11 +193,9 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
 }
 
 template <unsigned opIdx>
-Value DpasMatmulLoader<opIdx>::loadMatrix(int repOuter, int repInner,
-                                          const ArrayRef<Value> ptrs,
-                                          LLVM::LLVMStructType structTy,
-                                          Type smemTy,
-                                          Value cSwizzleOffset) const {
+Value DpasMatmulLoader<opIdx>::loadMatrix(
+    int repBatch, int repOuter, int repInner, const ArrayRef<Value> ptrs,
+    LLVM::LLVMStructType structTy, Type smemTy, Value cSwizzleOffset) const {
   Type elemTy = structTy.getBody()[0];
   assert(
       llvm::any_of(structTy.getBody(), [&](Type ty) { return ty == elemTy; }) &&
@@ -189,6 +204,12 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(int repOuter, int repInner,
   Value offsetOuter = mul(i32_val(repOuter), repNonKDimStride);
   Value offsetInner = mul(i32_val(repInner), repKDimStride);
   Value offset = add(offsetOuter, offsetInner);
+  if (repBatch > 0) {
+    SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    Value offsetBatch =
+        mul(i32_val(repBatch * warpsPerCTA[0]), repBatchDimStride);
+    offset = add(offset, offsetBatch);
+  }
 
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
   size_t elemNum = structTy.getBody().size();
@@ -203,18 +224,20 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(int repOuter, int repInner,
 }
 
 Value composeValuesToDotOperandLayoutStruct(
-    const ValueTable &vals, int n0, int n1,
+    const ValueTable &vals, int batch, int n0, int n1,
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
   std::vector<Value> elems;
-  for (int m = 0; m < n0; ++m) {
-    for (int k = 0; k < n1; ++k) {
-      Value matVal = vals.at({m, k});
-      auto matType = cast<LLVM::LLVMStructType>(matVal.getType());
-      Type valTy = matType.getBody()[0];
-      for (int i = 0; i < matType.getBody().size(); ++i) {
-        auto val = extract_val(valTy, matVal, i);
-        elems.push_back(val);
+  for (int b = 0; b < batch; ++b) {
+    for (int m = 0; m < n0; ++m) {
+      for (int k = 0; k < n1; ++k) {
+        Value matVal = vals.at({b, m, k});
+        auto matType = cast<LLVM::LLVMStructType>(matVal.getType());
+        Type valTy = matType.getBody()[0];
+        for (int i = 0; i < matType.getBody().size(); ++i) {
+          auto val = extract_val(valTy, matVal, i);
+          elems.push_back(val);
+        }
       }
     }
   }
@@ -245,10 +268,11 @@ Type getSharedMemTy(Type argType) {
 }
 
 template <unsigned opIdx>
-std::function<void(int, int)>
+std::function<void(int, int, int)>
 getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
                 DpasEncodingAttr dpasLayout, unsigned warpsPerTile,
-                SmallVector<unsigned> instrShape, Value warpId,
+                SmallVector<unsigned> shapePerWarp,
+                SmallVector<Value> multiDimWarpId, Value warpId,
                 Value outerWarpDim, Value laneId, ValueTable &vals,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
@@ -259,12 +283,14 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
 
   auto sharedLayout = cast<SharedEncodingAttr>(descTy.getEncoding());
   ArrayRef<unsigned> order = sharedLayout.getOrder();
+  size_t rank = order.size();
 
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &smemObj, &instrShape, &vals](int a, int b) {
-    DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
-                                   smemObj.strides, instrShape, rewriter,
-                                   typeConverter, loc);
+  auto load = [=, &rewriter, &smemObj, &shapePerWarp, &multiDimWarpId,
+               &vals](int batch, int outer, int inner) {
+    DpasMatmulLoader<opIdx> loader(
+        dpasLayout, descTy, warpsPerTile, smemObj.strides, shapePerWarp,
+        multiDimWarpId, rewriter, typeConverter, loc);
 
     // Offset of a slice within the original tensor in shared memory.
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
@@ -282,14 +308,15 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
           gep(ptr_ty(rewriter.getContext(), 3), smemTy, smemBase, offs[i]);
 
     // Load from shared memory.
-    unsigned totalElem = product<unsigned>(instrShape);
+    unsigned totalElem = product<unsigned>(shapePerWarp);
     unsigned threadsPerWarp = product<unsigned>(getThreadsPerWarp(dpasLayout));
     auto matTy = LLVM::LLVMStructType::getLiteral(
         eltTy.getContext(),
         SmallVector<Type>(totalElem / threadsPerWarp,
                           typeConverter->convertType(eltTy)));
 
-    vals[{a, b}] = loader.loadMatrix(a, b, ptrs, matTy, smemTy, cSwizzleOffset);
+    vals[{batch, outer, inner}] = loader.loadMatrix(
+        batch, outer, inner, ptrs, matTy, smemTy, cSwizzleOffset);
   };
 
   return load;
@@ -324,27 +351,33 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<Value> multiDimWarpId =
       LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
-  unsigned ceilRes = mlir::ceil<unsigned>(shapePerCTA[opIdx], shape[opIdx]);
-  Value outerWarpDim = urem(multiDimWarpId[opIdx], i32_val(ceilRes));
-  unsigned warpsPerTile = std::min<unsigned>(warpsPerCTA[opIdx], ceilRes);
+  unsigned rank = shape.size();
+  unsigned dimOuter = opIdx ? (rank - 1) : (rank - 2);
+  unsigned ceilRes =
+      mlir::ceil<unsigned>(shapePerCTA[dimOuter], shape[dimOuter]);
+  Value outerWarpDim = urem(multiDimWarpId[dimOuter], i32_val(ceilRes));
+  unsigned warpsPerTile = std::min<unsigned>(warpsPerCTA[dimOuter], ceilRes);
 
   // Get the function to use to load the operand.
   ValueTable vals;
-  std::function<void(int, int)> loadFn = getLoadMatrixFn<opIdx>(
-      descTy, smemObj, dpasLayout, warpsPerTile, std::move(shape), warpId,
-      outerWarpDim, laneId, vals, typeConverter, rewriter, loc);
+  std::function<void(int, int, int)> loadFn = getLoadMatrixFn<opIdx>(
+      descTy, smemObj, dpasLayout, warpsPerTile, std::move(shape),
+      std::move(multiDimWarpId), warpId, outerWarpDim, laneId, vals,
+      typeConverter, rewriter, loc);
 
   // Load the operand.
-  int64_t numRepOuter = numReps[opIdx];
-  int64_t numRepK = numReps[(opIdx == 0) ? 1 : 0];
+  int64_t numRepBatch = numReps[0];
+  int64_t numRepOuter = numReps[opIdx ? 2 : 1];
+  int64_t numRepK = numReps[opIdx ? 1 : 2];
 
-  for (int m = 0; m < numRepOuter; ++m)
-    for (int k = 0; k < numRepK; ++k)
-      loadFn(m, k);
+  for (int b = 0; b < numRepBatch; ++b)
+    for (int m = 0; m < numRepOuter; ++m)
+      for (int k = 0; k < numRepK; ++k)
+        loadFn(b, m, k);
 
   // Format the values into an LLVM::Struct.
-  return composeValuesToDotOperandLayoutStruct(vals, numRepOuter, numRepK,
-                                               typeConverter, loc, rewriter);
+  return composeValuesToDotOperandLayoutStruct(
+      vals, numRepBatch, numRepOuter, numRepK, typeConverter, loc, rewriter);
 }
 
 } // namespace

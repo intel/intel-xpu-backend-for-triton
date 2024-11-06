@@ -3,8 +3,8 @@
 
 #include "TargetInfo.h"
 #include "TritonGPUToLLVMBase.h"
+#include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
-#include "triton/Analysis/AxisInfo.h"
 
 namespace mlir::triton::intel {
 
@@ -53,7 +53,7 @@ void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateLoadStoreOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     const TargetInfo &targetInfo, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
+    const ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
 
 void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,

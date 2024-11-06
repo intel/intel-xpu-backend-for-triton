@@ -69,29 +69,39 @@ SmallVector<unsigned> getWarpsPerTile(DotOp dotOp,
     if (isa<DotOp>(op) && (op != dotOp))
       return {numWarps, 1};
 
-  SmallVector<unsigned> ret{1, 1};
-  SmallVector<int64_t> shapePerWarp{dpasCap.repeatCount, dpasCap.executionSize};
+  size_t rank = shape.size();
+  SmallVector<unsigned> ret(rank, 1);
+
+  if (rank == 3) {
+    int batchWarp = numWarps;
+    while (batchWarp > shape[0])
+      batchWarp /= 2;
+    ret[0] = batchWarp;
+    numWarps /= batchWarp;
+  }
 
   // Try to find a proper tiling shape for the dot operation.
   // It doubles the warp number in col or row in each time based on column to
   // width ratio.
   // By this, we can minimize the duplication of the dot operands A and B.
+  SmallVector<int64_t> shapePerWarp{dpasCap.repeatCount, dpasCap.executionSize};
   uint32_t rowColRatio =
       ceil<uint32_t>(dpasCap.repeatCount, dpasCap.executionSize);
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
 
+  int rowDim = rank - 2, colDim = rank - 1;
   do {
-    if (ret[0] * ret[1] >= numWarps)
+    if (ret[rowDim] * ret[colDim] >= numWarps)
       break;
-    if (shape[0] / (shapePerWarp[0] * colRowRatio) / ret[0] >=
-        shape[1] / (shapePerWarp[1] * rowColRatio) / ret[1]) {
-      if (ret[0] < shape[0] / shapePerWarp[0])
-        ret[0] *= 2;
+    if (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
+        shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim]) {
+      if (ret[rowDim] < shape[rowDim] / shapePerWarp[0])
+        ret[rowDim] *= 2;
       else
-        ret[1] *= 2;
+        ret[colDim] *= 2;
     } else {
-      ret[1] *= 2;
+      ret[colDim] *= 2;
     }
   } while (true);
 
@@ -121,6 +131,7 @@ public:
 
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
+    size_t rank = retShape.size();
     ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
     unsigned numWarps = TritonGPUDialect::getNumWarps(mod);
 
@@ -145,11 +156,12 @@ public:
     unsigned opsPerChan = dpasCap.opsChanBitWidths / dpasElemBitWidths;
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+    SmallVector<unsigned> repCluster(rank, 1);
 
     unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     auto dpasEnc = intel::DpasEncodingAttr::get(
         oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
-        dpasCap.executionSize, opsPerChan, warpsPerTile, {1, 1},
+        dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
 
     if (dpasCap.executionSize == 16 /* PVC */) {
@@ -160,7 +172,7 @@ public:
       SmallVector<int64_t> repA =
           dpasEnc.getDPASRepetitions(oldAType.getShape(), 0);
       unsigned repClusterDimM =
-          std::min(maxRepClusterM, static_cast<unsigned>(repA[0]));
+          std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
 
       unsigned maxRepClusterN =
           PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
@@ -168,12 +180,14 @@ public:
       SmallVector<int64_t> repB =
           dpasEnc.getDPASRepetitions(oldBType.getShape(), 1);
       unsigned repClusterDimN =
-          std::min(maxRepClusterN, static_cast<unsigned>(repB[1]));
+          std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
+      repCluster[rank - 2] = repClusterDimM;
+      repCluster[rank - 1] = repClusterDimN;
 
       dpasEnc = intel::DpasEncodingAttr::get(
           oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
-          dpasCap.executionSize, opsPerChan, warpsPerTile,
-          {repClusterDimM, repClusterDimN}, threadsPerWarp);
+          dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
+          threadsPerWarp);
     }
 
     RankedTensorType newRetType =

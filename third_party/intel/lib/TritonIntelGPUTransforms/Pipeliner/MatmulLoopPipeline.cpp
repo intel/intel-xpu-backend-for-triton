@@ -10,6 +10,8 @@
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritonintelgpu-pipeline"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -55,30 +57,25 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
   if (!tensorType)
     return nullptr;
 
-  if (isa<ttg::SharedEncodingAttr>(tensorType.getEncoding()))
-    return allTransitiveUsesHaveDotEncoding(res);
-
-  return llvm::dyn_cast_or_null<ttg::DotOperandEncodingAttr>(
-      tensorType.getEncoding());
+  Attribute layout = tensorType.getEncoding();
+  return isa<ttg::SharedEncodingAttr, ttg::BlockedEncodingAttr>(layout)
+             ? allTransitiveUsesHaveDotEncoding(res)
+             : llvm::dyn_cast_or_null<ttg::DotOperandEncodingAttr>(layout);
 }
 
 /// If all the transitive uses of the given value are used by a convert to the
 /// same dot operand encoding, return the encoding. Otherwise return nullptr.
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
   ttg::DotOperandEncodingAttr attr{nullptr};
-  LLVM_DEBUG(llvm::dbgs() << "Checking users of " << val << "\n");
+  LDBG("Checking users of " << val);
   for (Operation *user : val.getUsers()) {
-    ttg::DotOperandEncodingAttr dotAttr;
-    if (isa<triton::DotOp>(user)) {
-      auto tensorType = cast<RankedTensorType>(val.getType());
-      dotAttr = dyn_cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
-    } else {
-      dotAttr = getDotEncodingFromUser(user);
-    }
+    ttg::DotOperandEncodingAttr dotAttr =
+        isa<triton::DotOp>(user)
+            ? dyn_cast<ttg::DotOperandEncodingAttr>(
+                  cast<RankedTensorType>(val.getType()).getEncoding())
+            : getDotEncodingFromUser(user);
     if (!dotAttr || (attr != nullptr && attr != dotAttr)) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "no dot attribute found for user: " << user << "\n";
-      });
+      LDBG("no dot attribute found for user: " << *user);
       return nullptr;
     }
     attr = dotAttr;
@@ -292,14 +289,14 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
   SmallVector<LoadDotOperand> loads;
   collectOpsToPipeline(forOp, loads, supportRegularPtr);
   if (loads.empty()) {
-    LLVM_DEBUG(llvm::dbgs() << "No loads to pipeline\n");
+    LDBG("No loads to pipeline");
     return false;
   }
 
   LLVM_DEBUG({
-    llvm::dbgs() << "Loads to pipeline:\n";
+    DBGS() << "Loads to pipeline:\n";
     for (const LoadDotOperand &load : loads)
-      llvm::dbgs() << "  " << *load.load << "\n";
+      DBGS() << "  " << *load.load << "\n";
   });
 
   // 2. Create the prefetching operations for the loads collected.
