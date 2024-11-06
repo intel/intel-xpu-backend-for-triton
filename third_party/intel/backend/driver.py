@@ -2,6 +2,7 @@ import importlib.metadata
 import os
 import hashlib
 import shutil
+import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
@@ -115,7 +116,8 @@ compilation_helper = CompilationHelper()
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
+    file_name = f"{name}.{sysconfig.get_config_var('EXT_SUFFIX').split('.')[-1]}"
+    cache_path = cache.get_file(file_name)
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
@@ -127,7 +129,7 @@ def compile_module_from_src(src, name):
             so = _build(name, src_path, tmpdir, compilation_helper.library_dir, compilation_helper.include_dir,
                         compilation_helper.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+                cache_path = cache.put(f.read(), file_name, binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
