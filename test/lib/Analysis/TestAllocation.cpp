@@ -19,7 +19,7 @@ struct TestAllocationPass
     auto &os = llvm::errs();
     ModuleOp moduleOp = getOperation();
     // Convert to std::string can remove quotes from opName
-    ModuleAllocation moduleAllocation(moduleOp);
+    ModuleAllocation moduleAllocation = ModuleAllocation::get(moduleOp);
     moduleOp.walk([&](triton::FuncOp funcOp) {
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
       os << opName << "\n";
