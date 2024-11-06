@@ -552,8 +552,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
-dotOperandMfmaToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
-                             ArrayRef<int64_t> shape) {
+mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
+                      ArrayRef<int64_t> shape) {
 
   // Current linear layout conversion for dot operand is only necessary to
   // enable LDS bypass for operand B in the MFMA dot path. To achieve
@@ -896,7 +896,7 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
       llvm::to_vector(llvm::reverse(ArrayRef(dimNames).take_back(2))));
 
   auto order = dot.getCTAOrder();
-  assert(order[0] == 1 && order[1] == 0);
+  assert(order[0] == rank - 1 && order[1] == rank - 2);
   ctaLayout *= identityND(S("warp"), dot.getWarpsPerCTA(), order, dimNames);
 
   return combineCtaCgaWithShape(ctaLayout, mma.getCTALayout(), shape);
@@ -904,19 +904,17 @@ LinearLayout ampereDotToLinearLayout(ArrayRef<int64_t> shape,
 
 std::optional<LinearLayout>
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
-    return dotOperandMfmaToLinearLayout(*this, shape);
-  }
-  if (auto dpasLayout = llvm::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
+  auto parent = getParent();
+  if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
+    return mfmaDotToLinearLayout(*this, shape);
+  } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
+    if (mma.getVersionMajor() == 2 && mma.getVersionMinor() == 0) {
+      return ampereDotToLinearLayout(shape, *this);
+    }
+  } else if (auto dpasLayout =
+                 llvm::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
     return dotOperandDpasToLinearLayout(*this, shape);
   }
-
-  // TODO Activate in a follow-up PR
-  // else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(getParent())) {
-  //  if (mma.isAmpere()) {
-  //    return ampereDotToLinearLayout(shape, *this);
-  //  }
-  //}
   return std::nullopt;
 }
 

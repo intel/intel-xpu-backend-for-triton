@@ -48,7 +48,7 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     return cc_cmd
 
 
-def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
+def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compile_args=[]):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -75,7 +75,6 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
     custom_backend_dirs = set(os.getenv(var) for var in ('TRITON_CUDACRT_PATH', 'TRITON_CUDART_PATH'))
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
-    extra_compiler_flags = []
 
     if is_xpu():
         icpx = None
@@ -92,9 +91,9 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
         if icpx is not None:
-            extra_compiler_flags += ["-fsycl"]
+            extra_compile_args += ["-fsycl"]
         else:
-            extra_compiler_flags += ["--std=c++17"]
+            extra_compile_args += ["--std=c++17"]
         if os.name == "nt":
             library_dirs += [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
     else:
@@ -102,7 +101,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
 
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
-    cc_cmd += extra_compiler_flags
+    cc_cmd += extra_compile_args
 
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
@@ -110,8 +109,6 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
-    # fallback on setuptools
-    extra_compile_args = []
     # extra arguments
     extra_link_args = []
     # create extension module

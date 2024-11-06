@@ -1,4 +1,5 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -8,8 +9,10 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 #include <array>
 
 using namespace mlir;
@@ -77,7 +80,19 @@ public:
         ret.push_back(v);
       }
     }
-
+    // FIXME [Dot LL]
+    // The DotOperandEncodingAttr without LLs encodes the
+    // layout as
+    // e0 e1
+    // e2 e3
+    // rather than transposed that, as the PTX docs say
+    // We transpose every block of 4 elements (kWidth = 8 -> 4 bf16x2)
+    assert(ret.size() % 16 == 0);
+    for (int i = 0; i < ret.size() / 16; ++i) {
+      for (int j = 0; j < 4; ++j) {
+        std::swap(ret[16 * i + j + 4], ret[16 * i + j + 8]);
+      }
+    }
     return ret;
   }
 
@@ -91,6 +106,7 @@ public:
 
     auto xVals = unpackLLElements(loc, operands[0], rewriter);
     auto scaleVals = unpackLLElements(loc, operands[1], rewriter);
+    auto fpType = op.getFpType();
 
     Value tid = tid_val();
     auto mod = op->getParentOfType<ModuleOp>();
@@ -99,7 +115,11 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    auto scale = [&loc, &rewriter](Value v, Value s) -> Value {
+    if (fpType == ScaleDotElemType::E2M1) {
+      xVals = unpackFP4Elements(loc, rewriter, xVals, laneId);
+    }
+
+    auto scaleBf16x2 = [&loc, &rewriter](Value v, Value s) -> Value {
       // Split bf16x2 into 2 bf16, scale each of them, and pack them back
       // TODO Is it true that the bfloats are always packed as bf16x2?
       auto bf16_0 = bitcast(trunc(i16_ty, v), bf16_ty);
@@ -123,18 +143,18 @@ public:
     auto c = mul(udiv(laneId, i32_val(4)), i32_val(2));
     std::array<Value, 4> ci = {c, add(c, i32_val(1)), add(c, i32_val(16)),
                                add(c, i32_val(17))};
+
     for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
+      // column major as per the DotOperandEncoding(opidx=0) layout
       auto si = std::array<Value, 4>{
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[0]),
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[1]),
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[2]),
+          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[1]),
           targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[3]),
       };
-      // si indices for the 16 elements in x
-      std::array<int, 16> siMap = {0, 0, 2, 2, 0, 0, 2, 2,
-                                   1, 1, 3, 3, 1, 1, 3, 3};
+
       for (int j = 0; j < 16; ++j) {
-        xVals[16 * i + j] = scale(xVals[16 * i + j], si[siMap[j]]);
+        xVals[16 * i + j] = scaleBf16x2(xVals[16 * i + j], si[j / 4]);
       }
     }
 

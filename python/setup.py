@@ -481,11 +481,11 @@ class CMakeBuild(build_ext):
         cfg = get_build_type()
         build_args = ["--config", cfg]
 
+        cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
         if platform.system() == "Windows":
             cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             cmake_args += [f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
         else:
-            cmake_args += ["-DCMAKE_BUILD_TYPE=" + cfg]
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
 
@@ -550,9 +550,9 @@ def get_platform_dependent_src_path(subdir):
          if int(version_major) >= 12 and int(version_minor1) >= 5 else subdir)(*version.split('.')))
 
 
-extension = ".exe" if os.name == "nt" else ""
+exe_extension = sysconfig.get_config_var("EXE")
 download_and_copy(
-    name="ptxas", src_path=f"bin/ptxas{extension}", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
+    name="ptxas", src_path=f"bin/ptxas{exe_extension}", dst_path="bin/ptxas", variable="TRITON_PTXAS_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["ptxas"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
       f"https://anaconda.org/nvidia/cuda-nvcc-tools/{version}/download/{system}-{arch}/cuda-nvcc-tools-{version}-0.tar.bz2"
@@ -561,7 +561,7 @@ download_and_copy(
      (*version.split('.'))))
 download_and_copy(
     name="cuobjdump",
-    src_path=f"bin/cuobjdump{extension}",
+    src_path=f"bin/cuobjdump{exe_extension}",
     dst_path="bin/cuobjdump",
     variable="TRITON_CUOBJDUMP_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
@@ -570,7 +570,7 @@ download_and_copy(
 )
 download_and_copy(
     name="nvdisasm",
-    src_path=f"bin/nvdisasm{extension}",
+    src_path=f"bin/nvdisasm{exe_extension}",
     dst_path="bin/nvdisasm",
     variable="TRITON_NVDISASM_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
