@@ -113,7 +113,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   }
 
   if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
-    // Conversions that can be implemented as sub-group transposes store the whole tensor in shared memory and read it afterwards.
+    // Conversions that can be implemented as sub-group transposes store the
+    // whole tensor in shared memory and read it afterwards.
     auto srcEncoding = cast<gpu::DistributedEncodingTrait>(srcTy.getEncoding());
     unsigned threadsPerWarp = product(srcEncoding.getThreadsPerWarp());
     unsigned warpsPerCTA = product(srcEncoding.getWarpsPerCTA());
