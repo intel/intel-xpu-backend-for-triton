@@ -13408,10 +13408,6 @@ Value *BoUpSLP::vectorizeTree(
     const ExtraValueToDebugLocsMap &ExternallyUsedValues,
     SmallVectorImpl<std::pair<Value *, Value *>> &ReplacedExternals,
     Instruction *ReductionRoot) {
-  // All blocks must be scheduled before any instructions are inserted.
-  for (auto &BSIter : BlocksSchedules) {
-    scheduleBlock(BSIter.second.get());
-  }
   // Clean Entry-to-LastInstruction table. It can be affected after scheduling,
   // need to rebuild it.
   EntryToLastInstruction.clear();
@@ -15269,7 +15265,11 @@ bool SLPVectorizerPass::runImpl(Function &F, ScalarEvolution *SE_,
     R.clearReductionData();
 
     // Vectorize trees that end at reductions.
+    //    llvm::outs() << "BB befoer vectorize:\n" << *BB << "\n";
+    //    llvm::outs().flush();
     Changed |= vectorizeChainsInBlock(BB, R);
+    //    llvm::outs() << "BB after vectorize:\n" << *BB << "\n";
+    //    llvm::outs().flush();
   }
 
   if (Changed) {
@@ -15436,7 +15436,13 @@ bool SLPVectorizerPass::vectorizeInsertElementInst(InsertElementInst *IEI,
     return false;
 
   LLVM_DEBUG(dbgs() << "SLP: array mappable to vector: " << *IEI << "\n");
-  return tryToVectorizeList(BuildVectorInsts, R);
+  //  llvm::outs() << "Before Vectorize the instruction Function:\n" <<
+  //  *BB->getParent() << "\n";
+  auto changed = tryToVectorizeList(BuildVectorInsts, R);
+  //  llvm::outs() << "After Vectorize the instruction BB:\n" <<
+  //  *BB->getParent() << "\n"; llvm::outs().flush();
+
+  return changed;
 }
 
 bool SLPVectorizerPass::vectorizeInserts(InstSetVector &Instructions,
@@ -15444,6 +15450,11 @@ bool SLPVectorizerPass::vectorizeInserts(InstSetVector &Instructions,
   assert(all_of(Instructions, IsaPred<InsertElementInst>) &&
          "This function only accepts Insert instructions");
   bool OpsChanged = false;
+
+  //  for (auto *I : Instructions) {
+  //    llvm::outs() << "Vectorize insert instructions: " << *I << "\n";
+  //    llvm::outs().flush();
+  //  }
   // Try to match and vectorize a buildvector sequence.
   for (auto *I : reverse(Instructions)) {
     if (R.isDeleted(I))
@@ -15545,8 +15556,11 @@ void mlir::triton::intel::SLPVectorizer(llvm::Module &mod, bool trace) {
   FunctionPassManager FPM;
   FPM.addPass(SLPVectorizerPass(trace));
 
+  //  ::llvm::setCurrentDebugType("SLP");
+  //  ::llvm::DebugFlag = true;
   for (llvm::Function &function : mod.functions()) {
     if (isCandidate(function))
       FPM.run(function, FAM);
   }
+  //  ::llvm::DebugFlag = false;
 }
