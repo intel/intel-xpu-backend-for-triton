@@ -1,6 +1,5 @@
 import multiprocessing
 import shutil
-import os
 
 import triton
 import triton.language as tl
