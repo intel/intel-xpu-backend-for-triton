@@ -51,17 +51,17 @@ public:
       if (largeKWidth) {
         return;
       }
-      auto srcOrder = triton::gpu::getOrder(srcEncoding);
-      auto rank = srcOrder.size();
+      auto srcThreadOrder = triton::gpu::getThreadOrder(srcEncoding);
+      auto rank = srcThreadOrder.size();
       SmallVector<unsigned> sharedOrder;
       if (rank == 3) {
         // add all elements except the element that is zero
         for (unsigned i = 0; i < rank; ++i)
-          if (srcOrder[i] != 0)
-            sharedOrder.emplace_back(srcOrder[i]);
+          if (srcThreadOrder[i] != 0)
+            sharedOrder.emplace_back(srcThreadOrder[i]);
         sharedOrder.emplace_back(0);
       } else {
-        sharedOrder = srcOrder;
+        sharedOrder = srcThreadOrder;
       }
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
