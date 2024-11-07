@@ -6,6 +6,7 @@
 
 This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton/) backend for Intel GPUs. Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) and standalone usage.
 
+<<<<<<< HEAD
 # Compatibility
 
 * Operating systems:
@@ -21,11 +22,25 @@ This is the development repository of Intel® XPU Backend for Triton\*, a new [T
   * Latest [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 
 Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
+=======
+| **`Documentation`** | **`Nightly Wheels`** |
+|-------------------- | -------------------- |
+| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
+
+# Triton
+
+This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
+
+The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
+
+The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
+>>>>>>> d6739d3c33dee481f2d4dee4f6ecd4123f671597
 
 # Quick Installation
 
 ## Prerequisites
 
+<<<<<<< HEAD
 1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
 2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
 3. Latest release of [Profiling Tools Interfaces for Intel GPU (PTI for GPU)](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
@@ -40,18 +55,35 @@ Extract the archive and in the extracted directory execute:
 ```shell
 pip install torch-*.whl triton-*.whl
 ```
+=======
+```shell
+pip install triton
+```
+
+Binary wheels are available for CPython 3.8-3.12 and PyPy 3.8-3.9.
+>>>>>>> d6739d3c33dee481f2d4dee4f6ecd4123f671597
 
 Before using Intel® XPU Backend for Triton\* you need to initialize the toolchain.
 The default location is `/opt/intel/oneapi` (if installed as a `root` user) or `~/intel/oneapi` (if installed as a regular user).
 
 ```shell
+<<<<<<< HEAD
 # replace /opt/intel/oneapi with the actual location of PyTorch Prerequisites for Intel GPUs
 source /opt/intel/oneapi/setvars.sh
+=======
+pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
+>>>>>>> d6739d3c33dee481f2d4dee4f6ecd4123f671597
 ```
 
 # Install from source
 
+<<<<<<< HEAD
 ## Prerequisites
+=======
+```shell
+git clone https://github.com/triton-lang/triton.git;
+cd triton;
+>>>>>>> d6739d3c33dee481f2d4dee4f6ecd4123f671597
 
 1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
 2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
@@ -72,9 +104,14 @@ source /opt/intel/oneapi/setvars.sh
 Clone this repository:
 
 ```shell
+<<<<<<< HEAD
 git clone https://github.com/intel/intel-xpu-backend-for-triton.git
 cd intel-xpu-backend-for-triton
 ```
+=======
+git clone https://github.com/triton-lang/triton.git;
+cd triton;
+>>>>>>> d6739d3c33dee481f2d4dee4f6ecd4123f671597
 
 To avoid potential conflicts with installed packages it is recommended to create and activate a new Python virtual environment:
 
@@ -205,6 +242,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 
 # Usage Guide
 
+<<<<<<< HEAD
 ## Code Modifications
 Intel® XPU Backend for Triton\* requires a special version of PyTorch that can be built from sources or installed from nightly wheels.
 
@@ -308,6 +346,14 @@ Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user 
 ```Bash
 export TRITON_XPU_PROFILE=1
 ```
+=======
+Version 2.0 is out! New features include:
+
+- Many, many bug fixes
+- Performance improvements
+- Backend rewritten to use MLIR
+- Support for kernels that contain back-to-back matmuls (e.g., flash attention)
+>>>>>>> d6739d3c33dee481f2d4dee4f6ecd4123f671597
 
 # Contributing
 
@@ -317,6 +363,7 @@ Community contributions are more than welcome, whether it be to fix bugs or to a
 
 _MIT License_. As found in [LICENSE](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/LICENSE) file.
 
+<<<<<<< HEAD
 
 ## Security
 
@@ -324,3 +371,16 @@ See Intel's [Security Center](https://www.intel.com/content/www/us/en/security-c
 for information on how to report a potential security issue or vulnerability.
 
 See also: [Security Policy](security.md)
+=======
+# Compatibility
+
+Supported Platforms:
+
+- Linux
+
+Supported Hardware:
+
+- NVIDIA GPUs (Compute Capability 8.0+)
+- AMD GPUs (ROCm 5.2+)
+- Under development: CPUs
+>>>>>>> d6739d3c33dee481f2d4dee4f6ecd4123f671597
