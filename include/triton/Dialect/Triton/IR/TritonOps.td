@@ -108,6 +108,8 @@ def TT_FpToFpOp : TT_Op<"fp_to_fp", [SameOperandsAndResultShape,
     let assemblyFormat = "$src attr-dict  (`,` `rounding` `=` $rounding^)? `:` type($src) `->` type($result)";
 
     let hasVerifier = 1;
+
+    let hasFolder = 1;
 }
 
 //
@@ -685,15 +687,15 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let arguments = (
       ins
-      // inputs are integer types as they are packed types and we currently
-      // don't have a representation for those.
-      TT_IntTensor:$lhs,
-      TT_IntTensor:$rhs,
+      // inputs are floats if we have a type for them, otherwise (fp4),
+      // they are packed in pairs in an I8Tensor
+      RankedTensorOf<[TT_Float,I8]>:$lhs,
+      RankedTensorOf<[TT_Float,I8]>:$rhs,
       TT_FloatTensor:$c,
-      TT_IntTensor:$lhs_scale,
-      Optional<TT_IntTensor>:$rhs_scale,
-      TT_F8F6F4TypeAttr:$lhs_type,
-      TT_F8F6F4TypeAttr:$rhs_type
+      RankedTensorOf<[I8]>:$lhs_scale,
+      Optional<RankedTensorOf<[I8]>>:$rhs_scale,
+      TT_ScaleDotElemTypeAttr:$lhs_type,
+      TT_ScaleDotElemTypeAttr:$rhs_type
     );
 
     let results = (outs TT_FloatTensor:$d);

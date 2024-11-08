@@ -342,6 +342,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kRegister = str_attr("register");
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals(numRegs);
     for (int i = 0; i < outVals.size(); i++) {
@@ -355,6 +357,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
+    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -386,9 +389,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
         if (auto nvidiaMma =
                 dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
-            return false;
-          }
           if (useLegacyMMAConversion) {
             return false;
           }
@@ -398,6 +398,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
               dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
           return largeKWidth && nvidiaMma.isAmpere();
         }
+        return false;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
@@ -439,6 +440,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
+    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -458,22 +460,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    // FIXME [Dot LL]
-    // We know it's just for largeKWidth case in Ampere
-    // In this case, we need to pack the outputs into i32
-    if (isa<DotOperandEncodingAttr>(dstTy.getEncoding())) {
-      auto concat = [&](Value a, Value b) {
-        return or_(zext(i32_ty, bitcast(a, i16_ty)),
-                   shl(zext(i32_ty, bitcast(b, i16_ty)), i32_val(16)));
-      };
-
-      SmallVector<Value> outVals32(outVals.size() / 2);
-      for (int i = 0; i < outVals32.size(); ++i) {
-        outVals32[i] = concat(outVals[2 * i], outVals[2 * i + 1]);
-      }
-      outVals = outVals32;
-    }
-
+    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);

@@ -210,6 +210,11 @@ class XPUBackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
+        # Set up Diagnostic
+        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
+            srcMgr = llvm.source_mgr()
+            ir.source_mgr_diag(srcMgr, mod.context)
+            mod.context.printOpOnDiagnostic(True)
 
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
@@ -235,7 +240,8 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
+        if os.getenv("TRITON_INTEL_REWRITE_TENSOR_POINTER", "0") == "1":
+            intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
         intel.passes.ttgpuir.add_coalesce(pm)
@@ -269,6 +275,11 @@ class XPUBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        # Set up Diagnostic
+        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
+            srcMgr = llvm.source_mgr()
+            ir.source_mgr_diag(srcMgr, mod.context)
+            mod.context.printOpOnDiagnostic(True)
         # FIXME: Advanced path drops tensor layouts, so this will crash on some
         # operations being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":

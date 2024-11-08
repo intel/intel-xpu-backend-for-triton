@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,NO-AGGRESSIVE-REUSE
+// RUN: TRITON_INTEL_AGGRESSIVE_DPAS_REUSE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm  --check-prefixes=CHECK,AGGRESSIVE-REUSE
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_operand_a = #triton_gpu.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
@@ -543,22 +544,39 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
     // CHECK:           %[[C_3_1:.*]] = llvm.insertelement %[[VAL_353]], %[[VAL_416]]{{\[}}%[[CST_7]] : i32] : vector<8xf32>
 
     // COM: Total 16 dpas ops unrolled.
-    // CHECK:           %[[C_0_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_0]], %[[C_0_0]])
-    // CHECK:           %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_1]], %[[C_0_1]])
-    // CHECK:           %[[C_1_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_0]], %[[C_1_0]])
-    // CHECK:           %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_1]], %[[C_1_1]])
-    // CHECK:           %[[C_2_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_0]], %[[C_2_0]])
-    // CHECK:           %[[C_2_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_1]], %[[C_2_1]])
-    // CHECK:           %[[C_3_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_0]], %[[C_3_0]])
-    // CHECK:           %[[C_3_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_1]], %[[C_3_1]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_0]], %[[C_0_0_0]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_1]], %[[C_0_1_0]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_0]], %[[C_1_0_0]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_1]], %[[C_1_1_0]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_0]], %[[C_2_0_0]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_1]], %[[C_2_1_0]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_0]], %[[C_3_0_0]])
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_1]], %[[C_3_1_0]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_0_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_0]], %[[C_0_0]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_1_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_0]], %[[C_1_0]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_2_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_0]], %[[C_2_0]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_3_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_0]], %[[C_3_0]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_1]], %[[C_0_1]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_1]], %[[C_1_1]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_2_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_1]], %[[C_2_1]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_3_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_1]], %[[C_3_1]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_0]], %[[C_0_0_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_0]], %[[C_1_0_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_0]], %[[C_2_0_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_0]], %[[C_3_0_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_1]], %[[C_0_1_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_1]], %[[C_1_1_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_1]], %[[C_2_1_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_1]], %[[C_3_1_0]])
+
+    // AGGRESSIVE-REUSE:           %[[C_0_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_0]], %[[C_0_0]])
+    // AGGRESSIVE-REUSE:           %[[C_1_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_0]], %[[C_1_0]])
+    // AGGRESSIVE-REUSE:           %[[C_2_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_0]], %[[C_2_0]])
+    // AGGRESSIVE-REUSE:           %[[C_3_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_0]], %[[C_3_0]])
+    // AGGRESSIVE-REUSE:           %[[C_3_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_1]], %[[C_3_1]])
+    // AGGRESSIVE-REUSE:           %[[C_2_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_1]], %[[C_2_1]])
+    // AGGRESSIVE-REUSE:           %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_1]], %[[C_1_1]])
+    // AGGRESSIVE-REUSE:           %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_1]], %[[C_0_1]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_0]], %[[C_0_0_0]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_0]], %[[C_1_0_0]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_0]], %[[C_2_0_0]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_0]], %[[C_3_0_0]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_1]], %[[C_3_1_0]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_1]], %[[C_2_1_0]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_1]], %[[C_1_1_0]])
+    // AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_1]], %[[C_0_1_0]])
 
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<32x32xf16, #dot_operand_a> * tensor<32x32xf16, #dot_operand_b> -> tensor<32x32xf32, #dpas>
     tt.return
