@@ -4,7 +4,7 @@ import hashlib
 import subprocess
 import sysconfig
 
-from abc import ABCMeta, abstractmethod, abstractclassmethod
+from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Union
 from types import ModuleType
@@ -238,20 +238,17 @@ class BaseBackend(metaclass=ABCMeta):
             os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
             os.path.join(base_dir, "third_party", "cuda", "bin", binary),
         ]
-        for p in paths:
-            if os.name != "nt":
-                bin = p.split(" ")[0]
-            else:
-                bin = p
-            if os.path.exists(bin) and os.path.isfile(bin):
-                result = subprocess.check_output([bin, "--version"], stderr=subprocess.STDOUT)
+        for path in paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
                 if result is not None:
                     version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
                     if version is not None:
-                        return p, version.group(1)
+                        return path, version.group(1)
         raise RuntimeError(f"Cannot find {binary}")
 
-    @abstractclassmethod
+    @classmethod
+    @abstractmethod
     def supports_target(target: GPUTarget):
         raise NotImplementedError
 
