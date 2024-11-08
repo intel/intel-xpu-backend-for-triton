@@ -17,8 +17,8 @@ triton::gpu::ConvertLayoutOp dynCastToSubGroupTranspose(Operation *op) {
   return convertLayout;
 }
 
-/// Check if `lhsOp` and `rhsOp` are safe to overlap sub-group transpose-like
-/// layout conversions.
+/// Check if `lhsOp` and `rhsOp` are safe to execute back-to-back sub-group
+/// transpose layout conversions.
 ///
 /// Sub-group transposes are implemented as follows:
 ///
@@ -27,8 +27,8 @@ triton::gpu::ConvertLayoutOp dynCastToSubGroupTranspose(Operation *op) {
 /// region.
 ///
 /// As there is no need to synchronize work-items in the same sub-group and we
-/// know data won't be shared between sub-groups, it is safe to overlap these
-/// operations.
+/// know data won't be shared between sub-groups, executing these operations
+/// back-to-back with no barriers in between is safe.
 bool areSafeToOverlapSubGroupTransposeOps(Operation *lhsOp, Operation *rhsOp) {
   // Check both are lowered to sub-group transpose operations.
   auto lhsTranspose = dynCastToSubGroupTranspose(lhsOp);

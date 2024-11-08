@@ -8,7 +8,8 @@ namespace intel {
 /// each other.
 ///
 /// This is useful as the granularity to check whether barriers are needed is
-/// quite coarse.
+/// quite coarse. The filter will return true if no barrier is needed between
+/// `lhsOp` and `rhsOp`.
 bool membarFilter(Operation *lhsOp, Operation *rhsOp);
 } // namespace intel
 } // namespace mlir
