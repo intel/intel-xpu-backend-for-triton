@@ -6,7 +6,6 @@ import numbers
 
 from .._C.libtriton import ir
 from . import core as tl
-from . import math
 
 T = TypeVar('T')
 
@@ -88,11 +87,12 @@ def computation_type_impl(a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_i
         else:
             return tl.float16
     # 4) return bf16 only if both operands are of bf16
-    if a_ty.is_bf16() or b_ty.is_bf16():
+    if a_ty.is_bf16() and b_ty.is_bf16():
         if div_or_mod:
             return tl.float32
-        if a_ty.is_bf16() and b_ty.is_bf16():
+        else:
             return tl.bfloat16
+    if a_ty.is_bf16() or b_ty.is_bf16():
         return tl.float32
     # 5) return fp16 if operands are different fp8
     if a_ty.is_fp8() and b_ty.is_fp8():
@@ -333,10 +333,7 @@ def mod(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, bu
     other_scalar_ty = other.type.scalar
     # float % float
     if scalar_ty.is_floating():
-        # input - input.div(other, rounding_mode="floor") * other
-        floor = math.floor(fdiv(input, other, False, builder), _builder=builder)
-        ret = sub(input, mul(floor, other, True, builder), True, builder)
-        return ret
+        return tl.tensor(builder.create_frem(input.handle, other.handle), input.type)
     # % int
     elif scalar_ty.is_int():
         if scalar_ty.int_signedness != other_scalar_ty.int_signedness:
@@ -1256,7 +1253,7 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
     val = cast(val, elt_ty, builder)
 
     # Build IR
-    if not mask:
+    if mask is None:
         return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
@@ -1311,7 +1308,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
         if val is not None:
             val = broadcast_impl_shape(val, ptr.type.get_block_shapes(), builder)
     val = cast(val, ptr.type.scalar.element_ty, builder)
-    if not mask:
+    if mask is None:
         mask_ir = builder.get_int1(True)
         mask_ty = tl.int1
         if ptr.type.is_block():

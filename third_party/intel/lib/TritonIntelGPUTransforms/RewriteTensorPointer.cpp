@@ -677,7 +677,7 @@ public:
     DenseSet<Operation *> tensorPointersToRemove;
     mod.walk([&](tt::MakeTensorPtrOp makeTensorPtrOp) {
       tensorPointersToRemove.insert(makeTensorPtrOp);
-      DenseSet<Operation *> workingSet;
+      std::set<Operation *> workingSet;
 
       LDBG("Considering: " << makeTensorPtrOp);
       Value result = makeTensorPtrOp.getResult();
