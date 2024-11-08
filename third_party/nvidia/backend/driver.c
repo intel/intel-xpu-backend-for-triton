@@ -9,9 +9,6 @@
 #include <stdbool.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#ifndef WIN32
-#include <stdatomic.h>
-#endif
 
 // Raises a Python exception and returns false if code is not CUDA_SUCCESS.
 static bool gpuAssert(CUresult code, const char *file, int line) {
