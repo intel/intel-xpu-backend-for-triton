@@ -372,7 +372,6 @@ class CUDABackend(BaseBackend):
                 cubin = f.read()
             if os.path.exists(fbin):
                 os.remove(fbin)
-
         return cubin
 
     def add_stages(self, stages, options):
