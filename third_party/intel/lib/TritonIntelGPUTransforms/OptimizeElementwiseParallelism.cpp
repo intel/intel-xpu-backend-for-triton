@@ -39,53 +39,66 @@ bool isBadLayoutForElementwise(Attribute layout) {
          parentLayout.getThreadsPerWarp()[dim] != 1;
 }
 
-Value convertToCheaperLayout(Location loc, Value val, Attribute newLayout,
+Value convertToCheaperLayout(Location loc, Value val, RankedTensorType type,
                              PatternRewriter &rewriter) {
-  assert(newLayout && "Expecting valid layout");
   return TypeSwitch<Operation *, Value>(val.getDefiningOp())
-      .Case([loc, newLayout, val, &rewriter](SplatOp splat) {
+      .Case([loc, type, val, &rewriter](SplatOp splat) {
         // This is a cost <= 0 conversion as:
         // - If the splat is used by other operation, we just don't use all the
         // duplicated elements in our elementwise operation.
         // - If the splat is not used by other operations, we reduce data
         // duplication and possibly even calculation for this data.
-        RankedTensorType type =
-            RankedTensorType::Builder(splat.getResult().getType())
-                .setEncoding(newLayout);
         return rewriter.create<SplatOp>(loc, type, splat.getSrc());
       })
       .Case([](ConvertLayoutOp convertLayout) {
         // This is a cost = 0 conversion as we ensured no other op is using the
         // layout conversion result.
         return convertLayout.getSrc();
+      })
+      .Case([](ReshapeOp reshape) {
+        // We only allow `tt.reshape` ops with a `triton_gpu.convert_layout`
+        // `src`.
+        auto convertLayout = reshape.getSrc().getDefiningOp<ConvertLayoutOp>();
+        assert(convertLayout && "Expecting convert layout src");
+        return convertLayout.getSrc();
       });
 }
 
-Value convertToOriginalLayout(Location loc, Value val, Attribute layout,
-                              PatternRewriter &rewriter) {
-  RankedTensorType type =
-      RankedTensorType::Builder(cast<RankedTensorType>(val.getType()))
-          .setEncoding(layout);
-  return rewriter.create<ConvertLayoutOp>(loc, type, val);
-}
-
-class AttributeAcc {
+/// Class encoding source types of convert_layout operations or
+/// convert_layout-reshape operation chains.
+///
+/// `reshape(convert_layout(src))` chains are common patterns arising from
+/// `-intel-triton-optimize-reduction-locality`, so it is worth matching
+/// them.
+class ConvertToOriginalAcc {
 public:
-  static AttributeAcc id() { return AttributeAcc(std::nullopt); }
-  static AttributeAcc error() { return AttributeAcc(Attribute()); }
-
-  AttributeAcc() = default;
-  AttributeAcc(Attribute value) : value(value) {}
-
-  friend bool operator==(AttributeAcc lhs, AttributeAcc rhs) {
-    return lhs.value == rhs.value;
+  static ConvertToOriginalAcc id() {
+    return ConvertToOriginalAcc(std::nullopt, std::nullopt);
   }
 
-  friend bool operator!=(AttributeAcc lhs, AttributeAcc rhs) {
+  static ConvertToOriginalAcc error() {
+    return ConvertToOriginalAcc(RankedTensorType(), RankedTensorType());
+  }
+
+  ConvertToOriginalAcc() = default;
+  explicit ConvertToOriginalAcc(ConvertLayoutOp convertLayout)
+      : convertLayoutSrcType(convertLayout.getSrc().getType()) {}
+  explicit ConvertToOriginalAcc(ReshapeOp reshape)
+      : reshapeSrcType(reshape.getSrc().getType()) {}
+
+  friend bool operator==(ConvertToOriginalAcc lhs, ConvertToOriginalAcc rhs) {
+    return lhs.convertLayoutSrcType == rhs.convertLayoutSrcType &&
+           lhs.reshapeSrcType == rhs.reshapeSrcType;
+  }
+
+  friend bool operator!=(ConvertToOriginalAcc lhs, ConvertToOriginalAcc rhs) {
     return !(lhs == rhs);
   }
 
-  friend AttributeAcc operator+(AttributeAcc lhs, AttributeAcc rhs) {
+  /// ConvertToOriginalAcc accumulator checking lhs and rhs are one of the
+  /// identities or encode the same types.
+  friend ConvertToOriginalAcc operator+(const ConvertToOriginalAcc &lhs,
+                                        const ConvertToOriginalAcc &rhs) {
     if (lhs == error() || rhs == error())
       return error();
     if (lhs == id())
@@ -97,42 +110,93 @@ public:
     return lhs;
   }
 
-  Attribute operator*() const {
-    assert(*this != id() && *this != error() && "Expecting valid layout");
-    return *value;
+  /// ConvertToOriginalAcc merger under certain conditions.
+  friend ConvertToOriginalAcc operator*(const ConvertToOriginalAcc &lhs,
+                                        const ConvertToOriginalAcc &rhs) {
+    if (lhs == error() || rhs == error())
+      return error();
+    if (lhs == id())
+      return rhs;
+    if (rhs == id())
+      return lhs;
+    std::optional<RankedTensorType> convertLayoutSrcType =
+        merge(lhs.convertLayoutSrcType, rhs.convertLayoutSrcType);
+    if (convertLayoutSrcType && !*convertLayoutSrcType)
+      return error();
+    std::optional<RankedTensorType> reshapeSrcType =
+        merge(lhs.reshapeSrcType, rhs.reshapeSrcType);
+    if (reshapeSrcType && !*reshapeSrcType)
+      return error();
+    return {convertLayoutSrcType, reshapeSrcType};
+  }
+
+  RankedTensorType getConvertLayoutSrcType() const {
+    return *convertLayoutSrcType;
+  }
+
+  std::optional<RankedTensorType> getReshapeSrcType() const {
+    return reshapeSrcType;
   }
 
 private:
-  AttributeAcc(std::optional<Attribute> value) : value(value) {}
+  ConvertToOriginalAcc(std::optional<RankedTensorType> convertLayoutSrcType,
+                       std::optional<RankedTensorType> reshapeSrcType)
+      : convertLayoutSrcType(convertLayoutSrcType),
+        reshapeSrcType(reshapeSrcType) {}
 
-  std::optional<Attribute> value;
+  static std::optional<RankedTensorType>
+  merge(std::optional<RankedTensorType> lhs,
+        std::optional<RankedTensorType> rhs) {
+    if (!lhs)
+      return rhs;
+    if (!rhs)
+      return lhs;
+    if (lhs != rhs)
+      return RankedTensorType{};
+    return lhs;
+  }
+
+  std::optional<RankedTensorType> convertLayoutSrcType;
+  std::optional<RankedTensorType> reshapeSrcType;
 };
 
-AttributeAcc getCheapLayoutToConvertTo(Value value) {
-  Operation *op = value.getDefiningOp();
-  if (!op)
-    return AttributeAcc::error();
-  return TypeSwitch<Operation *, AttributeAcc>(op)
-      .Case([](SplatOp splat) {
-        // Do not support tensor splats, just scalar splats.
-        return isa<RankedTensorType>(splat.getSrc().getType())
-                   ? AttributeAcc::error()
-                   : AttributeAcc::id();
-      })
-      .Case([](ConvertLayoutOp convertLayout) -> AttributeAcc {
-        // If the layout conversion has more than one user, this may worsen
-        // register pressure, as data would need to coexist in both layouts at
-        // the same time in registers.
-        // TODO: Extend with heuristics to check this is cheap to do.
-        if (!convertLayout->hasOneUse())
-          return AttributeAcc::error();
-        return convertLayout.getSrc().getType().getEncoding();
-      })
-      .Default(AttributeAcc::error());
+Value convertToOriginalLayout(Location loc, Value val,
+                              RankedTensorType originalType,
+                              const ConvertToOriginalAcc &convertRecipe,
+                              PatternRewriter &rewriter) {
+  if (std::optional<RankedTensorType> type =
+          convertRecipe.getReshapeSrcType()) {
+    // If we read a reshape operation before, we need to perform the same
+    // conversion again.
+    val = rewriter.create<ConvertLayoutOp>(loc, *type, val);
+    return rewriter.create<ReshapeOp>(loc, originalType, val,
+                                      /*allow_reorder=*/true,
+                                      /*efficient_layout=*/true);
+  }
+  return rewriter.create<ConvertLayoutOp>(loc, originalType, val);
 }
 
-AttributeAcc accumulateCheapLayoutToConvertTo(AttributeAcc acc, Value val) {
-  return acc + getCheapLayoutToConvertTo(val);
+ConvertToOriginalAcc getConvertToOriginalFromVal(Value val) {
+  Operation *definingOp = val.getDefiningOp();
+  if (!definingOp)
+    return ConvertToOriginalAcc::error();
+  return TypeSwitch<Operation *, ConvertToOriginalAcc>(definingOp)
+      .Case([](SplatOp) { return ConvertToOriginalAcc::id(); })
+      .Case([](ConvertLayoutOp convertLayout) {
+        if (!convertLayout->hasOneUse())
+          return ConvertToOriginalAcc::error();
+        return ConvertToOriginalAcc(convertLayout);
+      })
+      .Case([](ReshapeOp reshape) {
+        if (!reshape->hasOneUse())
+          return ConvertToOriginalAcc::error();
+        auto convertLayout = reshape.getSrc().getDefiningOp<ConvertLayoutOp>();
+        if (!convertLayout || !convertLayout->hasOneUse())
+          return ConvertToOriginalAcc::error();
+        return ConvertToOriginalAcc(reshape) *
+               ConvertToOriginalAcc(convertLayout);
+      })
+      .Default(ConvertToOriginalAcc::error());
 }
 
 struct ElementwiseOptPattern final
@@ -160,19 +224,20 @@ struct ElementwiseOptPattern final
     if (!layout || !isBadLayoutForElementwise(layout))
       return failure();
 
-    // Check if we can convert the operands to a common optimal layout.
-    AttributeAcc layoutAcc =
-        std::accumulate(op->operand_begin(), op->operand_end(),
-                        AttributeAcc::id(), accumulateCheapLayoutToConvertTo);
-    if (layoutAcc == AttributeAcc::error() || layoutAcc == AttributeAcc::id())
+    // Check if we can convert the operands to a common optimal layout while
+    // getting the "recipe" to convert back to the original tensor type.
+    ConvertToOriginalAcc convertRecipe = std::transform_reduce(
+        op->operand_begin(), op->operand_end(), ConvertToOriginalAcc::id(),
+        std::plus<>{}, getConvertToOriginalFromVal);
+    if (convertRecipe == ConvertToOriginalAcc::error() ||
+        convertRecipe == ConvertToOriginalAcc::id())
       return failure();
 
     // Check the new layout is good for elementwise operations.
     // TODO: Provide heuristics to check it's *better* than the original one
     // instead.
-    Attribute newLayout = *layoutAcc;
-    assert(newLayout && "Expecting valid layout");
-    if (isBadLayoutForElementwise(newLayout))
+    RankedTensorType newType = convertRecipe.getConvertLayoutSrcType();
+    if (isBadLayoutForElementwise(newType.getEncoding()))
       return failure();
 
     // Replace operation with new operation taking operands with a more optimal
@@ -181,20 +246,30 @@ struct ElementwiseOptPattern final
     StringAttr opName = op->getName().getIdentifier();
     SmallVector<Value> newOperands(op->getNumOperands());
     llvm::transform(op->getOperands(), std::begin(newOperands),
-                    [loc, newLayout, &rewriter](Value val) {
-                      return convertToCheaperLayout(loc, val, newLayout,
+                    [loc, newType, &rewriter](Value val) {
+                      return convertToCheaperLayout(loc, val, newType,
                                                     rewriter);
                     });
-    Type newType = newOperands.front().getType();
     ArrayRef<NamedAttribute> attributes = op->getAttrs();
     Operation *newElementwiseOp =
         rewriter.create(loc, opName, newOperands, newType, attributes);
     assert(newElementwiseOp->getNumResults() == 1 &&
            "Expecting single result operation");
 
+    LLVM_DEBUG({
+      for (OpOperand &operand : newElementwiseOp->getOpOperands()) {
+        llvm::dbgs() << "Converted operand #" << operand.getOperandNumber()
+                     << ":\n"
+                     << operand.get() << "\n";
+      }
+      llvm::dbgs() << "Optimized elementwise operation created:\n"
+                   << newElementwiseOp->getResult(0) << "\n";
+    });
+
     // Convert the result back to the original layout for type consistency.
+    // Check if we can convert the operands to a common optimal layout.
     Value newOp = convertToOriginalLayout(loc, newElementwiseOp->getResult(0),
-                                          layout, rewriter);
+                                          type, convertRecipe, rewriter);
 
     rewriter.replaceOp(op, newOp);
     return success();
