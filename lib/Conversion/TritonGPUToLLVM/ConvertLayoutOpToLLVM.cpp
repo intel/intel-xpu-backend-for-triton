@@ -328,20 +328,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
-      auto dstCvt = requiresI32Conversion(dstTy);
-      auto srcCvt = requiresI32Conversion(srcTy);
-      if (dstCvt || srcCvt) {
-        auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
-        inVals = unpackI32s(inVals, srcTy, rewriter, op.getLoc(),
-                            getTypeConverter());
-        inVals =
-            packI32s(inVals, dstTy, rewriter, op.getLoc(), getTypeConverter());
-        auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
-                                  rewriter, op.getType());
-        rewriter.replaceOp(op, res);
-      } else {
-        rewriter.replaceOp(op, adaptor.getSrc());
-      }
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
   }
@@ -358,9 +345,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
     SmallVector<Value> outVals(numRegs);
-    for (int i = 0; i < numRegs; i++) {
+    for (int i = 0; i < outVals.size(); i++) {
       // Remove free masks from the register index
       // For example, if idx = 0b00111, and masks = 0b00100, then we get
       // 0b00011. It means that register 7 (0b111) has the same value as
