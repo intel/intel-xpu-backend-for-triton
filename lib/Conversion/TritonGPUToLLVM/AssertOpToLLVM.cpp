@@ -34,14 +34,13 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
         return failure();
       }
     }
-    Block *thenBlock = llAssert(op, condition, adaptor.getMessage(), rewriter);
+    llAssert(op, condition, adaptor.getMessage(), rewriter);
     if (isa<RankedTensorType>(op.getCondition().getType())) {
       // Add a barrier to avoid a race condition in case an assert is followed
       // by an op that may trap if the assert condition is true. Since the
       // tensor in those two operations may have different layout we need to
       // make sure all the threads are done executing the assert before going to
       // the next op.
-      rewriter.setInsertionPointToStart(thenBlock);
       barrier();
     }
     rewriter.eraseOp(op);
@@ -49,10 +48,8 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
   }
   // op: the op at which the assert is inserted. Unlike printf, we need to
   // know about the op to split the block.
-  Block *llAssert(Operation *op, Value condition, StringRef message,
-                  ConversionPatternRewriter &rewriter) const {
-    ConversionPatternRewriter::InsertionGuard guard(rewriter);
-
+  void llAssert(Operation *op, Value condition, StringRef message,
+                ConversionPatternRewriter &rewriter) const {
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
 
@@ -88,7 +85,7 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     rewriter.create<cf::BranchOp>(loc, thenBlock);
     rewriter.setInsertionPointToEnd(prevBlock);
     rewriter.create<cf::CondBranchOp>(loc, condition, ifBlock, thenBlock);
-    return thenBlock;
+    rewriter.setInsertionPointToStart(thenBlock);
   }
 
 protected:
