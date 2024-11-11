@@ -24,6 +24,27 @@ namespace mlir::triton::gpu::intel {
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
 namespace {
+bool isMultiWarpValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
+                                          int32_t numWorkGroupPos,
+                                          PatternRewriter &rewriter) {
+  StringAttr kLane = rewriter.getStringAttr("lane");
+  StringAttr kWarp = rewriter.getStringAttr("warp");
+  int32_t subGroupSize = linearLayout.getInDimSize(kLane);
+  ArrayRef<int32_t> numContiguousPerWarp = linearLayout.getBasis(kWarp, 0);
+  // Check the warp dimension hasn't been sliced away and we have n *
+  // sub_group_size contiguous elements per warp.
+  if (numContiguousPerWarp == ArrayRef<int32_t>{0} ||
+      numContiguousPerWarp[0] % subGroupSize != 0)
+    return false;
+  int32_t expectedValue = numContiguousPerWarp[0] * 2;
+  for (int32_t pos = 1; pos < numWorkGroupPos; ++pos) {
+    if (linearLayout.getBasis(kWarp, pos) != ArrayRef<int32_t>{expectedValue})
+      return false;
+    expectedValue *= 2;
+  }
+  return true;
+}
+
 /// Return whether the input linear layout can be unbroadcasted.
 ///
 /// A layout is valid for being "unbroadcasted" along its lanes if:
@@ -31,8 +52,8 @@ namespace {
 /// sliced.
 /// - The size of the input 'block' dimension is 1. This is true for XPU
 /// backend.
-/// - The size of the input 'warp' dimension is 1. This is a limitation to keep
-/// things simple for now.
+/// - The size of the input 'warp' dimension is 1 or there are n*sub_group_size
+/// contiguous elements per warp.
 ///
 /// Broadcasted layouts are layouts with sliced lane, warp or block (not
 /// possible for XPU backend) dimensions, i.e., the same data is owned by
@@ -49,8 +70,11 @@ bool isValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
   // Only single block for now.
   if (linearLayout.getInDimSize(kBlock) != 1)
     return false;
-  // Only single warp for now.
-  return linearLayout.getInDimSize(kWarp) == 1;
+  // 'warp' dimension hasn't been sliced away and there are n*sub_group_size
+  // contiguous elements in each warp (or there is a single warp).
+  int32_t numWorkGroupPos = linearLayout.getInDimSizeLog2(kWarp);
+  return numWorkGroupPos == 0 || isMultiWarpValidLayoutForUnbroadcast(
+                                     linearLayout, numWorkGroupPos, rewriter);
 }
 
 /// Get optimized unbroadcasted tensor type.
@@ -61,18 +85,21 @@ bool isValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
 RankedTensorType getOptimizedType(RankedTensorType type,
                                   const LinearLayout &linearLayout,
                                   PatternRewriter &rewriter) {
+  StringAttr kWarp = rewriter.getStringAttr("warp");
+
   auto encoding = cast<DistributedEncodingTrait>(type.getEncoding());
   unsigned threadsPerWarp = product(encoding.getThreadsPerWarp());
-  [[maybe_unused]] unsigned warpsPerCTA = product(encoding.getWarpsPerCTA());
-  assert(warpsPerCTA == 1 && "Expecting single warp");
+  unsigned warpsPerCTA = product(encoding.getWarpsPerCTA());
   [[maybe_unused]] unsigned ctaSplitNum = product(encoding.getCTASplitNum());
   assert(ctaSplitNum == 1 && "Expecting single CTA");
 
   RankedTensorType::Builder builder(type);
+  int32_t numWorkGroupPos = linearLayout.getInDimSizeLog2(kWarp);
+  unsigned sizePerThread =
+      numWorkGroupPos == 0 ? 1 : linearLayout.getBasis(kWarp, 0)[0];
   CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(rewriter.getContext(), 1);
   auto newEncoding = rewriter.getAttr<BlockedEncodingAttr>(
-      /*sizePerThread=*/1, threadsPerWarp, /*warpsPerCTA=*/1, /*order=*/0,
-      ctaLayout);
+      sizePerThread, threadsPerWarp, warpsPerCTA, /*order=*/0, ctaLayout);
   builder.setEncoding(newEncoding);
   return builder;
 }
