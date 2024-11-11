@@ -77,6 +77,47 @@ bool isValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
                                      linearLayout, numWorkGroupPos, rewriter);
 }
 
+/// Generic checks for the operation not looking at the tensor type.
+bool isCandidateOp(Operation *op) {
+  // Rely on this for a simpler pass.
+  if (!op->hasTrait<OpTrait::SameOperandsAndResultType>() ||
+      op->getNumResults() != 1)
+    return false;
+
+  // Skip complex operations.
+  if (op->hasSuccessors() || op->getNumRegions() != 0)
+    return false;
+
+  return true;
+}
+
+bool optimizationDoesNotWorsenRegisterPressure(
+    Value value, RankedTensorType newType, SmallPtrSetImpl<Value> &visited) {
+  if (!visited.insert(value).second)
+    return true;
+  // All users must be operations we will optimize too or layout conversions we
+  // will introduce later.
+  return llvm::all_of(value.getUses(), [&visited, newType](OpOperand &operand) {
+    Operation *owner = operand.getOwner();
+
+    // We will be introducing just this operation later.
+    if (auto convertLayout = dyn_cast<ConvertLayoutOp>(owner))
+      return convertLayout.getResult().getType() == newType;
+
+    // Only allow candidates. Check only operation constraints. We do not have
+    // to check the type as we did already.
+    if (!owner->hasTrait<OpTrait::Elementwise>() || !isCandidateOp(owner))
+      return false;
+
+    // Check other operands fit the constraints.
+    return llvm::all_of(owner->getOperands(),
+                        [&visited, newType](Value operand) {
+                          return optimizationDoesNotWorsenRegisterPressure(
+                              operand, newType, visited);
+                        });
+  });
+}
+
 /// Get optimized unbroadcasted tensor type.
 ///
 /// Get optimized ranked tensor type after unbroadcasting. As we only support 1D
@@ -110,13 +151,10 @@ struct ElementwiseOptPattern final
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const final {
-    // Rely on this for a simpler pass.
-    if (!op->hasTrait<OpTrait::SameOperandsAndResultType>() ||
-        op->getNumResults() != 1)
-      return failure();
+    LLVM_DEBUG(llvm::dbgs() << "Checking operation:\n" << *op << "\n");
 
-    // Skip complex operations.
-    if (op->hasSuccessors() || op->getNumRegions() != 0)
+    // Rely on this for a simpler pass.
+    if (!isCandidateOp(op))
       return failure();
 
     // Layout optimizations only apply to tensors.
@@ -132,19 +170,30 @@ struct ElementwiseOptPattern final
       return failure();
     std::optional<LinearLayout> linearLayout =
         toLinearLayout(type.getShape(), layout);
-    if (!linearLayout || !isValidLayoutForUnbroadcast(*linearLayout, rewriter))
-      return failure();
 
-    // Check the operands are not used by other operations. This will prevent
-    // register pressure increase:
-    if (!llvm::all_of(op->getOperands(),
-                      [](Value val) { return val.hasOneUse(); }))
+    LLVM_DEBUG(llvm::dbgs() << "Checking linear layout:\n"
+                            << linearLayout << "\n");
+
+    if (!linearLayout || !isValidLayoutForUnbroadcast(*linearLayout, rewriter))
       return failure();
 
     // As we are dealing with 1D tensors, we can do a simple transform to obtain
     // a more optimized operation.
     Location loc = op->getLoc();
     RankedTensorType newType = getOptimizedType(type, *linearLayout, rewriter);
+
+    LLVM_DEBUG(llvm::dbgs() << "Would convert to type:\n" << newType << "\n");
+
+    // Check the operands are not used by other operations. This will prevent
+    // register pressure increase:
+    if (SmallPtrSet<Value, 2> visited;
+        !llvm::all_of(op->getOperands(), [&visited, newType](Value operand) {
+          return optimizationDoesNotWorsenRegisterPressure(operand, newType,
+                                                           visited);
+        }))
+      return failure();
+
+    // Obtain converted operands.
     SmallVector<Value> newOperands(op->getNumOperands());
     llvm::transform(op->getOperands(), std::begin(newOperands),
                     [&rewriter, loc, newType](Value operand) {
@@ -163,6 +212,8 @@ struct ElementwiseOptPattern final
     // Convert to unoptimized encoding for further use.
     Value newValue = newElementwiseOp->getResult(0);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, type, newValue);
+
+    LLVM_DEBUG(llvm::dbgs() << "Conversion took place.\n");
 
     return success();
   }
