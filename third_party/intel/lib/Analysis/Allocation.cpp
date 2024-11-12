@@ -15,6 +15,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include "intel/include/Analysis/Utility.h"
+
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -104,6 +106,26 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
 
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy) {
+  if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy)) {
+    // Conversions that can be implemented as sub-group shuffles do not need
+    // scratch memory.
+    return ScratchConfig({}, {});
+  }
+
+  if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
+    // Conversions that can be implemented as sub-group transposes store the
+    // whole tensor in shared memory and read it afterwards.
+    auto srcEncoding = cast<gpu::DistributedEncodingTrait>(srcTy.getEncoding());
+    unsigned threadsPerWarp = product(srcEncoding.getThreadsPerWarp());
+    unsigned warpsPerCTA = product(srcEncoding.getWarpsPerCTA());
+    unsigned remaining = product(srcTy.getShape()) /
+                         (threadsPerWarp * threadsPerWarp * warpsPerCTA);
+    SmallVector<unsigned> repShape{threadsPerWarp, threadsPerWarp, remaining,
+                                   warpsPerCTA};
+    return ScratchConfig(repShape, repShape,
+                         /*inVec=*/1, /*outVec=*/threadsPerWarp);
+  }
+
   // Initialize vector sizes and stride
   auto repShape = getRepShapeForCvt(srcTy, dstTy);
   if (repShape.empty())
