@@ -168,7 +168,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-adv-path.csv $REPORTS/gemm-triton-advanced-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (A@B^t) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && contains(inputs.skip_benchmarks, 'gemm_benchmark.py_abt') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS
@@ -179,7 +179,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-bt.csv $REPORTS/gemm-bt-onednn-report.csv --benchmark gemm-bt --compiler onednn --param_cols "B,M,K,N" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (A^t@B) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && contains(inputs.skip_benchmarks, 'gemm_benchmark.py_atb') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           TRANSPOSE_A=1 python gemm_benchmark.py --reports $REPORTS
