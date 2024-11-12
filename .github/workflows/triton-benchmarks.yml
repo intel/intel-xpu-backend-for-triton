@@ -27,7 +27,7 @@ on:
       skip_benchmarks:
         description: JSON list of benchmarks to skip
         type: string
-        default: ""
+        default: "[]"
   schedule:
     - cron: "5 23 * * *"
   pull_request:
