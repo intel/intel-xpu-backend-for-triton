@@ -5186,8 +5186,6 @@ def return_poison(x):
 
 
 def test_poison_return(device):
-    if is_xpu():
-        pytest.skip("FIXME: poison is optimized away by opt")
 
     @triton.jit
     def kernel(Out):
@@ -5196,7 +5194,9 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel[(1, )](a)
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    assert "poison" in h.asm["llir"], h.asm["llir"]
+    # xpu uses llvm.store, which in this case is removed by the optimizer
+    if not is_xpu():
+        assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
 # -----------------------
