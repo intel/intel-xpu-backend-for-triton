@@ -23,7 +23,7 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
-def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
+def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compile_args=[]):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -74,6 +74,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     cc_cmd += [f'-l{lib}' for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
+    cc_cmd += extra_compile_args
 
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
@@ -81,8 +82,6 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
-    # fallback on setuptools
-    extra_compile_args = []
     # extra arguments
     extra_link_args = []
     # create extension module

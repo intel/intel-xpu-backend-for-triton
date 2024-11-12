@@ -1,6 +1,9 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -58,7 +61,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int n0, int n1,
     RankedTensorType type) {
-
   auto elems = unpackLLElements(loc, value, rewriter);
   int offset{};
   ValueTableV2 vals;
@@ -119,19 +121,15 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     }
 
     if (dot.getOpIdx() == 1) {
-      // there are kWidth * 2 elems packed as bf16x2
       int elemsInTile = dot.getKWidth();
-      // n0 and n1 are unrolled in the legacy path
-      // Unrolling n1 makes some sense, but unrolling n0 makes absolutely no
-      // sense IMO
+      // n0 is unrolled in the legacy path, which makes no sense
       n0 *= 2;
-      n1 *= 2;
       for (auto b = 0; b < batch; ++b)
-        for (auto j = 0; j < n1 / elemsInTile; ++j)
-          for (auto i = 0; i < n0; ++i)
-            for (auto k = 0; k < elemsInTile; ++k) {
-              vals[{b, i, elemsInTile * j + k}] = elems[offset++];
-            }
+        for (auto i = 0; i < n0; ++i)
+          for (auto j = 0; j < n1; ++j) {
+            vals[{b, i, 2 * j}] = elems[offset++];
+            vals[{b, i, 2 * j + 1}] = elems[offset++];
+          }
       return vals;
     }
   }
@@ -391,20 +389,28 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getMMAv2Rep(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  auto repA =
+      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+          .getMMAv2OrV3RepForOperand(aShapePerCTA, bitwidth, dotOpA.getKWidth(),
+                                     dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getMMAv2Rep(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+  auto repB =
+      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+          .getMMAv2OrV3RepForOperand(bShapePerCTA, bitwidth, dotOpB.getKWidth(),
+                                     dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
-  // shape / shape_per_cta
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
+
+  // FIXME [Dot LL]
+  // max(repN / 2, 1) is wrong for repN = 1!
+  // This is also wrong in
+  // NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperand
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, std::max(repN / 2, 1),
       repK, bTensorTy);
