@@ -223,4 +223,29 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
              buildSubGroupTransposeLaneBases(laneInDimSize);
 }
 
+bool cvtIsUnbroadcast(RankedTensorType srcTy, RankedTensorType dstTy) {
+  MLIRContext *ctx = srcTy.getContext();
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  std::optional<LinearLayout> srcLayout =
+      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+  if (!srcLayout)
+    return false;
+
+  std::optional<LinearLayout> dstLayout =
+      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+  if (!dstLayout)
+    return false;
+
+  LinearLayout comp = dstLayout->invertAndCompose(*srcLayout);
+  std::optional<LinearLayout> conversion = comp.quotient({kBlock, kWarp});
+  if (!conversion)
+    return false;
+
+  // All bases in the kLane OutDim must be zero.
+  return conversion->sublayoutIsZero({kRegister, kLane}, kLane);
+}
 } // namespace mlir::triton::gpu::intel

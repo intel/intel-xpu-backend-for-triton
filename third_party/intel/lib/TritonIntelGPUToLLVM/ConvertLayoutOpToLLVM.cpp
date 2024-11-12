@@ -514,6 +514,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
+      // If the operation is a supported unbroadcast operation, simply drop the
+      // no longer needed values.
+      if (intel::cvtIsUnbroadcast(srcTy, dstTy)) {
+        performUnbroadcast(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
       // TODO(jlebar): Implement me.
       return failure();
     } else if (llvm::is_contained(dims, kRegister) ||
@@ -812,6 +818,61 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                             ArrayRef<LLVM::GEPArg>{offset}, /*inbounds=*/true);
     }
     return unwrapFromVectors(loc, transposedVecs, rewriter);
+  }
+
+  void performUnbroadcast(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                          const LinearLayout &dstLayout, OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = getContext();
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
+    std::optional<LinearLayout> conversion = comp.quotient({kBlock, kWarp});
+    assert(conversion && "Expecting unbroadcast operation");
+
+    Location loc = op.getLoc();
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    LinearLayout outTransform =
+        conversion->sublayout({kRegister, kLane}, kRegister);
+
+    int32_t subGroupSize = outTransform.getInDimSize(kLane);
+    Value subGroupLocalId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, i32_ty,
+        rewriter.create<mlir::gpu::LaneIdOp>(loc,
+                                             /*upper_bound=*/IntegerAttr{}));
+    SmallVector<Value> comparisons(subGroupSize);
+    for (int32_t i = 0; i < subGroupSize; ++i)
+      comparisons[i] = icmp_eq(subGroupLocalId, i32_val(i));
+
+    int32_t numOutVals = outTransform.getInDimSize(kRegister);
+    assert(numOutVals == inVals.size() / subGroupSize &&
+           "Unexpected number of output values");
+    SmallVector<Value> outVals(numOutVals);
+    Type elementType = inVals.front().getType();
+    Value poison = rewriter.create<LLVM::PoisonOp>(loc, elementType);
+    int32_t numContiguousPerThread = outTransform.getNumConsecutiveInOut();
+    int32_t numInVals = inVals.size();
+    for (int32_t i = 0; i < numOutVals; ++i) {
+      SmallVector<Value> toSelectFrom(subGroupSize);
+      for (int32_t j = 0; j < subGroupSize; ++j)
+        toSelectFrom[j] = inVals[i + j * numContiguousPerThread];
+      auto values = llvm::zip_equal(comparisons, toSelectFrom);
+      outVals[i] = std::accumulate(std::begin(values), std::end(values), poison,
+                                   [&](Value acc, auto entry) -> Value {
+                                     auto [cmp, val] = entry;
+                                     return select(cmp, val, acc);
+                                   });
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
   }
 };
 

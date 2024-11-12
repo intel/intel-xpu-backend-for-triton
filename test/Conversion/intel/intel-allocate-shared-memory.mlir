@@ -63,3 +63,19 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     tt.return %0 : tensor<128x64xf32, #blocked1>
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+
+// Check no scrath memory needed for unbroadcast.
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: triton_gpu.shared = 0 : i32
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  tt.func @test_basic(%arg0: tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<16xf32, #blocked1> {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #blocked1>
+    tt.return %0 : tensor<16xf32, #blocked1>
+  }
+}

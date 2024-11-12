@@ -16,6 +16,10 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy);
 /// Return whether `type` is a valid element type for a fast sub-group
 /// transpose.
 bool isValidElementTypeForSubGroupTranspose(Type type);
+/// Return whether the layout conversion from `srcTy` to `dstTy` can be
+/// performed as an "unbroadcast" transformation, i.e., dropping duplicated
+/// values.
+bool cvtIsUnbroadcast(RankedTensorType srcTy, RankedTensorType dstTy);
 
 } // namespace mlir::triton::gpu::intel
 
