@@ -97,6 +97,9 @@ class IRSource:
         self.ext = path.suffix[1:]
         self.src = path.read_text()
         ir.load_dialects(context)
+        target = driver.active.get_current_target()
+        backend = make_backend(target)
+        backend.load_dialects(context)
 
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
@@ -270,10 +273,7 @@ def compile(src, target=None, options=None):
         context = ir.context()
         ir.load_dialects(context)
         backend.load_dialects(context)
-    else:
-        # For IRSource, we have already grabbed the context + called ir.load_dialects
-        # just need to load the dialects for the backend.
-        backend.load_dialects(context)
+
     codegen_fns = backend.get_codegen_implementation()
     module_map = backend.get_module_map()
     try:
