@@ -24,10 +24,10 @@ on:
         description: Run name
         type: string
         default: "Triton benchmarks"
-      only_subset:
-        description: Run only core subset of benchmarks
-        type: boolean
-        default: false
+      skip_benchmarks:
+        description: List of benchmarks to skip
+        type: string
+        default: ""
   schedule:
     - cron: "5 23 * * *"
   pull_request:
@@ -116,7 +116,7 @@ jobs:
           python setup.py install
 
       - name: Run Triton Softmax kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && search(inputs.skip_benchmarks, "fused_softmax.py") }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python fused_softmax.py --reports $REPORTS
