@@ -53,10 +53,10 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
 
   // mma or dot layout does not have an order, so the order depends on the
   // layout of the other operand.
-  auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
-                                              : getOrder(srcLayout);
-  auto outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
-                                               : getOrder(dstLayout);
+  const auto &inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
+                                                     : getOrder(srcLayout);
+  const auto &outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
+                                                      : getOrder(dstLayout);
 
   return {inOrd, outOrd};
 }
@@ -368,7 +368,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto aliasBufferIter : allocation->getAliasBuffer()) {
+    for (const auto &aliasBufferIter : allocation->getAliasBuffer()) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
       auto range = getLiveness(value);
@@ -508,7 +508,7 @@ private:
           std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
             auto xRange = bufferRange[buffer];
             bool res = xRange.intersects(range);
-            for (auto val : tripleMap)
+            for (const auto &val : tripleMap)
               res = res &&
                     !val.second.intersects(xRange); // only one buffer intersect
             return res;
