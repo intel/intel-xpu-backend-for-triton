@@ -3,6 +3,7 @@ add_triton_library(TritonIntelAnalysis
     AxisInfo.cpp
     DPAS.cpp
     Liveness.cpp
+    Membar.cpp
     Utility.cpp
 
     DEPENDS
