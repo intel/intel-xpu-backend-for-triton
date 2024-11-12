@@ -55,7 +55,7 @@ on:
       runner_version:
         description: Runner label for version
         type: string
-        default: runner-0.0.19
+        default: runner-0.0.20
       env_manager:
         description: Environment manager
         default: conda
