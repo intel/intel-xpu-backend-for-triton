@@ -190,7 +190,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-at.csv $REPORTS/gemm-at-onednn-report.csv --benchmark gemm-at --compiler onednn --param_cols "B,M,K,N" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (stream-k) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'gemm_streamk_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_streamk_benchmark.py --reports $REPORTS
@@ -198,7 +198,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-streamk-performance.csv $REPORTS/gemm-streamk-triton-report.csv --benchmark gemm-streamk --compiler triton --param_cols "M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (split-k) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'gemm_splitk_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_splitk_benchmark.py --reports $REPORTS
@@ -206,7 +206,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-splitk-performance.csv $REPORTS/gemm-splitk-triton-report.csv --benchmark gemm-splitk --compiler triton --param_cols "M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PreOp (exp) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'gemm_preop_exp_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_preop_exp_benchmark.py --reports $REPORTS
@@ -214,7 +214,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-preop-exp.csv $REPORTS/gemm-preop-exp-triton-report.csv --benchmark gemm-preop-exp --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'gemm_postop_gelu_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_gelu_benchmark.py --reports $REPORTS
@@ -222,7 +222,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-gelu.csv $REPORTS/gemm-postop-gelu-triton-report.csv --benchmark gemm-postop-gelu --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'gemm_postop_addmatrix_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
@@ -230,7 +230,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix.csv $REPORTS/gemm-postop-addmatrix-triton-report.csv --benchmark gemm-postop-addmatrix --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'flash_attention_fwd_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_fwd_benchmark.py --reports $REPORTS
@@ -240,7 +240,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark - default path
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'flash_attention_fwd_benchmark.py_default') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           TRITON_INTEL_ADVANCED_PATH=0 \
@@ -253,7 +253,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton FA kernel benchmark - advanced path
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'flash_attention_fwd_benchmark.py_advanced') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           TRITON_INTEL_ADVANCED_PATH=1 \
@@ -266,7 +266,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-advanced-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Prefix Sums kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'prefix_sums.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python prefix_sums.py --reports $REPORTS
@@ -274,7 +274,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/prefix-sums.csv $REPORTS/prefix_sums-triton-report.csv --benchmark prefix_sums --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run micro benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.only_subset || false) }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(inputs.skip_benchmarks, 'micro_benchmarks') }}
         run: |
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
