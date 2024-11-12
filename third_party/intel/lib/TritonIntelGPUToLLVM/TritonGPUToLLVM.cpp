@@ -14,7 +14,8 @@
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
-#include "triton/Analysis/Allocation.h"
+#include "intel/include/Analysis/Allocation.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -94,7 +95,8 @@ struct ConvertTritonGPUToLLVM
 
     // Allocate shared memory and set barrier
     if (!pipelineManager.skipSharedMemoryAllocation()) {
-      ModuleAllocation allocation(mod);
+      ModuleAllocation allocation =
+          ModuleAllocation::get<triton::intel::AllocationAnalysis>(mod);
       ModuleMembarAnalysis membarPass(&allocation);
       membarPass.run();
     }

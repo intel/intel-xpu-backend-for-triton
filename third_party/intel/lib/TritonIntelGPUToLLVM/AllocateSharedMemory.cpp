@@ -1,8 +1,8 @@
 
+#include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "triton/Analysis/Allocation.h"
 
 using namespace mlir;
 
@@ -22,7 +22,8 @@ struct AllocateSharedMemory
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
-    ModuleAllocation allocation(mod);
+    ModuleAllocation allocation =
+        ModuleAllocation::get<triton::intel::AllocationAnalysis>(mod);
 
     mod.walk([&](FunctionOpInterface funcOp) {
       if (allocation.isRoot(funcOp) && allocation.getSharedMemorySize()) {

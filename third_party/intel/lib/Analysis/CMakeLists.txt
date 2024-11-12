@@ -1,4 +1,5 @@
 add_triton_library(TritonIntelAnalysis
+    Allocation.cpp
     AxisInfo.cpp
     DPAS.cpp
     Liveness.cpp

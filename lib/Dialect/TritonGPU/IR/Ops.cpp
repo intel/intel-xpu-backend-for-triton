@@ -17,8 +17,9 @@ LogicalResult UpcastMXFPOp::verify() {
   auto xTy = getSrc().getType();
   auto scaleTy = getScale().getType();
 
-  if (xTy.getElementType() != FloatType::getBF16(getContext())) {
-    return emitOpError("element type of the first operand must be bf16");
+  if (xTy.getElementType() != FloatType::getBF16(getContext()) &&
+      xTy.getElementType() != IntegerType::get(getContext(), 8)) {
+    return emitOpError("element type of the first operand must be bf16 or i8");
   }
 
   if (scaleTy.getElementType() != IntegerType::get(getContext(), 8)) {
@@ -33,13 +34,13 @@ LogicalResult UpcastMXFPOp::verify() {
         "operands must have the same number of dimensions, at least 2");
   }
 
-  if (!(fpType == F8F6F4Type::E2M1 || fpType == F8F6F4Type::E4M3 ||
-        fpType == F8F6F4Type::E5M2)) {
+  if (!(fpType == ScaleDotElemType::E2M1 || fpType == ScaleDotElemType::E4M3 ||
+        fpType == ScaleDotElemType::E5M2)) {
     return emitOpError("NYI: fpType must be E2M1, E4M3, or E5M2");
   }
 
   // Change to support fp8 types
-  const auto elems_packed = fpType == F8F6F4Type::E2M1 ? 2 : 1;
+  const auto elems_packed = fpType == ScaleDotElemType::E2M1 ? 2 : 1;
 
   if (xShape.back() != (32 / elems_packed) * scaleShape.back()) {
     return emitOpError("last dimension of first operand must be 16 times "
@@ -51,28 +52,32 @@ LogicalResult UpcastMXFPOp::verify() {
         "all dimensions except the last must match between operands");
   }
 
-  auto layoutX = xTy.getEncoding();
-  if (!layoutX || !isa<DotOperandEncodingAttr>(layoutX)) {
+  auto dotEncoding =
+      dyn_cast_or_null<DotOperandEncodingAttr>(xTy.getEncoding());
+  if (!dotEncoding) {
     return emitOpError("Expected a DotOperandEncodingAttr for values");
   }
-  auto layoutScale = scaleTy.getEncoding();
-  if (!layoutScale || !isa<BlockedEncodingAttr>(layoutScale)) {
+
+  auto blockedScale =
+      dyn_cast_or_null<BlockedEncodingAttr>(scaleTy.getEncoding());
+  if (!blockedScale) {
     return emitOpError("Expected a BlockOperandEncoding for scales");
   }
-  auto blockedScale = cast<BlockedEncodingAttr>(layoutScale);
 
-  // Necessary to keep all of the scales of a given block of values in the same
-  // warp
-  auto threadsPerWarp = blockedScale.getThreadsPerWarp();
-  if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
-    return emitOpError("Expected threads per warp to be {16, 2}");
+  if (isa<NvidiaMmaEncodingAttr>(dotEncoding.getParent())) {
+    // Necessary to keep all of the scales of a given block of values in the
+    // same warp
+    auto threadsPerWarp = blockedScale.getThreadsPerWarp();
+    if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
+      return emitOpError("Expected threads per warp to be {16, 2}");
+    }
   }
 
   return success();
 }
 
 LogicalResult UpcastMXFPOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    MLIRContext *ctx, std::optional<Location> loc, ValueRange operands,
     DictionaryAttr attributes, OpaqueProperties opaqueProperties,
     RegionRange regions, SmallVectorImpl<Type> &inferredReturnTypes) {
   auto xTy = cast<RankedTensorType>(operands[0].getType());
@@ -82,21 +87,25 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
 
   auto encoding = xTy.getEncoding();
   if (!encoding) {
-    return emitOptionalError(location, "expected an encoding");
+    return emitOptionalError(loc, "expected an encoding");
   }
   if (!mlir::isa<DotOperandEncodingAttr>(encoding)) {
-    return emitOptionalError(location, "expected an mma layout encoding");
-  }
-  if (xShape.size() < 2) {
-    return emitOptionalError(location, "tensor rank must be at least 2");
+    return emitOptionalError(loc, "expected a dotOperand encoding");
   }
 
-  // For now we just return the input encoding. For fp4 we'll need to cast from
-  // tf32 to fp16 encoding and multiply the shape by two
-  assert((typeEncoded == F8F6F4Type::E4M3 || typeEncoded == F8F6F4Type::E5M2) &&
-         "NYI: only fp8e4m3 and fp8e5m2 are supported");
+  if (typeEncoded == ScaleDotElemType::E2M1) {
+    auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+    auto newVEncoding = DotOperandEncodingAttr::get(
+        ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
+        oldEncoding.getKWidth() * 2);
+    auto newShape = SmallVector<int64_t>(xShape);
+    newShape.back() *= 2;
+    inferredReturnTypes.push_back(
+        RankedTensorType::get(newShape, FloatType::getBF16(ctx), newVEncoding));
+  } else {
+    inferredReturnTypes.push_back(xTy);
+  }
 
-  inferredReturnTypes.push_back(xTy);
   return success();
 }
 

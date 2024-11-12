@@ -100,7 +100,7 @@ fi
 # Configure, build and install PyTorch from source.
 
 if [[ $BUILD_PYTORCH = true ]]; then
-  PYTORCH_PROJ=$BASE/pytorch
+  PYTORCH_PROJ=$BASE/pytorch-stonepia
 
   echo "**** Cleaning $PYTORCH_PROJ before build ****"
   rm -rf $PYTORCH_PROJ
