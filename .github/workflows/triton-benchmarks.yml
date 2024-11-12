@@ -25,7 +25,7 @@ on:
         type: string
         default: "Triton benchmarks"
       skip_benchmarks:
-        description: List of benchmarks to skip
+        description: JSON list of benchmarks to skip
         type: string
         default: ""
   schedule:
