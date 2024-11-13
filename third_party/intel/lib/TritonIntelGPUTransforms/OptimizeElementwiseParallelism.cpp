@@ -26,9 +26,9 @@ namespace mlir::triton::gpu::intel {
 namespace {
 bool isMultiWarpValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
                                           int32_t numWorkGroupPos,
-                                          PatternRewriter &rewriter) {
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  StringAttr kWarp = rewriter.getStringAttr("warp");
+                                          Builder &builder) {
+  StringAttr kLane = builder.getStringAttr("lane");
+  StringAttr kWarp = builder.getStringAttr("warp");
   int32_t subGroupSize = linearLayout.getInDimSize(kLane);
   ArrayRef<int32_t> numContiguousPerWarp = linearLayout.getBasis(kWarp, 0);
   // Check the warp dimension hasn't been sliced away and we have n *
@@ -59,11 +59,11 @@ bool isMultiWarpValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
 /// possible for XPU backend) dimensions, i.e., the same data is owned by
 /// different threads.
 bool isValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
-                                 PatternRewriter &rewriter) {
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  StringAttr kWarp = rewriter.getStringAttr("warp");
-  StringAttr kBlock = rewriter.getStringAttr("block");
-  StringAttr kDim0 = rewriter.getStringAttr("dim0");
+                                 Builder &builder) {
+  StringAttr kLane = builder.getStringAttr("lane");
+  StringAttr kWarp = builder.getStringAttr("warp");
+  StringAttr kBlock = builder.getStringAttr("block");
+  StringAttr kDim0 = builder.getStringAttr("dim0");
   // 'lane' dimension must have been sliced away completely.
   if (!linearLayout.sublayoutIsZero(kLane, kDim0))
     return false;
@@ -74,7 +74,7 @@ bool isValidLayoutForUnbroadcast(const LinearLayout &linearLayout,
   // contiguous elements in each warp (or there is a single warp).
   int32_t numWorkGroupPos = linearLayout.getInDimSizeLog2(kWarp);
   return numWorkGroupPos == 0 || isMultiWarpValidLayoutForUnbroadcast(
-                                     linearLayout, numWorkGroupPos, rewriter);
+                                     linearLayout, numWorkGroupPos, builder);
 }
 
 /// Generic checks for the operation not looking at the tensor type.
@@ -104,6 +104,10 @@ bool optimizationDoesNotWorsenRegisterPressure(
     if (auto convertLayout = dyn_cast<ConvertLayoutOp>(owner))
       return convertLayout.getResult().getType() == newType;
 
+    // Allow for loop optimizations.
+    if (auto yield = dyn_cast<scf::YieldOp>(owner))
+      return true;
+
     // Only allow candidates. Check only operation constraints. We do not have
     // to check the type as we did already.
     if (!owner->hasTrait<OpTrait::Elementwise>() || !isCandidateOp(owner))
@@ -125,8 +129,8 @@ bool optimizationDoesNotWorsenRegisterPressure(
 /// tensor type.
 RankedTensorType getOptimizedType(RankedTensorType type,
                                   const LinearLayout &linearLayout,
-                                  PatternRewriter &rewriter) {
-  StringAttr kWarp = rewriter.getStringAttr("warp");
+                                  Builder &builder) {
+  StringAttr kWarp = builder.getStringAttr("warp");
 
   auto encoding = cast<DistributedEncodingTrait>(type.getEncoding());
   unsigned threadsPerWarp = product(encoding.getThreadsPerWarp());
@@ -134,7 +138,7 @@ RankedTensorType getOptimizedType(RankedTensorType type,
   [[maybe_unused]] unsigned ctaSplitNum = product(encoding.getCTASplitNum());
   assert(ctaSplitNum == 1 && "Expecting single CTA");
 
-  RankedTensorType::Builder builder(type);
+  RankedTensorType::Builder typeBuilder(type);
   int32_t numWorkGroupPos = linearLayout.getInDimSizeLog2(kWarp);
   unsigned sizePerThread =
       numWorkGroupPos == 0
@@ -143,8 +147,69 @@ RankedTensorType getOptimizedType(RankedTensorType type,
   CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(rewriter.getContext(), 1);
   auto newEncoding = rewriter.getAttr<BlockedEncodingAttr>(
       sizePerThread, threadsPerWarp, warpsPerCTA, /*order=*/0, ctaLayout);
-  builder.setEncoding(newEncoding);
-  return builder;
+  typeBuilder.setEncoding(newEncoding);
+  return typeBuilder;
+}
+
+bool isCandidateTypeForOptimization(RankedTensorType type) {
+  if (!type)
+    return false;
+
+  // Check if the layout is actually bad and can be optimized using our
+  // approach. We only support 1D tensors for now as these are easier to
+  // handle.
+  Attribute layout = type.getEncoding();
+  if (!layout || type.getRank() != 1)
+    return false;
+  std::optional<LinearLayout> linearLayout =
+      toLinearLayout(type.getShape(), layout);
+
+  LLVM_DEBUG(llvm::dbgs() << "Checking linear layout:\n"
+                          << linearLayout << "\n");
+
+  Builder builder(type.getContext());
+  if (!linearLayout || !isValidLayoutForUnbroadcast(*linearLayout, builder))
+    return false;
+
+  // As we are dealing with 1D tensors, we can do a simple transform to obtain
+  // a more optimized operation.
+  RankedTensorType newType = getOptimizedType(type, *linearLayout, builder);
+
+  LLVM_DEBUG(llvm::dbgs() << "Would convert to type:\n" << newType << "\n");
+
+  return true;
+}
+
+bool canLoopInductionVarBeOptimized(Value initArg, Value regionIterArg,
+                                    Value yieldedVal) {
+  LLVM_DEBUG(llvm::dbgs() << "Checking loop vars:\n"
+                          << initArg << "\n"
+                          << regionIterArg << "\n"
+                          << yieldedVal << "\n");
+
+  // Check the induction variable is a candidate for this optimization based on
+  // its type.
+  auto type = dyn_cast<RankedTensorType>(initArg.getType());
+  if (!isCandidateTypeForOptimization(type))
+    return false;
+  assert(type && "Expecting ranked tensor type");
+
+  // We want to check all the variables involve in the optimization can be
+  // replaced by ones with a more efficient layout without affecting register
+  // pressure.
+
+  LinearLayout linearLayout =
+      *toLinearLayout(type.getShape(), type.getEncoding());
+  Builder builder(type.getContext());
+  RankedTensorType newType = getOptimizedType(type, linearLayout, builder);
+
+  SmallPtrSet<Value, 2> visited;
+  // Only allow initArgs with a single use for now.
+  return initArg.hasOneUse() &&
+         optimizationDoesNotWorsenRegisterPressure(yieldedVal, newType,
+                                                   visited) &&
+         optimizationDoesNotWorsenRegisterPressure(regionIterArg, newType,
+                                                   visited);
 }
 
 struct ElementwiseOptPattern final
@@ -159,32 +224,20 @@ struct ElementwiseOptPattern final
     if (!isCandidateOp(op))
       return failure();
 
-    // Layout optimizations only apply to tensors.
-    auto type = dyn_cast<RankedTensorType>(op->getResultTypes().front());
-    if (!type)
+    // Check the operation is a candidate for this optimization based on its
+    // type.
+    auto type = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    if (!isCandidateTypeForOptimization(type))
       return failure();
+    assert(type && "Expecting ranked tensor type");
 
-    // Check if the layout is actually bad and can be optimized using our
-    // approach. We only support 1D tensors for now as these are easier to
-    // handle.
-    Attribute layout = type.getEncoding();
-    if (!layout || type.getRank() != 1)
-      return failure();
-    std::optional<LinearLayout> linearLayout =
-        toLinearLayout(type.getShape(), layout);
-
-    LLVM_DEBUG(llvm::dbgs() << "Checking linear layout:\n"
-                            << linearLayout << "\n");
-
-    if (!linearLayout || !isValidLayoutForUnbroadcast(*linearLayout, rewriter))
-      return failure();
+    LinearLayout linearLayout =
+        *toLinearLayout(type.getShape(), type.getEncoding());
 
     // As we are dealing with 1D tensors, we can do a simple transform to obtain
     // a more optimized operation.
     Location loc = op->getLoc();
-    RankedTensorType newType = getOptimizedType(type, *linearLayout, rewriter);
-
-    LLVM_DEBUG(llvm::dbgs() << "Would convert to type:\n" << newType << "\n");
+    RankedTensorType newType = getOptimizedType(type, linearLayout, rewriter);
 
     // Check the operands are not used by other operations. This will prevent
     // register pressure increase:
@@ -221,6 +274,106 @@ struct ElementwiseOptPattern final
   }
 };
 
+struct ForOptPattern final : OpRewritePattern<scf::ForOp> {
+  using OpRewritePattern<scf::ForOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scf::ForOp loop,
+                                PatternRewriter &rewriter) const final {
+    LLVM_DEBUG(llvm::dbgs() << "Checking operation:\n" << loop << "\n");
+
+    // Tuples of <initArg, blockArg, yieldedVal>
+    SmallVector<std::tuple<Value, BlockArgument, Value>> toOptimize;
+    llvm::copy_if(llvm::zip_equal(loop.getInitArgs(), loop.getRegionIterArgs(),
+                                  loop.getYieldedValues()),
+                  std::back_inserter(toOptimize), [](auto entry) {
+                    auto [initArg, regionIterArg, yieldedVal] = entry;
+                    return canLoopInductionVarBeOptimized(
+                        initArg, regionIterArg, yieldedVal);
+                  });
+    if (toOptimize.empty())
+      return failure();
+
+    constexpr auto getRealArgNumber = [](BlockArgument blockArg) {
+      return blockArg.getArgNumber() - 1;
+    };
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "Selected for optimization:\n";
+      for (auto [initArg, regionIterArg, yieldedVal] : toOptimize)
+        llvm::dbgs() << "Value:\n- init_arg: " << initArg
+                     << "\n- index: " << getRealArgNumber(regionIterArg)
+                     << "\n- yielded_value: " << yieldedVal << "\n";
+    });
+
+    Location loc = loop.getLoc();
+    Value lowerBound = loop.getLowerBound();
+    Value upperBound = loop.getUpperBound();
+    Value step = loop.getStep();
+
+    // Convert candidate init args:
+    SmallVector<Value> newInitArgs(loop.getInitArgs());
+    for (auto [initArg, regionIterArg, yieldedVal] : toOptimize) {
+      unsigned index = getRealArgNumber(regionIterArg);
+      auto type = cast<RankedTensorType>(initArg.getType());
+      LinearLayout linearLayout =
+          *toLinearLayout(type.getShape(), type.getEncoding());
+      RankedTensorType newType = getOptimizedType(type, linearLayout, rewriter);
+      newInitArgs[index] =
+          rewriter.create<ConvertLayoutOp>(loc, newType, initArg);
+    }
+
+    // Create new for loop.
+    // We provide a custom loop body builder that will clone the original body,
+    // but adding layout conversions for the optimized block arguments.
+    auto loopBodyBuilder = [&](OpBuilder &builder, Location loc,
+                               Value inductionVar, ValueRange regionIterArgs) {
+      // Add mapping for the cloning.
+      // We need to convert the operations back to the unoptimized layout in the
+      // loop body.
+      SmallVector<Value> argValues{inductionVar};
+      llvm::append_range(argValues, regionIterArgs);
+      for (auto [initArg, regionIterArg, yieldedVal] : toOptimize) {
+        unsigned index = getRealArgNumber(regionIterArg);
+        auto type = cast<RankedTensorType>(initArg.getType());
+        Value backToOriginalLayout = builder.create<ConvertLayoutOp>(
+            loc, regionIterArg.getType(), regionIterArgs[index]);
+        argValues[regionIterArg.getArgNumber()] = backToOriginalLayout;
+      }
+
+      rewriter.mergeBlocks(&loop.getRegion().front(), builder.getBlock(),
+                           argValues);
+
+      // Modify yield operation with updated values.
+      auto yieldOp = cast<scf::YieldOp>(builder.getBlock()->getTerminator());
+      builder.setInsertionPoint(yieldOp);
+      for (auto [initArg, regionIterArg, yieldedVal] : toOptimize) {
+        unsigned index = getRealArgNumber(regionIterArg);
+        Type type = regionIterArgs[index].getType();
+        yieldOp.getResultsMutable()[index].assign(
+            builder.create<ConvertLayoutOp>(
+                loc, type, yieldOp.getResultsMutable()[index].get()));
+      }
+    };
+    auto newForOp = rewriter.create<scf::ForOp>(
+        loc, lowerBound, upperBound, step, newInitArgs, loopBodyBuilder);
+
+    LLVM_DEBUG(llvm::dbgs() << "New loop:\n" << newForOp << "\n");
+
+    // Convert for loop results back to their original types:
+    SmallVector<Value> newVals(newForOp.getResults().size());
+    llvm::transform(llvm::zip_equal(newForOp.getResults(), loop.getResults()),
+                    std::begin(newVals), [&](auto entry) -> Value {
+                      auto [newRes, origRes] = entry;
+                      if (newRes.getType() == origRes.getType())
+                        return newRes;
+                      return rewriter.create<ConvertLayoutOp>(
+                          loc, origRes.getType(), newRes);
+                    });
+    rewriter.replaceOp(loop, newVals);
+    return success();
+  }
+};
+
 struct TritonIntelGPUOptimizeElementwiseParallelism final
     : impl::TritonIntelGPUOptimizeElementwiseParallelismBase<
           TritonIntelGPUOptimizeElementwiseParallelism> {
@@ -230,7 +383,7 @@ struct TritonIntelGPUOptimizeElementwiseParallelism final
     Operation *op = getOperation();
     MLIRContext *ctx = op->getContext();
     RewritePatternSet patterns(ctx);
-    patterns.add<ElementwiseOptPattern>(ctx);
+    patterns.add<ElementwiseOptPattern, ForOptPattern>(ctx);
     if (failed(
             applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
