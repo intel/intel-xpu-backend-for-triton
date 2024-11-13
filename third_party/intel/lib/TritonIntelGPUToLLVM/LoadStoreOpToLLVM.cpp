@@ -1,5 +1,6 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/SmallVector.h"
@@ -627,13 +628,19 @@ struct LoadOpConversion
 
       std::swap(tileHeight, tileWidth);
 
-      // We can decompose the matrix returned by transposed large 2d load
-      // when threads per warp < column size. Otherwise we have to load one
-      // operand per inst.
-      // Note: the tileHeight and numOperandsPer2DLoadM are the column size
-      // now.
-      numOperandsPer2DLoadM =
-          (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+      if (triton::tools::getBoolEnv(
+              "TRITON_INTEL_DISABLE_LARGE_BLOCK_SIZE_IO_FOR_TRANS_DOT_B")) {
+        // Only load 1 operand per inst on row.
+        numOperandsPer2DLoadM = 1;
+      } else {
+        // We can decompose the matrix returned by transposed large 2d load
+        // when threads per warp < column size. Otherwise we have to load one
+        // operand per inst.
+        // Note: the tileHeight and numOperandsPer2DLoadM are the column size
+        // now.
+        numOperandsPer2DLoadM =
+            (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+      }
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
       numOperandsPer2DloadN = 1;
@@ -1307,7 +1314,10 @@ struct AtomicCASOpConversion
 
       Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
       if (!atomicNeedsSharedMemory(op.getResult()))
-        rewriter.create<TritonGEN::BarrierOp>(loc, TritonGEN::MemFence::GLOBAL);
+        rewriter.create<spirv::ControlBarrierOp>(
+            loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
+            spirv::MemorySemantics::SequentiallyConsistent |
+                spirv::MemorySemantics::CrossWorkgroupMemory);
       Block &endBlock =
           LLVM::intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
             // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
@@ -1456,8 +1466,10 @@ struct AtomicRMWOpConversion
                                  rmwPtr, rmwVal, rmwMask, {zero});
       } else {
         if (!atomicNeedsSharedMemory(op.getResult()))
-          rewriter.create<TritonGEN::BarrierOp>(loc,
-                                                TritonGEN::MemFence::GLOBAL);
+          rewriter.create<spirv::ControlBarrierOp>(
+              loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
+              spirv::MemorySemantics::SequentiallyConsistent |
+                  spirv::MemorySemantics::CrossWorkgroupMemory);
         endBlock = &LLVM::intel::createPredicatedBlock(
             rewriter, loc, rmwMask, {zero}, [&] {
               mlir::LLVM::AtomicBinOp rmwKind;

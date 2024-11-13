@@ -4,6 +4,7 @@
 #include "fmha_backward_policy.h"
 #include "fmha_utils.h"
 #include "xetla.hpp"
+#include <math.h>
 
 using T = sycl::half;
 
