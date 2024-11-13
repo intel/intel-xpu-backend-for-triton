@@ -107,8 +107,24 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
   auto encoding = xTy.getEncoding();
 
   if (typeEncoded == ScaleDotElemType::E2M1) {
-    RankedTensorType retTy;
+    auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+    auto parentEncoding = oldEncoding.getParent();
 
+    // Note: For Intel the dot operands layout's kWidth parameter must
+    // match the parent's dpas layout opsPerChannel. Given that the kWidth
+    // parameter for the result dot layout is going to be twice the kWidth
+    // parameter of the operand, we cannot reuse the operand's parent dpas
+    // layout and we need to materialize a new dpas encoding.
+    if (auto dpasEncoding = dyn_cast<intel::DpasEncodingAttr>(parentEncoding))
+      parentEncoding = intel::DpasEncodingAttr::get(
+          ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
+          dpasEncoding.getExecutionSize(), dpasEncoding.getOpsPerChannel() * 2,
+          dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
+          dpasEncoding.getSubGroupSize());
+
+    auto newVEncoding =
+        DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(), parentEncoding,
+                                    oldEncoding.getKWidth() * 2);
     auto newShape = SmallVector<int64_t>(xShape);
     if (!encoding) {
       newShape.back() *= 2;
