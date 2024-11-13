@@ -253,6 +253,8 @@ public:
                                                 targetInfo, benefit);
       intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                               patterns, benefit);
+      intel::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
+                                              targetInfo, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,

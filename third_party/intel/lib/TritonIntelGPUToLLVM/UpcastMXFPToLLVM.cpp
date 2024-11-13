@@ -1,12 +1,8 @@
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/TypeUtilities.h"
-
 #include "PatternTritonGPUOpToLLVM.h"
 
-#include "mlir/IR/Value.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -20,6 +16,7 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace {
+
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
 private:
   const TargetInfoBase &targetInfo;
@@ -33,14 +30,11 @@ public:
   LogicalResult
   matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
-    auto loc = op.getLoc();
-    auto tyX = cast<RankedTensorType>(op->getOperandTypes()[0]);
+    Location loc = op.getLoc();
     auto operands = adaptor.getOperands();
-
-    auto xVals = unpackLLElements(loc, operands[0], rewriter);
-    auto scaleVals = unpackLLElements(loc, operands[1], rewriter);
-    auto fpType = op.getFpType();
+    SmallVector<Value> xVals = unpackLLElements(loc, operands[0], rewriter);
+    SmallVector<Value> scaleVals = unpackLLElements(loc, operands[1], rewriter);
+    ScaleDotElemType fpType = op.getFpType();
 
     Value tid = tid_val();
     auto mod = op->getParentOfType<ModuleOp>();
@@ -82,7 +76,7 @@ public:
 };
 } // anonymous namespace
 
-void mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(
+void mlir::triton::intel::populateUpcastMXFPToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   patterns.add<UpcastMXFPOpPattern>(typeConverter, targetInfo, benefit);
