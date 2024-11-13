@@ -104,8 +104,12 @@ bool optimizationDoesNotWorsenRegisterPressure(
     if (auto convertLayout = dyn_cast<ConvertLayoutOp>(owner))
       return convertLayout.getResult().getType() == newType;
 
+    // Broadcasted in source.
+    if (isa<ExpandDimsOp>(owner))
+      return true;
+
     // Allow for loop optimizations.
-    if (auto yield = dyn_cast<scf::YieldOp>(owner))
+    if (isa<scf::YieldOp>(owner))
       return true;
 
     // Only allow candidates. Check only operation constraints. We do not have
