@@ -321,4 +321,4 @@ _MIT License_. As found in [LICENSE](https://github.com/intel/intel-xpu-backend-
 See Intel's [Security Center](https://www.intel.com/content/www/us/en/security-center/default.html)
 for information on how to report a potential security issue or vulnerability.
 
-See also: [Security Policy](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/SECURITY.md)
+See also: [Security Policy](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/SECURITY.md).
