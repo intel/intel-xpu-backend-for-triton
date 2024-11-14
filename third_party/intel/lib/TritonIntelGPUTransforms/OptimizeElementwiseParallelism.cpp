@@ -96,7 +96,9 @@ RankedTensorType getOptimizedType(RankedTensorType type,
   RankedTensorType::Builder builder(type);
   int32_t numWorkGroupPos = linearLayout.getInDimSizeLog2(kWarp);
   unsigned sizePerThread =
-      numWorkGroupPos == 0 ? 1 : linearLayout.getBasis(kWarp, 0)[0];
+      numWorkGroupPos == 0
+          ? 1
+          : linearLayout.getBasis(kWarp, 0)[0] / threadsPerWarp;
   CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(rewriter.getContext(), 1);
   auto newEncoding = rewriter.getAttr<BlockedEncodingAttr>(
       sizePerThread, threadsPerWarp, warpsPerCTA, /*order=*/0, ctaLayout);
