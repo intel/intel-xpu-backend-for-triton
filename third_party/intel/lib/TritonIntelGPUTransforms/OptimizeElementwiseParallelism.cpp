@@ -142,6 +142,8 @@ RankedTensorType getOptimizedType(RankedTensorType type,
   [[maybe_unused]] unsigned ctaSplitNum = product(encoding.getCTASplitNum());
   assert(ctaSplitNum == 1 && "Expecting single CTA");
 
+  llvm::errs() << linearLayout << "\n";
+
   RankedTensorType::Builder typeBuilder(type);
   int32_t numWorkGroupPos = linearLayout.getInDimSizeLog2(kWarp);
   unsigned sizePerThread =
