@@ -174,6 +174,17 @@ class DpasLayout:
         return f"#triton_intel_gpu.dpas<{{repeatCount={self.repeatCount}, systolicDepth={self.systolic_depth}, executionSize = {self.execution_size}, opsPerChan = {self.ops_per_chan}, threadsPerWarp = {self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, repCluster={self.rep_cluster}}}>"
 
 
+class DotOperandLayout:
+
+    def __init__(self, parent, op_idx, k_width):
+        self.parent = parent
+        self.op_idx = op_idx
+        self.k_width = k_width
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.dot_op<{{parent={self.parent}, opIdx={self.op_idx}, kWidth={self.k_width}}}>"
+
+
 class BlockedLayout:
 
     def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
@@ -5314,6 +5325,10 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Do not convert same layout")
+    if (isinstance(src_layout, DotOperandLayout)
+            and isinstance(interm_layout, SharedLayout)) or (isinstance(dst_layout, DotOperandLayout)
+                                                             and isinstance(interm_layout, SharedLayout)):
+        pytest.xfail("DotOperandLayout <-> SharedLayout conversion is not completely supported")
     if is_hip() or is_xpu():
         try:
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
