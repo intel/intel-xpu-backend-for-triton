@@ -1,6 +1,5 @@
 [![Build and test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml/badge.svg?branch=main)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml)
 [![Triton wheels](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml/badge.svg?branch=main)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml)
-[![Conda test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml/badge.svg?branch=main)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml)
 
 # Intel® XPU Backend for Triton\*
 
@@ -211,7 +210,7 @@ Intel® XPU Backend for Triton\* requires a special version of PyTorch that can 
 1. Add `import torch` for xpu support.
 2. Put the tensor and models to XPU by calling `to('xpu')`.
 
-This repository contains modified [tutorials](python/tutorials) that must be used with Intel® XPU Backend for Triton\*.
+This repository contains modified [tutorials](https://github.com/intel/intel-xpu-backend-for-triton/tree/main/python/tutorials) that must be used with Intel® XPU Backend for Triton\*.
 
 The following examples show modifications for the user code.
 
@@ -299,10 +298,8 @@ graph_result = optimized_mod(x)
 
 ## Performance Analysis Guide
 
-There are several ways of doing performance analysis. We recommend using `torch.profiler` for end-to-end performance analysis and using Intel® VTune™ Profiler for more detailed kernel analysis. We provide a comprehensive guide for those two:
-1. [end_to_end_tests#profiling settings](docs/test_docs/end_to_end_tests.md#profiling-settings) section for using `torch.profiler`.
-2. [VTune Profiling Guide](docs/VTune_Profiling.md) for kernel analysis.
-
+There are several ways of doing performance analysis.
+We recommend using `torch.profiler` for end-to-end performance analysis and using Intel® VTune™ Profiler for more detailed kernel analysis.
 Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user needs to enable kernel profiling.
 
 ```Bash
@@ -311,7 +308,7 @@ export TRITON_XPU_PROFILE=1
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/intel/intel-xpu-backend-for-triton). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
+Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/intel/intel-xpu-backend-for-triton). For more detailed instructions, please visit our [contributor's guide](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/CONTRIBUTING.md).
 
 ## License
 
@@ -323,4 +320,4 @@ _MIT License_. As found in [LICENSE](https://github.com/intel/intel-xpu-backend-
 See Intel's [Security Center](https://www.intel.com/content/www/us/en/security-center/default.html)
 for information on how to report a potential security issue or vulnerability.
 
-See also: [Security Policy](security.md)
+See also: [Security Policy](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/SECURITY.md)
