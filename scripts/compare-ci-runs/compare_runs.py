@@ -1,7 +1,6 @@
 #! /usr/bin/env python3
 
 import argparse
-import pathlib
 import shutil
 import subprocess
 import os
