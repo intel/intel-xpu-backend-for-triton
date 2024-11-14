@@ -91,13 +91,15 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path, context):
+    def __init__(self, path, context, target=None):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
         ir.load_dialects(context)
-        target = driver.active.get_current_target()
+        if target is None:
+            target = driver.active.get_current_target()
+        assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
         backend = make_backend(target)
         backend.load_dialects(context)
 
@@ -226,7 +228,7 @@ def compile(src, target=None, options=None):
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
         context = ir.context()
-        src = IRSource(src, context)
+        src = IRSource(src, context, target)
 
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
