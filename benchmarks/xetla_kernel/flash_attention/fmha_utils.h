@@ -17,6 +17,7 @@
 #pragma once
 
 #include "xetla.hpp"
+#include <math.h>
 
 namespace gpu::xetla {
 

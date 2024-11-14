@@ -100,6 +100,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
+  ADD_PASS_WRAPPER_0(
+      "add_optimize_elementwise_parallelism",
+      gpu::intel::createTritonIntelGPUOptimizeElementwiseParallelism);
 }
 
 void init_triton_intel(py::module &&m) {

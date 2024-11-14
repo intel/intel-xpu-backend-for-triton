@@ -18,6 +18,7 @@
 #include "mlir/Conversion/GPUToLLVMSPV/GPUToLLVMSPVPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
@@ -268,6 +269,8 @@ public:
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
+    populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
+                                          spirv::ClientAPI::OpenCL);
   }
 
 private:
