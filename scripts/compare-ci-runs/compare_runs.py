@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import argparse
+import pathlib
 import shutil
 import subprocess
 import os
@@ -111,9 +112,9 @@ def merge_triton_xetla_reports_data(config: str, triton_file: Path, xetla_file: 
         return pd.DataFrame()
 
 
-def build_triton_benchmark_reports_path(directory: Path, report_name: str) -> str:
+def build_triton_benchmark_reports_path(directory: Path, report_name: str) -> Path:
     """Construct the full file path for a given report name."""
-    return os.path.join(directory, "benchmark-reports", f"{report_name}-report.csv")
+    return directory / "benchmark-reports" / f"{report_name}-report.csv"
 
 
 def parse_triton_benchmark_data(config: str, directory: Path) -> pd.DataFrame:
