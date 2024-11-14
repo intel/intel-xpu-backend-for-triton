@@ -15,6 +15,7 @@
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
 #include "intel/include/Analysis/Allocation.h"
+#include "intel/include/Analysis/Membar.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -77,7 +78,8 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    intel::TritonGPUToLLVMPipelineManager pipelineManager(mod, context);
+    mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
+        mod, context);
     mlir::LowerToLLVMOptions option(context);
     bool isAdvancedPathEnabled =
         mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
@@ -97,7 +99,7 @@ struct ConvertTritonGPUToLLVM
     if (!pipelineManager.skipSharedMemoryAllocation()) {
       ModuleAllocation allocation =
           ModuleAllocation::get<triton::intel::AllocationAnalysis>(mod);
-      ModuleMembarAnalysis membarPass(&allocation);
+      ModuleMembarAnalysis membarPass(&allocation, ::mlir::intel::membarFilter);
       membarPass.run();
     }
 
@@ -116,7 +118,7 @@ struct ConvertTritonGPUToLLVM
         return signalPassFailure();
     }
 
-    intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    mlir::triton::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);

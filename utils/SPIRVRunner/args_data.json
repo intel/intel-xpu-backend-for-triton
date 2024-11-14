@@ -32,5 +32,6 @@
   "threads_per_warp": 32,
   "shared_memory": 0,
   "kernel_name": "add_kernel",
-  "spv_name": "add_kernel.spv"
+  "spv_name": "add_kernel.spv",
+  "build_flags": ""
 }

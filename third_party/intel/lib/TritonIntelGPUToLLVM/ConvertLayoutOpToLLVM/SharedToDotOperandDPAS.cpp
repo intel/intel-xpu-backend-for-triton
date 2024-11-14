@@ -20,7 +20,8 @@ public:
                    ConversionPatternRewriter &rewriter,
                    const LLVMTypeConverter *typeConverter, Location loc)
       : dpasLayout(dpasLayout), descTy(descTy), smemStrides(smemStrides),
-        multiDimWarpId(multiDimWarpId), rewriter(rewriter), loc(loc) {
+        multiDimWarpId(std::move(multiDimWarpId)), rewriter(rewriter),
+        loc(loc) {
     static_assert(opIdx == 0 || opIdx == 1);
 
     size_t rank = warpShape.size();

@@ -426,3 +426,20 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.return %0 : tensor<32x64xf32, #blocked1>
   }
 }
+
+// -----
+
+// Test no barriers are inserted when back to back transpositions are performed.
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @test_back_to_back
+  // CHECK-NOT: barrier
+  tt.func @test_back_to_back(%arg0: tensor<32x64xf32, #blocked>, %arg1: tensor<32x64xf32, #blocked>) -> (tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>) {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, #blocked1>
+    %1 = triton_gpu.convert_layout %arg1 : tensor<32x64xf32, #blocked> -> tensor<32x64xf32, #blocked1>
+    tt.return %0, %1 : tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>
+  }
+}

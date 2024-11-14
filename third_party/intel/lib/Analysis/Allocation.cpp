@@ -15,6 +15,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include "intel/include/Analysis/Utility.h"
+
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -51,10 +53,10 @@ getCvtOrder(Attribute srcLayout, Attribute dstLayout) {
 
   // mma or dot layout does not have an order, so the order depends on the
   // layout of the other operand.
-  auto inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
-                                              : getOrder(srcLayout);
-  auto outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
-                                               : getOrder(dstLayout);
+  const auto &inOrd = (srcMmaLayout || srcDotLayout) ? getOrder(dstLayout)
+                                                     : getOrder(srcLayout);
+  const auto &outOrd = (dstMmaLayout || dstDotLayout) ? getOrder(srcLayout)
+                                                      : getOrder(dstLayout);
 
   return {inOrd, outOrd};
 }
@@ -104,6 +106,26 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
 
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy) {
+  if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy)) {
+    // Conversions that can be implemented as sub-group shuffles do not need
+    // scratch memory.
+    return ScratchConfig({}, {});
+  }
+
+  if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
+    // Conversions that can be implemented as sub-group transposes store the
+    // whole tensor in shared memory and read it afterwards.
+    auto srcEncoding = cast<gpu::DistributedEncodingTrait>(srcTy.getEncoding());
+    unsigned threadsPerWarp = product(srcEncoding.getThreadsPerWarp());
+    unsigned warpsPerCTA = product(srcEncoding.getWarpsPerCTA());
+    unsigned remaining = product(srcTy.getShape()) /
+                         (threadsPerWarp * threadsPerWarp * warpsPerCTA);
+    SmallVector<unsigned> repShape{threadsPerWarp, threadsPerWarp, remaining,
+                                   warpsPerCTA};
+    return ScratchConfig(repShape, repShape,
+                         /*inVec=*/1, /*outVec=*/threadsPerWarp);
+  }
+
   // Initialize vector sizes and stride
   auto repShape = getRepShapeForCvt(srcTy, dstTy);
   if (repShape.empty())
@@ -346,7 +368,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto aliasBufferIter : allocation->getAliasBuffer()) {
+    for (const auto &aliasBufferIter : allocation->getAliasBuffer()) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
       auto range = getLiveness(value);
@@ -486,7 +508,7 @@ private:
           std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
             auto xRange = bufferRange[buffer];
             bool res = xRange.intersects(range);
-            for (auto val : tripleMap)
+            for (const auto &val : tripleMap)
               res = res &&
                     !val.second.intersects(xRange); // only one buffer intersect
             return res;
