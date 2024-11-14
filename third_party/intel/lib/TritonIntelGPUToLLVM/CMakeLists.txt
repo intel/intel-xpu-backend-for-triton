@@ -33,6 +33,7 @@ add_triton_library(TritonIntelGPUToLLVM
     LINK_LIBS PUBLIC
     GPUToTritonGEN
     MLIRGPUToLLVMSPV
+    MLIRSPIRVToLLVM
     TritonGENIR
     TritonGENToLLVM
     TritonIntelGPUIR

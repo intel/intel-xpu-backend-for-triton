@@ -55,7 +55,7 @@ on:
       runner_version:
         description: Runner label for version
         type: string
-        default: runner-0.0.19
+        default: runner-0.0.20
       env_manager:
         description: Environment manager
         default: conda
@@ -82,7 +82,7 @@ jobs:
         id: conda-cache
         uses: ./.github/actions/load
         env:
-          CACHE_NUMBER: 6
+          CACHE_NUMBER: 7
         with:
           path: $HOME/miniforge3/envs/triton
           key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
