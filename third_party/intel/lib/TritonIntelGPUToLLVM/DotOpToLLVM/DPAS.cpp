@@ -220,6 +220,7 @@ public:
     unsigned repNumN = repN * repCluster[rank - 1];
     unsigned repOuter = repNumM > repNumN ? repNumN : repNumM;
     unsigned repInner = repNumM > repNumN ? repNumM : repNumN;
+    llvm::errs() << "Gen dpas loop:\n\tRep Batch: " << repBatch << "\n\trepK: " << repK << "\n\trepOuter: " << repOuter << "\n";
     for (int b = 0; b < repBatch; ++b)
       for (int k = 0; k < repK; ++k)
         for (int outer = 0; outer < repOuter; ++outer) {

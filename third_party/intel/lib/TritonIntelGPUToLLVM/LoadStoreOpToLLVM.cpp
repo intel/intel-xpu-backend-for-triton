@@ -632,8 +632,12 @@ struct LoadOpConversion
       // operand per inst.
       // Note: the tileHeight and numOperandsPer2DLoadM are the column size
       // now.
+#if 1 
+      numOperandsPer2DLoadM = 1;
+#else
       numOperandsPer2DLoadM =
           (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+#endif
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
       numOperandsPer2DloadN = 1;
@@ -752,6 +756,7 @@ struct LoadOpConversion
             // immediately lowered further to a builtin call.
             return failure();
           }
+          llvm::errs() << "emitting load op: (transpose? " << isTransposeRequired << ")\n\t" << load2dOp << "\n";
 
           unsigned packedRowNum = opIdx == 0 ? numOperandsOuterDimPerLoad
                                              : numOperandsInnerDimPerLoad;
