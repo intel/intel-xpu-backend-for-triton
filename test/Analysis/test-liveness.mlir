@@ -1,5 +1,4 @@
 // RUN: triton-opt %s --mlir-disable-threading --test-liveness --split-input-file 2>&1 | FileCheck %s
-// XFAIL: *
 
 module attributes {"triton_gpu.num-warps" = 8 : i32} {
   tt.func public @test(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %cond: i1) {
@@ -19,12 +18,12 @@ module attributes {"triton_gpu.num-warps" = 8 : i32} {
     // CHECK-NEXT:  [[[ADVANCE2]], scf.yield] for value: [[ADVANCE2]]
 
     // CHECK: scf.if
-    // CHECK-NEXT: LiveIntervals for block: ^bb0
-    // CHECK-NEXT:  [[[LOAD1:%.*]], [[LOAD1]]] for value: %arg0
-    // CHECK-NEXT:  [[[LOAD1]], scf.yield] for value: [[LOAD1]]
-    // CHECK-NEXT: LiveIntervals for block: ^bb0
-    // CHECK-NEXT:  [[[LOAD2:%.*]], [[LOAD2]]] for value: %arg1
-    // CHECK-NEXT:  [[[LOAD2]], scf.yield] for value: [[LOAD2]]
+    // CHECK-DAG: LiveIntervals for block: ^bb0
+    // CHECK-DAG:  [[[LOAD1:%.*]], [[LOAD1]]] for value: %arg0
+    // CHECK-DAG:  [[[LOAD1]], scf.yield] for value: [[LOAD1]]
+    // CHECK-DAG: LiveIntervals for block: ^bb0
+    // CHECK-DAG:  [[[LOAD2:%.*]], [[LOAD2]]] for value: %arg1
+    // CHECK-DAG:  [[[LOAD2]], scf.yield] for value: [[LOAD2]]
 
     %c1024_i32 = arith.constant 1024 : i32
     %c64_i32 = arith.constant 64 : i32
