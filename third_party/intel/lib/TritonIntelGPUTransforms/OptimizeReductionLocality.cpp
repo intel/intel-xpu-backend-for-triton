@@ -212,15 +212,15 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
                << "Performed elementwise reduction within repCount: " << operand
                << "\n");
 
-    operand = reshapeForFinalReduction(op, rewriter, operand, encoding);
-
-    LLVM_DEBUG(llvm::dbgs()
-               << "Reshaped for final reduction: " << operand << "\n");
-
     operand = convertLayoutForFinalReduction(op, rewriter, operand, encoding);
 
     LLVM_DEBUG(llvm::dbgs()
                << "Converted layout for final reduction: " << operand << "\n");
+
+    operand = reshapeForFinalReduction(op, rewriter, operand, encoding);
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "Reshaped for final reduction: " << operand << "\n");
 
     operand = performFinalElementwiseReduction(op, rewriter, operand);
 
@@ -315,21 +315,25 @@ private:
                                        Value val,
                                        DpasEncodingAttr dpasEncoding) const {
     auto oldType = cast<RankedTensorType>(val.getType());
-    auto oldEncoding = cast<BlockedEncodingAttr>(oldType.getEncoding());
     RankedTensorType::Builder type(oldType);
 
-    constexpr size_t rank = 4;
+    constexpr size_t rank = 5;
     std::array<unsigned, rank> sizePerThread{
         dpasEncoding.getExecutionSize(),
         dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
             dpasEncoding.getExecutionSize(),
-        1, 1};
+        1, 1, 1};
     std::array<unsigned, rank> threadsPerWarp{
-        1, dpasEncoding.getExecutionSize(), 1, 1};
+        1, dpasEncoding.getExecutionSize() / dpasEncoding.getRepCluster()[0],
+        dpasEncoding.getRepCluster()[0], 1, 1};
+    std::array<unsigned, rank> warpsPerCTA{1, 1, 1,
+                                           dpasEncoding.getWarpsPerCTA()[1],
+                                           dpasEncoding.getWarpsPerCTA()[0]};
+    constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4};
+    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
-        sizePerThread, threadsPerWarp, oldEncoding.getWarpsPerCTA(),
-        oldEncoding.getOrder(), oldEncoding.getCTALayout());
+        sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
 
     type.setEncoding(encoding);
 
@@ -349,10 +353,12 @@ private:
         dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0],
         dpasEncoding.getWarpsPerCTA()[1], dpasEncoding.getWarpsPerCTA()[0]};
     std::array<unsigned, rank> sizePerThread{
-        1, dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0], 1,
-        1};
-    std::array<unsigned, rank> threadsPerWarp{dpasEncoding.getExecutionSize(),
-                                              1, 1, 1};
+        dpasEncoding.getExecutionSize(),
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+            dpasEncoding.getExecutionSize(),
+        1, 1};
+    std::array<unsigned, rank> threadsPerWarp{
+        1, dpasEncoding.getExecutionSize(), 1, 1};
     std::array<unsigned, rank> warpsPerCTA{1, 1,
                                            dpasEncoding.getWarpsPerCTA()[1],
                                            dpasEncoding.getWarpsPerCTA()[0]};
