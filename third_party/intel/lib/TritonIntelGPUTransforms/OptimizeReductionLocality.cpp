@@ -152,10 +152,9 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
   static constexpr int preferredReductionAxis = 1;
 
   // Intermediate reductions
-  static constexpr int finalEWReductionAxis = 0;
-  static constexpr int finalWarpsReductionAxis = 2;
+  static constexpr int finalElementwiseReductionAxis = 0;
+  static constexpr int finalWarpsReductionAxis = 1;
   static constexpr int repCountReshapedAxis = 2;
-  static constexpr int withinWarpXAxisReshapedAxis = 5;
 
   LogicalResult matchAndRewrite(ReduceOp op,
                                 PatternRewriter &rewriter) const final {
@@ -188,6 +187,18 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
             0)
       return failure();
 
+    // The layout should cover the tensor shape.
+    ArrayRef<int64_t> shape = type.getShape();
+    if ( // X axis condition
+        encoding.getExecutionSize() * encoding.getRepCluster()[1] *
+                encoding.getWarpsPerCTA()[1] !=
+            shape[1] ||
+        // Y axis conditions
+        encoding.getRepeatCount() * encoding.getRepCluster()[0] *
+                encoding.getWarpsPerCTA()[0] !=
+            shape[0])
+      return failure();
+
     LLVM_DEBUG(llvm::dbgs() << "Optimizing reduction: " << op << "\n");
 
     operand = reshapeForElementWiseReduction(op, rewriter, encoding);
@@ -201,18 +212,12 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
                << "Performed elementwise reduction within repCount: " << operand
                << "\n");
 
-    operand = performElementWiseReductionAcrossRepCounts(op, rewriter, operand);
-
-    LLVM_DEBUG(llvm::dbgs()
-               << "Performed elementwise reduction across repCount: " << operand
-               << "\n");
-
     operand = reshapeForFinalReduction(op, rewriter, operand, encoding);
 
     LLVM_DEBUG(llvm::dbgs()
                << "Reshaped for final reduction: " << operand << "\n");
 
-    operand = convertLayoutForFinalReduction(op, rewriter, operand);
+    operand = convertLayoutForFinalReduction(op, rewriter, operand, encoding);
 
     LLVM_DEBUG(llvm::dbgs()
                << "Converted layout for final reduction: " << operand << "\n");
@@ -227,15 +232,15 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
     LLVM_DEBUG(llvm::dbgs() << "Final across-warps reduction performed: "
                             << operand << "\n");
 
-    operand = convertLayoutToOriginalType(op, rewriter, operand, encoding);
-
-    LLVM_DEBUG(llvm::dbgs()
-               << "Converted layout to original type: " << operand << "\n");
-
-    operand = reshapeToOriginalType(op, rewriter, operand);
+    operand = reshapeToOriginalType(op, rewriter, operand, encoding);
 
     LLVM_DEBUG(llvm::dbgs()
                << "Reshaped to original type: " << operand << "\n");
+
+    operand = convertLayoutToOriginalType(op, rewriter, operand);
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "Converted layout to original type: " << operand << "\n");
 
     rewriter.replaceOp(op, operand);
 
@@ -251,44 +256,26 @@ private:
     auto oldType = cast<RankedTensorType>(val.getType());
     ArrayRef<int64_t> oldShape = oldType.getShape();
 
-    constexpr size_t rank = 8;
+    constexpr size_t rank = 6;
     std::array<int64_t, rank> shape{
-        dpasEncoding.getExecutionSize(),
-        dpasEncoding.getRepeatCount(),
-        dpasEncoding.getRepCluster()[1],
-        dpasEncoding.getRepCluster()[0],
-        dpasEncoding.getWarpsPerCTA()[1],
-        dpasEncoding.getWarpsPerCTA()[0],
-        oldShape[1] /
-            (dpasEncoding.getExecutionSize() * dpasEncoding.getRepCluster()[1] *
-             dpasEncoding.getWarpsPerCTA()[1]),
-        oldShape[0] /
-            (dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] *
-             dpasEncoding.getWarpsPerCTA()[0])};
-    std::array<unsigned, rank> sizePerThread{
-        1,
-        dpasEncoding.getRepeatCount(),
-        dpasEncoding.getRepCluster()[1],
-        dpasEncoding.getRepCluster()[0],
-        1,
-        1,
-        static_cast<unsigned>(oldShape[1]) /
-            (dpasEncoding.getExecutionSize() * dpasEncoding.getRepCluster()[1] *
-             dpasEncoding.getWarpsPerCTA()[1]),
-        static_cast<unsigned>(oldShape[0]) /
-            (dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] *
-             dpasEncoding.getWarpsPerCTA()[0])};
+        dpasEncoding.getExecutionSize(),  dpasEncoding.getRepeatCount(),
+        dpasEncoding.getRepCluster()[1],  dpasEncoding.getRepCluster()[0],
+        dpasEncoding.getWarpsPerCTA()[1], dpasEncoding.getWarpsPerCTA()[0]};
+    std::array<unsigned, rank> sizePerThread{1,
+                                             dpasEncoding.getRepeatCount(),
+                                             dpasEncoding.getRepCluster()[1],
+                                             dpasEncoding.getRepCluster()[0],
+                                             1,
+                                             1};
     std::array<unsigned, rank> threadsPerWarp{
-        dpasEncoding.getExecutionSize(), 1, 1, 1, 1, 1, 1, 1};
+        dpasEncoding.getExecutionSize(), 1, 1, 1, 1, 1};
     std::array<unsigned, rank> warpsPerCTA{1,
                                            1,
                                            1,
                                            1,
                                            dpasEncoding.getWarpsPerCTA()[1],
-                                           dpasEncoding.getWarpsPerCTA()[0],
-                                           1,
-                                           1};
-    std::array<unsigned, rank> order{0, 1, 2, 3, 4, 5, 6, 7};
+                                           dpasEncoding.getWarpsPerCTA()[0]};
+    constexpr std::array<unsigned, rank> order{0, 1, 2, 3, 4, 5};
     CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
@@ -324,24 +311,21 @@ private:
     return performReduction(op, rewriter, val, /*axis=*/repCountReshapedAxis);
   }
 
-  Value performElementWiseReductionAcrossRepCounts(ReduceOp op,
-                                                   PatternRewriter &rewriter,
-                                                   Value val) const {
-    return performReduction(op, rewriter, val,
-                            /*axis=*/withinWarpXAxisReshapedAxis);
-  }
-
   Value convertLayoutForFinalReduction(ReduceOp op, PatternRewriter &rewriter,
-                                       Value val) const {
+                                       Value val,
+                                       DpasEncodingAttr dpasEncoding) const {
     auto oldType = cast<RankedTensorType>(val.getType());
     auto oldEncoding = cast<BlockedEncodingAttr>(oldType.getEncoding());
     RankedTensorType::Builder type(oldType);
 
-    SmallVector<unsigned> sizePerThread = oldEncoding.getSizePerThread();
-    SmallVector<unsigned> threadsPerWarp = oldEncoding.getThreadsPerWarp();
-
-    std::swap(sizePerThread[0], sizePerThread[1]);
-    std::swap(threadsPerWarp[0], threadsPerWarp[1]);
+    constexpr size_t rank = 4;
+    std::array<unsigned, rank> sizePerThread{
+        dpasEncoding.getExecutionSize(),
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+            dpasEncoding.getExecutionSize(),
+        1, 1};
+    std::array<unsigned, rank> threadsPerWarp{
+        1, dpasEncoding.getExecutionSize(), 1, 1};
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, oldEncoding.getWarpsPerCTA(),
@@ -359,32 +343,20 @@ private:
     auto oldType = cast<RankedTensorType>(val.getType());
     ArrayRef<int64_t> oldShape = oldType.getShape();
 
-    constexpr size_t rank = 6;
-    std::array<int64_t, rank> shape{dpasEncoding.getExecutionSize(),
-                                    dpasEncoding.getExecutionSize(),
-                                    dpasEncoding.getRepeatCount() *
-                                        dpasEncoding.getRepCluster()[0] /
-                                        dpasEncoding.getExecutionSize(),
-                                    dpasEncoding.getWarpsPerCTA()[1],
-                                    dpasEncoding.getWarpsPerCTA()[0],
-                                    oldShape.back()};
-    std::array<unsigned, rank> sizePerThread{
-        1,
+    constexpr size_t rank = 4;
+    std::array<int64_t, rank> shape{
         dpasEncoding.getExecutionSize(),
-        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
-            dpasEncoding.getExecutionSize(),
-        1,
-        1,
-        static_cast<unsigned>(oldShape.back())};
-    std::array<unsigned, rank> threadsPerWarp{
-        dpasEncoding.getExecutionSize(), 1, 1, 1, 1, 1};
-    std::array<unsigned, rank> warpsPerCTA{1,
-                                           1,
-                                           1,
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0],
+        dpasEncoding.getWarpsPerCTA()[1], dpasEncoding.getWarpsPerCTA()[0]};
+    std::array<unsigned, rank> sizePerThread{
+        1, dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0], 1,
+        1};
+    std::array<unsigned, rank> threadsPerWarp{dpasEncoding.getExecutionSize(),
+                                              1, 1, 1};
+    std::array<unsigned, rank> warpsPerCTA{1, 1,
                                            dpasEncoding.getWarpsPerCTA()[1],
-                                           dpasEncoding.getWarpsPerCTA()[0],
-                                           1};
-    std::array<unsigned, rank> order{0, 1, 2, 3, 4, 5};
+                                           dpasEncoding.getWarpsPerCTA()[0]};
+    constexpr std::array<unsigned, rank> order{0, 1, 2, 3};
     CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
@@ -404,7 +376,8 @@ private:
 
   Value performFinalElementwiseReduction(ReduceOp op, PatternRewriter &rewriter,
                                          Value val) const {
-    return performReduction(op, rewriter, val, /*axis=*/finalEWReductionAxis);
+    return performReduction(op, rewriter, val,
+                            /*axis=*/finalElementwiseReductionAxis);
   }
 
   Value performFinalAcrossWarpsReduction(ReduceOp op, PatternRewriter &rewriter,
@@ -413,42 +386,37 @@ private:
                             /*axis=*/finalWarpsReductionAxis);
   }
 
-  Value convertLayoutToOriginalType(ReduceOp op, PatternRewriter &rewriter,
-                                    Value val,
-                                    DpasEncodingAttr dpasEncoding) const {
-    auto oldType = cast<RankedTensorType>(val.getType());
-    ArrayRef<int64_t> oldShape = oldType.getShape();
-    RankedTensorType::Builder type(oldType);
+  Value reshapeToOriginalType(ReduceOp op, PatternRewriter &rewriter, Value val,
+                              DpasEncodingAttr dpasEncoding) const {
+    RankedTensorType::Builder type(
+        cast<RankedTensorType>(op.getResult().front().getType()));
 
-    constexpr size_t rank = 5;
+    constexpr size_t rank = 2;
     std::array<unsigned, rank> sizePerThread{
-        dpasEncoding.getExecutionSize(),
-        dpasEncoding.getRepCluster()[0] * dpasEncoding.getRepeatCount() /
-            dpasEncoding.getExecutionSize(),
-        1, 1, 1};
-    std::array<unsigned, rank> threadsPerWarp{1, 1, 1, 1,
+        1, dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+               dpasEncoding.getExecutionSize()};
+    std::array<unsigned, rank> threadsPerWarp{1,
                                               dpasEncoding.getExecutionSize()};
-    std::array<unsigned, rank> warpsPerCTA{1, 1,
-                                           dpasEncoding.getWarpsPerCTA()[0], 1,
-                                           dpasEncoding.getWarpsPerCTA()[1]};
-    std::array<unsigned, rank> order{0, 1, 2, 3, 4};
+    std::array<unsigned, rank> warpsPerCTA{dpasEncoding.getWarpsPerCTA()[1],
+                                           dpasEncoding.getWarpsPerCTA()[0]};
+    constexpr std::array<unsigned, rank> order{0, 1};
     CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
 
     auto parentEncoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
 
-    type.setEncoding(parentEncoding.squeeze(rank - 1));
+    type.setEncoding(parentEncoding.squeeze(0));
 
-    return rewriter.create<ConvertLayoutOp>(
-        op.getLoc(), static_cast<RankedTensorType>(type), val);
-  }
-
-  Value reshapeToOriginalType(ReduceOp op, PatternRewriter &rewriter,
-                              Value val) const {
     return rewriter.create<ReshapeOp>(op.getLoc(),
-                                      op.getResult().front().getType(), val,
+                                      static_cast<RankedTensorType>(type), val,
                                       /*allow_reorder=*/true,
                                       /*efficient_layout=*/true);
+  }
+
+  Value convertLayoutToOriginalType(ReduceOp op, PatternRewriter &rewriter,
+                                    Value val) const {
+    return rewriter.create<ConvertLayoutOp>(
+        op.getLoc(), op.getResult().front().getType(), val);
   }
 };
 
