@@ -159,6 +159,10 @@ DpasEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
   return shapePerCTATile;
 }
 
+SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
+  llvm::report_fatal_error("NYI. DpasEncodingAttr::getRepOrder");
+}
+
 SmallVector<unsigned>
 DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
