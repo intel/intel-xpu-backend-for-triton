@@ -2536,6 +2536,9 @@ def test_histogram(M, N, device):
         offset2 = tl.arange(0, N)
         x = tl.load(x_ptr + offset1)
         z = tl.histogram(x, N)
+        bias = tl.full([M, N], 1, dtype=tl.int32)
+        # check that histogram produces object compatible with broadcasting
+        biased = z + bias
         tl.store(z_ptr + offset2, z)
 
     torch.manual_seed(17)
@@ -3425,8 +3428,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if rhs_scale:
-            pytest.skip("scales on rhs not yet support for HIP")
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (normal_type, mxfp_type) and not is_hip_mi300():
@@ -4135,13 +4136,12 @@ def test_load_cache_modifier(cache, device):
         cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-        flat_load_line = [line for line in amdgcn.splitlines() if "flat_load" in line]
         if cache == '' or cache == '.ca':
             assert cg_cache_modifier_str not in (global_load_line[0] if global_load_line else buffer_load_line[0])
         if cache == '.cg':
             assert cg_cache_modifier_str in global_load_line[0]
         if cache == '.cv':
-            assert cv_cache_modifier_str in flat_load_line[0]
+            assert cv_cache_modifier_str in global_load_line[0]
 
     if is_cuda():
         ptx = pgm.asm['ptx']
