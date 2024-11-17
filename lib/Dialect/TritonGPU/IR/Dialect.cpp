@@ -992,6 +992,10 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
       return amdWmmaParent.getTotalElemsPerThreadForOperand(
           shape, eltTy, getKWidth(), getOpIdx());
     }
+    if (auto dpasParent = mlir::dyn_cast<intel::DpasEncodingAttr>(mmaParent)) {
+      return dpasParent.getTotalElemsPerThreadForOperand(
+          shape, eltTy, getKWidth(), getOpIdx());
+    }
   }
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
     auto shapePerCTA = getShapePerCTA(*this, shape);
