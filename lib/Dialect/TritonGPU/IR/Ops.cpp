@@ -53,14 +53,23 @@ LogicalResult UpcastMXFPOp::verify() {
         "all dimensions except the last must match between operands");
   }
 
-  auto dotEncoding =
-      dyn_cast_or_null<DotOperandEncodingAttr>(xTy.getEncoding());
+  auto layoutX = xTy.getEncoding();
+  auto layoutScale = scaleTy.getEncoding();
+  if (bool(layoutX) != bool(layoutScale)) {
+    return emitOpError(
+        "Expected either both or neither operands to have an encoding");
+  }
+  // Nothing to check if no encoding. This is used to infer the return type in
+  // AccelerateMatmul.cpp
+  if (!layoutX) {
+    return success();
+  }
+
+  auto dotEncoding = dyn_cast<DotOperandEncodingAttr>(xTy.getEncoding());
   if (!dotEncoding) {
     return emitOpError("Expected a DotOperandEncodingAttr for values");
   }
-
-  auto blockedScale =
-      dyn_cast_or_null<BlockedEncodingAttr>(scaleTy.getEncoding());
+  auto blockedScale = dyn_cast<BlockedEncodingAttr>(scaleTy.getEncoding());
   if (!blockedScale) {
     return emitOpError("Expected a BlockOperandEncoding for scales");
   }
@@ -87,36 +96,37 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
   auto xShape = xTy.getShape();
 
   auto encoding = xTy.getEncoding();
-  if (!encoding) {
-    return emitOptionalError(loc, "expected an encoding");
-  }
-  if (!mlir::isa<DotOperandEncodingAttr>(encoding)) {
-    return emitOptionalError(loc, "expected a dotOperand encoding");
-  }
 
   if (typeEncoded == ScaleDotElemType::E2M1) {
-    auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-    auto parentEncoding = oldEncoding.getParent();
+    RankedTensorType retTy;
 
-    // Note: For Intel the dot operands layout's kWidth parameter must
-    // match the parent's dpas layout opsPerChannel. Given that the kWidth
-    // parameter for the result dot layout is going to be twice the kWidth
-    // parameter of the operand, we cannot reuse the operand's parent dpas
-    // layout and we need to materialize a new dpas encoding.
-    if (auto dpasEncoding = dyn_cast<intel::DpasEncodingAttr>(parentEncoding))
-      parentEncoding = intel::DpasEncodingAttr::get(
-          ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
-          dpasEncoding.getExecutionSize(), dpasEncoding.getOpsPerChannel() * 2,
-          dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
-          dpasEncoding.getSubGroupSize());
-
-    auto newVEncoding =
-        DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(), parentEncoding,
-                                    oldEncoding.getKWidth() * 2);
     auto newShape = SmallVector<int64_t>(xShape);
     newShape.back() *= 2;
-    inferredReturnTypes.push_back(
-        RankedTensorType::get(newShape, FloatType::getBF16(ctx), newVEncoding));
+    if (!encoding) {
+      retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
+    } else {
+      auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+
+      // Note: For Intel the dot operands layout's kWidth parameter must
+      // match the parent's dpas layout opsPerChannel. Given that the kWidth
+      // parameter for the result dot layout is going to be twice the kWidth
+      // parameter of the operand, we cannot reuse the operand's parent dpas
+      // layout and we need to materialize a new dpas encoding.
+      auto parentEncoding = oldEncoding.getParent();
+      if (auto dpasEncoding = dyn_cast<intel::DpasEncodingAttr>(parentEncoding))
+        parentEncoding = intel::DpasEncodingAttr::get(
+            ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
+            dpasEncoding.getExecutionSize(),
+            dpasEncoding.getOpsPerChannel() * 2, dpasEncoding.getWarpsPerCTA(),
+            dpasEncoding.getRepCluster(), dpasEncoding.getSubGroupSize());
+
+      auto newVEncoding = DotOperandEncodingAttr::get(
+          ctx, oldEncoding.getOpIdx(), parentEncoding,
+          oldEncoding.getKWidth() * 2);
+      retTy = RankedTensorType::get(newShape, FloatType::getBF16(ctx),
+                                    newVEncoding);
+    }
+    inferredReturnTypes.push_back(retTy);
   } else {
     inferredReturnTypes.push_back(xTy);
   }
