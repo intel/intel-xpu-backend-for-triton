@@ -26,10 +26,10 @@ jobs:
       - name: Install Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
       - name: Build Triton
         run: |
           cd python
-          pip install wheel pybind11
+          pip install wheel pybind11 python-certifi-win32
           pip install --no-build-isolation '.[build,tests,tutorials]'
