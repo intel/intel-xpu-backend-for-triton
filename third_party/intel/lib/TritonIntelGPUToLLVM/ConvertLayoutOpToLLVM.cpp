@@ -802,8 +802,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     int rowLength = threadsPerWarp + 1;
     Type offsetType = getTypeConverter()->getIndexType();
-    Value subGroupOffset =
-        int_val(offsetType.getIntOrFloatBitWidth(), rowLength * numRows);
     Value subGroupId = getValueOrCreateCastToIndexLike(
         rewriter, loc, offsetType,
         rewriter.create<mlir::gpu::SubgroupIdOp>(
@@ -812,6 +810,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         rewriter, loc, offsetType,
         rewriter.create<mlir::gpu::LaneIdOp>(loc,
                                              /*upper_bound=*/IntegerAttr{}));
+    Value subGroupOffset =
+        mul(subGroupId,
+            int_val(offsetType.getIntOrFloatBitWidth(), rowLength * numRows));
     Value subGroupBasePtr = gep(ptrType, elementType, smemBase,
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
     Value base = subGroupBasePtr;
