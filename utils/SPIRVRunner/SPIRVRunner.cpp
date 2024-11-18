@@ -138,7 +138,18 @@ loadBinary(const std::string &kernel_name, const std::string &build_flags,
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[deviceId];
   const sycl::device sycl_device = sycl_l0_device_pair.first;
 
-  const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
+  auto platform = sycl_device.get_platform();
+  sycl::context ctx;
+  try {
+    ctx = platform.ext_oneapi_get_default_context();
+  } catch (const std::runtime_error &ex) {
+    // This exception is thrown on Windows because
+    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // ignored it seems.
+#if _DEBUG
+    std::cout << "ERROR: " << ex.what() << std::endl;
+#endif
+  }
   const auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   const auto l0_context =
