@@ -14,7 +14,7 @@ permissions: read-all
 
 jobs:
   build:
-    name: Pre-commit checks
+    name: Build
     # FIXME: change to Windows
     runs-on: avc336
     steps:
