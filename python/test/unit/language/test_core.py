@@ -6050,8 +6050,6 @@ def sanitize_add(a, b):
 
 
 def test_side_effectful_reduction(device):
-    if device != "cuda":
-        pytest.xfail()
 
     @triton.jit(debug=True)
     def sanitize_sum_kernel(Z, X, BLOCK: tl.constexpr):
@@ -6061,10 +6059,10 @@ def test_side_effectful_reduction(device):
 
     BLOCK = 512
     torch.manual_seed(42)
-    X = torch.randint(0, 10, [BLOCK], device="cuda", dtype=torch.int32)
+    X = torch.randint(0, 10, [BLOCK], device=device, dtype=torch.int32)
     X[:300] = 32
     X[300:] = 0
-    Z = torch.zeros((), device="cuda", dtype=torch.int32)
+    Z = torch.zeros((), device=device, dtype=torch.int32)
     sanitize_sum_kernel[(1, )](Z, X, BLOCK=BLOCK)
     torch.testing.assert_close(Z, X.sum().to(torch.int32))
 
