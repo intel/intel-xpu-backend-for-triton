@@ -1,0 +1,33 @@
+name: Build on Windows
+
+on:
+  workflow_dispatch:
+
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions: read-all
+
+jobs:
+  build:
+    name: Pre-commit checks
+    # FIXME: change to Windows
+    runs-on: avc336
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Build Triton
+        run: |
+          cd python
+          pip install wheel pybind11
+          pip install --no-build-isolation '.[build,tests,tutorials]'
