@@ -505,13 +505,25 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // If the operation is a supported sub-group shuffle, perform via shuffle
       // operations.
       if (intel::cvtIsSubGroupShuffle(srcTy, dstTy)) {
-        performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
+        performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter,
+                               /*isContiguous=*/false);
+        return success();
+      }
+      if (intel::cvtIsContiguousSubGroupShuffle(srcTy, dstTy)) {
+        performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter,
+                               /*isContiguous=*/true);
         return success();
       }
       // If the operation is a supported sub-group transposition, perform via
       // SLM.
       if (intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
-        performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
+        performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter,
+                                 /*isContiguous=*/false);
+        return success();
+      }
+      if (intel::cvtIsContiguousSubGroupTranspose(srcTy, dstTy)) {
+        performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter,
+                                 /*isContiguous=*/true);
         return success();
       }
       // If the operation is a supported unbroadcast operation, simply drop the
@@ -568,8 +580,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   void performSubGroupShuffle(ConvertLayoutOp op, const LinearLayout &srcLayout,
                               const LinearLayout &dstLayout, OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
-    assert(intel::cvtIsSubGroupShuffle(op.getSrc().getType(), op.getType()) &&
+                              ConversionPatternRewriter &rewriter,
+                              bool isContiguous) const {
+    assert((isContiguous ||
+            intel::cvtIsSubGroupShuffle(op.getSrc().getType(), op.getType())) &&
+           "Expecting sub-group shuffle");
+    assert((!isContiguous || intel::cvtIsContiguousSubGroupShuffle(
+                                 op.getSrc().getType(), op.getType())) &&
            "Expecting sub-group shuffle");
 
     MLIRContext *ctx = op->getContext();
@@ -611,8 +628,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           });
         });
 
-    SmallVector<Value> outVals =
-        performSubGroupShuffle(loc, inVals, subGroupSize, rewriter);
+    SmallVector<Value> outVals = performSubGroupShuffle(
+        loc, inVals, subGroupSize, rewriter, isContiguous);
 
     // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
     // upstream level. We are not enabling support for all types here as that
@@ -642,19 +659,32 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     rewriter.replaceOp(op, result);
   }
 
-  SmallVector<Value>
-  performSubGroupShuffle(Location loc, ArrayRef<Value> inVals,
-                         int32_t subGroupSize,
-                         ConversionPatternRewriter &rewriter) const {
+  SmallVector<Value> performSubGroupShuffle(Location loc,
+                                            ArrayRef<Value> inVals,
+                                            int32_t subGroupSize,
+                                            ConversionPatternRewriter &rewriter,
+                                            bool isContiguous) const {
     SmallVector<Value> res;
     Value width = i32_val(subGroupSize);
-    for (Value val : inVals) {
-      for (int32_t i = 0; i < subGroupSize; ++i)
-        res.push_back(
-            rewriter
-                .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
-                                              mlir::gpu::ShuffleMode::IDX)
-                .getShuffleResult());
+    if (isContiguous) {
+      for (int32_t i = 0; i < subGroupSize; ++i) {
+        for (Value val : inVals) {
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+        }
+      }
+    } else {
+      for (Value val : inVals) {
+        for (int32_t i = 0; i < subGroupSize; ++i)
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+      }
     }
     return res;
   }
@@ -663,8 +693,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                 const LinearLayout &srcLayout,
                                 const LinearLayout &dstLayout,
                                 OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
-    assert(intel::cvtIsSubGroupTranspose(op.getSrc().getType(), op.getType()) &&
+                                ConversionPatternRewriter &rewriter,
+                                bool isContiguous) const {
+    assert((isContiguous || intel::cvtIsSubGroupTranspose(op.getSrc().getType(),
+                                                          op.getType())) &&
+           "Expecting sub-group transpose");
+    assert((!isContiguous || intel::cvtIsContiguousSubGroupTranspose(
+                                 op.getSrc().getType(), op.getType())) &&
            "Expecting sub-group transpose");
 
     Location loc = op.getLoc();
@@ -704,7 +739,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         .Default([](auto) { llvm_unreachable("Unsupported type"); });
 
     SmallVector<Value> outVals =
-        performSubGroupTranspose(loc, inVals, rewriter);
+        performSubGroupTranspose(loc, inVals, rewriter, isContiguous);
 
     TypeSwitch<Type>(origElemTy)
         .Case([&](FloatType floatTy) {
@@ -763,7 +798,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   SmallVector<Value>
   performSubGroupTranspose(Location loc, ArrayRef<Value> inVals,
-                           ConversionPatternRewriter &rewriter) const {
+                           ConversionPatternRewriter &rewriter,
+                           bool isContiguous) const {
     VectorType opType = getTypeForSubGroupTranspose(inVals, rewriter);
     auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
     unsigned vecWidth = opType.getShape()[0];
@@ -784,8 +820,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         rewriter, loc, offsetType,
         rewriter.create<mlir::gpu::LaneIdOp>(loc,
                                              /*upper_bound=*/IntegerAttr{}));
+    int wiStrideNum = isContiguous ? numElements : threadsPerWarp;
     Value wiStride =
-        rewriter.create<LLVM::ConstantOp>(loc, offsetType, threadsPerWarp);
+        rewriter.create<LLVM::ConstantOp>(loc, offsetType, wiStrideNum);
     Value sgStride = rewriter.create<LLVM::ConstantOp>(
         loc, offsetType, threadsPerWarp * numElements);
     Value subGroupOffset = mul(sgStride, subGroupId);
@@ -808,11 +845,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // `Nxsub_group_size` size, so we need to load back in blocks of
     // `sub_group_size` (`N/sub_group_size` loads).
     Value workItemOffset = mul(wiStride, subGroupLocalId);
-    Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
-                                ValueRange{workItemOffset}, /*inbounds=*/true);
+    Value workItemBasePtr =
+        gep(ptrType, elementType, subGroupBasePtr, ValueRange{workItemOffset},
+            /*inbounds=*/true);
     SmallVector<Value> transposedVecs;
-    Type loadTy = vec_ty(opType.getElementType(), threadsPerWarp);
-    for (std::size_t i = 0, n = inVals.size(); i < n; i += threadsPerWarp) {
+    Type loadTy = vec_ty(opType.getElementType(), wiStrideNum);
+    for (std::size_t i = 0, n = inVals.size(); i < n; i += wiStrideNum) {
       transposedVecs.push_back(load(loadTy, workItemBasePtr));
       workItemBasePtr = gep(ptrType, loadTy, workItemBasePtr,
                             ArrayRef<LLVM::GEPArg>{offset}, /*inbounds=*/true);

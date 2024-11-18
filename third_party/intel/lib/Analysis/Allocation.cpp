@@ -14,10 +14,13 @@ constexpr unsigned invalidSize = -1;
 unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
   RankedTensorType srcTy = convertLayout.getSrc().getType();
   RankedTensorType dstTy = convertLayout.getResult().getType();
-  if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy) || gpu::intel::cvtIsUnbroadcast(srcTy, dstTy))
+  if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy) ||
+      gpu::intel::cvtIsUnbroadcast(srcTy, dstTy) ||
+      gpu::intel::cvtIsContiguousSubGroupShuffle(srcTy, dstTy))
     return 0;
 
-  if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
+  if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy) ||
+      gpu::intel::cvtIsContiguousSubGroupTranspose(srcTy, dstTy)) {
     Type elemTy = srcTy.getElementType();
     unsigned bytesPerElement =
         isa<PointerType>(elemTy)

@@ -11,6 +11,9 @@ triton::gpu::ConvertLayoutOp dynCastToSubGroupTranspose(Operation *op) {
 
   if (!triton::gpu::intel::cvtIsSubGroupTranspose(
           convertLayout.getSrc().getType(),
+          convertLayout.getResult().getType()) &&
+      !triton::gpu::intel::cvtIsContiguousSubGroupTranspose(
+          convertLayout.getSrc().getType(),
           convertLayout.getResult().getType()))
     return nullptr;
 
