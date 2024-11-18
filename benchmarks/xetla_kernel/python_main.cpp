@@ -317,6 +317,9 @@ PYBIND11_MODULE(xetla_kernel, m) {
   m.def("gemm_splitk_shape_3072_4096_3072",
         &bf16_split_k_gemm<3072, 4096, 3072, kslicing_impl_t::global>,
         "bf16_gemm_splitk (XeTLA)");
+  m.def("gemm_splitk_shape_4096_4096_4096",
+        &bf16_split_k_gemm<4096, 4096, 4096, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
   // flash_attn
   m.def("flash_attn_causal_false", &flash_attn<false, false, false>,
         "flash attn fwd (XeTLA)");
