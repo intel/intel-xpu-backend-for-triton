@@ -16,7 +16,6 @@
 
 namespace {
 
-using ::mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -56,8 +55,7 @@ private:
     return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
                srcLayout) &&
            isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-               dstLayout) &&
-           !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
+               dstLayout);
   }
 
   // shared memory rd/st for blocked or mma layout with data padding
@@ -357,7 +355,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -374,10 +371,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    // TODO (Keren): Currently, we handle general mma/blocked/slice ->
-    // mma/blocked/slice conversions.
-    // The following tasks must be completed before we can remove the layoutIsOK
-    // check:
+    // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
+    // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
+    // completed before we can remove the layoutIsOK check:
     // 1. Support for AMD's MFMA and WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
@@ -392,11 +388,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           if (useLegacyMMAConversion) {
             return false;
           }
-          // FIXME [Dot LL]
-          // Enabling LL path for buggy kWidth path
-          bool largeKWidth =
-              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
-          return largeKWidth && nvidiaMma.isAmpere();
+          if (nvidiaMma.isAmpere()) {
+            return true;
+          }
         }
         return false;
       }
@@ -440,7 +434,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -460,7 +453,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
