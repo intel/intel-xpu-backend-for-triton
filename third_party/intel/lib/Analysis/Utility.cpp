@@ -196,6 +196,8 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (!conversion)
     return false;
 
+  llvm::errs() << conversion << "\n";
+
   // Expected conversion is:
   // - register=1 -> (0, 1)
   // ...
