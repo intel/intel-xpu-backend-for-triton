@@ -6,6 +6,7 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/DivRemPairs.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -203,6 +204,17 @@ void init_triton_intel(py::module &&m) {
           // sure all the struct are removed for the following passes.
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
+        });
+    pb.registerPeepholeEPCallback(
+        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+          // The Triton masked load pattern can generate instances where the
+          // mask false path appears to cause undefined behavior during
+          // computation. Even though the result of that behavior will never be
+          // used, LLVM can choose to optimize away the false path resulting in
+          // an incorrect result for the kernel. Adding `DivRemPairsPass`
+          // introduces freeze instructions which prevent UB from leaking into
+          // div/rem instructions.
+          fpm.addPass(DivRemPairsPass());
         });
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
