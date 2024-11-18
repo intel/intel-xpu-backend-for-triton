@@ -28,6 +28,7 @@
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ModRef.h"
@@ -937,25 +938,34 @@ struct TritonMatrix2DBlockPrefetchLowering
 template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                OpType, TritonGEN::SIMDBlockReadOp,
                                TritonGEN::SIMDBlockWriteOp>::value>>
-static std::string getSIMDBlockManglingName(OpType op, VectorType vecTy) {
+static std::string getSIMDBlockManglingName(OpType op, Type type) {
   constexpr bool isWrite =
       std::is_same<OpType, TritonGEN::SIMDBlockWriteOp>::value;
   const LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
-  const unsigned numElems = vecTy.getNumElements();
   // Note: OCL builtin name here differs from regular mangling.
   std::string funcName = "intel_sub_group_block_";
   if constexpr (isWrite)
     funcName += "write";
   else
     funcName += "read";
-  funcName += "_u" + intel::getTypeMangling(vecTy.getElementType()) +
-              (numElems == 1 ? "" : std::to_string(numElems));
-  funcName =
-      "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
-      std::to_string(ptrTy.getAddressSpace()) +
-      intel::getTypeMangling(vecTy.getElementType(), /*isUnsigned=*/true);
+  TypeSwitch<Type>(type)
+      .Case([&](VectorType vecType) {
+        const unsigned numElems = vecType.getNumElements();
+        funcName += "_u" + intel::getTypeMangling(vecType.getElementType()) +
+                    std::to_string(numElems);
+        funcName = "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
+                   std::to_string(ptrTy.getAddressSpace()) +
+                   intel::getTypeMangling(vecType.getElementType(),
+                                          /*isUnsigned=*/true);
+      })
+      .Case([&](IntegerType vecType) {
+        funcName += "_u" + intel::getTypeMangling(type);
+        funcName = "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
+                   std::to_string(ptrTy.getAddressSpace()) +
+                   intel::getTypeMangling(type, /*isUnsigned=*/true);
+      });
   if constexpr (isWrite)
-    funcName += intel::getTypeMangling(vecTy, /*isUnsigned=*/true);
+    funcName += intel::getTypeMangling(type, /*isUnsigned=*/true);
   return funcName;
 }
 
@@ -968,9 +978,9 @@ struct TritonSIMDBlockReadLowering
   matchAndRewrite(TritonGEN::SIMDBlockReadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
-    VectorType vecTy = op.getRes().getType();
+    Type type = op.getRes().getType();
 
-    std::string funcName = getSIMDBlockManglingName(op, vecTy);
+    std::string funcName = getSIMDBlockManglingName(op, type);
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::Ref,
@@ -978,7 +988,7 @@ struct TritonSIMDBlockReadLowering
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = createDeviceFunctionCall(
-        rewriter, funcName, vecTy, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
+        rewriter, funcName, type, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
 
     rewriter.replaceOp(op, call.getResult());
     return success();
@@ -995,9 +1005,9 @@ struct TritonSIMDBlockWriteLowering
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = rewriter.getContext();
     LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
-    VectorType vecTy = op.getVal().getType();
+    Type type = op.getVal().getType();
 
-    std::string funcName = getSIMDBlockManglingName(op, vecTy);
+    std::string funcName = getSIMDBlockManglingName(op, type);
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
@@ -1006,7 +1016,7 @@ struct TritonSIMDBlockWriteLowering
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = createDeviceFunctionCall(
-        rewriter, funcName, void_ty(ctx), {ptrTy, vecTy},
+        rewriter, funcName, void_ty(ctx), {ptrTy, type},
         {op.getPtr(), op.getVal()}, {}, funcAttrs);
 
     rewriter.replaceOp(op, call);

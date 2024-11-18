@@ -314,8 +314,16 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
   let hasVerifier = 1;
 }
 
+def TritonGEN_SIMDBlockMemoryAccessElementType : AnyTypeOf<[I8, I16, I32, I64]>;
+
+def TritonGEN_SIMDBlockMemoryAccessType
+    : AnyTypeOf<[TritonGEN_SIMDBlockMemoryAccessElementType,
+                 FixedVectorOfLengthAndType<[2, 4, 8], [TritonGEN_SIMDBlockMemoryAccessElementType]>,
+		 // Vectors of length 16 only allowed for i8 for now.
+		 FixedVectorOfLengthAndType<[16], [I8]>]>;
+
 def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
-  Results<(outs FixedVectorOf<[AnyTypeOf<[AnyI8, AnyI16, AnyI32, AnyI64]>]>:$res)>,
+  Results<(outs TritonGEN_SIMDBlockMemoryAccessType:$res)>,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr
   )> {
@@ -331,14 +339,12 @@ def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
   let assemblyFormat = [{
     operands ` ` attr-dict `:` functional-type(operands, results)
   }];
-
-  let hasVerifier = 1;
 }
 
 def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
-    FixedVectorOf<[AnyTypeOf<[AnyI8, AnyI16, AnyI32, AnyI64]>]>:$val
+    TritonGEN_SIMDBlockMemoryAccessType:$val
   )> {
 
   let summary = "simd block write";
@@ -353,7 +359,5 @@ def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
   let assemblyFormat = [{
     operands ` ` attr-dict `:` `(` type(operands) `)`
   }];
-
-  let hasVerifier = 1;
 }
 #endif // TRITONGEN_OPS

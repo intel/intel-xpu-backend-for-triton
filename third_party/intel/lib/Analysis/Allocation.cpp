@@ -26,7 +26,11 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
         isa<PointerType>(elemTy)
             ? kPtrBitWidth / 8
             : std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-    return product(srcTy.getShape()) * bytesPerElement;
+    Attribute srcEncoding = srcTy.getEncoding();
+    unsigned threadsPerWarp = product(gpu::getThreadsPerWarp(srcEncoding));
+    unsigned numMatrixCells =
+        (product(srcTy.getShape()) / threadsPerWarp) * (threadsPerWarp + 1);
+    return numMatrixCells * bytesPerElement;
   }
   return invalidSize;
 }

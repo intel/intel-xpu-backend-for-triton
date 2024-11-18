@@ -767,14 +767,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     rewriter.replaceOp(op, result);
   }
 
-  VectorType
-  getTypeForSubGroupTranspose(ArrayRef<Value> inVals,
-                              ConversionPatternRewriter &rewriter) const {
-    auto elementTy = cast<IntegerType>(inVals.front().getType());
-    return elementTy.getWidth() <= 16 ? vec_ty(elementTy, 16)
-                                      : vec_ty(elementTy, 8);
-  }
-
   Value wrapInVector(Location loc, VectorType type, ArrayRef<Value> values,
                      ConversionPatternRewriter &rewriter) const {
     assert(type.getShape()[0] == values.size() && "Size mismatch");
@@ -800,18 +792,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   performSubGroupTranspose(Location loc, ArrayRef<Value> inVals,
                            ConversionPatternRewriter &rewriter,
                            bool isContiguous) const {
-    VectorType opType = getTypeForSubGroupTranspose(inVals, rewriter);
+    Type elementType = inVals.front().getType();
     auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
-    unsigned vecWidth = opType.getShape()[0];
 
     Value smemBase = LLVM::intel::getSharedMemoryBase(
         loc, rewriter, targetInfo, &*rewriter.getInsertionPoint());
     Type ptrType = smemBase.getType();
-
-    int numElements = inVals.size();
+    int numRows = inVals.size();
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int offset = threadsPerWarp;
+    int rowLength = threadsPerWarp + 1;
     Type offsetType = getTypeConverter()->getIndexType();
+    Value subGroupOffset =
+        int_val(offsetType.getIntOrFloatBitWidth(), rowLength * numRows);
     Value subGroupId = getValueOrCreateCastToIndexLike(
         rewriter, loc, offsetType,
         rewriter.create<mlir::gpu::SubgroupIdOp>(
@@ -820,42 +812,40 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         rewriter, loc, offsetType,
         rewriter.create<mlir::gpu::LaneIdOp>(loc,
                                              /*upper_bound=*/IntegerAttr{}));
-    int wiStrideNum = isContiguous ? numElements : threadsPerWarp;
-    Value wiStride =
-        rewriter.create<LLVM::ConstantOp>(loc, offsetType, wiStrideNum);
-    Value sgStride = rewriter.create<LLVM::ConstantOp>(
-        loc, offsetType, threadsPerWarp * numElements);
-    Value subGroupOffset = mul(sgStride, subGroupId);
-    Type elementType = opType.getElementType();
     Value subGroupBasePtr = gep(ptrType, elementType, smemBase,
                                 ValueRange{subGroupOffset}, /*inbounds=*/true);
     Value base = subGroupBasePtr;
-    // Store in matrix, transposed
-    for (ArrayRef<Value> vals = inVals; !vals.empty();
-         vals = vals.drop_front(vecWidth)) {
-      ArrayRef<Value> curr = vals.take_front(vecWidth);
-      Value vec = wrapInVector(loc, opType, curr, rewriter);
-      rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, vec);
-      base = gep(base.getType(), opType, base, ArrayRef<LLVM::GEPArg>{offset},
+    for (Value val : inVals) {
+      rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, val);
+      base = gep(base.getType(), elementType, base,
+                 ArrayRef<LLVM::GEPArg>{rowLength},
                  /*inbounds=*/true);
     }
 
-    // Load from matrix, non-trasposed.
-    // As per SIMD block semantics, we have stored the elements in a matrix of
-    // `Nxsub_group_size` size, so we need to load back in blocks of
-    // `sub_group_size` (`N/sub_group_size` loads).
-    Value workItemOffset = mul(wiStride, subGroupLocalId);
+    int32_t numContiguous = isContiguous ? inVals.size() / threadsPerWarp : 1;
+    int32_t workItemStride =
+        isContiguous ? rowLength : rowLength * threadsPerWarp;
+    Value workItemOffset =
+        mul(subGroupLocalId, int_val(offsetType.getIntOrFloatBitWidth(),
+                                     numContiguous * rowLength));
     Value workItemBasePtr =
         gep(ptrType, elementType, subGroupBasePtr, ValueRange{workItemOffset},
             /*inbounds=*/true);
-    SmallVector<Value> transposedVecs;
-    Type loadTy = vec_ty(opType.getElementType(), wiStrideNum);
-    for (std::size_t i = 0, n = inVals.size(); i < n; i += wiStrideNum) {
-      transposedVecs.push_back(load(loadTy, workItemBasePtr));
-      workItemBasePtr = gep(ptrType, loadTy, workItemBasePtr,
-                            ArrayRef<LLVM::GEPArg>{offset}, /*inbounds=*/true);
+    int32_t rowsPerThread = numRows / threadsPerWarp;
+    SmallVector<Value> outputVals;
+    for (int i = 0; i < rowsPerThread; ++i) {
+      for (int j = 0; j < threadsPerWarp; ++j) {
+        outputVals.push_back(load(elementType, workItemBasePtr));
+        workItemBasePtr =
+            gep(workItemBasePtr.getType(), elementType, workItemBasePtr,
+                ArrayRef<LLVM::GEPArg>{1}, /*inbounds=*/true);
+      }
+      workItemBasePtr =
+          gep(workItemBasePtr.getType(), elementType, workItemBasePtr,
+              ArrayRef<LLVM::GEPArg>{workItemStride - threadsPerWarp},
+              /*inbounds=*/true);
     }
-    return unwrapFromVectors(loc, transposedVecs, rewriter);
+    return outputVals;
   }
 
   void performUnbroadcast(ConvertLayoutOp op, const LinearLayout &srcLayout,
