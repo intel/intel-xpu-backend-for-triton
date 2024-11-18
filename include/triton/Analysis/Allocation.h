@@ -249,9 +249,6 @@ private:
   size_t sharedMemorySize = 0;
 };
 
-template <>
-void Allocation::run<triton::AllocationAnalysis>(FuncAllocMapT &funcAllocMap);
-
 /// Static analysis that computes the allocation of shared memory buffers
 /// of the entire call graph.
 /// The allocation is performed in a post-order walk of the call graph.
@@ -271,11 +268,10 @@ public:
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
         // Post-order node walk callback
         [&](FunctionOpInterface funcOp) {
-          auto [iter, inserted] = res.funcMap.try_emplace(funcOp, funcOp);
+          auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
           if (inserted)
             iter->second.run(funcMap, scratchSizeGetter);
         });
-    return res;
   }
 
   size_t getSharedMemorySize() {
@@ -300,9 +296,6 @@ public:
   }
 
 private:
-  explicit ModuleAllocation(ModuleOp moduleOp)
-      : CallGraph<Allocation>(moduleOp) {}
-
   FuncOffsetMapT sharedMemoryValue;
 };
 
