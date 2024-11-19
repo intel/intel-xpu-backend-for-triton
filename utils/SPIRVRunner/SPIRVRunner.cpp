@@ -13,8 +13,8 @@
 #include <vector>
 
 #include "sycl_functions.h"
-#include <nlohmann/json.hpp>
 #include "llvm/Support/CommandLine.h"
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
@@ -393,17 +393,17 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
 
 int main(int argc, char **argv) {
   try {
-    llvm::cl::opt<std::string> out_tensor_name("o", llvm::cl::desc("Specify Output Tensor Name"), llvm::cl::value_desc("filename"));
-    llvm::cl::opt<bool> enable_profiling("p", llvm::cl::desc("Enable Profiling"));
+    llvm::cl::opt<std::string> out_tensor_name(
+        "o", llvm::cl::desc("Specify Output Tensor Name"),
+        llvm::cl::value_desc("filename"));
+    llvm::cl::opt<bool> enable_profiling("p",
+                                         llvm::cl::desc("Enable Profiling"));
     llvm::cl::ParseCommandLineOptions(argc, argv);
     if (argc < 3) {
       llvm::cl::PrintHelpMessage();
       throw std::runtime_error("Insufficient arguments provided \n");
     }
-    if (out_tensor_name.empty()) {
-        std::cerr << "Output Tensor not specified !" << std::endl;
-        return 1;
-    }
+
     bool get_kernel_time = enable_profiling;
 
     // initialize sycl runtime
