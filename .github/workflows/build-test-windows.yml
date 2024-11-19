@@ -26,10 +26,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
+          # shorter name to avoid error "Filename longer than 260 characters"
+          path: triton
 
       - name: Build Triton
         run: |
-          cd python
+          cd triton/python
           pip install -U wheel pybind11 certifi cython ninja cmake
           python -m certifi
           pip install --no-build-isolation '.[build]'
