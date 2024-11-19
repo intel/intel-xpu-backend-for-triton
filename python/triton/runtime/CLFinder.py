@@ -19,13 +19,13 @@ def find_visual_studio(version_ranges):
     for version_range in version_ranges:
         command = [
             str(vswhere), "-version", version_range, "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-property", "installationPath", "-prerelease"
+            "-products", "*", "-property", "installationPath", "-prerelease"
         ]
 
         try:
             output = subprocess.check_output(command, text=True).strip()
             if output:
-                return output
+                return output.split("\n")[0]
         except subprocess.CalledProcessError:
             continue
 
