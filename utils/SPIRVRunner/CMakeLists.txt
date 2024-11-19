@@ -49,6 +49,5 @@ set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS}"
 set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 add_dependencies(${TARGET_NAME} json)
 
-#llvm_map_components_to_libnames(LLVM_LIBS support)
 target_link_libraries(${TARGET_NAME} PRIVATE "${TORCH_LIBRARIES}" "${LLVM_LIBS}")
 set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 17)
