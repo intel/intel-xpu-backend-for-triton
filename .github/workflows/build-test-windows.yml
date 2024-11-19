@@ -17,6 +17,10 @@ jobs:
     name: Build
     runs-on: avc336
     steps:
+      - name: Enable long paths
+        run: |
+          git config --system core.longPaths true
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
