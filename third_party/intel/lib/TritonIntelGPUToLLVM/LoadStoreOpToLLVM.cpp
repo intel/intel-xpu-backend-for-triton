@@ -1571,7 +1571,7 @@ struct AtomicRMWOpConversion
     auto lowPtrBits = and_(intPtr, i64_val(3));
     auto elemIndex = trunc(i32_ty, lshr(lowPtrBits, i64_val(1)));
     auto alignPtr = inttoptr(rmwPtr.getType(), sub(intPtr, lowPtrBits));
-    auto firstValInt = load(i32_ty, alignPtr, 4, false, false, false,
+    auto firstValInt = load(i32_ty, alignPtr, 4, false, false, false, false,
                             LLVM::AtomicOrdering::acquire);
 
     // Create a loop body block. It has a single parameter which holds the
