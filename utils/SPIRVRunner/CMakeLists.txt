@@ -16,6 +16,12 @@ list(APPEND CMAKE_PREFIX_PATH "${ONEAPI_ROOT}/tbb/latest/lib/cmake/tbb/")
 
 find_package(Torch REQUIRED)
 
+# Include LLVM Support Library for CLI parsing
+find_package(LLVM REQUIRED CONFIG)
+include_directories(${LLVM_INCLUDE_DIRS})
+add_definitions(${LLVM_DEFINITIONS})
+llvm_map_components_to_libnames(LLVM_LIBS Support)
+
 include(ExternalProject)
 ExternalProject_Add(
     json
@@ -38,10 +44,11 @@ set(SYCL_FUNCTIONS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/in
 set(TARGET_NAME SPIRVRunner)
 add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp)
 target_include_directories(${TARGET_NAME} PRIVATE
-    "${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
+	"${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
 set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS}")
 set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 add_dependencies(${TARGET_NAME} json)
 
-target_link_libraries(${TARGET_NAME} "${TORCH_LIBRARIES}")
+#llvm_map_components_to_libnames(LLVM_LIBS support)
+target_link_libraries(${TARGET_NAME} PRIVATE "${TORCH_LIBRARIES}" "${LLVM_LIBS}")
 set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 17)

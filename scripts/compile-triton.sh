@@ -129,6 +129,7 @@ build_llvm() {
   cd $LLVM_PROJ_BUILD
   cmake -G Ninja ../llvm \
     -DLLVM_ENABLE_DUMP=1 \
+    -DLLVM_ENABLE_RTTI=ON \
     -DCMAKE_BUILD_TYPE=Release \
     -DLLVM_ENABLE_ASSERTIONS=true \
     -DLLVM_ENABLE_PROJECTS="mlir" \

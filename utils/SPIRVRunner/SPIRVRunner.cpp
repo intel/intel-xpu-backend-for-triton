@@ -14,6 +14,7 @@
 
 #include "sycl_functions.h"
 #include <nlohmann/json.hpp>
+#include "llvm/Support/CommandLine.h"
 
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
@@ -390,36 +391,22 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   return triton_args.host_outbuffer;
 }
 
-bool check_option_amoung_argv(int argc, char **argv, std::string option) {
-  bool res = false;
-  if (argc > 2) {
-    // optional parameters can be in any order
-    for (int i = 2; i < argc; i++) {
-      if (argv[i] == option) {
-        res = true;
-        break;
-      }
-    }
-  }
-  return res;
-}
-
 int main(int argc, char **argv) {
   try {
-    std::string enable_profiling = "--enable-profiling";
-    if (argc < 2) {
-      std::cout << "Help: " << std::endl;
-      std::cout << "<Executable> <Output Tensor Name>" << std::endl;
-      std::cout << "./build/SPIRVRunner tensor_2" << std::endl;
-      std::cout << "To get kernel time, use:" << std::endl;
-      std::cout << "./build/SPIRVRunner tensor_2 " << enable_profiling
-                << std::endl;
-      throw std::runtime_error("Input arguments are missing \n");
+    llvm::cl::opt<std::string> out_tensor_name("o", llvm::cl::desc("Specify Output Tensor Name"), llvm::cl::value_desc("filename"));
+    llvm::cl::opt<bool> enable_profiling("p", llvm::cl::desc("Enable Profiling"));
+    llvm::cl::ParseCommandLineOptions(argc, argv);
+    if (argc < 3) {
+      llvm::cl::PrintHelpMessage();
+      throw std::runtime_error("Insufficient arguments provided \n");
     }
+    if (out_tensor_name.empty()) {
+        std::cerr << "Output Tensor not specified !" << std::endl;
+        return 1;
+    }
+    bool get_kernel_time = enable_profiling;
 
     // initialize sycl runtime
-    bool get_kernel_time =
-        check_option_amoung_argv(argc, argv, enable_profiling);
     sycl::queue q;
     if (get_kernel_time) {
       sycl::property_list prop_list{sycl::property::queue::enable_profiling()};
@@ -434,7 +421,7 @@ int main(int argc, char **argv) {
     initDevices(&q);
 
     // Parse the JSON file and create argument dictionary
-    KernelArguments tritonArgDict(argv[1]);
+    KernelArguments tritonArgDict(out_tensor_name);
 
     // read spirv
     auto spirv = read_spirv(tritonArgDict.spv_name);
