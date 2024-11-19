@@ -122,6 +122,26 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
+sycl::context get_default_context(const sycl::device &sycl_device) {
+  const auto &platform = sycl_device.get_platform();
+#ifdef WIN32
+  sycl::context ctx;
+  try {
+    ctx = platform.ext_oneapi_get_default_context();
+  } catch (const std::runtime_error &ex) {
+    // This exception is thrown on Windows because
+    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // ignored it seems.
+#if _DEBUG
+    std::cout << "ERROR: " << ex.what() << std::endl;
+#endif
+  }
+  return ctx;
+#else
+  return platform.ext_oneapi_get_default_context();
+#endif
+}
+
 /** SYCL Functions **/
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable>, sycl::kernel,
            int32_t, int32_t>
@@ -138,7 +158,8 @@ loadBinary(const std::string &kernel_name, const std::string &build_flags,
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[deviceId];
   const sycl::device sycl_device = sycl_l0_device_pair.first;
 
-  const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
+  const auto &ctx = get_default_context(sycl_device);
+
   const auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   const auto l0_context =
