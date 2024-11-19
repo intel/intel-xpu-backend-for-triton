@@ -32,6 +32,7 @@ jobs:
         with:
           python-version: '3.9'
 
+      # Copy workspace to a temporary location with a shorter name.
       - name: Copy workspace
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
