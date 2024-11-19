@@ -158,7 +158,7 @@ loadBinary(const std::string &kernel_name, const std::string &build_flags,
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[deviceId];
   const sycl::device sycl_device = sycl_l0_device_pair.first;
 
-  sycl::context ctx = get_default_context(sycl_device);
+  const auto &ctx = get_default_context(sycl_device);
 
   const auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);

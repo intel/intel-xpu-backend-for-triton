@@ -214,7 +214,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     const size_t binary_size = PyBytes_Size(py_bytes);
 
     uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
-    sycl::context ctx = get_default_context(sycl_device);
+    const auto &ctx = get_default_context(sycl_device);
     const auto l0_device =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
     const auto l0_context =
