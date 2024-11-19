@@ -26,18 +26,15 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: gregory/windows-support
 
       - name: Install Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
-      - name: Copy workspace to a shorter location
+      - name: Copy workspace
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
-          ls "${{ env.NEW_WORKSPACE }}"
 
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
@@ -49,3 +46,8 @@ jobs:
           pip install -U wheel pybind11 certifi cython cmake
           python -m certifi
           pip install --no-build-isolation '.[build]'
+
+      - name: Clean
+        if: ${{ always() }}
+        run: |
+          Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
