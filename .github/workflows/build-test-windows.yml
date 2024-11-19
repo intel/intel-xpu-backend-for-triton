@@ -30,6 +30,6 @@ jobs:
       - name: Build Triton
         run: |
           cd python
-          pip install -U wheel pybind11 certifi cython
+          pip install -U wheel pybind11 certifi cython ninja cmake
           python -m certifi
           pip install --no-build-isolation '.[build]'
