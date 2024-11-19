@@ -32,4 +32,4 @@ jobs:
           cd python
           pip install -U wheel pybind11 certifi cython
           python -m certifi
-          pip install --no-build-isolation '.[build,tests,tutorials]'
+          pip install --no-build-isolation '.[build]'
