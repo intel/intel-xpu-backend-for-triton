@@ -163,6 +163,11 @@ SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
   llvm::report_fatal_error("NYI. DpasEncodingAttr::getRepOrder");
 }
 
+SmallVector<unsigned> DpasEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  auto rank = getWarpsPerCTA().size();
+  return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
+}
+
 SmallVector<unsigned>
 DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
