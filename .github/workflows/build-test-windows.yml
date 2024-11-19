@@ -15,7 +15,7 @@ permissions: read-all
 jobs:
   build:
     name: Build
-    runs-on: avc336
+    runs-on: Windows
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
