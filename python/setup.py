@@ -146,6 +146,13 @@ def set_env_vars(vs_path, arch="x64"):
             os.environ[var] = value
 
 
+def initialize_visual_studio_env(version_ranges, arch="x64"):
+    vs_path = find_visual_studio(version_ranges)
+    if not vs_path:
+        raise EnvironmentError("Visual Studio not found in specified version ranges.")
+    set_env_vars(vs_path, arch)
+
+
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
 def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
