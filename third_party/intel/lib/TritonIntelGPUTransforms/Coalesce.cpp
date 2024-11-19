@@ -148,11 +148,13 @@ private:
     if (op->getNumResults() == 0 && op->getNumRegions() == 0)
       return true;
 
+    // Operations that do not consume a block pointer aren't interesting.
+    if (llvm::none_of(op->getOperandTypes(), tt::isTensorPointerType))
+      return true;
+
     // Operations that do not yield a block pointer aren't interesting.
     if (op->getNumRegions() == 0 &&
-        llvm::none_of(op->getResultTypes(), [](Type resType) {
-          return tt::isTensorPointerType(resType);
-        }))
+        llvm::none_of(op->getResultTypes(), tt::isTensorPointerType))
       return true;
 
     return false;
@@ -367,8 +369,7 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "\nlayoutMap:"
-             << "\n";
+      DBGS() << "\nlayoutMap:\n";
       for (auto [op, encoding] : layoutMap) {
         DBGS() << "op: " << *op << "\n";
         DBGS() << "encoding: " << encoding << "\n\n";
