@@ -15,7 +15,7 @@ permissions: read-all
 jobs:
   build:
     name: Build
-    runs-on: Windows
+    runs-on: avc336
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,5 +30,6 @@ jobs:
       - name: Build Triton
         run: |
           cd python
-          pip install wheel pybind11
+          pip install -U wheel pybind11 certifi
+          python -m certifi
           pip install --no-build-isolation '.[build,tests,tutorials]'
