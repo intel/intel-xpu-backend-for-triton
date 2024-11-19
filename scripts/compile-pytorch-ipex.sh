@@ -106,8 +106,7 @@ if [[ $BUILD_PYTORCH = true ]]; then
   rm -rf $PYTORCH_PROJ
 
   echo "**** Cloning $PYTORCH_PROJ ****"
-  cd $BASE
-  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
+  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git $PYTORCH_PROJ
 
   cd $PYTORCH_PROJ
 
