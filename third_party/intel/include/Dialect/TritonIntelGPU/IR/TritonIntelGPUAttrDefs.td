@@ -14,7 +14,8 @@ def DpasEncodingAttr : DistributedEncoding<"DpasEncoding", "intel_dpas_encoding"
   let mnemonic = "dpas";
 
   let description = [{
-An encoding for the tensors distributed across the threads for the C and D operands of XMX tensor core operation.
+An encoding for the tensors distributed across the threads for the C and D operands of XMX tensor core operation
+and its corresponding A and B operands layout with the DPAS encoding as parent.
 The XMX tensor core operation is defined for matrix matmul as: D=A*B+C
 The shape of the of XMX tensor core operation is defined by systolic depth, repeat count, execution size and operations per channel.
 
@@ -23,43 +24,147 @@ The encoding is characterized by parameters:
         - `systolicDepth` For PVC/ATSM, the size is 8.
         - `executionSize` For PVC, the size is 16. For ATSM, the size is 8.
         - `opsPerChannel` 4 for 8 bit scalar type, 2 for 16 bit scalar type, 1 for 32 bit scalar type.
-        - `warpsPerCTA`
-        - `sugGroupSize` valid sub group size is 8/16/32
+        - `warpsPerCTA` indicates the distribution of the warps in the block. The order is [1, 0] for rank 2.
+        - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
+        - `sugGroupSize` Currently only sub group size 16 is supported.
 
+The values of the matrix is distributed across the threads in the subgroup as row-major order.
+  - If the column size of the matrix is equal to the number of threads in the subgroup, a single value name represents a single rows of the matrix.
+  - If the column size of the matrix is less than the number of threads in the subgroup, a single value name represents multiple rows of the matrix.
+  - If the column size of the matrix is larger than the number of the threads in the subgroup, a single row of the matrix requires multiple value name.
 
-The layout example repeat_count=8, systolic_depth=8, execution_size=16 and operands_per_chan=2 for warp size 32.
-For A operand:
-                                   systolic depth = 8
-<------------------------------------------------------------------------------------------------->
-opsPerChan=2
-<--------->
-t0  ...  t0   t1  ... t1   t2  ... t2  t3  ... t3  t4  ... t4   t5  ... t5  t6  ... t6  t7  ... t7    ^
-t8  ...  t8   t9  ... t9   t10 ... t10 t11 ... t11 t12 ... t12  t13 ... t13 t14 ... t14 t15 ... t15   |
-t16 ...  t16  t17 ... t17  t18 ... t18 t19 ... t19 t20 ... t20  t21 ... t21 t22 ... t22 t23 ... t23   |
-t24 ...  t24  t25 ... t25  t26 ... t26 t27 ... t27 t28 ... t28  t29 ... t29 t30 ... t30 t31 ... t31   | repeat count <= 8
-t0  ...  t0   t1  ... t1   t2  ... t2  t3  ... t3  t4  ... t4   t5  ... t5  t6  ... t6  t7  ... t7    |
-t8  ...  t8   t9  ... t9   t10 ... t10 t11 ... t11 t12 ... t12  t13 ... t13 t14 ... t14 t15 ... t15   |
-t16 ...  t16  t17 ... t17  t18 ... t18 t19 ... t19 t20 ... t20  t21 ... t21 t22 ... t22 t23 ... t23   |
-t24 ...  t24  t25 ... t25  t26 ... t26 t27 ... t27 t28 ... t28  t29 ... t29 t30 ... t30 t31 ... t31   v
+Example 1, the column size of the matrix is 16 and the number of threads in the subgroup is 16.
+The DPAS encoding of repeatCount=8, systolicDepth=8, executionSize=16, opsPerChannel=2 and sugGroupSize=16.
 
-For B operand:
-               execution size = 16
-<------------------------------------------------------------->
-t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15     ^             ^
-.   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .       | opsPerChan=2|
-t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15     v             |
-t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31                   |
-.   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .                     |
-t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31                   |  systolic depth = 8
-t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15                   |
-.   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .                     |
-t0  t1  t2  t3  t4  t5  t6  t7  t8  t9  t10 t11 t12 t13 t14 t15                   |
-t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31                   |
-.   .   .   .   .   .   .   .   .   .   .   .   .   .   .   .                     |
-t16 t17 t18 t19 t20 t21 t22 t23 t24 t25 t26 t27 t28 t29 t30 t31                   v
+The layout for A operand:
+                       K = 16 (K = systolic depth * opsPerChan)
+<---------------------------------------------------------------------------->
 
-This pattern repeats every warpsPerTile[0] (resp. warpsPerTile[1]) blocks
-along the row (resp. col) dimension.
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   ^
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   | M = 8 (repeat count)
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   v
+
+The layout for B operand:
+                        N = 16 (N = execution size)
+<---------------------------------------------------------------------------->
+
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    ^
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |  K = 16 (K = systolic depth * opsPerChan)
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    v
+
+The layout for C operand and result D:
+                    N = 16 (N = execution size)
+<---------------------------------------------------------------------------->
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   ^
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   | M = 8 (M=repeat count)
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   v
+
+Example 2, the column size of the matrix is 8 and the number of threads in the subgroup is 16.
+The DPAS encoding of repeatCount=8, systolicDepth=8, executionSize=16, opsPerChannel=1 and sugGroupSize=16.
+
+The layout for A operand:
+  K = 8 (K = systolic depth * opsPerChan)
+<---------------------------------------->
+
+t0   t1   t2   t3   t4   t5   t6   t7    ^
+t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7    |
+t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7    | M = 8 (repeat count)
+t8   t9   t10  t11  t12  t13  t14  t15   |
+t0   t1   t2   t3   t4   t5   t6   t7    |
+t8   t9   t10  t11  t12  t13  t14  t15   v
+
+The layouts for B operand is like the one of opsPerChan=2 but the K size is 8.
+The layouts for C and D operands are same as the one of opsPerChan=2.
+
+Example 3, the column size of the matrix is 32 and the number of threads in the subgroup is 16.
+The DPAS encoding of repeatCount=8, systolicDepth=8, executionSize=16, opsPerChannel=4 and sugGroupSize=16.
+
+The layout for A operand:
+                       K = 32 (K = systolic depth * opsPerChan)
+<----------------------------------------------------------------------------------------------------------------------------------->
+
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   ^
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   |
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   |
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   |
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   | M = 8 (repeat count)
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   |
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   |
+t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   t10 t10  t11 t11  t12 t12  t13 t13  t14 t14  t15 t15   v
+
+The layouts for B operand is like the one of opsPerChan=2 but the K size is 32.
+The layouts for C and D operands are same as the one of opsPerChan=2.
+
+The patterns (illustrated above) repeats every warpsPerTile[0] (resp. warpsPerTile[1]) blocks
+along the row (resp. col) dimension.  And the repetitions are clustered of the size of repCluster to optimize the memory accessing.
+
+Suppose we have a `tt.dot` operation of the block size [64, 128] += [64, 32] * [32, 128] of hf16/bf16.
+The `warpsPerCTA` set to [2, 2]. The number of repetitions of the DPAS tile per warp is: A=8, B=8, C,D=16.
+The DPAS repetitions are distributed as follows:
+
+                                                warp[:0]  warp[:1]  warp[:0]  warp[:1]
+                                              |----^----|----^----|----^----|----^----|
+                                              repCluster[1]
+                                              <--------->
+                                              ┌────┬────┬────┬────┬────┬────┬────┬────┐
+                                              │R0  │R1  │    │    │R4  │R5  │    │    │
+                                              │    │    │    │    │    │    │    │    │
+                                              ├────┼────┼────┼────┼────┼────┼────┼────┤
+                                              │R2  │R3  │    │    │R6  │R7  │    │    │
+                                              │    │    │    │    │    │    │    │    │
+                                              └────┴────┴────┴────┴────┴────┴────┴────┘
+
+            -                ^ ┌────┬────┐    ┌────┬────┬────┬────┬────┬────┬────┬────┐
+            |                | │R0  │R2  │    │R0  │R1  │    │    │R4  │R5  │    │    │
+            |                | │    │    │    │    │    │    │    │    │    │    │    │
+   warp[0:] < repCluster[0]  | ]────┼────┤    ├────┼────┼────┼────┼────┼────┼────┼────┤
+            |                | │R1  │R3  │    │R2  │R3  │    │    │R6  │R7  │    │    │
+            |                | │    │    │    │    │    │    │    │    │    │    │    │
+            -                v ├────┼────┤    ├────┼────┼────┼────┼────┼────┼────┼────┤
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+   warp[1:] <                  ├────┼────┤    ├────┼────┼────┼────┼────┼────┼────┼────┤
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+            -                  ├────┼────┤    ├────┼────┼────┼────┼────┼────┼────┼────┤
+            |                  │R4  │R6  │    │R8  │R9  │    │    │R12 │R13 │    │    │
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+   warp[0:] <                  ├────┼────┤    ├────┼────┼────┼────┼────┼────┼────┼────┤
+            |                  │R5  │R7  │    │R10 │R11 │    │    │R14 │R15 │    │    │
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+            -                  ├────┼────┤    ├────┼────┼────┼────┼────┼────┼────┼────┤
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+   warp[1:] <                  ├────┼────┤    ├────┼────┼────┼────┼────┼────┼────┼────┤
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+            |                  │    │    │    │    │    │    │    │    │    │    │    │
+            -                  └────┴────┘    └────┴────┴────┴────┴────┴────┴────┴────┘
+
 }];
 
   let parameters = (
