@@ -166,9 +166,9 @@ struct BuildFlags {
   }
 };
 
-#ifdef WIN32
 sycl::context get_default_context(const sycl::device &sycl_device) {
-  auto platform = sycl_device.get_platform();
+  const auto &platform = sycl_device.get_platform();
+#ifdef WIN32
   sycl::context ctx;
   try {
     ctx = platform.ext_oneapi_get_default_context();
@@ -181,12 +181,10 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #endif
   }
   return ctx;
-}
 #else
-sycl::context get_default_context(const sycl::device &sycl_device) {
-  return sycl_device.get_platform().ext_oneapi_get_default_context();
-}
+  return platform.ext_oneapi_get_default_context();
 #endif
+}
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name, *build_flags_ptr;
