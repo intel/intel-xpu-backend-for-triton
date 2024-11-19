@@ -12,6 +12,9 @@ on:
 
 permissions: read-all
 
+env:
+  NEW_WORKSPACE: C:\gh${{ github.run_id }}
+
 jobs:
   build:
     name: Build
@@ -31,8 +34,17 @@ jobs:
         with:
           python-version: '3.9'
 
+      - name: Copy workspace to a shorter location
+        run: |
+          Copy-Item -Path "${{ github.workspace }}\*" -Destination "${{ env.NEW_WORKSPACE }}" -Recurse
+          ls "${{ env.NEW_WORKSPACE }}"
+
+      # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
+      # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
+      # runner.
       - name: Build Triton
         run: |
+          cd "${{ env.NEW_WORKSPACE }}"
           cd python
           pip install -U wheel pybind11 certifi cython cmake
           python -m certifi
