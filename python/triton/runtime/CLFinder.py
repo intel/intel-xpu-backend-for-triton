@@ -47,9 +47,7 @@ def set_env_vars(vs_path, arch="x64"):
 
 
 def initialize_visual_studio_env(version_ranges, arch="x64"):
-    # Check if the environment variable that vcvarsall.bat sets is present
-    if os.environ.get('VSCMD_ARG_TGT_ARCH') != arch:
-        vs_path = find_visual_studio(version_ranges)
-        if not vs_path:
-            raise EnvironmentError("Visual Studio not found in specified version ranges.")
-        set_env_vars(vs_path, arch)
+    vs_path = find_visual_studio(version_ranges)
+    if not vs_path:
+        raise EnvironmentError("Visual Studio not found in specified version ranges.")
+    set_env_vars(vs_path, arch)
