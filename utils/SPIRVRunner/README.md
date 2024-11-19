@@ -10,10 +10,17 @@ find .venv -name TorchConfig.cmake
 ```
 in the top level Triton directory.
 
+`SPIRVRunner` depends on LLVM support libarary for argument parsing in order to use this run following in the top level Triton directory.
+```
+scripts/compile-triton.sh --llvm
+```
+
+SPIR-V Runner build steps:
+
 ```
 mkdir build
 cd build
-CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/FromAbove/ cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/FromAbove/ LLVM_DIR=/abs/path/to/packages/llvm cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
 make -j
 ```
 
