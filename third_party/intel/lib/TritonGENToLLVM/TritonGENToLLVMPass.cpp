@@ -28,6 +28,8 @@
 #include "mlir/Target/LLVMIR/TypeToLLVM.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/ADT/identity.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ModRef.h"
@@ -935,42 +937,50 @@ struct TritonMatrix2DBlockPrefetchLowering
 };
 
 template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                               OpType, TritonGEN::SIMDBlockReadOp,
-                               TritonGEN::SIMDBlockWriteOp>::value>>
-static std::string getSIMDBlockManglingName(OpType op, VectorType vecTy) {
+                               OpType, TritonGEN::SubGroupBlockReadOp,
+                               TritonGEN::SubGroupBlockWriteOp>::value>>
+static std::string getSubGroupBlockManglingName(OpType op, Type type) {
   constexpr bool isWrite =
-      std::is_same<OpType, TritonGEN::SIMDBlockWriteOp>::value;
+      std::is_same<OpType, TritonGEN::SubGroupBlockWriteOp>::value;
   const LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
-  const unsigned numElems = vecTy.getNumElements();
   // Note: OCL builtin name here differs from regular mangling.
   std::string funcName = "intel_sub_group_block_";
   if constexpr (isWrite)
     funcName += "write";
   else
     funcName += "read";
-  funcName += "_u" + intel::getTypeMangling(vecTy.getElementType()) +
-              (numElems == 1 ? "" : std::to_string(numElems));
-  funcName =
-      "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
-      std::to_string(ptrTy.getAddressSpace()) +
-      intel::getTypeMangling(vecTy.getElementType(), /*isUnsigned=*/true);
+  Type elementType =
+      TypeSwitch<Type, Type>(type)
+          .Case([](VectorType vecType) { return vecType.getElementType(); })
+          // Scalar case
+          .Default(llvm::identity<Type>());
+  const unsigned numElems =
+      TypeSwitch<Type, unsigned>(type)
+          .Case([](VectorType vecType) { return vecType.getNumElements(); })
+          // Scalar case
+          .Default(0u);
+  funcName += "_u" + intel::getTypeMangling(elementType) +
+              (numElems ? std::to_string(numElems) : "");
+  funcName = "_Z" + std::to_string(funcName.size()) + funcName + "PU3AS" +
+             std::to_string(ptrTy.getAddressSpace()) +
+             intel::getTypeMangling(elementType, /*isUnsigned=*/true);
   if constexpr (isWrite)
-    funcName += intel::getTypeMangling(vecTy, /*isUnsigned=*/true);
+    funcName += intel::getTypeMangling(type, /*isUnsigned=*/true);
   return funcName;
 }
 
-struct TritonSIMDBlockReadLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockReadOp> {
+struct TritonSubGroupBlockReadLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupBlockReadOp> {
   using ConvertOpToLLVMPattern<
-      TritonGEN::SIMDBlockReadOp>::ConvertOpToLLVMPattern;
+      TritonGEN::SubGroupBlockReadOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(TritonGEN::SIMDBlockReadOp op, OpAdaptor adaptor,
+  matchAndRewrite(TritonGEN::SubGroupBlockReadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
-    VectorType vecTy = op.getRes().getType();
+    Type type = op.getRes().getType();
 
-    std::string funcName = getSIMDBlockManglingName(op, vecTy);
+    std::string funcName = getSubGroupBlockManglingName(op, type);
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::Ref,
@@ -978,26 +988,26 @@ struct TritonSIMDBlockReadLowering
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = createDeviceFunctionCall(
-        rewriter, funcName, vecTy, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
+        rewriter, funcName, type, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
 
     rewriter.replaceOp(op, call.getResult());
     return success();
   }
 };
 
-struct TritonSIMDBlockWriteLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SIMDBlockWriteOp> {
+struct TritonSubGroupBlockWriteLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupBlockWriteOp> {
   using ConvertOpToLLVMPattern<
-      TritonGEN::SIMDBlockWriteOp>::ConvertOpToLLVMPattern;
+      TritonGEN::SubGroupBlockWriteOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(TritonGEN::SIMDBlockWriteOp op, OpAdaptor adaptor,
+  matchAndRewrite(TritonGEN::SubGroupBlockWriteOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = rewriter.getContext();
     LLVM::LLVMPointerType ptrTy = op.getPtr().getType();
-    VectorType vecTy = op.getVal().getType();
+    Type type = op.getVal().getType();
 
-    std::string funcName = getSIMDBlockManglingName(op, vecTy);
+    std::string funcName = getSubGroupBlockManglingName(op, type);
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
@@ -1006,7 +1016,7 @@ struct TritonSIMDBlockWriteLowering
     auto funcAttrs = noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
     LLVM::CallOp call = createDeviceFunctionCall(
-        rewriter, funcName, void_ty(ctx), {ptrTy, vecTy},
+        rewriter, funcName, void_ty(ctx), {ptrTy, type},
         {op.getPtr(), op.getVal()}, {}, funcAttrs);
 
     rewriter.replaceOp(op, call);
@@ -1071,12 +1081,13 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns.add<
-      TritonGENSplitBarrierSignalLowering, TritonGENSplitBarrierWaitLowering,
-      TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
-      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering,
-      TritonSIMDBlockReadLowering, TritonSIMDBlockWriteLowering>(converter);
+  patterns
+      .add<TritonGENSplitBarrierSignalLowering,
+           TritonGENSplitBarrierWaitLowering, TritonSubGroupReduceLowering,
+           TritonSubGroupScanLowering, TritonMatrixDPASLowering,
+           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+           TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
+           TritonSubGroupBlockWriteLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
