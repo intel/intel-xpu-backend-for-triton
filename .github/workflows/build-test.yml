@@ -39,7 +39,7 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
-
+        
 permissions: read-all
 
 jobs:

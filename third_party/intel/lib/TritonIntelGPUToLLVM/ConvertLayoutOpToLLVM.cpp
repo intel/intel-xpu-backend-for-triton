@@ -792,14 +792,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
          vals = vals.drop_front(vecWidth)) {
       ArrayRef<Value> curr = vals.take_front(vecWidth);
       Value vec = wrapInVector(loc, opType, curr, rewriter);
-      rewriter.create<TritonGEN::SIMDBlockWriteOp>(loc, base, vec);
+      rewriter.create<TritonGEN::SubGroupBlockWriteOp>(loc, base, vec);
       base = gep(base.getType(), opType, base, ArrayRef<LLVM::GEPArg>{offset},
                  /*inbounds=*/true);
     }
 
     // Load from matrix, non-trasposed.
-    // As per SIMD block semantics, we have stored the elements in a matrix of
-    // `Nxsub_group_size` size, so we need to load back in blocks of
+    // As per sub-group block semantics, we have stored the elements in a matrix
+    // of `Nxsub_group_size` size, so we need to load back in blocks of
     // `sub_group_size` (`N/sub_group_size` loads).
     Value workItemOffset = mul(wiStride, subGroupLocalId);
     Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,

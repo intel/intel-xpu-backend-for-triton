@@ -46,7 +46,7 @@ static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
       VectorType::get(maxBlockStoreWidth, vecTy.getElementType());
   Value offset = i32_val(subGroupSize);
   for (int i = 0; i < vecTy.getNumElements() / maxBlockStoreWidth; ++i) {
-    rewriter.create<TritonGEN::SIMDBlockWriteOp>(
+    rewriter.create<TritonGEN::SubGroupBlockWriteOp>(
         loc, base,
         rewriter
             .create<triton::gpu::intel::ExtractOp>(loc, decomposedVecTy, val, i)
@@ -313,7 +313,7 @@ private:
           i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
       SmallVector<Value> values;
       for (int i = 0; i < 64 / maxBlockLoadi16Width; ++i) {
-        auto simdRead = rewriter.create<TritonGEN::SIMDBlockReadOp>(
+        auto simdRead = rewriter.create<TritonGEN::SubGroupBlockReadOp>(
             loc, decomposedVecTy, base);
         values.push_back(simdRead.getRes());
         base = gep(ptrToSharedMemTy, decomposedVecTy, base, offset);
