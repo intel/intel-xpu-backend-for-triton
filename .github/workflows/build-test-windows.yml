@@ -20,25 +20,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Monitor _temp folder and copy setup.ps1
+        shell: pwsh
+        run: |
+          # Ensure debug folder exists
+          $debugFolder = "C:\GitHubActionsRunner\debug"
+          if (!(Test-Path -Path $debugFolder)) {
+            New-Item -ItemType Directory -Path $debugFolder
+          }
+
+          # Monitor _temp folder for setup.ps1 and copy it as soon as it appears
+          $tempFolder = "C:\GitHubActionsRunner\_work\_temp"
+          $fileCopied = $false
+          while (-not $fileCopied) {
+            if (Test-Path -Path "$tempFolder\setup.ps1") {
+              Copy-Item -Path "$tempFolder\setup.ps1" -Destination "$debugFolder" -Force
+              Write-Output "setup.ps1 copied to debug folder."
+              $fileCopied = $true
+            }
+            Start-Sleep -Seconds 1
+          }
+
       - name: Install Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-
-      - name: Copy setup.ps1 to debug folder
-        run: |
-          if (!(Test-Path -Path "C:\GitHubActionsRunner\debug")) {
-            New-Item -ItemType Directory -Path "C:\GitHubActionsRunner\debug"
-          }
-
-          $tempFolder = "C:\GitHubActionsRunner\_work\_temp"
-          $debugFolder = "C:\GitHubActionsRunner\debug"
-
-          if (Test-Path -Path "$tempFolder") {
-            Get-ChildItem -Path $tempFolder -Recurse -Filter setup.ps1 | ForEach-Object {
-              Copy-Item -Path $_.FullName -Destination $debugFolder -Force
-            }
-          }
 
       - name: Build Triton
         run: |
