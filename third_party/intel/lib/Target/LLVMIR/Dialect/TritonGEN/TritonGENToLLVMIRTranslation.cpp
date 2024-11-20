@@ -36,10 +36,10 @@ public:
                  NamedAttribute attribute,
                  LLVM::ModuleTranslation &moduleTranslation) const final {
     StringRef attrName = attribute.getName().getValue();
-    assert(
-        attrName ==
-            triton::TritonGEN::TritonGENDialect::getCacheControlsAttrName() &&
-        "Only supported attribute");
+    // Unsupported attribute name: skip.
+    if (attrName !=
+        triton::TritonGEN::TritonGENDialect::getCacheControlsAttrName())
+      return success();
     auto decorationAttr =
         dyn_cast<triton::TritonGEN::DecorationCacheControlAttr>(
             attribute.getValue());
