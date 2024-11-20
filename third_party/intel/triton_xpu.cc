@@ -17,6 +17,7 @@
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
+#include "intel/lib/LLVMIR/LLVMPasses.h"
 
 #include "triton/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -205,6 +206,7 @@ void init_triton_intel(py::module &&m) {
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
         });
+#if 1
     pb.registerPeepholeEPCallback(
         [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
           // The Triton masked load pattern can generate instances where the
@@ -214,8 +216,12 @@ void init_triton_intel(py::module &&m) {
           // an incorrect result for the kernel. Adding `DivRemPairsPass`
           // introduces freeze instructions which prevent UB from leaking into
           // div/rem instructions.
-          fpm.addPass(DivRemPairsPass());
+          // fpm.addPass(DivRemPairsPass());
+          fpm.addPass(FreezeMaskedDivRemPass());
         });
+#else
+    mpm.addPass(createModuleToFunctionPassAdaptor(FreezeMaskedDivRemPass()));
+#endif
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
   });
