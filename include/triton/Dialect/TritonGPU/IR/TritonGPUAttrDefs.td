@@ -778,6 +778,11 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     (ins "int":$opIdx,
                          "int":$kWidth)>,
 
+    InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getRepOrderForOperand",
+                    (ins "int":$opIdx)>,
+
     InterfaceMethod<"Return element sizes per thread for dot operands.", "SmallVector<unsigned>",
       "getElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
                                            "Type":$eltTy,

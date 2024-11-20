@@ -166,6 +166,26 @@ struct BuildFlags {
   }
 };
 
+sycl::context get_default_context(const sycl::device &sycl_device) {
+  const auto &platform = sycl_device.get_platform();
+#ifdef WIN32
+  sycl::context ctx;
+  try {
+    ctx = platform.ext_oneapi_get_default_context();
+  } catch (const std::runtime_error &ex) {
+    // This exception is thrown on Windows because
+    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // ignored it seems.
+#if _DEBUG
+    std::cout << "ERROR: " << ex.what() << std::endl;
+#endif
+  }
+  return ctx;
+#else
+  return platform.ext_oneapi_get_default_context();
+#endif
+}
+
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
@@ -194,8 +214,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     const size_t binary_size = PyBytes_Size(py_bytes);
 
     uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
-    const auto ctx =
-        sycl_device.get_platform().ext_oneapi_get_default_context();
+    const auto &ctx = get_default_context(sycl_device);
     const auto l0_device =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
     const auto l0_context =

@@ -56,6 +56,10 @@ on:
         description: Runner label for version
         type: string
         default: runner-0.0.20
+      use_system_python:
+        description: Use system Python
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -91,9 +95,15 @@ jobs:
           key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python ${{ inputs.python_version }}
+        if: ${{ !inputs.use_system_python }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
