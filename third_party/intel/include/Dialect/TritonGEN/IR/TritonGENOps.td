@@ -320,23 +320,22 @@ def TritonGEN_SubGroupBlockMemoryAccessElementType
 
 def TritonGEN_SubGroupBlockMemoryAccessType
     : AnyTypeOf<[TritonGEN_SubGroupBlockMemoryAccessElementType,
-                 FixedVectorOfLengthAndType<
-		     [2, 4, 8],
-		     [TritonGEN_SubGroupBlockMemoryAccessElementType]>,
-		 // Vectors of length 16 only allowed for i8 for now.
-		 FixedVectorOfLengthAndType<[16], [I8]>],
-		 "Valid sub-group block memory access type">;
+                 FixedVectorOfLengthAndType<[2, 4, 8],
+                     [TritonGEN_SubGroupBlockMemoryAccessElementType]>,
+                 // Vectors of length 16 only allowed for i8 for now.
+                 FixedVectorOfLengthAndType<[16], [I8]>],
+          "Valid sub-group block memory access type">;
 
 def TritonGEN_SubGroupBlockMemoryAccessPointerType
     : Type<And<[LLVM_AnyPointer.predicate,
                 Or<[CPred<"::llvm::cast<::mlir::LLVM::LLVMPointerType>($_self)" #
-		              ".getAddressSpace() == " #
-			      "static_cast<unsigned>(kCrossWorkgroup)">,
-		    CPred<"::llvm::cast<::mlir::LLVM::LLVMPointerType>($_self)" #
-		              ".getAddressSpace() == " #
-			      "static_cast<unsigned>(kWorkgroup)">]>]>,
-           "LLVM pointer in local or global OpenCL address space",
-           "::mlir::LLVM::LLVMPointerType">;
+                          ".getAddressSpace() == " #
+                          "static_cast<unsigned>(kCrossWorkgroup)">,
+                    CPred<"::llvm::cast<::mlir::LLVM::LLVMPointerType>($_self)" #
+                          ".getAddressSpace() == " #
+                          "static_cast<unsigned>(kWorkgroup)">]>]>,
+          "LLVM pointer in local or global OpenCL address space",
+          "::mlir::LLVM::LLVMPointerType">;
 
 def TritonGEN_SubGroupBlockReadOp: TritonGEN_Op<"sub_group_block_read"> {
   let summary = "Sub-group block read.";
