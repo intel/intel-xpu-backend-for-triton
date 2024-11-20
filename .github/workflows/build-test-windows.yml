@@ -21,14 +21,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Monitor _temp folder and copy setup.ps1
-        shell: pwsh
+        shell: powershell
         run: |
           # Ensure debug folder exists
           $debugFolder = "C:\GitHubActionsRunner\debug"
           if (!(Test-Path -Path $debugFolder)) {
             New-Item -ItemType Directory -Path $debugFolder
           }
-
+          
           # Monitor _temp folder for setup.ps1 and copy it as soon as it appears
           $tempFolder = "C:\GitHubActionsRunner\_work\_temp"
           $fileCopied = $false
