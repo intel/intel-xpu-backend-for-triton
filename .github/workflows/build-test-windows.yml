@@ -25,6 +25,21 @@ jobs:
         with:
           python-version: '3.9'
 
+      - name: Copy setup.ps1 to debug folder
+        run: |
+          if (!(Test-Path -Path "C:\GitHubActionsRunner\debug")) {
+            New-Item -ItemType Directory -Path "C:\GitHubActionsRunner\debug"
+          }
+
+          $tempFolder = "C:\GitHubActionsRunner\_work\_temp"
+          $debugFolder = "C:\GitHubActionsRunner\debug"
+
+          if (Test-Path -Path "$tempFolder") {
+            Get-ChildItem -Path $tempFolder -Recurse -Filter setup.ps1 | ForEach-Object {
+              Copy-Item -Path $_.FullName -Destination $debugFolder -Force
+            }
+          }
+
       - name: Build Triton
         run: |
           cd python
