@@ -19,8 +19,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: gregory/windows-support
 
       - name: Install Python
         uses: actions/setup-python@v5
