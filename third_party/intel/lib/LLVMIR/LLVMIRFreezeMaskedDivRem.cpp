@@ -16,6 +16,7 @@ static bool processPhiNode(PHINode *phiNode, BasicBlock& BB) {
     return false; 
   });
 
+  bool Changed = false;
   if (phiHasNullValue) {
         auto FindUse = llvm::find_if(phiNode->users(), [](auto *U) {
           auto *Use = cast<Instruction>(U);
@@ -27,13 +28,15 @@ static bool processPhiNode(PHINode *phiNode, BasicBlock& BB) {
           return false; 
         }
         auto *Use = cast<Instruction>(*FindUse);
-        assert()
-        llvm::errs() << "Got our user! " << *Use << "\n";
-
-        // insert freeze between phi and sdiv 
-        // 
+        if (Use->getOperand(1) == phiNode) {
+          llvm::errs() << "Got our user! " << *Use << "\n";
+          llvm::errs() << "Operand 1: " << *Use->getOperand(1) << "\n";
+          auto *freezePhi = new FreezeInst(phiNode, phiNode->getName() + ".frozen", Use->getIterator());
+          Use->setOperand(1, freezePhi);
+          Changed = true;
+        }
   }
-  return false; 
+  return Changed; 
 }
 
 static bool runOnFunction(Function& F, const TargetTransformInfo &TTI,
