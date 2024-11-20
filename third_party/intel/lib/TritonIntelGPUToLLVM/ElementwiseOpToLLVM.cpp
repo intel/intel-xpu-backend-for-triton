@@ -1420,6 +1420,33 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+struct PreciseSqrtOpConversion
+    : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(PreciseSqrtOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto input = operands[0][0];
+    auto origTy = input.getType();
+    if (!origTy.isF64())
+      input = fpext(f64_ty, input);
+    Type funcType = LLVM::LLVMFunctionType::get(f64_ty, {f64_ty});
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, "__imf_sqrt_rn", funcType);
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, {input});
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    auto result = callOp.getResult();
+    if (!origTy.isF64())
+      result = rewriter.create<LLVM::FPTruncOp>(loc, origTy, result);
+    return {result};
+  }
+};
+
 template <typename TritonOp>
 struct OpToExternCallConversion
     : public ElementwiseOpConversionBase<TritonOp,
@@ -1462,8 +1489,8 @@ void populateElementwiseOpToLLVMPatterns(
     PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
-  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "__imf_sqrtf", benefit);
+  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis,
+                                        benefit);
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "__imf_fdiv_rn", benefit);
 
