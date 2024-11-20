@@ -8,4 +8,4 @@ struct FreezeMaskedDivRemPass : PassInfoMixin<FreezeMaskedDivRemPass> {
   static StringRef name() { return "FreezeMaskedDivRemPass"; }
 };
 
-}
+} // namespace llvm

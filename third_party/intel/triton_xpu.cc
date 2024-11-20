@@ -206,22 +206,21 @@ void init_triton_intel(py::module &&m) {
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
         });
-#if 1
     pb.registerPeepholeEPCallback(
         [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
           // The Triton masked load pattern can generate instances where the
-          // mask false path appears to cause undefined behavior during
-          // computation. Even though the result of that behavior will never be
-          // used, LLVM can choose to optimize away the false path resulting in
-          // an incorrect result for the kernel. Adding `DivRemPairsPass`
-          // introduces freeze instructions which prevent UB from leaking into
-          // div/rem instructions.
-          // fpm.addPass(DivRemPairsPass());
+          // mask value causes undefined behavior in sdiv/srem instructions. The
+          // language allows this UB as the result of those arithmetic
+          // instructions is never used, and control flow to avoid computation
+          // of these instructions would negatively affect performance. But,
+          // LLVM SimplifyCFG aggressively marks code paths with undefined
+          // behavior as dead. This can result in removal of the mask path and
+          // incorrect results from legal Triton kernels due to masked elements
+          // being used in computation. Run a pass to add a freeze instruction
+          // between masked loads and sdiv/srem to signal to LLVM we consider
+          // the sdiv/srem operands to be well defined.
           fpm.addPass(FreezeMaskedDivRemPass());
         });
-#else
-    mpm.addPass(createModuleToFunctionPassAdaptor(FreezeMaskedDivRemPass()));
-#endif
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
   });
