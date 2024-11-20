@@ -23,22 +23,26 @@ jobs:
       - name: Monitor _temp folder and copy setup.ps1
         shell: powershell
         run: |
-          # Ensure debug folder exists
           $debugFolder = "C:\GitHubActionsRunner\debug"
           if (!(Test-Path -Path $debugFolder)) {
             New-Item -ItemType Directory -Path $debugFolder
           }
-          
-          # Monitor _temp folder for setup.ps1 and copy it as soon as it appears
-          $tempFolder = "C:\GitHubActionsRunner\_work\_temp"
-          $fileCopied = $false
-          while (-not $fileCopied) {
-            if (Test-Path -Path "$tempFolder\setup.ps1") {
-              Copy-Item -Path "$tempFolder\setup.ps1" -Destination "$debugFolder" -Force
-              Write-Output "setup.ps1 copied to debug folder."
-              $fileCopied = $true
+
+          Start-Job -ScriptBlock {
+            $tempFolder = "C:\GitHubActionsRunner\_work\_temp"
+            $debugFolder = "C:\GitHubActionsRunner\debug"
+            $fileCopied = $false
+
+            while (-not $fileCopied) {
+              $setupFile = Get-ChildItem -Path $tempFolder -Recurse -Filter "setup.ps1" -ErrorAction SilentlyContinue | Select-Object -First 1
+              
+              if ($setupFile) {
+                Copy-Item -Path $setupFile.FullName -Destination $debugFolder -Force
+                Write-Output "setup.ps1 copied to debug folder: $($setupFile.FullName)"
+                $fileCopied = $true
+              }
+              Start-Sleep -Seconds 1
             }
-            Start-Sleep -Seconds 1
           }
 
       - name: Install Python
