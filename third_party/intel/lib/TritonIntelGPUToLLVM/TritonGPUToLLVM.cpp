@@ -97,8 +97,8 @@ struct ConvertTritonGPUToLLVM
 
     // Allocate shared memory and set barrier
     if (!pipelineManager.skipSharedMemoryAllocation()) {
-      ModuleAllocation allocation =
-          ModuleAllocation::get<triton::intel::AllocationAnalysis>(mod);
+      ModuleAllocation allocation(
+          mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
       ModuleMembarAnalysis membarPass(&allocation, ::mlir::intel::membarFilter);
       membarPass.run();
     }

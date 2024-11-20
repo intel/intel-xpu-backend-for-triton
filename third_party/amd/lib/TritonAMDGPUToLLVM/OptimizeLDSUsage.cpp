@@ -231,7 +231,7 @@ public:
       LDSLimit = targetInfo.getSharedMemorySize();
     }
 
-    ModuleAllocation allocAnalysis = ModuleAllocation::get(mod);
+    ModuleAllocation allocAnalysis(mod);
     if (allocAnalysis.getSharedMemorySize() <= LDSLimit)
       return;
 
