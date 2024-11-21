@@ -35,7 +35,6 @@ static bool processPhiNode(PHINode *PhiNode, BasicBlock &BB) {
 static bool runOnFunction(Function &F) {
   bool Changed = false;
 
-  SmallVector<PHINode *> PhiNodes;
   for (BasicBlock &BB : F) {
     for (Instruction &I : BB) {
       if (PHINode *PhiNode = dyn_cast<PHINode>(&I)) {
