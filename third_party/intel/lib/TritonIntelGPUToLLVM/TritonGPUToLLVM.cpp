@@ -83,12 +83,14 @@ struct ConvertTritonGPUToLLVM
     ModuleOp mod = getOperation();
 
     bool isAdvancedPathEnabled =
-        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                         getSupportSG2DBlockAttrName()) &&
-        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                         getSupportDPASAttrName()) &&
-        (mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH") ||
-         advancedPath);
+        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH") ||
+        advancedPath;
+    if (isAdvancedPathEnabled)
+      assert(mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                              getSupportSG2DBlockAttrName()) &&
+             mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                              getSupportDPASAttrName()) &&
+             "Target do not support blocked load/mma");
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
         mod, context, isAdvancedPathEnabled);
     mlir::LowerToLLVMOptions option(context);
