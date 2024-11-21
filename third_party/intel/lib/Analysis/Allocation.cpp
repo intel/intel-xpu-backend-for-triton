@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
 namespace mlir::triton::intel {
 namespace {
@@ -22,7 +23,16 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
         isa<PointerType>(elemTy)
             ? kPtrBitWidth / 8
             : std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-    return product(srcTy.getShape()) * bytesPerElement;
+    unsigned numElements = product(srcTy.getShape());
+    Attribute encoding = srcTy.getEncoding();
+    int subGroupSize = product(gpu::getThreadsPerWarp(encoding));
+    assert(numElements % subGroupSize == 0 &&
+           "Sub-group transposable tensors have a number of elements multiple "
+           "of the sub-group size");
+    // Add an element at the end of the row that will not be accessed. This
+    // allows us to avoid bank conflicts.
+    unsigned numMatrixCells = (numElements / subGroupSize) * (subGroupSize + 1);
+    return numMatrixCells * bytesPerElement;
   }
   return invalidSize;
 }
