@@ -234,8 +234,8 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
 
         if (os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1" or opt.advanced_path):
-            assert properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"], \
-            "Target do not support blocked load/mma"
+            if not (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]):
+                raise AssertionError("Target do not support blocked load/mma")
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
