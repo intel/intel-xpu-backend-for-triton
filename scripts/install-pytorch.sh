@@ -155,7 +155,7 @@ $SCRIPTS_DIR/patch-pytorch.sh
 echo "****** Building $PYTORCH_PROJ ******"
 pip install -r requirements.txt
 pip install cmake ninja
-USE_MKL_STATIC=1 python setup.py bdist_wheel
+USE_STATIC_MKL=1 python setup.py bdist_wheel
 
 echo "****** Installing PyTorch ******"
 pip install dist/*.whl

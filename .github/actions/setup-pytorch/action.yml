@@ -83,7 +83,7 @@ runs:
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 13
+        CACHE_NUMBER: 14
       with:
         path: pytorch
         key: pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER
@@ -120,7 +120,7 @@ runs:
         cd pytorch
         pip install wheel
         pip install -r requirements.txt
-        USE_MKL_STATIC=1 python setup.py bdist_wheel
+        USE_STATIC_MKL=1 python setup.py bdist_wheel
 
     - name: Install PyTorch (built from source)
       if: ${{ inputs.mode == 'source' }}
