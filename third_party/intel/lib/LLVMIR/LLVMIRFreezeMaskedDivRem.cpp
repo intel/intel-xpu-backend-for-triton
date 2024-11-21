@@ -6,7 +6,7 @@
 
 using namespace llvm;
 
-static bool processPhiNode(PHINode *PhiNode, BasicBlock &BB) {
+static bool processBasicBlock(BasicBlock &BB, PHINode *PhiNode) {
   if (!any_of(PhiNode->incoming_values(), [](Use &U) {
         if (Constant *C = dyn_cast<Constant>(&U)) {
           return C->isNullValue();
@@ -38,7 +38,7 @@ static bool runOnFunction(Function &F) {
   for (BasicBlock &BB : F) {
     for (Instruction &I : BB) {
       if (PHINode *PhiNode = dyn_cast<PHINode>(&I)) {
-        Changed |= processPhiNode(PhiNode, BB);
+        Changed |= processBasicBlock(BB, PhiNode);
         continue;
       }
       break;
