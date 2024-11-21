@@ -66,7 +66,7 @@ if pip show torch &>/dev/null; then
     echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
     if [ "$FORCE_REINSTALL" = false ]; then
       echo "**** Exiting without action. ****"
-      echo "**** INFO: Run the install-pytorch script with the --force-reinstall flag to force reinstallation of PyTorch,
+      echo "**** INFO: Run the compile-pytorch-ipex script with the --force-reinstall flag to force reinstallation of PyTorch,
         or uninstall the current version of PyTorch manually. ****"
       exit 1
     fi

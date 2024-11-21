@@ -953,7 +953,7 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (mma.isAmpere() || mma.isHopper()) {
       auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
-      auto rep = mma.getRepForOperand(shape, bitwidth, idx);
+      auto rep = mma.getRepForOperand(shape, bitwidth, kWidth, idx);
       auto sizePerThread = getSizePerThread();
       auto elemsPerKRep = mma.isHopper() ? (kWidth * 2) : (32 / bitwidth * 2);
       if (rank == 3)
@@ -1037,7 +1037,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   assert(rank == 2 || rank == 3 && "Invalid dotLayout");
 
   // Do not split CTA in K dimension
-  getOpIdx() == 0 ? res[rank - 1] = 1 : res[rank - 2] = 1;
+  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
+  res[kDim] = 1;
   return res;
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
@@ -2018,14 +2019,18 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
-                                        int opIdx) const {
+                                        int kWidth, int opIdx) const {
   auto rank = shape.size();
   auto warpsPerCTA = getWarpsPerCTA();
 
   // {batch, m, n, k}
   // Hopper path never uses the n value, since this method is only invoked
   // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
-  SmallVector<int> shapePerWarp = {1, 16, 8, 4 * 64 / bitwidth};
+  // TODO: rep per operand is not accurate for Hopper. It is currently done that
+  // way to allow us to get the correct total number of elements. this will be
+  // fixed when moving to linear layout.
+  SmallVector<int> shapePerWarp = {
+      1, 16, 8, isHopper() ? 4 * 2 * kWidth : 4 * 64 / bitwidth};
   int numRepBatch =
       rank == 3
           ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))
@@ -3201,10 +3206,6 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
   if (!layout)
     return "";
 
-  unsigned threadsPerWarp = getWarpSize(layout);
-  unsigned numWarpsPerCTA = getNumWarpsPerCTA(layout);
-  unsigned numBlocks = getNumCTAs(layout);
-  int numElementsPerThreads = getTotalElemsPerThread(tensorType);
   StringAttr kRegister = StringAttr::get(tensorType.getContext(), "register");
   StringAttr kLane = StringAttr::get(tensorType.getContext(), "lane");
   StringAttr kWarp = StringAttr::get(tensorType.getContext(), "warp");
@@ -3217,6 +3218,10 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
   int64_t tensorSize = product(tensorType.getShape());
   std::vector<std::string> elementMapping(tensorSize);
   std::vector<std::string> threadMapping;
+  unsigned threadsPerWarp = ll->getInDimSize(kLane);
+  unsigned numWarpsPerCTA = ll->getInDimSize(kWarp);
+  unsigned numBlocks = ll->getInDimSize(kBlock);
+  int numElementsPerThreads = ll->getInDimSize(kRegister);
   for (int blockId = 0; blockId < numBlocks; ++blockId) {
     for (int warpId = 0; warpId < numWarpsPerCTA; warpId++) {
       for (int tid = 0; tid < threadsPerWarp; ++tid) {
