@@ -132,10 +132,6 @@ TRITON_PROJ="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && cd .
 SCRIPTS_DIR="$TRITON_PROJ/scripts"
 # source "$SCRIPTS_DIR/pytest-utils.sh"
 
-if [ "$TRITON_TEST_REPORTS" == true ]; then
-    capture_runtime_env
-fi
-
 install_deps() {
   if [ "$SKIP_PIP" = true ]; then
     echo "**** Skipping installation of pip dependencies ****"
