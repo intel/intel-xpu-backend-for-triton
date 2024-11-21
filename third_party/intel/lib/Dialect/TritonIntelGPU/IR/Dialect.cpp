@@ -147,18 +147,6 @@ SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
   return res;
 }
 
-SmallVector<unsigned>
-DpasEncodingAttr::getShapePerCTATile(ArrayRef<int64_t> tensorShape) const {
-  auto shapeC = getShapeC();
-  SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
-  size_t rank = shapeC.size();
-  SmallVector<unsigned> shapePerCTATile(rank);
-  llvm::transform(
-      llvm::zip_equal(shapeC, warpsPerCTA), shapePerCTATile.begin(),
-      [](auto entry) { return std::get<0>(entry) * std::get<1>(entry); });
-  return shapePerCTATile;
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
   llvm::report_fatal_error("NYI. DpasEncodingAttr::getRepOrder");
 }
@@ -174,7 +162,14 @@ DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   assert((rank == 2 || rank == 3) && "Unexpected rank of mma layout");
 
   SmallVector<unsigned> elemsPerThread(rank, 1);
-  auto shapePerCTATile = getShapePerCTATile(shape);
+
+  auto shapeC = getShapeC();
+  SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
+  SmallVector<unsigned> shapePerCTATile(rank);
+  llvm::transform(
+      llvm::zip_equal(shapeC, warpsPerCTA), shapePerCTATile.begin(),
+      [](auto entry) { return std::get<0>(entry) * std::get<1>(entry); });
+
   unsigned tilesRow =
       ceil<unsigned>(shape[rank - 2], shapePerCTATile[rank - 2]);
   unsigned tilesCol =
@@ -304,33 +299,6 @@ SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
   res[rank - 2] = subGroupSize / executionSize;
   res[rank - 1] = executionSize;
   return res;
-}
-
-SmallVector<unsigned>
-DpasEncodingAttr::getShapePerCTATileForOperand(ArrayRef<int64_t> shape,
-                                               int kWidth, int opIdx) const {
-  auto parentShapePerCTATile = getShapePerCTATile(shape);
-  size_t rank = parentShapePerCTATile.size();
-  assert((rank == 2 || rank == 3) && "unexpected rank number for Dpas layout");
-  if (opIdx == 0) {
-    auto shapeA = getShapeA();
-    return (rank == 2)
-               ? SmallVector<unsigned>{parentShapePerCTATile[0], shapeA[1]}
-               : SmallVector<unsigned>{parentShapePerCTATile[0],
-                                       parentShapePerCTATile[rank - 2],
-                                       shapeA[rank - 1]};
-  }
-
-  if (opIdx == 1) {
-    auto shapeB = getShapeB();
-    return (rank == 2)
-               ? SmallVector<unsigned>{shapeB[0], parentShapePerCTATile[1]}
-               : SmallVector<unsigned>{parentShapePerCTATile[0],
-                                       shapeB[rank - 2],
-                                       parentShapePerCTATile[rank - 1]};
-  }
-
-  llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
 }
 
 SmallVector<unsigned>
