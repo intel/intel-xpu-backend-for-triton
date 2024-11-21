@@ -142,16 +142,19 @@ jobs:
             echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           } | tee -a $GITHUB_ENV
 
-      - name: Run unit tests
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --unit
-
       - name: Run core tests
         run: |
           ${{ env.TRITON_TEST_CMD }} --core --skip-pip-install
 
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: triton-cache
+          path: ~/.triton/cache
+
       - name: Run interpreter tests
         run: |
+          exit 1
           ${{ env.TRITON_TEST_CMD }} --interpreter --skip-pip-install
 
       - name: Run Tutorials

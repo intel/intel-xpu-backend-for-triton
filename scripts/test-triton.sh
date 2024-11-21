@@ -182,21 +182,7 @@ run_core_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
-
-  # run runtime tests serially to avoid race condition with cache handling.
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    pytest --verbose --device xpu runtime/
-
-  TRITON_TEST_SUITE=debug \
-    pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
-
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+    pytest -vvv -s -n ${PYTEST_MAX_PROCESSES:-8} --device xpu "test_scan_layouts[True-1-src_layout10-64-32]"
 }
 
 run_regression_tests() {
