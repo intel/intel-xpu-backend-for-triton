@@ -78,7 +78,8 @@ LogicalResult ExtractSliceOp::verify() {
   }
 
   auto srcShape = srcTy.getShape();
-  auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcLayout);
+  auto shapePerCTATile =
+      mlir::triton::gpu::getShapePerCTATile(srcLayout, srcShape);
   shapePerCTATile[0] =
       std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
   shapePerCTATile[1] =
