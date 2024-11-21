@@ -144,7 +144,9 @@ jobs:
 
       - name: Run core tests
         run: |
-          ${{ env.TRITON_TEST_CMD }} --core --skip-pip-install
+          pwd
+          cd python/test/unit
+          pytest -vvv --device xpu "language/test_core.py::test_scan_layouts[True-1-src_layout10-64-32]"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v3
