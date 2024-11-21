@@ -53,17 +53,15 @@ LogicalResult UpcastMXFPOp::verify() {
   if (!dotEncoding) {
     return emitOpError("Expected a DotOperandEncodingAttr for values");
   }
-  if (!isa<BlockedEncodingAttr, LinearEncodingAttr>(layoutScale)) {
-    return emitOpError(
-        "Expected a BlockOperandEncoding or LinearOperandEncoding "
-        "for scales");
+  auto blockedScale = dyn_cast<BlockedEncodingAttr>(layoutScale);
+  if (!blockedScale) {
+    return emitOpError("Expected a BlockOperandEncoding for scales");
   }
 
   if (isa<NvidiaMmaEncodingAttr>(dotEncoding.getParent())) {
     // Necessary to keep all of the scales of a given block of values in the
     // same warp
-    auto threadsPerWarp =
-        cast<DistributedEncodingTrait>(layoutScale).getThreadsPerWarp();
+    auto threadsPerWarp = blockedScale.getThreadsPerWarp();
     if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
       return emitOpError("Expected threads per warp to be {16, 2}");
     }

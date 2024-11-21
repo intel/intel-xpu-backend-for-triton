@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "mlir/IR/BuiltinAttributes.h"
-#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -433,7 +432,6 @@ public:
   // (e.g. by reshaping) then the order doesn't really affect anything.
   auto getInDimNames() const { return llvm::make_first_range(bases); }
   auto getOutDimNames() const { return llvm::make_first_range(outDims); }
-  auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
 
   // Gets the position that this outDim occupies in getOutDimNames().  Asserts
   // if the dim is not present.
@@ -695,7 +693,6 @@ public:
     return !(lhs == rhs);
   }
   bool equalIgnoringOutDimSizes(const LinearLayout &other) const;
-  friend size_t hash_value(const LinearLayout &layout);
 
 private:
   // Factory function that gracefully fails rather than asserts if the layout is
