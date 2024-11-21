@@ -357,7 +357,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
 // t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   v
 // In this case, the LinearLayout bases are:
 // Register:  {{2,0}, {4,0}}
-// Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {2,0}}
+// Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {1,0}}
 // clang-format on
 std::vector<std::vector<int32_t>> DPASRegBasesA(int opsPerChannel,
                                                 int repeatCount,
