@@ -19,13 +19,13 @@ def find_visual_studio(version_ranges):
     for version_range in version_ranges:
         command = [
             str(vswhere), "-version", version_range, "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-property", "installationPath", "-prerelease"
+            "-products", "*", "-property", "installationPath", "-prerelease"
         ]
 
         try:
             output = subprocess.check_output(command, text=True).strip()
             if output:
-                return output
+                return output.split("\n")[0]
         except subprocess.CalledProcessError:
             continue
 
@@ -37,7 +37,7 @@ def set_env_vars(vs_path, arch="x64"):
     if not vcvarsall_path.exists():
         raise FileNotFoundError(f"vcvarsall.bat not found in expected path: {vcvarsall_path}")
 
-    command = f'call "{vcvarsall_path}" {arch} && set'
+    command = ["call", vcvarsall_path, arch, "&&", "set"]
     output = subprocess.check_output(command, shell=True, text=True)
 
     for line in output.splitlines():
