@@ -130,7 +130,7 @@ fi
 
 TRITON_PROJ="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && cd .. && pwd )"
 SCRIPTS_DIR="$TRITON_PROJ/scripts"
-source "$SCRIPTS_DIR/pytest-utils.sh"
+# source "$SCRIPTS_DIR/pytest-utils.sh"
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
@@ -179,10 +179,9 @@ run_core_tests() {
   echo "******      Running Triton Core tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
-  ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -vvv -s -n ${PYTEST_MAX_PROCESSES:-8} --device xpu "test_scan_layouts[True-1-src_layout10-64-32]"
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu "language/test_core.py::test_scan_layouts[True-1-src_layout10-64-32]"
 }
 
 run_regression_tests() {
