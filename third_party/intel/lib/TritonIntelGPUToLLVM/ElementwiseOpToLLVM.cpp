@@ -1431,16 +1431,17 @@ struct PreciseSqrtOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto input = operands[0][0];
-    auto origTy = input.getType();
+    Value input = operands[0][0];
+    Type origTy = input.getType();
     if (!origTy.isF64())
       input = fpext(f64_ty, input);
     Type funcType = LLVM::LLVMFunctionType::get(f64_ty, {f64_ty});
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, "__imf_sqrt_rn", funcType);
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, {input});
+    LLVM::CallOp callOp =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, {input});
     callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    auto result = callOp.getResult();
+    Value result = callOp.getResult();
     if (!origTy.isF64())
       result = rewriter.create<LLVM::FPTruncOp>(loc, origTy, result);
     return {result};
