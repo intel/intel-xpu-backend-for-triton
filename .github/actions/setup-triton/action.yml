@@ -8,7 +8,7 @@ inputs:
     default: false
   command:
     description: Command to execute
-    default: DEBUG=1 pip install --no-build-isolation '.[build,tests,tutorials]' -v
+    default: DEBUG=1 pip install '.[build,tests,tutorials]' -v
 runs:
   using: "composite"
   steps:
@@ -72,10 +72,3 @@ runs:
         cd python
         pip install wheel pybind11
         ${{ inputs.command }}
-
-    - name: Save Triton cache
-      if: steps.triton-cache.outputs.status == 'miss'
-      uses: ./.github/actions/save
-      with:
-        path: ${{ steps.triton-cache.outputs.path }}
-        dest: ${{ steps.triton-cache.outputs.dest }}
