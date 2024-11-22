@@ -214,6 +214,7 @@ def forward(q, k, v, causal, sm_scale):
             num_warps=num_warps,  #
             num_stages=num_stages,  #
             grf_mode='large',  #
+            advanced_path=True,  #
         )
     return o
 

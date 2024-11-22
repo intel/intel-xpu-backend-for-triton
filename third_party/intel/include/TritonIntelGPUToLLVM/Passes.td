@@ -27,6 +27,11 @@ def ConvertTritonIntelGPUToLLVM
                            "mlir::triton::TritonDialect",
                            "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonGEN::TritonGENDialect"];
+  let options = [
+    Option<"advancedPath", "advanced_path",
+           "bool", /*default*/"false",
+           "enable advanced path">,
+  ];
 }
 
 #endif // TRITONINTELGPU_CONVERSION_PASSES

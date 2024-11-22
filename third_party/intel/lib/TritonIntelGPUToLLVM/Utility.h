@@ -571,12 +571,6 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout))
-    return emitOffsetForDpasLayout(dpasLayout, type);
-  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
-    return emitOffsetForDotOpLayout(dotLayout, type);
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout))
-    return ::intel::emitOffsetForSliceLayout(sliceLayout, type);
   return mlir::emitOffsetForLayout(layout, type);
 }
 
