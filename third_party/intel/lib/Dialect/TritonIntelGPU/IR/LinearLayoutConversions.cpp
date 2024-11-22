@@ -341,38 +341,44 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
 
 } // anonymous namespace
 
+// clang-format off
 // The layout example repeat_count=8, systolic_depth=8,
 // execution_size=16 and operands_per_chan=2 for warp size 32.
 // For A operand:
-//                   systolic depth = 8
-//<----------------------------------------------------->
-// opsPerChan=2
-//<--------->
-// t0  ...  t0   t1  ... t1  ~  t6  ... t6  t7  ... t7   ^
-// t8  ...  t8   t9  ... t9  ~ t14 ... t14 t15 ... t15   |
-// t16 ...  t16  t17 ... t17 ~ t22 ... t22 t23 ... t23   |
-// t24 ...  t24  t25 ... t25 ~ t30 ... t30 t31 ... t31   | repeat count <= 8
-// t0  ...  t0   t1  ... t1  ~ t6  ... t6  t7  ... t7    |
-// t8  ...  t8   t9  ... t9  ~ t14 ... t14 t15 ... t15   |
-// t16 ...  t16  t17 ... t17 ~ t22 ... t22 t23 ... t23   |
-// t24 ...  t24  t25 ... t25 ~ t30 ... t30 t31 ... t31   v
+//                       K = 16 (K = systolic depth * opsPerChan)
+// <---------------------------------------------------------------------------->
+// t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   ^
+// t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+// t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+// t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+// t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   | M = 8 (repeat count)
+// t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+// t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+// t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   v
 // In this case, the LinearLayout bases are:
-// Register:  {{0,1}, {4,0}}
-// Lane:      {{0,2}, {0,4}, {0,8}, {1,0}, {2,0}}
+// Register:  {{2,0}, {4,0}}
+// Lane:      {{0,1}, {0,2}, {0,4}, {0,8}, {1,0}}
+// clang-format on
 std::vector<std::vector<int32_t>> DPASRegBasesA(int opsPerChannel,
                                                 int repeatCount,
                                                 int threadsPerWarp,
                                                 int systolicDepth) {
-  int rowPerWarp = threadsPerWarp / systolicDepth;
-  int warpRepeats = repeatCount / rowPerWarp;
   std::vector<std::vector<int32_t>> regBases;
 
-  for (int opc = 1; opc < opsPerChannel; opc *= 2) {
+  // pack the value to i16 for scalar bit width <=16.
+  assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
+         "invalid opsPerChannel number.");
+  int packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
+  int packedColNum = (systolicDepth * opsPerChannel) / packedOpsPerLane;
+  int rowsPerWarp = mlir::ceil<int>(threadsPerWarp, packedColNum);
+  int warpRepeats = repeatCount / rowsPerWarp;
+
+  for (int opc = 1; opc < packedOpsPerLane; opc *= 2) {
     regBases.push_back({0, opc});
   }
 
   for (int warp = 1; warp < warpRepeats; warp *= 2) {
-    regBases.push_back({warp * rowPerWarp, 0});
+    regBases.push_back({warp * rowsPerWarp, 0});
   }
 
   return regBases;
@@ -382,11 +388,17 @@ std::vector<std::vector<int32_t>>
 DPASLaneBasesA(int opsPerChannel, int threadsPerWarp, int systolicDepth) {
   std::vector<std::vector<int32_t>> laneBases;
 
-  for (int tid = 1; tid < systolicDepth; tid *= 2) {
-    laneBases.push_back({0, opsPerChannel * tid});
+  // pack the value to i16 for scalar bit width <=16.
+  assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
+         "invalid opsPerChannel number.");
+  int packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
+  int packedColNum = (systolicDepth * opsPerChannel) / packedOpsPerLane;
+
+  for (int tid = 1; tid < packedColNum; tid *= 2) {
+    laneBases.push_back({0, packedOpsPerLane * tid});
   }
-  for (int tid = systolicDepth; tid < threadsPerWarp; tid *= 2) {
-    laneBases.push_back({tid / systolicDepth, 0});
+  for (int tid = packedColNum; tid < threadsPerWarp; tid *= 2) {
+    laneBases.push_back({tid / packedColNum, 0});
   }
 
   return laneBases;
@@ -602,8 +614,7 @@ std::optional<LinearLayout>
 dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
                              ArrayRef<int64_t> shape) {
   auto dpasLayout = cast<intel::DpasEncodingAttr>(dotDpasLayout.getParent());
-  if (dotDpasLayout.getOpIdx() == 0)
-    return std::nullopt;
+
   return DPAStoLinearLayout(shape, dpasLayout, dotDpasLayout.getOpIdx());
 }
 
