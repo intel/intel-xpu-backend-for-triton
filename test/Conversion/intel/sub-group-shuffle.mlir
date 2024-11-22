@@ -360,3 +360,38 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 2 :
     tt.return %0 : tensor<128xi32, #sliced1>
   }
 }
+
+// -----
+
+#blocked = #triton_gpu.blocked<{sizePerThread = [2, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// Case of more than one contiguous element per work-item.
+
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_contiguous(
+  // CHECK-SAME:                                             %[[VAL_0:.*]]: !llvm.struct<(f16, f16)>)
+  tt.func @test_contiguous(%arg0: tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked1}>> {
+    // CHECK:           %[[VAL_1:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f16, f16)>
+    // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][1] : !llvm.struct<(f16, f16)>
+    // COM: Check the shuffles are "coalesced"
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    // CHECK:           %[[VAL_5:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_1]]
+    // CHECK:           %[[VAL_8:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]]
+    %0 = triton_gpu.convert_layout %arg0 : tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+    tt.return %0 : tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  }
+}
