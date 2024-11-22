@@ -1,5 +1,12 @@
 // RUN: triton-translate -triton-to-llvmir -split-input-file %s | FileCheck %s
 
+// CHECK: define spir_kernel void @test_max_work_group_size() !max_work_group_size ![[MAX_WORK_GROUP_SIZE:.*]] {
+llvm.func spir_kernelcc @test_max_work_group_size() attributes {triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]} {
+  llvm.return
+}
+
+// -----
+
 llvm.func @foo(%arg0: !llvm.ptr, %arg1: !llvm.ptr)
 
 // CHECK-LABEL: define void @triton_gen.cache_controls(
