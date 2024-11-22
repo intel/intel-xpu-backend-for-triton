@@ -37,6 +37,11 @@ jobs:
         with:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
+          # transformers package is required for the inductor (e2e) test
+          wheels_pattern: '{torch,transformers}-*.whl'
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
 
       - name: Install Triton runtime dependencies
         run: |
