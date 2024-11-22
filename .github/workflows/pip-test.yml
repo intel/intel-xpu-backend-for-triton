@@ -1,0 +1,56 @@
+name: Test with pip
+
+on:
+  workflow_dispatch:
+
+  # FIXME: update before merging
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: '3.9'
+  TRITON_TEST_CMD: "scripts/test-triton.sh --skip-pytorch-install"
+
+jobs:
+  tests:
+    name: Tests
+    runs-on:
+      - rolling
+      - runner-0.0.20
+    steps:
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          python_version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Triton runtime dependencies
+        run: |
+          pip install intel-sycl-rt intel-pti
+
+      - name: Run core tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run interpreter tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --interpreter --skip-pip-install
+
+      - name: Run Tutorials
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial --skip-pip-install
+
+      - name: Run inductor test
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install
