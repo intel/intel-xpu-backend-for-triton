@@ -310,44 +310,49 @@ def TritonIntelGPUOptimizeReductionLocality
     `triton_gpu.convert_layout` operations, e.g.:
     ```mlir
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2]}>
-tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
+tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
   %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
     %1 = arith.addf %arg1, %arg2 : f32
     tt.reduce.return %1 : f32
-  }) : (tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
-  tt.return %0 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
+  }) : (tensor<16x32xf32, #mma>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
+  tt.return %0 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
 }
     ```
     Is converted to:
     ```mlir
-#blocked = #triton_gpu.blocked<{sizePerThread = [16, 1, 1, 1, 1, 1, 1], threadsPerWarp = [1, 1, 1, 16, 1, 1, 1], warpsPerCTA = [1, 1, 1, 1, 1, 1, 1], order = [3, 4, 5, 6, 0, 1, 2]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 1, 1, 16, 1], threadsPerWarp = [16, 1, 1, 1, 1], warpsPerCTA = [1, 1, 1, 1, 1], order = [3, 4, 0, 1, 2]}>
-#blocked2 = #triton_gpu.blocked<{sizePerThread = [1, 1, 1, 16], threadsPerWarp = [16, 1, 1, 1], warpsPerCTA = [1, 1, 1, 1], order = [3, 0, 1, 2]}>
-#blocked3 = #triton_gpu.blocked<{sizePerThread = [16, 1, 1, 1], threadsPerWarp = [1, 1, 1, 16], warpsPerCTA = [1, 1, 1, 1], order = [3, 0, 1, 2]}>
+#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8, 2, 2, 1, 1, 1], threadsPerWarp = [16, 1, 1, 1, 1, 1, 1], warpsPerCTA = [1, 1, 1, 1, 1, 1, 1], order = [0, 1, 2, 3, 4, 5, 6]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [16, 1, 1, 1, 1], threadsPerWarp = [1, 8, 2, 1, 1], warpsPerCTA = [1, 1, 1, 1, 1], order = [0, 1, 2, 3, 4]}>
+#blocked2 = #triton_gpu.blocked<{sizePerThread = [16, 1, 1, 1], threadsPerWarp = [1, 16, 1, 1], warpsPerCTA = [1, 1, 1, 1], order = [0, 1, 2, 3]}>
+#blocked3 = #triton_gpu.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
-  %0 = tt.reshape %arg0 allow_reorder efficient_layout : tensor<32x32xf32, #mma> -> tensor<16x1x2x16x2x1x1xf32, #blocked>
-  %1 = "tt.reduce"(%0) <{axis = 6 : i32}> ({
+tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>> {
+  %0 = tt.reshape %arg0 allow_reorder efficient_layout : tensor<16x32xf32, #mma> -> tensor<16x8x2x2x1x1x1xf32, #blocked>
+  %1 = "tt.reduce"(%0) <{axis = 2 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
-    %8 = arith.addf %arg1, %arg2 : f32
-    tt.reduce.return %8 : f32
-  }) : (tensor<16x1x2x16x2x1x1xf32, #blocked>) -> tensor<16x1x2x16x2x1xf32, #triton_gpu.slice<{dim = 6, parent = #blocked}>>
+    %9 = arith.addf %arg1, %arg2 : f32
+    tt.reduce.return %9 : f32
+  }) : (tensor<16x8x2x2x1x1x1xf32, #blocked>) -> tensor<16x8x2x1x1x1xf32, #triton_gpu.slice<{dim = 2, parent = #blocked}>>
   %2 = "tt.reduce"(%1) <{axis = 4 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
-    %8 = arith.addf %arg1, %arg2 : f32
-    tt.reduce.return %8 : f32
-  }) : (tensor<16x1x2x16x2x1xf32, #triton_gpu.slice<{dim = 6, parent = #blocked}>>) -> tensor<16x1x2x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #blocked}>}>>
-  %3 = triton_gpu.convert_layout %2 : tensor<16x1x2x16x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 6, parent = #blocked}>}>> -> tensor<16x1x2x16x1xf32, #blocked1>
-  %4 = tt.reshape %3 allow_reorder efficient_layout : tensor<16x1x2x16x1xf32, #blocked1> -> tensor<16x1x2x16xf32, #blocked2>
-  %5 = "tt.reduce"(%4) <{axis = 3 : i32}> ({
+    %9 = arith.addf %arg1, %arg2 : f32
+    tt.reduce.return %9 : f32
+  }) : (tensor<16x8x2x1x1x1xf32, #triton_gpu.slice<{dim = 2, parent = #blocked}>>) -> tensor<16x8x2x1x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 2, parent = #blocked}>}>>
+  %3 = triton_gpu.convert_layout %2 : tensor<16x8x2x1x1xf32, #triton_gpu.slice<{dim = 4, parent = #triton_gpu.slice<{dim = 2, parent = #blocked}>}>> -> tensor<16x8x2x1x1xf32, #blocked1>
+  %4 = tt.reshape %3 allow_reorder efficient_layout : tensor<16x8x2x1x1xf32, #blocked1> -> tensor<16x16x1x1xf32, #blocked2>
+  %5 = "tt.reduce"(%4) <{axis = 0 : i32}> ({
   ^bb0(%arg1: f32, %arg2: f32):
-    %8 = arith.addf %arg1, %arg2 : f32
-    tt.reduce.return %8 : f32
-  }) : (tensor<16x1x2x16xf32, #blocked2>) -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked2}>>
-  %6 = triton_gpu.convert_layout %5 : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked2}>> -> tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked3}>>
-  %7 = tt.reshape %6 allow_reorder efficient_layout : tensor<16x1x2xf32, #triton_gpu.slice<{dim = 3, parent = #blocked3}>> -> tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
-  tt.return %7 : tensor<32xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
+    %9 = arith.addf %arg1, %arg2 : f32
+    tt.reduce.return %9 : f32
+  }) : (tensor<16x16x1x1xf32, #blocked2>) -> tensor<16x1x1xf32, #triton_gpu.slice<{dim = 0, parent = #blocked2}>>
+  %6 = "tt.reduce"(%5) <{axis = 1 : i32}> ({
+  ^bb0(%arg1: f32, %arg2: f32):
+    %9 = arith.addf %arg1, %arg2 : f32
+    tt.reduce.return %9 : f32
+  }) : (tensor<16x1x1xf32, #triton_gpu.slice<{dim = 0, parent = #blocked2}>>) -> tensor<16x1xf32, #triton_gpu.slice<{dim = 1, parent = #triton_gpu.slice<{dim = 0, parent = #blocked2}>}>>
+  %7 = tt.reshape %6 allow_reorder efficient_layout : tensor<16x1xf32, #triton_gpu.slice<{dim = 1, parent = #triton_gpu.slice<{dim = 0, parent = #blocked2}>}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 0, parent = #blocked3}>>
+  %8 = triton_gpu.convert_layout %7 : tensor<16xf32, #triton_gpu.slice<{dim = 0, parent = #blocked3}>> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
+  tt.return %8 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #mma}>>
 }
     ```
     The `tt.reshape` operation is a NOP so that the following `tt.reduce`
@@ -355,10 +360,14 @@ tt.func @test(%arg0: tensor<32x32xf32, #mma>) -> tensor<32xf32, #triton_gpu.slic
     `triton_gpu.convert_layout` performs the actual data movement to prevent
     within the sub-group reductions so that the following `tt.reduce` performs
     a reduction within the work-item again. Finally, we convert back to the
-    expected layout.
+    original type. Note the order of the operations to go back to the original
+    type is important: reshape to original shape and set an anchor for the
+    layout conversion removal pass, and convert to original layout.
 
     Note this pass only supports `triton_intel_gpu.dpas` input layouts at the
     moment, but it should be easily extended.
+
+    See pass implementation for more detailed implementation documentation.
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect",
