@@ -129,8 +129,8 @@ private:
            "Unexpected attribute");
     SmallVector<llvm::Metadata *, 3> metadata;
     llvm::Type *i64 = llvm::IntegerType::get(llvmContext, 64);
-    for (int64_t i :
-         extractFromIntegerArrayAttr<int64_t>(attribute.getValue())) {
+    for (int32_t i :
+         cast<DenseI32ArrayAttr>(attribute.getValue()).asArrayRef()) {
       llvm::Constant *constant = llvm::ConstantInt::get(i64, i);
       metadata.push_back(llvm::ConstantAsMetadata::get(constant));
     }

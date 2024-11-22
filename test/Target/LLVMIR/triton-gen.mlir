@@ -1,9 +1,11 @@
 // RUN: triton-translate -triton-to-llvmir -split-input-file %s | FileCheck %s
 
 // CHECK: define spir_kernel void @test_max_work_group_size() !max_work_group_size ![[MAX_WORK_GROUP_SIZE:.*]] {
-llvm.func spir_kernelcc @test_max_work_group_size() attributes {triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]} {
+llvm.func spir_kernelcc @test_max_work_group_size() attributes {triton_gen.max_work_group_size = array<i32: 128, 1, 1>} {
   llvm.return
 }
+
+// CHECK-DAG: ![[MAX_WORK_GROUP_SIZE]] = !{i64 128, i64 1, i64 1}
 
 // -----
 
