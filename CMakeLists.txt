@@ -10,7 +10,7 @@ include(ExternalProject)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-project(triton CXX)
+project(triton CXX C)
 include(CTest)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
