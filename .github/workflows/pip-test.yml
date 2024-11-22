@@ -3,13 +3,16 @@ name: Test with pip
 on:
   workflow_dispatch:
 
-  # FIXME: update before merging
   pull_request:
     branches:
       - main
+    paths:
+      - third_party/intel/backend/driver.py
   push:
     branches:
       - main
+    paths:
+      - third_party/intel/backend/driver.py
 
 permissions: read-all
 
