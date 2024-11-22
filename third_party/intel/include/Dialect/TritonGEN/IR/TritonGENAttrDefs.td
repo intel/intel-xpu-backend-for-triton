@@ -43,19 +43,6 @@ def TritonGEN_ScanKindAttr : I32EnumAttr<"ScanKind", "TritonGEN subgroup scan ki
   let cppNamespace = "::mlir::triton::TritonGEN";
 }
 
-/// Enum attribute of the different floating-point rounding modes.
-def TritonGEN_RoundingModeAttr : I32EnumAttr<"RoundingMode",
-  "TritonGEN floating-point rounding mode",
-  [
-    I32EnumAttrCase<"UNUSED", 0, "unused">,
-    I32EnumAttrCase<"RTE",    1, "rte">, ///< Round to nearest, ties to even
-    I32EnumAttrCase<"RTN",    2, "rtn">, ///< Round toward negative
-    I32EnumAttrCase<"RTP",    3, "rtp">, ///< Round toward positive
-    I32EnumAttrCase<"RTZ",    4, "rtz">, ///< Round toward zero
-  ]> {
-  let cppNamespace = "::mlir::triton::TritonGEN";
-}
-
 /// Enum attribute of the different precision types.
 def TritonGEN_PrecisionTypeAttr : I32EnumAttr<"PrecisionType",
   "TritonGEN precision type",
