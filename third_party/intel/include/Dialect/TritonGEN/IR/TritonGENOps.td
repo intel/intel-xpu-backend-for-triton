@@ -314,46 +314,96 @@ def TritonGEN_Matrix2DBlockPrefetchOp : TritonGEN_Op<"2Dblockprefetch">,
   let hasVerifier = 1;
 }
 
-def TritonGEN_SIMDBlockReadOp: TritonGEN_Op<"simdblockread">,
-  Results<(outs FixedVectorOf<[AnyTypeOf<[AnyI8, AnyI16, AnyI32, AnyI64]>]>:$res)>,
-  Arguments<(ins
-    Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr
-  )> {
+def TritonGEN_SubGroupBlockMemoryAccessElementType
+    : AnyTypeOf<[I8, I16, I32, I64],
+                "Valid sub-group block memory access element type">;
 
-  let summary = "simd block read";
+def TritonGEN_SubGroupBlockMemoryAccessType
+    : AnyTypeOf<[TritonGEN_SubGroupBlockMemoryAccessElementType,
+                 FixedVectorOfLengthAndType<[2, 4, 8],
+                     [TritonGEN_SubGroupBlockMemoryAccessElementType]>,
+                 // Vectors of length 16 only allowed for i8 for now.
+                 FixedVectorOfLengthAndType<[16], [I8]>],
+          "Valid sub-group block memory access type">;
+
+def TritonGEN_SubGroupBlockMemoryAccessPointerType
+    : Type<And<[LLVM_AnyPointer.predicate,
+                Or<[CPred<"::llvm::cast<::mlir::LLVM::LLVMPointerType>($_self)" #
+                          ".getAddressSpace() == " #
+                          "static_cast<unsigned>(kCrossWorkgroup)">,
+                    CPred<"::llvm::cast<::mlir::LLVM::LLVMPointerType>($_self)" #
+                          ".getAddressSpace() == " #
+                          "static_cast<unsigned>(kWorkgroup)">]>]>,
+          "LLVM pointer in local or global OpenCL address space",
+          "::mlir::LLVM::LLVMPointerType">;
+
+def TritonGEN_SubGroupBlockReadOp: TritonGEN_Op<"sub_group_block_read"> {
+  let summary = "Sub-group block read.";
 
   let description = [{
-    The `triton_gen.simdblockread` operation performs simd block read from
-      a start address without laneId offset. The parameters are:
-      $ptr - the base address to read data
+    The `triton_gen.sub_group_block_read` reads a scalar or vector for each
+    work-item in the sub-group from pointer `ptr` as a block operation.
+    The data is read strided, so the first value is read from:
+    ```
+    ptr[sub_group_local_id]
+    ```
+    and the second one is:
+    ```
+    ptr[sub_group_local_id + sub_group_size]
+    ```
+    etc.
+
+    `ptr` must be aligned to the size of the element type of `res`.
+
+     Example:
+     ```mlir
+     %0 = triton_gen.sub_group_block_read %ptr : !llvm.ptr<1> -> vector<4xi32>
+     ```
   }];
+
+  let arguments = (ins
+      Arg<TritonGEN_SubGroupBlockMemoryAccessPointerType, "", [MemRead]>:$ptr);
+
+  let results = (outs TritonGEN_SubGroupBlockMemoryAccessType:$res);
 
   let assemblyFormat = [{
-    operands ` ` attr-dict `:` functional-type(operands, results)
+    $ptr attr-dict `:` qualified(type($ptr)) `->` type($res)
   }];
-
-  let hasVerifier = 1;
 }
 
-def TritonGEN_SIMDBlockWriteOp : TritonGEN_Op<"simdblockwrite">,
-  Arguments<(ins
-    Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
-    FixedVectorOf<[AnyTypeOf<[AnyI8, AnyI16, AnyI32, AnyI64]>]>:$val
-  )> {
-
+def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
   let summary = "simd block write";
 
   let description = [{
-    The `triton_gen.simdblockwrite` operation performs simd block write to
-      a start address without laneId offset. The parameters are:
-      $ptr - the base address to be written
-      $val - the value vector to write
+    The `triton_gen.sub_group_block_write` writes a scalar or vector for each
+    work-item in the sub-group from pointer `ptr` as a block operation.
+    The data is read strided, so the first value is written to:
+    ```
+    ptr[sub_group_local_id]
+    ```
+    and the second one is:
+    ```
+    ptr[sub_group_local_id + sub_group_size]
+    ```
+    etc.
+
+    `ptr` must be aligned to the size of the element type of `res`.
+
+     Example:
+     ```mlir
+     %0 = triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<1>, vector<4xi32>
+     ```
   }];
+
+  let arguments = (ins
+      Arg<TritonGEN_SubGroupBlockMemoryAccessPointerType, "", [MemRead]>:$ptr,
+      TritonGEN_SubGroupBlockMemoryAccessType:$val);
+
+  let results = (outs);
 
   let assemblyFormat = [{
-    operands ` ` attr-dict `:` `(` type(operands) `)`
+    $ptr `,` $val attr-dict `:` qualified(type($ptr)) `,` type($val)
   }];
-
-  let hasVerifier = 1;
 }
+
 #endif // TRITONGEN_OPS

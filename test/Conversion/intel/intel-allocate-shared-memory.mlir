@@ -24,7 +24,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // Check scracth memory configuration for different sub-group transpose-like layout conversions.
 
 // CHECK-LABEL: module attributes
-// CHECK-SAME: triton_gpu.shared = 512 : i32
+// CHECK-SAME: triton_gpu.shared = 544 : i32
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func @test_f16(%arg0: tensor<16x16xf16, #blocked>) -> tensor<16x16xf16, #blocked1> {
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
@@ -40,7 +40,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // Check scracth memory configuration for different sub-group transpose-like layout conversions.
 
 // CHECK-LABEL: module attributes
-// CHECK-SAME: triton_gpu.shared = 1024 : i32
+// CHECK-SAME: triton_gpu.shared = 1088 : i32
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func @test_f32(%arg0: tensor<16x16xf32, #blocked>) -> tensor<16x16xf32, #blocked1> {
     %0 = triton_gpu.convert_layout %arg0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #blocked1>
@@ -56,7 +56,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 // Check scracth memory configuration for different sub-group transpose-like layout conversions.
 
 // CHECK-LABEL: module attributes
-// CHECK-SAME: triton_gpu.shared = 32768 : i32
+// CHECK-SAME: triton_gpu.shared = 34816 : i32
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   tt.func @test_f32(%arg0: tensor<128x64xf32, #blocked>) -> tensor<128x64xf32, #blocked1> {
     %0 = triton_gpu.convert_layout %arg0 : tensor<128x64xf32, #blocked> -> tensor<128x64xf32, #blocked1>

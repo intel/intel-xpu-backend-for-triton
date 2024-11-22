@@ -96,7 +96,7 @@ struct ConvertTritonGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Allocate shared memory and set barrier
-    ModuleAllocation allocation = ModuleAllocation::get(mod);
+    ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation, NVIDIA::canSkipBarSync);
     membarPass.run();
 

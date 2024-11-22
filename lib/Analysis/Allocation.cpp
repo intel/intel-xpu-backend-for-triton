@@ -41,10 +41,8 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 
   auto srcShapePerCTA = gpu::getShapePerCTA(srcTy);
   auto dstShapePerCTA = gpu::getShapePerCTA(dstTy);
-  auto srcShapePerCTATile =
-      gpu::getShapePerCTATile(srcLayout, srcTy.getShape());
-  auto dstShapePerCTATile =
-      gpu::getShapePerCTATile(dstLayout, dstTy.getShape());
+  auto srcShapePerCTATile = gpu::getShapePerCTATile(srcLayout);
+  auto dstShapePerCTATile = gpu::getShapePerCTATile(dstLayout);
 
   assert(srcTy.getRank() == dstTy.getRank() &&
          "src and dst must have the same rank");
@@ -84,12 +82,8 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
 
-  // FIXME This is NOT entirely correct
-  // This should be getElemOrder, but we don't have such a method
-  // TODO Implement getElemOrder and make sure it's consistent with
-  // getContigPerThread
-  auto inOrd = gpu::getThreadOrder(srcLayout);
-  auto outOrd = gpu::getThreadOrder(dstLayout);
+  const auto &inOrd = gpu::getOrder(srcLayout);
+  const auto &outOrd = gpu::getOrder(dstLayout);
   scratchConfig.order = outOrd;
 
   unsigned srcContigPerThread =
@@ -104,17 +98,12 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                                : srcContigPerThread;
   scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
 
-  if (auto mma = mlir::dyn_cast<gpu::NvidiaMmaEncodingAttr>(srcLayout)) {
-    if (mma.getVersionMajor() == 1) {
-      // For conversions to MmaV1 (Nvidia V100), this inVec is hardcoded in the
-      // codegen.
-      scratchConfig.inVec = srcContigPerThread;
-    } else if (mlir::isa<gpu::BlockedEncodingAttr>(dstLayout)) {
-      // when storing from mma layout and loading in blocked layout vectorizing
-      // the load back gives better performance even if there is a
-      // transposition.
-      scratchConfig.outVec = dstContigPerThread;
-    }
+  if (mlir::isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
+      mlir::isa<gpu::BlockedEncodingAttr>(dstLayout)) {
+    // when storing from mma layout and loading in blocked layout vectorizing
+    // the load back gives better performance even if there is a
+    // transposition.
+    scratchConfig.outVec = dstContigPerThread;
   }
 
   // No padding is required if the tensor is 1-D, or if all dimensions except
@@ -127,13 +116,70 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   return scratchConfig;
 }
 
+unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
+  if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
+    ReduceOpHelper helper(reduceOp);
+    return helper.getScratchSizeInBytes();
+  }
+  if (auto scanOp = dyn_cast<ScanOp>(op)) {
+    ScanLoweringHelper helper(scanOp);
+    return helper.getScratchSizeInBytes();
+  }
+  if (auto histogram = dyn_cast<HistogramOp>(op)) {
+    auto dstTy = histogram.getType();
+    int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    return std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
+           std::max<int>(8, dstTy.getElementTypeBitWidth()) / 8;
+  }
+  if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    auto srcTy = cvtLayout.getSrc().getType();
+    auto dstTy = cvtLayout.getType();
+    auto srcEncoding = srcTy.getEncoding();
+    auto dstEncoding = dstTy.getEncoding();
+    if (mlir::isa<gpu::SharedEncodingAttr>(srcEncoding) ||
+        mlir::isa<gpu::SharedEncodingAttr>(dstEncoding)) {
+      // Conversions from/to shared memory do not need scratch memory.
+      return 0;
+    }
+    // ConvertLayoutOp with both input/output non-shared_layout
+    // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
+    //       also possible to realize it with other approaches in restricted
+    //       conditions, such as warp-shuffle
+    auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
+    auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
+    return isa<PointerType>(srcTy.getElementType())
+               ? elems * kPtrBitWidth / 8
+               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
+  }
+  if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
+    auto value = op->getOperand(0);
+    // only scalar requires scratch memory
+    // make it explicit for readability
+    if (dyn_cast<RankedTensorType>(value.getType())) {
+      return 0;
+    }
+    auto smemShape = getRepShapeForAtomic(op->getResult(0));
+    auto elems = getNumScratchElements(smemShape);
+    auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
+    assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
+    return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
+  }
+  if (auto createTensormap = dyn_cast<ExperimentalTensormapCreateOp>(op)) {
+    constexpr int32_t kTMASize = 128;
+    return kTMASize;
+  }
+  return 0;
+}
+
 class AllocationAnalysis {
 public:
   AllocationAnalysis(Operation *operation,
                      Allocation::FuncAllocMapT *funcAllocMap,
-                     Allocation *allocation)
+                     Allocation *allocation,
+                     AllocationAnalysisScratchSizeFn scratchSizeGetter)
       : operation(operation), funcAllocMap(funcAllocMap),
-        allocation(allocation) {
+        allocation(allocation), scratchSizeGetter(scratchSizeGetter) {
     run();
   }
 
@@ -186,77 +232,19 @@ private:
 
   /// Initializes temporary shared memory for a given operation.
   void getScratchValueSize(Operation *op) {
-    const size_t scratchAlignment = 128;
-    if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-      ReduceOpHelper helper(reduceOp);
-      unsigned bytes = helper.getScratchSizeInBytes();
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (auto scanOp = dyn_cast<ScanOp>(op)) {
-      ScanLoweringHelper helper(scanOp);
-      unsigned bytes = helper.getScratchSizeInBytes();
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (auto histogram = dyn_cast<HistogramOp>(op)) {
-      auto dstTy = histogram.getType();
-      int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
-          op->getParentOfType<ModuleOp>());
-      auto bytes = std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
-                   std::max<int>(8, dstTy.getElementTypeBitWidth()) / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
-      auto srcTy = cvtLayout.getSrc().getType();
-      auto dstTy = cvtLayout.getType();
-      auto srcEncoding = srcTy.getEncoding();
-      auto dstEncoding = dstTy.getEncoding();
-      if (mlir::isa<gpu::SharedEncodingAttr>(srcEncoding) ||
-          mlir::isa<gpu::SharedEncodingAttr>(dstEncoding)) {
-        // Conversions from/to shared memory do not need scratch memory.
-        return;
-      }
-      // ConvertLayoutOp with both input/output non-shared_layout
-      // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
-      //       also possible to realize it with other approaches in restricted
-      //       conditions, such as warp-shuffle
-      auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-      auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
-      auto bytes =
-          isa<PointerType>(srcTy.getElementType())
-              ? elems * kPtrBitWidth / 8
-              : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                          scratchAlignment);
-    } else if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
-      auto value = op->getOperand(0);
-      // only scalar requires scratch memory
-      // make it explicit for readability
-      if (dyn_cast<RankedTensorType>(value.getType())) {
-        // nothing to do
-      } else {
-        auto smemShape = getRepShapeForAtomic(op->getResult(0));
-        auto elems = getNumScratchElements(smemShape);
-        auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
-        assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
-        auto bytes =
-            elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
-        maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
-                                                            scratchAlignment);
-      }
-    } else if (auto callOp = dyn_cast<CallOpInterface>(op)) {
+    constexpr size_t scratchAlignment = 128;
+    if (auto callOp = dyn_cast<CallOpInterface>(op)) {
       auto callable = callOp.resolveCallable();
       auto funcOp = dyn_cast<FunctionOpInterface>(callable);
       auto *funcAlloc = &(*funcAllocMap)[funcOp];
       auto bytes = funcAlloc->getSharedMemorySize();
       maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes,
                                                           scratchAlignment);
-    } else if (auto createTensormap =
-                   dyn_cast<ExperimentalTensormapCreateOp>(op)) {
-      constexpr int32_t kTMASize = 128;
-      constexpr int32_t kTMAAlign = 128;
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, kTMASize,
-                                                          kTMAAlign);
+      return;
     }
+    unsigned bytes = scratchSizeGetter(op);
+    maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
+                                                        scratchAlignment);
   }
 
   void getValueAlias(Value value, SharedMemoryAliasAnalysis &analysis) {
@@ -313,7 +301,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto aliasBufferIter : allocation->getAliasBuffer()) {
+    for (const auto &aliasBufferIter : allocation->getAliasBuffer()) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
       auto range = getLiveness(value);
@@ -453,7 +441,7 @@ private:
           std::find_if(xBuffers.begin(), xBuffers.end(), [&](auto *buffer) {
             auto xRange = bufferRange[buffer];
             bool res = xRange.intersects(range);
-            for (auto val : tripleMap)
+            for (const auto &val : tripleMap)
               res = res &&
                     !val.second.intersects(xRange); // only one buffer intersect
             return res;
@@ -556,13 +544,16 @@ private:
   Allocation::FuncAllocMapT *funcAllocMap;
   Allocation *allocation;
   BufferRangeMapT bufferRange;
+  AllocationAnalysisScratchSizeFn scratchSizeGetter;
 };
 
 } // namespace triton
 
-template <>
-void Allocation::run<triton::AllocationAnalysis>(FuncAllocMapT &funcAllocMap) {
-  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this);
+void Allocation::run(
+    FuncAllocMapT &funcAllocMap,
+    triton::AllocationAnalysisScratchSizeFn scratchSizeGetter) {
+  triton::AllocationAnalysis(getOperation(), &funcAllocMap, this,
+                             scratchSizeGetter);
 }
 
 std::map<Operation *, SmallVector<Allocation::BufferId>>

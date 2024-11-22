@@ -125,16 +125,16 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base
   llvm.return
 }
 
-llvm.func @triton_gen.simdblockread(%ptr : !llvm.ptr) {
-  // CHECK:      llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr) {
-  // CHECK-NEXT:   triton_gen.simdblockread %arg0 : (!llvm.ptr) -> vector<2xi16>
-  triton_gen.simdblockread %ptr : (!llvm.ptr) -> vector<2xi16>
+llvm.func @triton_gen.sub_group_block_read(%ptr : !llvm.ptr<1>) {
+  // CHECK:      llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<1>) {
+  // CHECK-NEXT:   triton_gen.sub_group_block_read %arg0 : !llvm.ptr<1> -> vector<2xi16>
+  triton_gen.sub_group_block_read %ptr : !llvm.ptr<1> -> vector<2xi16>
   llvm.return
 }
 
-llvm.func @triton_gen.simdblockwrite(%ptr : !llvm.ptr, %val : vector<2xi16>) {
-  // CHECK:      llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr, %arg1: vector<2xi16>) {
-  // CHECK-NEXT:    triton_gen.simdblockwrite %arg0, %arg1 : (!llvm.ptr, vector<2xi16>)
-  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr, vector<2xi16>)
+llvm.func @triton_gen.sub_group_block_write(%ptr : !llvm.ptr<3>, %val : i32) {
+  // CHECK:      llvm.func @triton_gen.sub_group_block_write(%arg0: !llvm.ptr<3>, %arg1: i32) {
+  // CHECK-NEXT:    triton_gen.sub_group_block_write %arg0, %arg1 : !llvm.ptr<3>, i32
+  triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<3>, i32
   llvm.return
 }

@@ -9,6 +9,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getOrderForDotOperand;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
@@ -62,7 +63,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type) {
   auto elems = unpackLLElements(loc, value, rewriter);
-  auto eltTy = type.getElementType();
+  auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
   ValueTableV2 vals;
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
@@ -89,6 +90,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
     // K dimension.
     llvm::SmallVector<unsigned> si;
+    auto kIters = kWidth / (32 / bitwidth);
 
     if (dot.getOpIdx() == 0) {
       // Original register layout:
@@ -105,11 +107,63 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11], [18, 19], [26, 27]]
       //  3rd MMA: [[4, 5], [12, 13], [20, 21], [28, 29]]
       //  4th MMA: [[6, 7], [14, 15], [22, 23], [30, 31]]
-      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
-        for (size_t tile = 0; tile < 4; ++tile)
-          for (size_t e = 0; e < numElemsPerVec; ++e) {
-            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
-          }
+      if (kIters <= repK) {
+        for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+          for (size_t tile = 0; tile < 4; ++tile)
+            for (size_t e = 0; e < numElemsPerVec; ++e) {
+              si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+            }
+      } else {
+        // Suppose kWidth=4 and type=fp32, so numElemsPerVec=1.
+        // Each tile of the dot operand layout has a size of 16x32.
+        // However, if the triton tensor size is 16x16, elements along the k
+        // dimension are duplicated. Within each tile, each register
+        // contains 2x8 elements arranged as follows:
+        //
+        //       tile0/0           tile0/1
+        //   |<--kWidth=4-->|   |<--kWidth-->|
+        //   |<-mmaWidth=2->|
+        //   [0,  1,  2,  3]    [0,  1,  2,  3]
+        //   [4,  5,  6,  7]    [4,  5,  6,  7]
+        //
+        // tile0/1 replicates the elements in tile0/0 along the k dimension.
+        // For a tensor size of 32x32, the next tile on the m dimension is as
+        // follows:
+        //
+        //       tile1/0              tile1/1
+        //   |<--kWidth-->|       |<--kWidth-->|
+        //   [8,  9, 10, 11],     [8,  9, 10, 11]
+        //   [12, 13, 14, 15],    [12, 13, 14, 15]
+        //
+        // Within a single tile, we can perform two MMAs, and the
+        // resulting register layout for each MMA is as follows:
+        //
+        //   1st MMA: [0, 4, 1, 5]
+        //   2nd MMA: [2, 6, 3, 7]
+        //   3rd MMA: [8, 12, 9, 13]
+        //   4th MMA: [10, 14, 11, 15]
+        //
+        // Additionally, we should reorder the elements by moving the duplicated
+        // elements to the end.  In the example above, we convert the order from
+        // tile0/0, tile0/1, tile1/0, tile1/1 to tile0/0, tile1/0, tile0/1,
+        // tile1/1, so that only the first two tiles will be used in the
+        // computation.
+        size_t elemsPerTile = 2 * 2 * kWidth;
+        size_t elemsPerMma = 2 * 2 * numElemsPerVec;
+        size_t mmaWidth = kWidth / numElemsPerVec / 2;
+        size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
+        for (size_t rep = 0; rep < repMma; ++rep)
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+            for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
+              for (size_t kTile = 0; kTile < 2; ++kTile)
+                for (size_t mTile = 0; mTile < 2; ++mTile)
+                  for (size_t e = 0; e < numElemsPerVec; ++e) {
+                    si.push_back(rep * mmaWidth * elemsPerMma +
+                                 mmaKWidth * 2 * numElemsPerVec +
+                                 tile * elemsPerTile + mTile * kWidth +
+                                 kTile * numElemsPerVec + e);
+                  }
+      }
     } else {
       // Original register layout:
       //
@@ -121,11 +175,36 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
       //  2nd MMA: [[2, 3], [10, 11]]
       //  3rd MMA: [[4, 5], [12, 13]]
       //  4th MMA: [[6, 7], [14, 15]]
-      for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
-        for (size_t tile = 0; tile < 2; ++tile)
-          for (size_t e = 0; e < numElemsPerVec; ++e) {
-            si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
-          }
+      if (kIters <= repK) {
+        for (size_t kRep = 0; kRep < kWidth / numElemsPerVec; ++kRep)
+          for (size_t tile = 0; tile < 2; ++tile)
+            for (size_t e = 0; e < numElemsPerVec; ++e) {
+              si.push_back(kRep * numElemsPerVec + tile * kWidth + e);
+            }
+      } else {
+        // Suppose kWidth=4 and type=fp32.
+        // Original register layout:
+        //
+        //       tile0/0        tile0/1
+        //   [0, 1, 2, 3]^T, [0, 1, 2, 3]^T
+        //
+        // Similar to the opIdx=0 situation, we should reorder the elements by
+        // moving the duplicated elements to the end.
+        size_t elemsPerTile = 2 * kWidth;
+        size_t elemsPerMma = 2 * numElemsPerVec;
+        size_t mmaWidth = kWidth / numElemsPerVec / 2;
+        size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
+        for (size_t rep = 0; rep < repMma; ++rep)
+          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+            for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
+              for (size_t kTile = 0; kTile < 2; ++kTile)
+                for (size_t e = 0; e < numElemsPerVec; ++e) {
+                  si.push_back(rep * mmaWidth * elemsPerMma +
+                               mmaKWidth * 2 * numElemsPerVec +
+                               tile * elemsPerTile + kTile * numElemsPerVec +
+                               e);
+                }
+      }
     }
 
     auto step = si.size();
@@ -401,22 +480,34 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-                  .getRepForOperand(aShapePerCTA, bitwidth, dotOpA.getOpIdx());
+  int kWidth = dotOpA.getKWidth();
+  auto repA =
+      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+          .getRepForOperand(aShapePerCTA, bitwidth, kWidth, dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-                  .getRepForOperand(bShapePerCTA, bitwidth, dotOpB.getOpIdx());
+  auto repB =
+      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+          .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
   int repM = repA[1], repN = repB[2], repK = repA[2];
   int repBatch = repA[0];
 
+  // We can reuse the same iteration order in
+  // getValuesFromDotOperandLayoutStruct as both a and b are K-major
+  assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
+                                                       aShapePerCTA.size(),
+                                                       /*kMajor=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
 
+  assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
+                                                       bShapePerCTA.size(),
+                                                       /*kMajor=*/true));
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
+
   auto fc = unpackLLElements(loc, loadedC, rewriter);
   auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int numCPackedElem = 4 / numMmaRets;

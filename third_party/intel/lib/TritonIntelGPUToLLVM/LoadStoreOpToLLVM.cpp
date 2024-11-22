@@ -36,7 +36,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto order = triton::gpu::getOrder(layout);
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
     Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
@@ -1571,7 +1571,7 @@ struct AtomicRMWOpConversion
     auto lowPtrBits = and_(intPtr, i64_val(3));
     auto elemIndex = trunc(i32_ty, lshr(lowPtrBits, i64_val(1)));
     auto alignPtr = inttoptr(rmwPtr.getType(), sub(intPtr, lowPtrBits));
-    auto firstValInt = load(i32_ty, alignPtr, 4, false, false, false,
+    auto firstValInt = load(i32_ty, alignPtr, 4, false, false, false, false,
                             LLVM::AtomicOrdering::acquire);
 
     // Create a loop body block. It has a single parameter which holds the

@@ -1084,9 +1084,11 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
-  ProgramPoint programPoint(op);
-  auto lb = getLatticeElementFor(&programPoint, op.getLowerBound())->getValue();
-  auto step = getLatticeElementFor(&programPoint, op.getStep())->getValue();
+  ProgramPoint *programPoint = getProgramPointAfter(op);
+  const auto &lb =
+      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
+  const auto &step =
+      getLatticeElementFor(programPoint, op.getStep())->getValue();
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
@@ -1213,7 +1215,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
 
   // Here order should be ordered by contiguous first, so the first element
   // should have the largest contiguous.
-  auto order = triton::gpu::getThreadOrder(layout);
+  auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
   auto uniqueContigPerThread =
@@ -1235,7 +1237,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   if (!axisInfo)
     return 1;
   auto layout = tensorTy.getEncoding();
-  auto order = triton::gpu::getThreadOrder(layout);
+  auto order = triton::gpu::getOrder(layout);
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
@@ -1262,7 +1264,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto maskOrder = triton::gpu::getThreadOrder(tensorTy.getEncoding());
+  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);

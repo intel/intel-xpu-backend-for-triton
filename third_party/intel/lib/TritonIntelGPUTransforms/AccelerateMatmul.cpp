@@ -216,7 +216,6 @@ public:
     tt::ScaleDotElemType aType = scaledDotOp.getLhsType();
     tt::ScaleDotElemType bType = scaledDotOp.getRhsType();
 
-    assert(scaledDotOp.getRhsScale() == nullptr && "rhs scale NYI");
     assert((aType == tt::ScaleDotElemType::E4M3 ||
             aType == tt::ScaleDotElemType::E5M2 ||
             aType == tt::ScaleDotElemType::E2M1) &&
@@ -304,14 +303,17 @@ private:
                                           vType.getElementType(), vEncoding);
     TensorValue ret =
         rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
+
+    // convert to bf16
     if (type != tt::ScaleDotElemType::E2M1 &&
         type != tt::ScaleDotElemType::BF16) {
-      // convert to bf16
       assert(type == tt::ScaleDotElemType::E5M2 ||
              type == tt::ScaleDotElemType::E4M3);
       auto vTypeBf16 = RankedTensorType::get(
           newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
-      ret = rewriter.create<tt::FpToFpOp>(v.getLoc(), vTypeBf16, ret);
+      ret = cast<TypedValue<RankedTensorType>>(
+          rewriter.create<tt::FpToFpOp>(v.getLoc(), vTypeBf16, ret)
+              .getResult());
     }
     return ret;
   }
