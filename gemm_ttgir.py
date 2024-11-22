@@ -87,7 +87,7 @@ ir = f"""
 #blocked = #triton_gpu.blocked<{{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}}>
 #blocked1 = #triton_gpu.blocked<{{sizePerThread = [8, 1], threadsPerWarp = [4, 4], warpsPerCTA = [1, 32], order = [0, 1]}}>
 #loc = loc("/home/abaden/Projects/intel-xpu-backend-for-triton/test_local.py":96:0)
-#mma = #triton_intel_gpu.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}}>
+#mma = #triton_intel_gpu.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [8, 2], A = [64, 16], B = [16, 32], C = [64, 32]}}>
 module attributes {{"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, triton_gpu.target = "xpu", "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block}} {{
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}} loc("/home/abaden/Projects/intel-xpu-backend-for-triton/test_local.py":96:0), %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}} loc("/home/abaden/Projects/intel-xpu-backend-for-triton/test_local.py":96:0), %arg2: !tt.ptr<f16> {{tt.divisibility = 16 : i32}} loc("/home/abaden/Projects/intel-xpu-backend-for-triton/test_local.py":96:0)) attributes {{noinline = false}} {{
     %c4_i32 = arith.constant 4 : i32 loc(#loc1)
