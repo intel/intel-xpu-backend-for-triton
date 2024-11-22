@@ -41,6 +41,7 @@ jobs:
       - name: Install Triton runtime dependencies
         run: |
           pip install intel-sycl-rt intel-pti
+          sleep inf
 
       - name: Run core tests
         run: |
