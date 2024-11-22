@@ -39,16 +39,7 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
-
-  pull_request:
-    branches:
-      - main
-      - release/**
-  push:
-    branches:
-      - main
-      - release/**
-
+        
 permissions: read-all
 
 jobs:
