@@ -41,7 +41,11 @@ jobs:
       - name: Install Triton runtime dependencies
         run: |
           pip install intel-sycl-rt intel-pti
-          sleep inf
+
+      - name: Set LD_LIBRARY_PATH
+        run: |
+          sycl_rt_lib="$(python scripts/sycl_rt_lib.py)"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$sycl_rt_lib" | tee -a $GITHUB_ENV
 
       - name: Run core tests
         run: |
