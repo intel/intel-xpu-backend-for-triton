@@ -3,6 +3,7 @@ name: Test with pip
 on:
   workflow_dispatch:
 
+  # run workflow on changes to the driver, which handles the libraries logic
   pull_request:
     branches:
       - main
@@ -14,6 +15,13 @@ on:
     paths:
       - third_party/intel/backend/driver.py
 
+  # run workflow after building nightly wheels
+  workflow_run:
+    workflows:
+      - nightly-wheels.yml
+    types:
+      - completed
+
 permissions: read-all
 
 env:
@@ -23,6 +31,7 @@ env:
 jobs:
   tests:
     name: Tests
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on:
       - rolling
       - runner-0.0.20
