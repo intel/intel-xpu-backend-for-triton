@@ -678,7 +678,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         }
       }
     } else {
-      // 1. Elements held by a work-item are contiguous rows in the abstract
+      // 2. Elements held by a work-item are contiguous rows in the abstract
       // slice matrix: Output element `i` will take the `i % 16`th value from
       // the `i / 16`th thread.
       for (int32_t i = 0; i < subGroupSize; ++i) {
