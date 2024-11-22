@@ -106,25 +106,31 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
     } else {
       auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+      Type elemType = FloatType::getBF16(ctx);
 
       // Note: For Intel the dot operands layout's kWidth parameter must
-      // match the parent's dpas layout opsPerChannel. Given that the kWidth
-      // parameter for the result dot layout is going to be twice the kWidth
-      // parameter of the operand, we cannot reuse the operand's parent dpas
-      // layout and we need to materialize a new dpas encoding.
-      auto parentEncoding = oldEncoding.getParent();
-      if (auto dpasEncoding = dyn_cast<intel::DpasEncodingAttr>(parentEncoding))
-        parentEncoding = intel::DpasEncodingAttr::get(
-            ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
-            dpasEncoding.getExecutionSize(),
-            dpasEncoding.getOpsPerChannel() * 2, dpasEncoding.getWarpsPerCTA(),
-            dpasEncoding.getRepCluster(), dpasEncoding.getSubGroupSize());
-
-      auto newVEncoding = DotOperandEncodingAttr::get(
-          ctx, oldEncoding.getOpIdx(), parentEncoding,
-          oldEncoding.getKWidth() * 2);
-      retTy = RankedTensorType::get(newShape, FloatType::getBF16(ctx),
-                                    newVEncoding);
+      // match the parent's DPAS layout opsPerChannel so we need to materialize
+      // a new DPAS layout.
+      Attribute newVEncoding;
+      if (auto dpasEncoding =
+              dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
+        auto mod = operands[0].getDefiningOp()->getParentOfType<ModuleOp>();
+        auto dpasCap = intel::DpasEncodingAttr::getDPASCapability(mod);
+        auto newDpasEncoding = intel::DpasEncodingAttr::get(
+            ctx, dpasCap.repeatCount, dpasCap.systolicDepth,
+            dpasCap.executionSize,
+            intel::DpasEncodingAttr::getOpsPerChannel(dpasCap, elemType),
+            dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
+            dpasEncoding.getSubGroupSize());
+        newVEncoding = DotOperandEncodingAttr::get(
+            ctx, oldEncoding.getOpIdx(), newDpasEncoding,
+            newDpasEncoding.getOpsPerChannel());
+      } else {
+        newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
+                                                   oldEncoding.getParent(),
+                                                   oldEncoding.getKWidth() * 2);
+      }
+      retTy = RankedTensorType::get(newShape, elemType, newVEncoding);
     }
     inferredReturnTypes.push_back(retTy);
   } else {

@@ -28,40 +28,10 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-struct IntelDPASCapability {
-  uint32_t systolicDepth;
-  uint32_t repeatCount;
-  uint32_t executionSize;
-  uint32_t opsChanBitWidths;
-};
-
-IntelDPASCapability getDPASCapability(unsigned minSGSize) {
-  switch (minSGSize) {
-  case 8: {
-    IntelDPASCapability cap;
-    cap.systolicDepth = 8;
-    cap.repeatCount = 8;
-    cap.executionSize = 8;
-    cap.opsChanBitWidths = 32;
-    return cap;
-  }
-  case 16: {
-    IntelDPASCapability cap;
-    cap.systolicDepth = 8;
-    cap.repeatCount = 8;
-    cap.executionSize = 16;
-    cap.opsChanBitWidths = 32;
-    return cap;
-  }
-  default:
-    return IntelDPASCapability();
-  }
-}
-
-SmallVector<unsigned> getWarpsPerTile(tt::DotOp dotOp,
-                                      struct IntelDPASCapability dpasCap,
-                                      const ArrayRef<int64_t> shape,
-                                      unsigned numWarps) {
+SmallVector<unsigned>
+getWarpsPerTile(tt::DotOp dotOp,
+                ttg::intel::DpasEncodingAttr::DPASCapability dpasCap,
+                const ArrayRef<int64_t> shape, unsigned numWarps) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -142,20 +112,10 @@ public:
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
 
-    unsigned minSGSize =
-        mod->getAttrOfType<IntegerAttr>(
-               ttg::intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
-            .getInt();
-    IntelDPASCapability dpasCap = getDPASCapability(minSGSize);
-    unsigned dpasElemBitWidths =
-        oldAType.getElementType().getIntOrFloatBitWidth();
-
-    // We are upcasting FP8 to FP16
-    if (oldAType.getElementType().isFloat8E5M2() ||
-        oldAType.getElementType().isFloat8E4M3FN())
-      dpasElemBitWidths = 2 * dpasElemBitWidths;
-
-    unsigned opsPerChan = dpasCap.opsChanBitWidths / dpasElemBitWidths;
+    auto dpasCap = ttg::intel::DpasEncodingAttr::getDPASCapability(mod);
+    Type elemType = oldAType.getElementType();
+    unsigned opsPerChan =
+        ttg::intel::DpasEncodingAttr::getOpsPerChannel(dpasCap, elemType);
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
     size_t rank = retShape.size();
@@ -168,6 +128,14 @@ public:
         threadsPerWarp);
 
     if (dpasCap.executionSize == 16 /* PVC */) {
+      unsigned dpasElemBitWidths =
+          oldAType.getElementType().getIntOrFloatBitWidth();
+
+      // We are upcasting FP8 to FP16
+      if (oldAType.getElementType().isFloat8E5M2() ||
+          oldAType.getElementType().isFloat8E4M3FN())
+        dpasElemBitWidths = 2 * dpasElemBitWidths;
+
       // Enlarge the repCluster size to use the large 2D load for A and B
       // operands.
       unsigned maxRepClusterM =
@@ -241,6 +209,7 @@ public:
         isa<ttg::intel::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
+    MLIRContext *ctx = scaledDotOp.getContext();
     TensorValue a = scaledDotOp.getLhs();
     TensorValue b = scaledDotOp.getRhs();
     TensorValue scale = scaledDotOp.getLhsScale();
@@ -257,159 +226,121 @@ public:
            bType == tt::ScaleDotElemType::BF16 &&
                "NYI: rhs supports fp8 and bf16");
 
+    // Convert accumulator.
     ttg::intel::DpasEncodingAttr dpasEnc =
         getDPASEncoding(rewriter, scaledDotOp);
-
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), dpasEnc);
-    llvm::errs() << "newRetType: " << newRetType << "\n";
-
-    // convert accumulator
     TensorValue oldAcc = scaledDotOp.getC();
     TensorValue newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
-    llvm::errs() << "newAcc: " << newAcc << "\n";
 
-    MLIRContext *ctx = scaledDotOp.getContext();
+    // Upcast A operand.
+    auto dpasEncForA = ttg::intel::DpasEncodingAttr::get(
+        ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
+        dpasEnc.getExecutionSize(), 2 * dpasEnc.getOpsPerChannel(),
+        dpasEnc.getWarpsPerCTA(), dpasEnc.getRepCluster(),
+        dpasEnc.getSubGroupSize());
     auto newAEncoding = ttg::DotOperandEncodingAttr::get(
-        ctx, 0, dpasEnc, dpasEnc.getOpsPerChannel());
-    llvm::errs() << "newAEncoding: " << newAEncoding << "\n";
+        ctx, 0, dpasEncForA, dpasEncForA.getOpsPerChannel());
+    a = createArg(rewriter, a, aType, newAEncoding);
 
     auto mod = scaledDotOp->getParentOfType<ModuleOp>();
-    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
+    SmallVector<unsigned> threadsPerWarp{instrShapeM, warpSize / instrShapeM};
     auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
-    auto newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
+    auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
         ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(),
         newAEncoding.getCTAOrder(), CTALayout);
-    a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding);
-    llvm::errs() << "operand A: " << a << "\n";
+    scale = createScale(rewriter, scale, newScaleEncoding);
 
-    // Upcast B operand
+    auto retTypeEncoding = ttg::DotOperandEncodingAttr::get(
+        ctx, 0, dpasEnc, dpasEnc.getOpsPerChannel());
+    a = createUpcastMxfpOp(rewriter, a, scale, aType, retTypeEncoding);
+
+    // Create B operand.
     assert(bType != tt::ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
     auto newBEncoding = ttg::DotOperandEncodingAttr::get(
         ctx, 1, dpasEnc, dpasEnc.getOpsPerChannel());
-    b = createArg(rewriter, b, 1, bType, newBEncoding,
-                  /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt);
-    llvm::errs() << "operand B: " << b << "\n";
+    b = createArg(rewriter, b, bType, newBEncoding);
 
     auto newDot = rewriter.create<tt::DotOp>(scaledDotOp.getLoc(), newRetType,
                                              a, b, newAcc);
-    llvm::errs() << "dot: " << *newDot << "\n";
-
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(scaledDotOp, oldRetType,
+                                                      newDot);
     return success();
   }
 
 private:
-  TensorValue createArg(mlir::PatternRewriter &rewriter, TensorValue v, int idx,
-                        tt::ScaleDotElemType type,
-                        std::optional<Attribute> vEncoding,
-                        std::optional<TensorValue> opt_scale,
-                        std::optional<Attribute> scaleEncoding) const {
-    MLIRContext *ctx = rewriter.getContext();
-    // Create a new tensor with a given encoding or remove the encoding
-    auto maybeWithEncoding = [](RankedTensorType ty,
-                                std::optional<Attribute> enc) {
-      if (enc.has_value())
-        return RankedTensorType::get(ty.getShape(), ty.getElementType(), *enc);
+  ttg::intel::DpasEncodingAttr
+  getDPASEncoding(PatternRewriter &rewriter,
+                  tt::DotScaledOp scaledDotOp) const {
+    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+    auto dpasCap = ttg::intel::DpasEncodingAttr::getDPASCapability(mod);
+    Type elemType = scaledDotOp.getRhs().getType().getElementType();
+    unsigned opsPerChan =
+        ttg::intel::DpasEncodingAttr::getOpsPerChannel(dpasCap, elemType);
 
-      return RankedTensorType::get(ty.getShape(), ty.getElementType());
-    };
+    unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    SmallVector<unsigned> warpsPerTile = {numWarps, 1};
 
-    RankedTensorType newVType = maybeWithEncoding(v.getType(), vEncoding);
+    ArrayRef<int64_t> retShape = scaledDotOp.getType().getShape();
+    size_t rank = retShape.size();
+    SmallVector<unsigned> repCluster(rank, 1);
+
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+
+    return ttg::intel::DpasEncodingAttr::get(
+        rewriter.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
+        dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
+        threadsPerWarp);
+  }
+
+  TensorValue createArg(PatternRewriter &rewriter, TensorValue v,
+                        tt::ScaleDotElemType type, Attribute vEncoding) const {
+    RankedTensorType vType = v.getType();
+    auto newVType = RankedTensorType::get(vType.getShape(),
+                                          vType.getElementType(), vEncoding);
     TensorValue ret =
         rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
-
-    // convert to bf16
     if (type != tt::ScaleDotElemType::E2M1 &&
         type != tt::ScaleDotElemType::BF16) {
+      // convert to bf16
       assert(type == tt::ScaleDotElemType::E5M2 ||
              type == tt::ScaleDotElemType::E4M3);
       auto vTypeBf16 = RankedTensorType::get(
           newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
       ret = rewriter.create<tt::FpToFpOp>(v.getLoc(), vTypeBf16, ret);
     }
-    if (opt_scale.has_value()) {
-      TensorValue scale = *opt_scale;
-      assert(idx == 0 && "NYI: rhs scale");
-      RankedTensorType newScaleDotElemType =
-          maybeWithEncoding(scale.getType(), scaleEncoding);
-      scale = rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(),
-                                                    newScaleDotElemType, scale);
-      ret = rewriter.create<ttg::UpcastMXFPOp>(v.getLoc(), ret, scale, type);
-    }
     return ret;
   }
 
-  ttg::intel::DpasEncodingAttr
-  getDPASEncoding(PatternRewriter &rewriter,
-                  tt::DotScaledOp scaledDotOp) const {
-    llvm::errs() << "at line: " << __LINE__ << "\n";
-    MLIRContext *ctx = rewriter.getContext();
-    TensorValue a = scaledDotOp.getLhs();
-    TensorValue b = scaledDotOp.getRhs();
-    TensorValue scale = scaledDotOp.getLhsScale();
-    tt::ScaleDotElemType aType = scaledDotOp.getLhsType();
-    tt::ScaleDotElemType bType = scaledDotOp.getRhsType();
+  TensorValue createScale(PatternRewriter &rewriter, TensorValue scale,
+                          Attribute scaleEncoding) const {
+    RankedTensorType scaleType = scale.getType();
+    auto newScaleDotElemType = RankedTensorType::get(
+        scaleType.getShape(), scaleType.getElementType(), scaleEncoding);
+    return rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(),
+                                                 newScaleDotElemType, scale);
+  }
 
-    Location loc = scaledDotOp.getLoc();
-    RankedTensorType aTType =
-        createArg(rewriter, a, 0, aType, /*vEncoding=*/std::nullopt, scale,
-                  /*scaleEncoding=*/std::nullopt)
-            .getType();
-    auto aTypeNoEnc =
-        RankedTensorType::get(aTType.getShape(), aTType.getElementType());
-
-    llvm::errs() << "aTType: " << aTType << "\n";
-    llvm::errs() << "aTypeNoEnc: " << aTypeNoEnc << "\n";
-
-    a = rewriter.create<ttg::ConvertLayoutOp>(loc, aTypeNoEnc, a);
-    llvm::errs() << "a: " << a << "\n";
-
-    RankedTensorType bTType =
-        createArg(rewriter, b, 1, bType, /*vEncoding=*/std::nullopt,
-                  /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt)
-            .getType();
-    auto bTypeNoEnc =
-        RankedTensorType::get(bTType.getShape(), bTType.getElementType());
-    llvm::errs() << "bTType: " << bTType << "\n";
-    llvm::errs() << "bTypeNoEnc: " << bTypeNoEnc << "\n";
-
-    b = rewriter.create<ttg::ConvertLayoutOp>(loc, bTypeNoEnc, b);
-    llvm::errs() << "b: " << b << "\n";
-
-    RankedTensorType oldRetType = scaledDotOp.getType();
-    llvm::errs() << "oldRetType: " << oldRetType << "\n";
-    auto dotOp =
-        rewriter.create<tt::DotOp>(loc, oldRetType, a, b, scaledDotOp.getC());
-    llvm::errs() << "dotOp: " << dotOp << "\n";
-
-    ArrayRef<int64_t> retShape = oldRetType.getShape();
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
-
-    unsigned minSGSize =
-        mod->getAttrOfType<IntegerAttr>(
-               ttg::intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
-            .getInt();
-    IntelDPASCapability dpasCap = getDPASCapability(minSGSize);
-
-    unsigned dpasElemBitWidths =
-        aTType.getElementType().getIntOrFloatBitWidth();
-    unsigned opsPerChan = dpasCap.opsChanBitWidths / dpasElemBitWidths;
-
-    SmallVector<unsigned> warpsPerTile = getWarpsPerTile(
-        dotOp, dpasCap, retShape, ttg::TritonGPUDialect::getNumWarps(mod));
-    size_t rank = retShape.size();
-    SmallVector<unsigned> repCluster(rank, 1);
-
-    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    auto dpasEnc = ttg::intel::DpasEncodingAttr::get(
-        oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
-        dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
-        threadsPerWarp);
-
-    llvm::errs() << "dpasEnc: " << dpasEnc << "\n";
-
-    return dpasEnc;
+  TensorValue createUpcastMxfpOp(PatternRewriter &rewriter, TensorValue a,
+                                 TensorValue scale, tt::ScaleDotElemType type,
+                                 Attribute retTypeEncoding) const {
+    auto aType = cast<RankedTensorType>(a.getType());
+    auto retType = RankedTensorType::get(
+        aType.getShape(), aType.getElementType(), retTypeEncoding);
+    if (type == tt::ScaleDotElemType::E2M1) {
+      RankedTensorType retTy;
+      SmallVector<int64_t> newShape(aType.getShape());
+      newShape.back() *= 2;
+      retType = RankedTensorType::get(
+          newShape, FloatType::getBF16(rewriter.getContext()), retTypeEncoding);
+    }
+    // TODO: Check whether constructing without explicit retType works.
+    return rewriter.create<ttg::UpcastMXFPOp>(a.getLoc(), retType, a, scale,
+                                              type);
   }
 };
 

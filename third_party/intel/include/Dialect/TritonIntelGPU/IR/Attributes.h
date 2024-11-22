@@ -3,6 +3,10 @@
 
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
+namespace mlir {
+class ModuleOp;
+}
+
 #define GET_ATTRDEF_CLASSES
 #include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.h.inc"
 
