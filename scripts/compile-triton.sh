@@ -179,7 +179,7 @@ build_triton() {
 
   cd python
   # Install triton and its dependencies.
-  pip install -v -e '.[build,tests]'
+  pip install -vvv '.[build,tests]'
 
   # Copy compile_commands.json in the build directory (so that cland vscode plugin can find it).
   cp $(find $TRITON_PROJ_BUILD -name compile_commands.json) $TRITON_PROJ/
