@@ -486,6 +486,7 @@ class CMakeBuild(build_ext):
 
         # configuration
         cfg = get_build_type()
+        print(f"MARK CFG: {cfg}")
         build_args = ["--config", cfg]
 
         cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
@@ -541,6 +542,7 @@ class CMakeBuild(build_ext):
 
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
+        print(f"MARK cmake args: {cmake_args}")
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
