@@ -148,16 +148,16 @@ public:
   LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
     // Match outerCvt(trans(innerCvt(x))).
-    auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
+    auto trans = cvtOp.getSrc().getDefiningOp<MemDescTransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
       return failure();
 
-    RankedTensorType srcTy = trans.getSrc().getType();
+    auto srcTy = dyn_cast<RankedTensorType>(trans.getSrc().getType());
 
     if (auto srcCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
       srcTy = srcCvt.getSrc().getType();
     }
-    RankedTensorType sharedLoadTy = cvtOp.getType();
+    auto sharedLoadTy = cast<RankedTensorType>(cvtOp.getType());
     auto cvtEncoding =
         dyn_cast<DotOperandEncodingAttr>(sharedLoadTy.getEncoding());
     if (!cvtEncoding)
