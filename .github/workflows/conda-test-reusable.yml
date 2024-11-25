@@ -108,9 +108,6 @@ jobs:
 
       - name: Create test-triton command line
         run: |
-          #find /home/runner/miniforge3/envs/triton/lib/python3.9/site-packages/triton/backends/intel/include/sycl
-          ls -l /home/runner/miniforge3/envs/triton/lib/python3.9/site-packages/triton/backends/intel/include/sycl/sycl.hpp
-          exit 1
           if [[ -n "${{ inputs.skip_list }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
           elif [[ -n "${{ inputs.driver_version }}" ]]; then

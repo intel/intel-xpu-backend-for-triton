@@ -15,6 +15,7 @@ install_env() {
     find /usr -name libze_\* -exec cp -n {} $HOME/miniforge3/envs/triton/lib \;
     link_sycl lib/python$python_version/site-packages/triton/backends/intel/include
     link_sycl x86_64-conda-linux-gnu/sysroot/usr/include
+    cp -r /opt/intel/oneapi/compiler/latest/include/sycl/* $HOME/miniforge3/envs/triton/lib/python$python_version/site-packages/triton/backends/intel/include/
 }
 
 print_env_info() {
