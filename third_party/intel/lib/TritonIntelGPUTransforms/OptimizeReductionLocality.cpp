@@ -22,15 +22,6 @@ namespace mlir::triton::gpu::intel {
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
 namespace {
-static CTALayoutAttr getIdentityCTALayoutAttr(PatternRewriter &rewriter,
-                                              size_t rank) {
-  SmallVector<unsigned> ctasPerCGA(rank, 1);
-  SmallVector<unsigned> ctaSplitNum(rank, 1);
-  SmallVector<unsigned> ctaOrder(rank);
-  std::iota(std::rbegin(ctaOrder), std::rend(ctaOrder), 0);
-  return rewriter.getAttr<CTALayoutAttr>(ctasPerCGA, ctaSplitNum, ctaOrder);
-}
-
 // clang-format off
   /// Optimize reduction with DPAS-encoded input.
   ///
@@ -282,7 +273,7 @@ private:
         1, 1, oldEncoding.getWarpsPerCTA()[1],
         1};
     std::array<unsigned, rank> order{3, 4, 5, 6, 0, 1, 2};
-    CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
+    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -341,7 +332,7 @@ private:
                                            dpasEncoding.getWarpsPerCTA()[0], 1,
                                            dpasEncoding.getWarpsPerCTA()[1]};
     std::array<unsigned, rank> order{3, 4, 0, 1, 2};
-    CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
+    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -368,7 +359,7 @@ private:
     std::array<unsigned, rank> warpsPerCTA{
         1, 1, oldEncoding.getWarpsPerCTA()[2], oldEncoding.getWarpsPerCTA()[4]};
     std::array<unsigned, rank> order{3, 0, 1, 2};
-    CTALayoutAttr ctaLayout = getIdentityCTALayoutAttr(rewriter, rank);
+    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
 
     auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -407,7 +398,7 @@ private:
         dpasEncoding.getWarpsPerCTA()[1]};
     std::array<unsigned, rankBeforeLastReduction> order{3, 0, 1, 2};
     CTALayoutAttr ctaLayout =
-        getIdentityCTALayoutAttr(rewriter, rankBeforeLastReduction);
+        CTALayoutAttr::getDefault(getContext(), rankBeforeLastReduction);
 
     auto blockedEncoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
@@ -432,9 +423,7 @@ private:
 struct TritonIntelGPUOptimizeReductionLocality final
     : impl::TritonIntelGPUOptimizeReductionLocalityBase<
           TritonIntelGPUOptimizeReductionLocality> {
-  using impl::TritonIntelGPUOptimizeReductionLocalityBase<
-      TritonIntelGPUOptimizeReductionLocality>::
-      TritonIntelGPUOptimizeReductionLocalityBase;
+  using Base::Base;
 
   void runOnOperation() final {
     Operation *op = getOperation();

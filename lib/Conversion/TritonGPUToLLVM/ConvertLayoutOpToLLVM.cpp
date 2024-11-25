@@ -16,7 +16,6 @@
 
 namespace {
 
-using ::mlir::isLayoutMmaV1;
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::getStridesFromShapeAndOrder;
@@ -56,8 +55,7 @@ private:
     return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
                srcLayout) &&
            isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-               dstLayout) &&
-           !isLayoutMmaV1(srcLayout) && !isLayoutMmaV1(dstLayout);
+               dstLayout);
   }
 
   // shared memory rd/st for blocked or mma layout with data padding
@@ -176,8 +174,8 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
-    auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-    auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
+    auto srcShapePerCTATile = getShapePerCTATile(srcLayout);
+    auto dstShapePerCTATile = getShapePerCTATile(dstLayout);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
     for (unsigned d = 0; d < rank; ++d) {
@@ -328,20 +326,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
-      auto dstCvt = requiresI32Conversion(dstTy);
-      auto srcCvt = requiresI32Conversion(srcTy);
-      if (dstCvt || srcCvt) {
-        auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
-        inVals = unpackI32s(inVals, srcTy, rewriter, op.getLoc(),
-                            getTypeConverter());
-        inVals =
-            packI32s(inVals, dstTy, rewriter, op.getLoc(), getTypeConverter());
-        auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
-                                  rewriter, op.getType());
-        rewriter.replaceOp(op, res);
-      } else {
-        rewriter.replaceOp(op, adaptor.getSrc());
-      }
+      rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
   }
@@ -358,9 +343,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
     SmallVector<Value> outVals(numRegs);
-    for (int i = 0; i < numRegs; i++) {
+    for (int i = 0; i < outVals.size(); i++) {
       // Remove free masks from the register index
       // For example, if idx = 0b00111, and masks = 0b00100, then we get
       // 0b00011. It means that register 7 (0b111) has the same value as
@@ -371,7 +355,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                         : idx;
       outVals[i] = inVals[srcIdx];
     }
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -388,33 +371,33 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    // TODO (Keren): Currently, we handle general mma/blocked/slice ->
-    // mma/blocked/slice conversions.
-    // The following tasks must be completed before we can remove the layoutIsOK
-    // check:
-    // 1. Support for AMD's MFMA and WMMA
+    // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
+    // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
+    // completed before we can remove the layoutIsOK check:
+    // 1. Support for AMD's WMMA
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
-      if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-        if (useLegacyMMAConversion) {
-          return false;
-        }
-        return true;
+      if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
+        return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        if (auto nvidiaMma =
-                dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (useLegacyMMAConversion) {
-            return false;
+        auto parent = dotOperand.getParent();
+        if (isa<MmaEncodingTrait>(parent) && useLegacyMMAConversion) {
+          return false;
+        }
+        if (auto nvidiaMma = dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
+          if (nvidiaMma.isAmpere()) {
+            return true;
           }
-          // FIXME [Dot LL]
-          // Enabling LL path for buggy kWidth path
-          bool largeKWidth =
-              dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
-          return largeKWidth && nvidiaMma.isAmpere();
+        }
+        if (isa<AMDMfmaEncodingAttr>(parent)) {
+          return true;
         }
         return false;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
+        return true;
+      }
+      if (isa<LinearEncodingAttr>(layout)) {
         return true;
       }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -454,7 +437,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
-    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -474,7 +456,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);

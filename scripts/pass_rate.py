@@ -135,13 +135,13 @@ def find_stats(stats: List[ReportStats], name: str) -> ReportStats:
     raise ValueError(f'{name} not found')
 
 
-def parse_junit_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
+def parse_junit_reports(args: argparse.Namespace) -> List[ReportStats]:
     """Parses junit report in the specified directory."""
     reports_path = pathlib.Path(args.reports)
     return [parse_report(report, args.skiplist_dir) for report in reports_path.glob('*.xml')]
 
 
-def parse_tutorials_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
+def parse_tutorials_reports(args: argparse.Namespace) -> List[ReportStats]:
     """Parses tutorials reports in the specified directory."""
     reports_path = pathlib.Path(args.reports)
     stats = ReportStats(name='tutorials')
@@ -157,7 +157,7 @@ def parse_tutorials_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
     return [stats]
 
 
-def parse_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
+def parse_reports(args: argparse.Namespace) -> List[ReportStats]:
     """Parses all report in the specified directory."""
     return parse_junit_reports(args) + parse_tutorials_reports(args)
 

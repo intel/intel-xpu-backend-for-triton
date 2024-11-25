@@ -56,6 +56,7 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = False
     generate_native_code: bool = False
+    advanced_path: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -233,7 +234,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
 
         if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
-                and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
+                and (os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1" or opt.advanced_path)):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
@@ -251,8 +252,9 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == 1:
+        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
+            intel.passes.ttgpuir.add_optimize_elementwise_parallelism(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -291,7 +293,7 @@ class XPUBackend(BaseBackend):
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path)
         intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)

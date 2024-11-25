@@ -102,6 +102,7 @@ add_llvm_executable(triton-tensor-layout triton-tensor-layout.cpp PARTIAL_SOURCE
 target_link_libraries(triton-tensor-layout PRIVATE
   TritonGPUIR
   TritonNvidiaGPUIR
+  TritonIntelGPUIR
   ${triton_libs}
   ${conversion_libs}
   ${dialect_libs}

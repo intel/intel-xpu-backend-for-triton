@@ -67,8 +67,8 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_to_llvmir",
-                     gpu::intel::createConvertTritonIntelGPUToLLVM);
+  ADD_PASS_WRAPPER_OPT_1("add_to_llvmir",
+                         gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
@@ -100,6 +100,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
+  ADD_PASS_WRAPPER_0(
+      "add_optimize_elementwise_parallelism",
+      gpu::intel::createTritonIntelGPUOptimizeElementwiseParallelism);
 }
 
 void init_triton_intel(py::module &&m) {

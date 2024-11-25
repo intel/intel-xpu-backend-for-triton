@@ -18,6 +18,7 @@
 #include "mlir/Conversion/GPUToLLVMSPV/GPUToLLVMSPVPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
@@ -180,14 +181,8 @@ struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
-      : mod(mod), ctx(ctx),
-        isAdvancedPathEnabled(
-            mod->hasAttr(gpu::intel::TritonIntelGPUDialect::
-                             getSupportSG2DBlockAttrName()) &&
-            mod->hasAttr(
-                gpu::intel::TritonIntelGPUDialect::getSupportDPASAttrName()) &&
-            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH")) {}
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced)
+      : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
@@ -268,6 +263,8 @@ public:
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
+    populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
+                                          spirv::ClientAPI::OpenCL);
   }
 
 private:

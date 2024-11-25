@@ -1,38 +1,5 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
-// CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-
-llvm.func @triton_gen.barrier() {
-  // CHECK-LABEL: triton_gen.barrier
-  // CHECK: [[LOCAL:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z7barrierj([[LOCAL]]) {{.*}} : (i32) -> ()
-  // CHECK: [[GLOBAL:%.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: llvm.call spir_funccc @_Z7barrierj([[GLOBAL]]) {{.*}} : (i32) -> ()
-  triton_gen.barrier {mem_fence=Local}
-  triton_gen.barrier {mem_fence=Global}
-  llvm.return
-}
-
-// -----
-
-// CHECK-DAG: llvm.func spir_funccc @_Z31intel_work_group_barrier_arriveii(i32, i32) attributes {convergent, no_unwind, will_return}
-// CHECK-DAG: llvm.func spir_funccc @_Z29intel_work_group_barrier_waitii(i32, i32) attributes {convergent, no_unwind, will_return}
-
-llvm.func @triton_gen.split_barrier() {
-  // CHECK-LABEL: triton_gen.split_barrier() {
-  // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-DAG: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK:     llvm.call spir_funccc @_Z31intel_work_group_barrier_arriveii([[ZERO]], [[ONE]]) {{.*}} : (i32, i32) -> ()
-  // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-DAG: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK:     llvm.call spir_funccc @_Z29intel_work_group_barrier_waitii([[ZERO]], [[ONE]]) {{.*}} : (i32, i32) -> ()
-  triton_gen.split_barrier_signal {mem_fence=None, mem_scope=WorkGroup}
-  triton_gen.split_barrier_wait {mem_fence=None, mem_scope=WorkGroup}
-  llvm.return
-}
-
-// -----
-
 // CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_addij(i32, i32) -> i32 attributes {convergent, no_unwind, will_return}
 // CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_mulij(i32, i32) -> i32 attributes {convergent, no_unwind, will_return}
 // CHECK-DAG: llvm.func spir_funccc @_Z30sub_group_clustered_reduce_maxij(i32, i32) -> i32 attributes {convergent, no_unwind, will_return}
@@ -256,10 +223,10 @@ llvm.func @triton_gen.dpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b
 
 // CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(!llvm.ptr<3>) -> vector<2xi16> attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind, will_return}
 
-llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
-  // CHECK:     llvm.func @triton_gen.simdblockread(%arg0: !llvm.ptr<3>) {
+llvm.func @triton_gen.sub_group_block_read(%ptr: !llvm.ptr<3>) {
+  // CHECK:     llvm.func @triton_gen.sub_group_block_read(%arg0: !llvm.ptr<3>) {
   // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_read_us2PU3AS3t(%arg0) {{.*}} : (!llvm.ptr<3>) -> vector<2xi16>
-  %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<2xi16>
+  %ret = triton_gen.sub_group_block_read %ptr : !llvm.ptr<3> -> vector<2xi16>
   llvm.return
 }
 
@@ -267,9 +234,18 @@ llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
 
 // CHECK: llvm.func spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(!llvm.ptr<3>, vector<2xi16>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = readwrite, inaccessibleMem = none>, no_unwind, will_return}
 
-llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val : vector<2xi16>) {
-  // CHECK:     llvm.func @triton_gen.simdblockwrite(%arg0: !llvm.ptr<3>, %arg1: vector<2xi16>) {
+llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<3>, %val : vector<2xi16>) {
+  // CHECK:     llvm.func @triton_gen.sub_group_block_write(%arg0: !llvm.ptr<3>, %arg1: vector<2xi16>) {
   // CHECK:       llvm.call spir_funccc @_Z31intel_sub_group_block_write_us2PU3AS3tDv2_t(%arg0, %arg1) {{.*}} : (!llvm.ptr<3>, vector<2xi16>) -> ()
-  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<2xi16>)
+  triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<3>, vector<2xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<1>, %val : i32) {
+  // CHECK:     llvm.func @triton_gen.sub_group_block_write(%arg0: !llvm.ptr<1>, %arg1: i32) {
+  // CHECK:       llvm.call spir_funccc @_Z30intel_sub_group_block_write_uiPU3AS1jj(%arg0, %arg1) {{.*}} : (!llvm.ptr<1>, i32) -> ()
+  triton_gen.sub_group_block_write %ptr, %val : !llvm.ptr<1>, i32
   llvm.return
 }
