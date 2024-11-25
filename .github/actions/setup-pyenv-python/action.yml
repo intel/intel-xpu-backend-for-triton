@@ -42,5 +42,6 @@ runs:
     - name: Use python as python3
       shell: bash
       run: |
-        ln -s $(which pip${{ inputs.python-version }}) ~/.local/bin/pip
-        ln -s $(which python${{ inputs.python-version }}) ~/.local/bin/python
+        ls -l ~/.local/bin/
+        ln -sf $(which pip${{ inputs.python-version }}) ~/.local/bin/pip
+        ln -sf $(which python${{ inputs.python-version }}) ~/.local/bin/python
