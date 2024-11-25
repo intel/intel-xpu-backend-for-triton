@@ -96,7 +96,7 @@ jobs:
 
       - name: Install Python ${{ inputs.python_version }}
         if: ${{ !inputs.use_system_python }}
-        uses: actions/setup-python@v5
+        uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: ${{ inputs.python_version }}
 

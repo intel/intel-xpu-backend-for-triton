@@ -1,9 +1,9 @@
 name: setup-pyenv-python
 description: Setup Python via pyenv
 inputs:
-  python_version:
+  python-version:
     description: Python version to setup
-  pyenv_version:
+  pyenv-version:
     description: Pyenv version to setup
     default: "v2.4.19"
 runs:
@@ -13,7 +13,7 @@ runs:
       uses: actions/checkout@v4
       with:
         repository: "https://github.com/pyenv/pyenv.git"
-        ref: ${{ inputs.pyenv_version }}
+        ref: ${{ inputs.pyenv-version }}
         path: pyenv
 
     - name: Setup environment variables
@@ -26,5 +26,5 @@ runs:
     - name: Setup Python
       shell: bash
       run: |
-        pyenv install ${{ inputs.python_version }}
-        echo "PATH="$(dirname $(pyenv which ${{ inputs.python_version }})):$PATH" >> ${GITHUB_ENV}
+        pyenv install ${{ inputs.python-version }}
+        echo "PATH="$(dirname $(pyenv which ${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
