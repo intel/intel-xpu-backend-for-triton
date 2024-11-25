@@ -38,6 +38,7 @@ runs:
       run: |
         set -x
         pyenv install ${{ inputs.python-version }}
+        pyenv global ${{ inputs.python-version }}
         echo PATH="$(dirname $(pyenv which python${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
     
     - name: Use python as python3
@@ -45,6 +46,5 @@ runs:
       run: |
         set -x
         ls -l ~/.local/bin/
-        pyenv global ${{ inputs.python-version }}
         ln -sf $(which pip${{ inputs.python-version }}) ~/.local/bin/pip
         ln -sf $(which python${{ inputs.python-version }}) ~/.local/bin/python
