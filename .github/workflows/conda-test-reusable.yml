@@ -91,7 +91,6 @@ jobs:
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           scripts/install-${{ inputs.env_manager }}.sh --python-version ${{ inputs.python_version }}
-          exit 1
           echo $HOME/miniforge3/bin >>$GITHUB_PATH
 
       - name: Print inputs
@@ -109,6 +108,8 @@ jobs:
 
       - name: Create test-triton command line
         run: |
+          find /home/runner/miniforge3/envs/triton/lib/python3.9/site-packages/triton/backends/intel
+          exit 1
           if [[ -n "${{ inputs.skip_list }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
           elif [[ -n "${{ inputs.driver_version }}" ]]; then
