@@ -1,0 +1,30 @@
+name: setup-pyenv-python
+description: Setup Python via pyenv
+inputs:
+  python_version:
+    description: Python version to setup
+  pyenv_version:
+    description: Pyenv version to setup
+    default: "v2.4.19"
+runs:
+  using: "composite"
+  steps:
+    - name: Clone pyenv
+      uses: actions/checkout@v4
+      with:
+        repository: "https://github.com/pyenv/pyenv.git"
+        ref: ${{ inputs.pyenv_version }}
+        path: pyenv
+
+    - name: Setup environment variables
+      shell: bash
+      run: |
+        echo PATH="${PWD}/pyenv/bin:${PATH}" >> "${GITHUB_ENV}"
+        echo PYENV_ROOT="${PWD}/pyenv" >> "${GITHUB_ENV}"
+        eval "$(pyenv init -)" >> ~/.profile
+
+    - name: Setup Python
+      shell: bash
+      run: |
+        pyenv install ${{ inputs.python_version }}
+        echo "PATH="$(dirname $(pyenv which ${{ inputs.python_version }})):$PATH" >> ${GITHUB_ENV}
