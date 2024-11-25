@@ -45,5 +45,6 @@ runs:
       run: |
         set -x
         ls -l ~/.local/bin/
+        pyenv global ${{ inputs.python-version }}
         ln -sf $(which pip${{ inputs.python-version }}) ~/.local/bin/pip
         ln -sf $(which python${{ inputs.python-version }}) ~/.local/bin/python
