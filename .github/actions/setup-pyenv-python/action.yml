@@ -31,13 +31,13 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y libncurses5-dev libbz2-dev libreadline-dev libsqlite3-dev libssl-dev zlib1g-dev
+        sudo apt-get install -y libncurses5-dev libbz2-dev libreadline-dev libsqlite3-dev libssl-dev zlib1g-dev liblzma-dev
 
     - name: Setup Python
       shell: bash
       run: |
         pyenv install ${{ inputs.python-version }}
-        echo "PATH="$(dirname $(pyenv which ${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
+        echo PATH="$(dirname $(pyenv which ${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
     
     - name: Use python as python3
       shell: bash
