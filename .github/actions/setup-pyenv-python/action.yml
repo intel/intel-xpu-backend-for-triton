@@ -40,7 +40,7 @@ runs:
         pyenv install ${{ inputs.python-version }}
         pyenv global ${{ inputs.python-version }}
         echo PATH="$(dirname $(pyenv which python${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
-    
+
     - name: Use python as python3
       shell: bash
       run: |
