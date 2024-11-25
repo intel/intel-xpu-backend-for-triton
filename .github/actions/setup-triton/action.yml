@@ -8,7 +8,7 @@ inputs:
     default: false
   command:
     description: Command to execute
-    default: DEBUG=1 pip install --no-build-isolation '.[build,tests,tutorials]'
+    default: DEBUG=1 pip install -v --no-build-isolation '.[build,tests,tutorials]'
 runs:
   using: "composite"
   steps:

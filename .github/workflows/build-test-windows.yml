@@ -48,7 +48,7 @@ jobs:
           cd python
           pip install -U wheel pybind11 certifi cython cmake
           python -m certifi
-          pip install --no-build-isolation '.[build]'
+          pip install -v --no-build-isolation '.[build]'
 
       - name: Clean
         if: ${{ always() }}
