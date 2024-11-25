@@ -40,4 +40,7 @@ runs:
         echo "PATH="$(dirname $(pyenv which ${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
     
     - name: Use python as python3
-      ln -s $ ~/.local/bin
+      shell: bash
+      run: |
+        ln -s $(which pip${{ inputs.python-version }}) ~/.local/bin/pip
+        ln -s $(which python${{ inputs.python-version }}) ~/.local/bin/python
