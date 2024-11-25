@@ -90,9 +90,8 @@ jobs:
       - name: Install Manager Environment
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
-          find /opt
-          exit 1
           scripts/install-${{ inputs.env_manager }}.sh --python-version ${{ inputs.python_version }}
+          exit 1
           echo $HOME/miniforge3/bin >>$GITHUB_PATH
 
       - name: Print inputs

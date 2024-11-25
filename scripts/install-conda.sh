@@ -2,8 +2,10 @@
 
 link_sycl() {
     mkdir -p $HOME/miniforge3/envs/triton/$1
+    ls -l /opt/intel/oneapi/compiler/latest/include/sycl/ur_api.h
     ln -snf /opt/intel/oneapi/compiler/latest/include/sycl $HOME/miniforge3/envs/triton/$1/
     ln -snf /opt/intel/oneapi/compiler/latest/include/sycl/CL $HOME/miniforge3/envs/triton/$1/
+    exit 1
 }
 
 install_env() {
