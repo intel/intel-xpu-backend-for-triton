@@ -1,8 +1,6 @@
 #include "Data/TraceData.h"
 #include "Utility/Errors.h"
 
-#include <stdexcept>
-
 namespace proton {
 
 void TraceData::startOp(const Scope &scope) { throw NotImplemented(); }

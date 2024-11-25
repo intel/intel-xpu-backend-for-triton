@@ -18,7 +18,7 @@ endif()
 include_directories(${JSON_INCLUDE_DIR})
 include_directories(${PROTON_SRC_DIR}/include)
 include_directories(${PROTON_EXTERN_DIR})
-include_directories(/opt/intel/oneapi/pti/0.9/include)
+include_directories(/opt/intel/oneapi/pti/latest/include)
 include_directories(/opt/intel/oneapi/compiler/latest/include)
 include_directories(/opt/intel/oneapi/compiler/latest/include/sycl)
 
