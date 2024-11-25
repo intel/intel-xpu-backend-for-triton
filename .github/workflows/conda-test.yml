@@ -2,9 +2,6 @@ name: Conda Test
 run-name: ${{ inputs.run_name }}
 
 on:
-#FIXME
-  push:
-
   workflow_dispatch:
     inputs:
       runner_label:
