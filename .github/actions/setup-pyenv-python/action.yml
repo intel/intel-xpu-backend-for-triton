@@ -12,7 +12,7 @@ runs:
     - name: Clone pyenv
       uses: actions/checkout@v4
       with:
-        repository: "https://github.com/pyenv/pyenv.git"
+        repository: "pyenv/pyenv"
         ref: ${{ inputs.pyenv-version }}
         path: pyenv
 
