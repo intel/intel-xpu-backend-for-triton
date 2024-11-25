@@ -203,6 +203,7 @@ def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::M
                            "mlir::triton::TritonGEN::TritonGENDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect",
                            "mlir::scf::SCFDialect",
+                           "mlir::spirv::SPIRVDialect",
                            "mlir::gpu::GPUDialect"];
   let options = [
     Option<"numAdvancePrefetches", "num-advance-prefetches",
