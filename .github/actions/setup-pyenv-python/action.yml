@@ -21,6 +21,10 @@ runs:
       run: |
         echo PATH="${PWD}/pyenv/bin:${PATH}" >> "${GITHUB_ENV}"
         echo PYENV_ROOT="${PWD}/pyenv" >> "${GITHUB_ENV}"
+
+    - name: Setup pyenv into profile
+      shell: bash
+      run: |
         eval "$(pyenv init -)" >> ~/.profile
 
     - name: Setup Python
