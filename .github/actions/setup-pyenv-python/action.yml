@@ -30,11 +30,14 @@ runs:
     - name: Install required packages
       shell: bash
       run: |
-        apt-get update
-        apt-get install -y libncurses5-dev
+        sudo apt-get update
+        sudo apt-get install -y libncurses5-dev
 
     - name: Setup Python
       shell: bash
       run: |
         pyenv install ${{ inputs.python-version }}
         echo "PATH="$(dirname $(pyenv which ${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
+    
+    - name: Use python as python3
+      ln -s $ ~/.local/bin
