@@ -16,4 +16,4 @@ private:
 
 } // namespace proton
 
-#endif // PROTON_PROFILER_Xpupti_PROFILER_H_
+#endif // PROTON_PROFILER_XPUPTI_PROFILER_H_
