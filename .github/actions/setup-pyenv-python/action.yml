@@ -27,6 +27,12 @@ runs:
       run: |
         eval "$(pyenv init -)" >> ~/.profile
 
+    - name: Install required packages
+      shell: bash
+      run: |
+        apt-get update
+        apt-get install -y libncurses5-dev
+
     - name: Setup Python
       shell: bash
       run: |
