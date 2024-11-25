@@ -10,7 +10,7 @@ include(ExternalProject)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-project(triton CXX)
+project(triton CXX C)
 include(CTest)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -346,10 +346,8 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   endforeach()
   add_subdirectory(third_party/proton/dialect)
 endif()
-if(WIN32)
-  option(CMAKE_USE_WIN32_THREADS_INIT "using WIN32 threads" ON)
-  option(gtest_disable_pthreads "Disable uses of pthreads in gtest." ON)
-endif()
+
+find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)

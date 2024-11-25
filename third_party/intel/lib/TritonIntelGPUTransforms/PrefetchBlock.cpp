@@ -39,6 +39,8 @@
 
 #include "TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -367,13 +369,13 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
   if (injectSplitBarriers) {
     Location loc = loop.getLoc();
     b.setInsertionPoint(loop);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<spirv::INTELControlBarrierArriveOp>(loc, spirv::Scope::Workgroup,
+                                                 spirv::Scope::Workgroup,
+                                                 spirv::MemorySemantics::None);
     b.setInsertionPoint(loop->getNextNode());
-    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<spirv::INTELControlBarrierWaitOp>(loc, spirv::Scope::Workgroup,
+                                               spirv::Scope::Workgroup,
+                                               spirv::MemorySemantics::None);
   }
 }
 
@@ -454,12 +456,12 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   if (injectSplitBarriers) {
     Location loc = loop.getLoc();
     b.setInsertionPoint(yield);
-    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<spirv::INTELControlBarrierWaitOp>(loc, spirv::Scope::Workgroup,
+                                               spirv::Scope::Workgroup,
+                                               spirv::MemorySemantics::None);
+    b.create<spirv::INTELControlBarrierArriveOp>(loc, spirv::Scope::Workgroup,
+                                                 spirv::Scope::Workgroup,
+                                                 spirv::MemorySemantics::None);
   }
 
   yield.getResultsMutable().append(advances);
