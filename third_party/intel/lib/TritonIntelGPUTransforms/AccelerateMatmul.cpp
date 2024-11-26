@@ -116,6 +116,35 @@ public:
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan =
         ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
+
+    // We are upcasting FP8 to FP16
+    if (oldAType.getElementType().isFloat8E5M2() ||
+        oldAType.getElementType().isFloat8E4M3FN())
+      dpasElemBitWidths = 2 * dpasElemBitWidths;
+
+    // now we can get the order from the a defining op 
+
+    llvm::errs() << "oldAType: " << oldAType << "\n";
+    llvm::errs() << "oldBType: " << oldBType << "\n";
+
+    llvm::errs() << "a: " << a << "\n";
+    llvm::errs() << "a defining op: " << *a.getDefiningOp() << "\n";
+
+    SmallVector<unsigned> order;
+    Operation* aOp = a.getDefiningOp();
+    if (isa<ttg::ConvertLayoutOp>(aOp)) {
+      assert(aOp->getNumOperands() == 1);
+      auto aLoad = aOp->getOperand(0);
+      order = triton::gpu::getOrder(cast<RankedTensorType>(aLoad.getType()).getEncoding());
+    } else {
+      assert(isa<tt::LoadOp>(aOp) && "expecting load input to DPAS");
+      order = triton::gpu::getOrder(cast<RankedTensorType>(aLoad.getType()).getEncoding());
+    }
+    // order = triton::gpu::getOrder(a.getDefiningOp().getEncoding());
+    llvm::errs() << "a load order: " << order[0] << ", " << order[1] << "\n";
+
+    // now find the fast changing dimension from the order 
+
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
     size_t rank = retShape.size();
