@@ -2,10 +2,12 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "intel/include/Analysis/DPAS.h"
+#include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -108,17 +110,21 @@ SmallVector<unsigned> getWarpsPerTile(tt::DotOp dotOp,
 
 class BlockedToDPAS : public OpRewritePattern<tt::DotOp> {
   const ttg::intel::DPASAnalysis &dpasAnalysis;
+  const tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis;
 
 public:
   BlockedToDPAS(MLIRContext *context,
-                const ttg::intel::DPASAnalysis &dpasAnalysis)
-      : OpRewritePattern<tt::DotOp>(context), dpasAnalysis(dpasAnalysis) {}
+                const ttg::intel::DPASAnalysis &dpasAnalysis,
+                const tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis)
+      : OpRewritePattern<tt::DotOp>(context), dpasAnalysis(dpasAnalysis), axisInfoAnalysis(axisInfoAnalysis) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     using TensorValue = TypedValue<RankedTensorType>;
 
     RankedTensorType oldRetType = dotOp.getType();
+    llvm::errs() << "old ret type: " << oldRetType << "\n";
+  
     if (!oldRetType.getEncoding() ||
         isa<ttg::intel::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
@@ -135,8 +141,63 @@ public:
 
     TensorValue a = dotOp.getA();
     TensorValue b = dotOp.getB();
+    
+    llvm::errs() << "a: " << a << "\n";
+    llvm::errs() << "a defining op: " << *a.getDefiningOp() << "\n";
+
+
+#if 1
+    // check for transpose
+    // 1. get a slice from the load back to the function entry point
+    SetVector<Operation *> slice;
+    mlir::getBackwardSlice(a, &slice);
+    slice = multiRootTopologicalSort(slice);
+
+    // 2. iterate the sorted slice to look for make tensor ptr ops and see if we can connect those ops via the def-use chain 
+    // TODO 
+    #if 1
+    for (auto op : slice) {
+      llvm::errs() << "op: " << *op << "\n";
+    }
+    #endif 
+
+    for (auto op : slice) {
+      if (isa<tt::MakeTensorPtrOp>(op)) {
+        llvm::errs() << "MTPO: " << *op << "\n";
+        // DenseSet<Operation *> seen;
+      }
+    }
+#else
+    SetVector<Operation *> slices;
+    mlir::BackwardSliceOptions opt;
+    opt.omitBlockArguments = false;
+#if 1
+    Operation* crtOp = a.getDefiningOp();
+    #if 1
+    opt.filter = [](Operation *op) {
+      return op->getNumOperands() == 1; //isa<tt::MakeTensorPtrOp>(op);
+    };
+    #endif
+#else
+    // TODO: need to get the loads for this dot op. can we do it with a filter? or is there a different API? 
+    opt.filter = [dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+#endif
+    mlir::getBackwardSlice(a, &slices, opt);
+    for (auto slice : slices) {
+      llvm::errs() << "slice: " << *slice << "\n";
+    }
+    auto sorted_slices = multiRootTopologicalSort(slices);
+    for (auto slice : sorted_slices) {
+      llvm::errs() << "sorted slice: " << *slice << "\n";
+    }
+#endif
+    // TODO: can we get the ptr value from here? then find the make tensor ptr and figure out if theres a transpose
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
+    llvm::errs() << "oldAType: " << oldAType << "\n";
+    llvm::errs() << "oldBType: " << oldBType << "\n";
 
     unsigned minSGSize =
         mod->getAttrOfType<IntegerAttr>(
@@ -152,8 +213,14 @@ public:
       dpasElemBitWidths = 2 * dpasElemBitWidths;
 
     unsigned opsPerChan = dpasCap.opsChanBitWidths / dpasElemBitWidths;
+#if 0
+    // TODO: this gives better perf for AxB and AxBT, but much worse for ATxB and ATxBT
+    SmallVector<unsigned> warpsPerTile =
+        llvm::to_vector(llvm::reverse(getWarpsPerTile(dotOp, dpasCap, retShape, numWarps)));
+#else
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+#endif
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
@@ -289,9 +356,10 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     auto &dpasAnalysis = getAnalysis<ttg::intel::DPASAnalysis>();
+    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(m);
 
     RewritePatternSet patterns(context);
-    patterns.add<BlockedToDPAS>(context, dpasAnalysis);
+    patterns.add<BlockedToDPAS>(context, dpasAnalysis, axisInfoAnalysis);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
 
