@@ -6105,10 +6105,15 @@ def test_side_effectful_scan(device):
 
 # stress test slice layout usages in reductions.
 @pytest.mark.parametrize("in_shape, perm, red_dims", [
-    ((4, 32, 32, 4, 2), [2, 1, 0, 3, 4], [3, 1, 0]),
+    ((4, 32, 32, 4, 2), [2, 1, 0, 3, 4], [3, 1, 0]),  #Runs out of shared memory
     ((8, 2, 32, 4, 16), [4, 0, 1, 3, 2], [0, 2, 0]),
 ])
 def test_chained_reductions(in_shape, perm, red_dims, device):
+    if is_xpu() and in_shape == (4, 32, 32, 4, 2):
+        # check maximum shared memory
+        if triton.runtime.driver.active.utils.get_device_properties(
+                triton.runtime.driver.active.get_current_device())["max_shared_mem"] <= 163840:
+            pytest.xfail("XPU: Not enough shared memory")
 
     @triton.jit
     def kernel(In, Out,  #
