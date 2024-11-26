@@ -268,7 +268,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
 
-  uint32_t expected_num_params =
+  [[maybe_unused]] uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
 
   size_t global_range_x =
