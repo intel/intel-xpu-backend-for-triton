@@ -299,6 +299,7 @@ def update_symlink(link_path, source_path):
         shutil.rmtree(link_path)
 
     print(f"creating symlink: {link_path} -> {source_path}", file=sys.stderr)
+    link_path.absolute().parent.mkdir(parents=True, exist_ok=True)  # Ensure link's parent directory exists
     link_path.symlink_to(source_path, target_is_directory=True)
 
 
@@ -763,7 +764,7 @@ def get_git_commit_hash(length=8):
 
 def get_install_requires():
     install_requires = [
-        "packaging",  # used by third_party/intel/backend/compiler.py
+        "packaging",  # used by third_party/intel/backend/driver.py
     ]  # yapf: disable
     return install_requires
 

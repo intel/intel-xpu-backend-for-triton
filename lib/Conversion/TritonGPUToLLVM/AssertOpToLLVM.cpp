@@ -50,6 +50,7 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
   // know about the op to split the block.
   void llAssert(Operation *op, Value condition, StringRef message,
                 ConversionPatternRewriter &rewriter) const {
+
     auto ctx = rewriter.getContext();
     auto loc = op->getLoc();
 

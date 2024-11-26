@@ -22,26 +22,6 @@ Getting Started
    getting-started/tutorials/index
 
 
-Programming Guide
------------------
-
-Check out the following documents to learn more about Triton and its comparison with other DSLs for Deep Neural Networks (DNNs):
-
-- Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`
-- Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`
-- Chapter 3: :doc:`Debugging <programming-guide/chapter-3/debugging>`
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Programming Guide
-   :hidden:
-
-   programming-guide/chapter-1/introduction
-   programming-guide/chapter-2/related-work
-   programming-guide/chapter-3/debugging
-
-.. _Triton: https://github.com/triton-lang/triton
-
 Python API
 ----------
 
@@ -73,3 +53,23 @@ Triton MLIR Dialects and Ops
    :hidden:
 
    dialects/dialects
+
+Going Further
+-------------
+
+Check out the following documents to learn more about Triton and how it compares against other DSLs for DNNs:
+
+- Chapter 1: :doc:`Introduction <programming-guide/chapter-1/introduction>`
+- Chapter 2: :doc:`Related Work <programming-guide/chapter-2/related-work>`
+- Chapter 3: :doc:`Debugging <programming-guide/chapter-3/debugging>`
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Programming Guide
+   :hidden:
+
+   programming-guide/chapter-1/introduction
+   programming-guide/chapter-2/related-work
+   programming-guide/chapter-3/debugging
+
+.. _Triton: https://github.com/triton-lang/triton
