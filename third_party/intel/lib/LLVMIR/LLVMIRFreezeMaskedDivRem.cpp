@@ -8,10 +8,8 @@ using namespace llvm;
 
 static bool processBasicBlock(BasicBlock &BB, PHINode *PhiNode) {
   if (!any_of(PhiNode->incoming_values(), [](Use &U) {
-        if (Constant *C = dyn_cast<Constant>(&U)) {
-          return C->isNullValue();
-        }
-        return false;
+        Constant *C = dyn_cast<Constant>(&U);
+        return C && C->isNullValue();
       })) {
     return false;
   }
