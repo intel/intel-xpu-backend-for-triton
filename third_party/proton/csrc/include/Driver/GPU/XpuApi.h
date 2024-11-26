@@ -2,20 +2,21 @@
 #define PROTON_DRIVER_GPU_SYCL_H_
 
 #include "Driver/Device.h"
+#include <level_zero/ze_api.h>
 
 namespace proton {
 
 namespace xpu {
 
-/*
-template <bool CheckSuccess> CUresult init(int flags);
-
-template <bool CheckSuccess> CUresult ctxSynchronize();
-
-template <bool CheckSuccess> CUresult ctxGetCurrent(CUcontext *pctx);
+template <bool CheckSuccess> ze_result_t init(ze_init_flags_t flags);
 
 template <bool CheckSuccess>
-CUresult deviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
+ze_result_t ctxSynchronize(ze_command_queue_handle_t hCommandQueue,
+                           uint64_t timeout);
+
+/*
+
+template <bool CheckSuccess> CUresult ctxGetCurrent(CUcontext *pctx);
 
 template <bool CheckSuccess> CUresult deviceGet(CUdevice *device, int ordinal);
 */

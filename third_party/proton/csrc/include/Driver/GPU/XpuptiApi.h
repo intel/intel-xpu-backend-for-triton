@@ -37,15 +37,15 @@ CUptiResult activityEnableContext(CUcontext context, CUpti_ActivityKind kind);
 
 template <bool CheckSuccess>
 CUptiResult activityDisableContext(CUcontext context, CUpti_ActivityKind kind);
+*/
 
-template <bool CheckSuccess>
-CUptiResult activityEnable(CUpti_ActivityKind kind);
+template <bool CheckSuccess> pti_result viewEnable(pti_view_kind kind);
 
-template <bool CheckSuccess>
-CUptiResult activityDisable(CUpti_ActivityKind kind);
+template <bool CheckSuccess> pti_result viewDisable(pti_view_kind kind);
 
-template <bool CheckSuccess> CUptiResult activityFlushAll(uint32_t flag);
+template <bool CheckSuccess> pti_result viewFlushAll();
 
+/*
 template <bool CheckSuccess>
 CUptiResult activityGetNextRecord(uint8_t *buffer, size_t validBufferSizeBytes,
                                   CUpti_Activity **record);

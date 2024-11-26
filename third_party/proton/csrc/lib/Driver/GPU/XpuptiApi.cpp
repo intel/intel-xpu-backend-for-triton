@@ -6,23 +6,18 @@ namespace proton {
 
 namespace xpupti {
 
-/*
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
-struct ExternLibCupti : public ExternLibBase {
-  using RetType = CUptiResult;
-  static constexpr const char *name = "libcupti.so";
-#ifdef CUPTI_LIB_DIR
-  static constexpr const char *defaultDir = TOSTRING(CUPTI_LIB_DIR);
-#else
+struct ExternLibXpupti : public ExternLibBase {
+  using RetType = pti_result;
+  // FIXME: ref: /opt/intel/oneapi/pti/latest/lib/libpti_view.so
+  static constexpr const char *name = "libpti_view.so";
   static constexpr const char *defaultDir = "";
-#endif
-  static constexpr RetType success = CUPTI_SUCCESS;
+  static constexpr RetType success = PTI_SUCCESS;
   static void *lib;
 };
 
-void *ExternLibCupti::lib = nullptr;
+void *ExternLibXpupti::lib = nullptr;
 
+/*
 DEFINE_DISPATCH(ExternLibCupti, getVersion, cuptiGetVersion, uint32_t *);
 
 DEFINE_DISPATCH(ExternLibCupti, getContextId, cuptiGetContextId, CUcontext,
@@ -41,22 +36,23 @@ DEFINE_DISPATCH(ExternLibCupti, enableDomain, cuptiEnableDomain, uint32_t,
 
 DEFINE_DISPATCH(ExternLibCupti, enableCallback, cuptiEnableCallback, uint32_t,
                 CUpti_SubscriberHandle, CUpti_CallbackDomain, CUpti_CallbackId);
+*/
 
-DEFINE_DISPATCH(ExternLibCupti, activityEnable, cuptiActivityEnable,
-                CUpti_ActivityKind)
+DEFINE_DISPATCH(ExternLibXpupti, viewEnable, ptiViewEnable, pti_view_kind)
 
-DEFINE_DISPATCH(ExternLibCupti, activityDisable, cuptiActivityDisable,
-                CUpti_ActivityKind)
+DEFINE_DISPATCH(ExternLibXpupti, viewDisable, ptiViewDisable, pti_view_kind)
 
+/*
 DEFINE_DISPATCH(ExternLibCupti, activityEnableContext,
                 cuptiActivityEnableContext, CUcontext, CUpti_ActivityKind)
 
 DEFINE_DISPATCH(ExternLibCupti, activityDisableContext,
                 cuptiActivityDisableContext, CUcontext, CUpti_ActivityKind)
+*/
 
-DEFINE_DISPATCH(ExternLibCupti, activityFlushAll, cuptiActivityFlushAll,
-                uint32_t)
+DEFINE_DISPATCH(ExternLibXpupti, viewFlushAll, ptiFlushAllViews)
 
+/*
 DEFINE_DISPATCH(ExternLibCupti, activityGetNextRecord,
                 cuptiActivityGetNextRecord, uint8_t *, size_t,
                 CUpti_Activity **)

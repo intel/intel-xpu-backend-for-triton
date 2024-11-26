@@ -227,11 +227,34 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // xpupti::subscribe<true>(&subscriber, callbackFn, nullptr);
-  ptiViewEnable(PTI_VIEW_DEVICE_GPU_KERNEL);
+  xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
   ptiViewSetCallbacks(allocBuffer, completeBuffer);
   // setGraphCallbacks(subscriber, /*enable=*/true);
   // setRuntimeCallbacks(subscriber, /*enable=*/true);
   // setDriverCallbacks(subscriber, /*enable=*/true);
 }
+
+void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
+  // FIXME: device synchronization?
+
+  profiler.correlation.flush(
+      /*maxRetries=*/100, /*sleepMs=*/10,
+      /*flush=*/[]() { xpupti::viewFlushAll<true>(); });
+}
+
+void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
+  xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
+  // setGraphCallbacks(subscriber, /*enable=*/false);
+  // setRuntimeCallbacks(subscriber, /*enable=*/false);
+  // setDriverCallbacks(subscriber, /*enable=*/false);
+  // cupti::unsubscribe<true>(subscriber);
+  // cupti::finalize<true>();
+}
+
+XpuptiProfiler::XpuptiProfiler() {
+  pImpl = std::make_unique<XpuptiProfilerPimpl>(*this);
+}
+
+XpuptiProfiler::~XpuptiProfiler() = default;
 
 } // namespace proton

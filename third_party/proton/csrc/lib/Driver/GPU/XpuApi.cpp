@@ -10,31 +10,35 @@ namespace proton {
 
 namespace xpu {
 
-/*
-struct ExternLibCuda : public ExternLibBase {
-  using RetType = CUresult;
-  //
-https://forums.developer.nvidia.com/t/wsl2-libcuda-so-and-libcuda-so-1-should-be-symlink/236301
-  // On WSL, "libcuda.so" and "libcuda.so.1" may not be linked, so we use
-  // "libcuda.so.1" instead.
-  static constexpr const char *name = "libcuda.so.1";
+struct ExternLibLevelZero : public ExternLibBase {
+  using RetType = ze_result_t;
+
+  // FIXME: removeme `/usr/lib/x86_64-linux-gnu/libze_intel_gpu.so.1`
+  static constexpr const char *name = "libze_intel_gpu.so.1";
   static constexpr const char *defaultDir = "";
-  static constexpr RetType success = CUDA_SUCCESS;
+  static constexpr RetType success = ZE_RESULT_SUCCESS;
   static void *lib;
 };
 
-void *ExternLibCuda::lib = nullptr;
+void *ExternLibLevelZero::lib = nullptr;
 
-DEFINE_DISPATCH(ExternLibCuda, init, cuInit, int)
+// FIXME: DEBUG ref:
+// https://spec.oneapi.io/level-zero/1.0.4/core/api.html#zeinit
+DEFINE_DISPATCH(ExternLibLevelZero, init, zeInit, ze_init_flags_t)
 
-DEFINE_DISPATCH(ExternLibCuda, ctxSynchronize, cuCtxSynchronize)
+// FIXME: probably it's better to change `ctxSynchronize` name;
+// leave it like this for now, so that it would be easier to compare
+// the implementation with other backends
+// SPEC:
+// https://spec.oneapi.io/level-zero/1.9.3/core/api.html#zecommandqueuesynchronize
+DEFINE_DISPATCH(ExternLibLevelZero, ctxSynchronize, zeCommandQueueSynchronize,
+                ze_command_queue_handle_t, uint64_t)
 
+/*
 DEFINE_DISPATCH(ExternLibCuda, ctxGetCurrent, cuCtxGetCurrent, CUcontext *)
 
 DEFINE_DISPATCH(ExternLibCuda, deviceGet, cuDeviceGet, CUdevice *, int)
 
-DEFINE_DISPATCH(ExternLibCuda, deviceGetAttribute, cuDeviceGetAttribute, int *,
-                CUdevice_attribute, CUdevice)
 */
 
 // FIXME: for this initialization is needed

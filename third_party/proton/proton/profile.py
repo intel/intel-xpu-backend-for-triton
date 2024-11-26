@@ -16,6 +16,8 @@ def _select_backend() -> str:
         return "cupti"
     elif backend == "hip":
         return "roctracer"
+    elif backend == "xpu":
+        return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")
 
