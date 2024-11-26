@@ -8,6 +8,8 @@ endif()
 
 include(ExternalProject)
 
+set(CMAKE_CXX_STANDARD 17)
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 project(triton CXX C)
@@ -58,13 +60,11 @@ endif()
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 if(NOT MSVC)
-  set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
   set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
 else()
-  set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
   set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
   set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
