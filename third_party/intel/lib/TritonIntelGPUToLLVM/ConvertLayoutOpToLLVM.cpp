@@ -560,6 +560,24 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
+  int getNumContiguousRowsForShuffle(const LinearLayout &srcLayout,
+                                     const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = getContext();
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp =
+        *dstLayout.invertAndCompose(srcLayout).quotient({kWarp, kBlock});
+    // Basic case: the number of contiguous rows is 1.
+    if (comp.getBasis(kRegister, 0)[1] == 1)
+      return 1;
+    // In other case, we only allow all threads handled by a single element to
+    // be contiguous, so we can simply:
+    return comp.getOutDimSize(kRegister);
+  }
+
   void performSubGroupShuffle(ConvertLayoutOp op, const LinearLayout &srcLayout,
                               const LinearLayout &dstLayout, OpAdaptor adaptor,
                               ConversionPatternRewriter &rewriter) const {
@@ -605,8 +623,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           });
         });
 
-    SmallVector<Value> outVals =
-        performSubGroupShuffle(loc, inVals, subGroupSize, rewriter);
+    SmallVector<Value> outVals = performSubGroupShuffle(
+        loc, inVals, subGroupSize, rewriter,
+        getNumContiguousRowsForShuffle(srcLayout, dstLayout));
 
     // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
     // upstream level. We are not enabling support for all types here as that
@@ -636,19 +655,41 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     rewriter.replaceOp(op, result);
   }
 
-  SmallVector<Value>
-  performSubGroupShuffle(Location loc, ArrayRef<Value> inVals,
-                         int32_t subGroupSize,
-                         ConversionPatternRewriter &rewriter) const {
+  SmallVector<Value> performSubGroupShuffle(Location loc,
+                                            ArrayRef<Value> inVals,
+                                            int32_t subGroupSize,
+                                            ConversionPatternRewriter &rewriter,
+                                            int numContiguousRows) const {
     SmallVector<Value> res;
     Value width = i32_val(subGroupSize);
-    for (Value val : inVals) {
-      for (int32_t i = 0; i < subGroupSize; ++i)
-        res.push_back(
-            rewriter
-                .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
-                                              mlir::gpu::ShuffleMode::IDX)
-                .getShuffleResult());
+    // A work-item may handle more than one element. There are two cases we
+    // support:
+    if (numContiguousRows == 1) {
+      // 1. Elements held by a work-item are strided rows in the abstract slice
+      // matrix: Output element `i` will take the `i / 16`th value from the `i %
+      // 16`th thread.
+      for (Value val : inVals) {
+        for (int32_t i = 0; i < subGroupSize; ++i) {
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+        }
+      }
+    } else {
+      // 2. Elements held by a work-item are contiguous rows in the abstract
+      // slice matrix: Output element `i` will take the `i % 16`th value from
+      // the `i / 16`th thread.
+      for (int32_t i = 0; i < subGroupSize; ++i) {
+        for (Value val : inVals) {
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+        }
+      }
     }
     return res;
   }

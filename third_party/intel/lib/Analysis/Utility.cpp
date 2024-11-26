@@ -72,6 +72,29 @@ buildSubGroupShuffleRegisterBases(int32_t registerSize, int32_t laneSize) {
 }
 
 // Return a vector such as:
+// [[1, 0], [2, 0], [4, 0], ..., [registerSize / laneSize, 0], [0, 1], ...,
+// [0, laneSize/2]]
+// i.e., mapping registers to registers till registerSize / laneSize (all
+// contiguous registers) and then to lanes.
+std::vector<std::vector<int32_t>>
+buildContiguousSubGroupShuffleRegisterBases(int32_t registerSize,
+                                            int32_t laneSize) {
+  std::vector<std::vector<int32_t>> bases;
+  std::vector<int32_t> curr(2);
+  int i = 1;
+  for (; i < registerSize / laneSize; i *= 2) {
+    curr[0] = i;
+    bases.push_back(curr);
+  }
+  curr[0] = 0;
+  for (int32_t val = 1; i < registerSize; i *= 2, val *= 2) {
+    curr[1] = val;
+    bases.push_back(curr);
+  }
+  return bases;
+}
+
+// Return a vector such as:
 // [[1, 0], [2, 0], [4, 0], ..., [laneSize / 2, 0]],
 // i.e., mapping lanes to registers.
 std::vector<std::vector<int32_t>>
@@ -138,11 +161,32 @@ bool cvtIsSubGroupShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   // ...
   // - register=2**i -> (0, 2**i)
   // ...
-  // - register=M -> (0, 2**M)
+  // - register=M -> (0, 2**(M-1))
+  // - register=M+1 -> (1, 0)
   // ...
-  // - register=2**k -> (2**(k-M), 0)
+  // - register=2**k -> (2**(K-M), 0)
   // ...
   // - register=2**N -> (2**(N-M), 0)
+  // - lane=1 -> (0, 0)
+  // ...
+  // - lane=2**j -> (0, 0)
+  // ...
+  //   lane=2**M -> (0, 0)
+  // where out dims are: [register (size 2**N), lane (size 2**M)]
+  //
+  // With N >= M.
+  //
+  // Or, when the elements managed by a given work-item are in contiguous
+  // positions:
+  // - register=1 -> (1, 0)
+  // ...
+  // - register=2**i -> (2**i, 0)
+  // ...
+  // - register=M -> (2**(N - M), 0)
+  // ...
+  // - register=2**k -> (0, 1)
+  // ...
+  // - register=2**N -> (0, 2**(M-1))
   // - lane=1 -> (0, 0)
   // ...
   // - lane=2**j -> (0, 0)
@@ -154,9 +198,12 @@ bool cvtIsSubGroupShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   int32_t registerInDimSize = conversion->getInDimSize(kRegister);
   int32_t laneOutDimSize = conversion->getOutDimSize(kLane);
   return conversion->sublayoutIsZero({kLane}, {kRegister, kLane}) &&
-         conversion->getBases().lookup(kRegister) ==
-             buildSubGroupShuffleRegisterBases(registerInDimSize,
-                                               laneOutDimSize);
+         (conversion->getBases().lookup(kRegister) ==
+              buildSubGroupShuffleRegisterBases(registerInDimSize,
+                                                laneOutDimSize) ||
+          conversion->getBases().lookup(kRegister) ==
+              buildContiguousSubGroupShuffleRegisterBases(registerInDimSize,
+                                                          laneOutDimSize));
 }
 
 bool isValidElementTypeForSubGroupTranspose(Type type) {
