@@ -32,7 +32,8 @@ namespace {
 
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
-                const ArrayRef<int64_t> shape, unsigned numWarps) {
+                const ArrayRef<int64_t> shape, unsigned numWarps,
+                const SmallVector<unsigned> &order) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -64,7 +65,7 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
 
-  int rowDim = rank - 2, colDim = rank - 1;
+  int rowDim = order[rank - 2], colDim = order[rank - 1];
   do {
     if (ret[rowDim] * ret[colDim] >= numWarps)
       break;
@@ -78,7 +79,6 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
       ret[colDim] *= 2;
     }
   } while (true);
-
   return ret;
 }
 
@@ -115,9 +115,24 @@ public:
 
     auto dpasCap = ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
+
     unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
+
+    SmallVector<unsigned> order = {0, 1};
+    Operation *aOp = a.getDefiningOp();
+    if (aOp && isa<ttg::ConvertLayoutOp>(aOp)) {
+      auto valueToConvert = aOp->getOperand(0);
+      aOp = valueToConvert.getDefiningOp();
+    }
+    if (aOp && isa<tt::LoadOp>(aOp)) {
+      assert(aOp->getNumResults() == 1);
+      Attribute layout =
+          cast<RankedTensorType>(aOp->getResult(0).getType()).getEncoding();
+      order = triton::gpu::getOrder(layout);
+    }
+
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps, order);
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
