@@ -60,7 +60,7 @@ buildContiguousSubGroupTransposeRegisterBases(int32_t registerSize,
                                               int32_t laneSize) {
   std::vector<std::vector<int32_t>> bases;
   std::vector<int32_t> curr(2);
-  int i = 1;
+  int32_t i = 1;
   for (; i < laneSize; i *= 2) {
     curr[1] = i;
     bases.push_back(curr);
