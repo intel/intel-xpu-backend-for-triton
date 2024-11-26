@@ -40,9 +40,9 @@ def test_divide(float_div, floor, trunc, device):
 
     torch.manual_seed(0)
 
-    outputs_float_div = "tl.store(out_ptr0 + (x0), tmp4, xmask)\n    tl.store(out_ptr3 + (x0), tmp4, xmask)" if float_div is True else ""
-    outputs_floor = "\n    tl.store(out_ptr1 + (x0), tmp5, xmask)\n    tl.store(out_ptr4 + (x0), tmp5, xmask)" if floor is True else ""
-    outputs_trunc = "\n    tl.store(out_ptr2 + (x0), tmp6, xmask)" if trunc is True else ""
+    outputs_float_div = "tl.store(out_ptr0 + (x0), tmp4, xmask)\n    tl.store(out_ptr3 + (x0), tmp4, xmask)" if float_div else ""
+    outputs_floor = "    tl.store(out_ptr1 + (x0), tmp5, xmask)\n    tl.store(out_ptr4 + (x0), tmp5, xmask)" if floor else ""
+    outputs_trunc = "    tl.store(out_ptr2 + (x0), tmp6, xmask)" if trunc else ""
 
     divide_kernel = patch_kernel(divide_kernel,
                                  {"GENERATE_OUTPUTS_HERE": f"{outputs_float_div}\n{outputs_floor}\n{outputs_trunc}"})
