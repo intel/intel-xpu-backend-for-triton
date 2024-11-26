@@ -5,6 +5,7 @@ issue: https://github.com/triton-lang/triton/issues/2523
 
 TODO: float8 types
 """
+
 import warnings
 import pytest
 import torch
