@@ -41,10 +41,8 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 
   auto srcShapePerCTA = gpu::getShapePerCTA(srcTy);
   auto dstShapePerCTA = gpu::getShapePerCTA(dstTy);
-  auto srcShapePerCTATile =
-      gpu::getShapePerCTATile(srcLayout, srcTy.getShape());
-  auto dstShapePerCTATile =
-      gpu::getShapePerCTATile(dstLayout, dstTy.getShape());
+  auto srcShapePerCTATile = gpu::getShapePerCTATile(srcLayout);
+  auto dstShapePerCTATile = gpu::getShapePerCTATile(dstLayout);
 
   assert(srcTy.getRank() == dstTy.getRank() &&
          "src and dst must have the same rank");
@@ -291,7 +289,7 @@ private:
   /// Each buffer is allocated only once.
   void resolveExplicitBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (auto valueBufferIter : allocation->getValueBuffer()) {
+    for (auto valueBufferIter : allocation->valueBuffer) {
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
       bufferRange[buffer] = getLiveness(value);
@@ -303,7 +301,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (const auto &aliasBufferIter : allocation->getAliasBuffer()) {
+    for (const auto &aliasBufferIter : allocation->aliasBuffer) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
       auto range = getLiveness(value);
@@ -336,8 +334,8 @@ private:
                                              operationId.lookup(op) + 1)});
       }
     };
-    processScratchMemory(allocation->getOpScratch());
-    processScratchMemory(allocation->getOpVirtual());
+    processScratchMemory(allocation->opScratch);
+    processScratchMemory(allocation->opVirtual);
   }
 
   /// Resolves liveness of all values involved under the root operation.
@@ -501,7 +499,7 @@ private:
   void allocate(const SmallVector<BufferT *> &buffers,
                 const GraphT &interference) {
     // Reset shared memory size
-    allocation->setSharedMemorySize(0);
+    allocation->sharedMemorySize = 0;
     // First-fit graph coloring
     // Neighbors are nodes that interfere with each other.
     // We color a node by finding the index of the first available
@@ -536,8 +534,8 @@ private:
       }
       if (colors.lookup(x) != 0)
         x->setOffsetAligned(newOffset);
-      allocation->setSharedMemorySize(
-          std::max(allocation->getSharedMemorySize(), x->offset + x->size));
+      allocation->sharedMemorySize =
+          std::max(allocation->sharedMemorySize, x->offset + x->size);
     }
   }
 

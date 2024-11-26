@@ -9,7 +9,7 @@
 module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @convert_dot(
   // CHECK-SAME:    %[[VAL_0:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
-  // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], {{.*}}} {
+  // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, {{.*}}} {
   tt.func @convert_dot(%A: tensor<128x64xf16, #blocked0>) {
     // CHECK-DAG:     %[[CST_128:.*]] = llvm.mlir.constant(128 : i32) : i32
     // CHECK-DAG:     %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -18,7 +18,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK-DAG:     %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK-DAG:     %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK-DAG:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    %AA = triton_gpu.local_alloc %A : (tensor<128x64xf16, #blocked0>) -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory>
+    %AA = triton_gpu.local_alloc %A : (tensor<128x64xf16, #blocked0>) -> !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory>
 
     // CHECK:         llvm.call spir_funccc @_Z7barrierj
     // COM:   Start of triton_gpu.local_load. Load the value from SLM to register.
@@ -70,7 +70,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK:         llvm.load %[[VAL_1064]] : !llvm.ptr<3> -> f16
     // CHECK-COUNT-15:{{.*}} = llvm.getelementptr {{.*}}{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16{{[[:space:]].*}}{{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> f16
 
-    %AA_DOT = triton_gpu.local_load %AA : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf16, #dot_operand_a>
+    %AA_DOT = triton_gpu.local_load %AA : !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf16, #dot_operand_a>
 
     %cst0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %cst1 = arith.constant dense<0.000000e+00> : tensor<64x256xf16, #dot_operand_b>
@@ -91,7 +91,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
 module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @convert_dot(
   // CHECK-SAME:    %[[VAL_0:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
-  // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], {{.*}}} {
+  // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, {{.*}}} {
   tt.func @convert_dot(%A: tensor<128x64xf16, #blocked0>) {
     // CHECK-DAG:     %[[CST_128:.*]] = llvm.mlir.constant(128 : i32) : i32
     // CHECK-DAG:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
@@ -101,7 +101,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK-DAG:     %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK-DAG:     %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK-DAG:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    %AA = triton_gpu.local_alloc %A : (tensor<128x64xf16, #blocked0>) -> !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory>
+    %AA = triton_gpu.local_alloc %A : (tensor<128x64xf16, #blocked0>) -> !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory>
 
     // CHECK:         llvm.call spir_funccc @_Z7barrierj
     // COM:   Start of triton_gpu.local_load. Load the value from SLM to register.
@@ -153,7 +153,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK:         llvm.load %[[VAL_1064]] : !llvm.ptr<3> -> f16
     // CHECK-COUNT-31:{{.*}} = llvm.getelementptr {{.*}}{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16{{[[:space:]].*}}{{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> f16
 
-    %AA_DOT = triton_gpu.local_load %AA : !tt.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf16, #dot_operand_a>
+    %AA_DOT = triton_gpu.local_load %AA : !triton_gpu.memdesc<128x64xf16, #shared, #triton_gpu.shared_memory> -> tensor<128x64xf16, #dot_operand_a>
 
     %cst0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %cst1 = arith.constant dense<0.000000e+00> : tensor<64x256xf16, #dot_operand_b>
@@ -174,7 +174,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
 module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @convert_dot(
   // CHECK-SAME:    %[[VAL_1:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
-  // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], {{.*}}} {
+  // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, {{.*}}} {
   tt.func @convert_dot(%B: tensor<64x256xf16, #blocked1>) {
     // CHECK-DAG:     %[[CST_128:.*]] = llvm.mlir.constant(128 : i32) : i32
     // CHECK-DAG:     %[[CST_256:.*]] = llvm.mlir.constant(256 : i32) : i32
@@ -186,7 +186,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK-DAG:     %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK-DAG:     %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK-DAG:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    %BB = triton_gpu.local_alloc %B : (tensor<64x256xf16, #blocked1>) -> !tt.memdesc<64x256xf16, #shared, #triton_gpu.shared_memory>
+    %BB = triton_gpu.local_alloc %B : (tensor<64x256xf16, #blocked1>) -> !triton_gpu.memdesc<64x256xf16, #shared, #triton_gpu.shared_memory>
 
     // CHECK:         llvm.call spir_funccc @_Z7barrierj
     // COM:   Start of triton_gpu.local_load. Load the value from SLM to register.
@@ -237,7 +237,7 @@ module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-wa
     // CHECK:         llvm.load %[[VAL_1064]] : !llvm.ptr<3> -> f16
     // CHECK-COUNT-31:{{.*}} = llvm.getelementptr {{.*}}{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16{{[[:space:]].*}}{{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> f16
 
-    %BB_DOT = triton_gpu.local_load %BB : !tt.memdesc<64x256xf16, #shared, #triton_gpu.shared_memory> -> tensor<64x256xf16, #dot_operand_b>
+    %BB_DOT = triton_gpu.local_load %BB : !triton_gpu.memdesc<64x256xf16, #shared, #triton_gpu.shared_memory> -> tensor<64x256xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %cst1 = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #dot_operand_a>
 

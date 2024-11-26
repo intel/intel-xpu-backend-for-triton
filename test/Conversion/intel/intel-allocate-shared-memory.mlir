@@ -18,6 +18,24 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 :
 
 // -----
 
+#blocked = #triton_gpu.blocked<{sizePerThread = [2, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #triton_gpu.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+
+// Check no scratch memory is allocated for sub-group shuffle-like layout conversions.
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: triton_gpu.shared = 0 : i32
+module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 1 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+  // CHECK: tt.func @test_sub_group_shuffle
+  // CHECK-NOT: llvm.ptr<3>
+  tt.func @test_sub_group_shuffle(%arg0: tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked}>>) -> tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked1}>> {
+    %0 = triton_gpu.convert_layout %arg0 : tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+    tt.return %0 : tensor<32xf16, #triton_gpu.slice<{dim = 1, parent = #blocked1}>>
+  }
+}
+
+// -----
+
 #blocked = #triton_gpu.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 

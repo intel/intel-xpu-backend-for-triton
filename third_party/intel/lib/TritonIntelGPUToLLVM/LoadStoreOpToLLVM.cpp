@@ -36,7 +36,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto order = triton::gpu::getOrder(layout);
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
     Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);

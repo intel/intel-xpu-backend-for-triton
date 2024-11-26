@@ -481,61 +481,6 @@ namespace {
 // Synchronization Ops Lowerings
 //===----------------------------------------------------------------------===//
 
-struct TritonGENSplitBarrier {
-protected:
-  template <typename OpType>
-  void replaceWithCall(OpType op, StringRef funcName,
-                       ConversionPatternRewriter &rewriter) const {
-    static_assert(
-        std::is_same<OpType, TritonGEN::SplitBarrierSignalOp>::value ||
-            std::is_same<OpType, TritonGEN::SplitBarrierWaitOp>::value,
-        "Unexpected OpType");
-
-    MLIRContext *ctx = rewriter.getContext();
-    Location loc = op->getLoc();
-    Type retType = void_ty(ctx);
-    Value memFence = i32_val(static_cast<int>(op.getMemFence()));
-    Value memScope = i32_val(static_cast<int>(op.getMemScope()));
-    SmallVector<Value> args{memFence, memScope};
-    SmallVector<Type> argTypes;
-    for (auto arg : args)
-      argTypes.push_back(arg.getType());
-
-    LLVM::CallOp callOp =
-        createDeviceFunctionCall(rewriter, funcName, retType, argTypes, args,
-                                 {}, convergentNoUnwindWillReturnAttrs);
-    rewriter.replaceOp(op, callOp);
-  }
-};
-
-struct TritonGENSplitBarrierSignalLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierSignalOp>,
-      public TritonGENSplitBarrier {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::SplitBarrierSignalOp>::ConvertOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(TritonGEN::SplitBarrierSignalOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    TritonGENSplitBarrier::replaceWithCall(
-        op, "_Z31intel_work_group_barrier_arriveii", rewriter);
-    return success();
-  }
-};
-
-struct TritonGENSplitBarrierWaitLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierWaitOp>,
-      public TritonGENSplitBarrier {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::SplitBarrierWaitOp>::ConvertOpToLLVMPattern;
-  LogicalResult
-  matchAndRewrite(TritonGEN::SplitBarrierWaitOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    TritonGENSplitBarrier::replaceWithCall(
-        op, "_Z29intel_work_group_barrier_waitii", rewriter);
-    return success();
-  }
-};
-
 struct TritonSubGroupBase {
 protected:
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
@@ -1082,10 +1027,9 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   patterns
-      .add<TritonGENSplitBarrierSignalLowering,
-           TritonGENSplitBarrierWaitLowering, TritonSubGroupReduceLowering,
-           TritonSubGroupScanLowering, TritonMatrixDPASLowering,
-           TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
+      .add<TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
+           TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+           TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
            TritonSubGroupBlockWriteLowering>(converter);
 }

@@ -116,12 +116,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setLinkage(LLVM::Linkage::External);
     }
 
-    NamedAttrList attrs;
-    attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-    attrs.append(TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr({threadsPerWarp}));
-    newFuncOp->setDialectAttrs(attrs);
+    newFuncOp->setAttr(
+        TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
+        rewriter.getDenseI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    newFuncOp.setIntelReqdSubGroupSize(threadsPerWarp);
 
     if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
@@ -181,14 +179,8 @@ struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
-      : mod(mod), ctx(ctx),
-        isAdvancedPathEnabled(
-            mod->hasAttr(gpu::intel::TritonIntelGPUDialect::
-                             getSupportSG2DBlockAttrName()) &&
-            mod->hasAttr(
-                gpu::intel::TritonIntelGPUDialect::getSupportDPASAttrName()) &&
-            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH")) {}
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced)
+      : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
