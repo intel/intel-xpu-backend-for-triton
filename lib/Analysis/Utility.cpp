@@ -917,7 +917,7 @@ public:
   using DataFlowAnalysis::DataFlowAnalysis;
 
   LogicalResult initialize(Operation *top) override {
-    WalkResult result = top->walk([&](Operation *op) {
+    WalkResult result = top->walk([&](Operation *op) -> mlir::WalkResult {
       ProgramPoint programPoint(op);
       if (failed(visit(&programPoint)))
         return WalkResult::interrupt();
