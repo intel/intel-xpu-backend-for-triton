@@ -6,7 +6,7 @@ import sysconfig
 
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Union
+from typing import Dict, List, Tuple, Union
 from types import ModuleType
 
 # Table that associates strings to AttrsDescriptor (sub)classes.
@@ -171,7 +171,7 @@ class AttrsDescriptor:
         return attrs_descriptor
 
     @classmethod
-    def from_hints(cls, hints: list[tuple[int, int]]):
+    def from_hints(cls, hints: List[Tuple[int, int]]):
         """
         Create the class from a set of hints that are passed in.
 

@@ -764,7 +764,7 @@ def get_git_commit_hash(length=8):
 
 def get_install_requires():
     install_requires = [
-        "packaging",  # used by third_party/intel/backend/compiler.py
+        "packaging",  # used by third_party/intel/backend/driver.py
     ]  # yapf: disable
     return install_requires
 

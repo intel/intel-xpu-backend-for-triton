@@ -154,7 +154,7 @@ endfunction()
 if(NOT MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX-")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX- /wd4244 /wd4624 /wd4715 /wd4530")
 endif()
 
 include_directories(".")
