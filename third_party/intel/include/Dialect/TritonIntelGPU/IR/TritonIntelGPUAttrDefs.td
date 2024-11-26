@@ -111,7 +111,7 @@ along the row (resp. col) dimension.
       static constexpr unsigned opsChanBitWidths = 32u;
       unsigned executionSize = 0u;
     };
-    
+
     static DPASCapability getDPASCapability(mlir::ModuleOp mod);
     static unsigned getOpsPerChannel(Type elemType);
   }];
