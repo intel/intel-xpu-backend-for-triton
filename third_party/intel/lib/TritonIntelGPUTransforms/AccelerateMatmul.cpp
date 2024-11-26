@@ -31,7 +31,8 @@ namespace {
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp,
                 ttg::intel::DpasEncodingAttr::DPASCapability dpasCap,
-                const ArrayRef<int64_t> shape, unsigned numWarps) {
+                const ArrayRef<int64_t> shape, unsigned numWarps, const SmallVector<unsigned>& order) {
+
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -63,7 +64,7 @@ getWarpsPerTile(tt::DotOp dotOp,
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
 
-  int rowDim = rank - 2, colDim = rank - 1;
+  int rowDim = order[rank - 2], colDim = order[rank - 1];
   do {
     if (ret[rowDim] * ret[colDim] >= numWarps)
       break;
@@ -122,31 +123,23 @@ public:
         oldAType.getElementType().isFloat8E4M3FN())
       dpasElemBitWidths = 2 * dpasElemBitWidths;
 
-    // now we can get the order from the a defining op 
-
-    llvm::errs() << "oldAType: " << oldAType << "\n";
-    llvm::errs() << "oldBType: " << oldBType << "\n";
-
-    llvm::errs() << "a: " << a << "\n";
-    llvm::errs() << "a defining op: " << *a.getDefiningOp() << "\n";
-
     SmallVector<unsigned> order;
-    Operation* aOp = a.getDefiningOp();
+    Operation *aOp = a.getDefiningOp();
     if (isa<ttg::ConvertLayoutOp>(aOp)) {
       assert(aOp->getNumOperands() == 1);
       auto aLoad = aOp->getOperand(0);
-      order = triton::gpu::getOrder(cast<RankedTensorType>(aLoad.getType()).getEncoding());
+      order = triton::gpu::getOrder(
+          cast<RankedTensorType>(aLoad.getType()).getEncoding());
     } else {
       assert(isa<tt::LoadOp>(aOp) && "expecting load input to DPAS");
-      order = triton::gpu::getOrder(cast<RankedTensorType>(aLoad.getType()).getEncoding());
+      assert(aOp->getNumResults() == 1);
+      auto ret = aOp->getResult(0);
+      order = triton::gpu::getOrder(
+          cast<RankedTensorType>(ret.getType()).getEncoding());
     }
-    // order = triton::gpu::getOrder(a.getDefiningOp().getEncoding());
-    llvm::errs() << "a load order: " << order[0] << ", " << order[1] << "\n";
-
-    // now find the fast changing dimension from the order 
 
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps, order);
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
