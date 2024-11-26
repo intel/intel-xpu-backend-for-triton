@@ -93,9 +93,9 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
 
     Value laneVOffset = urem(laneId, nonKDim);
     Value laneHOffset;
-    if (iNonKDim == 32)
+    if (iNonKDim == 32) {
       laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
-    else {
+    } else {
       // In this configuration warp contains 16 copies of same data
       if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4) {
         laneHOffset = i32_val(0);
@@ -198,7 +198,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto aTensorTy = cast<MemDescType>(tensor.getType());
+  auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
   auto rank = shape.size();
   int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
@@ -230,6 +230,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   } else {
     mfmaInstrNonK = elemsPerInstr[nonKDimIdx];
     mfmaInstrK = elemsPerInstr[kDimIdx];
+  }
+
+  if (mfmaInstrNonK > shape[nonKDimIdx] || mfmaInstrK > shape[kDimIdx]) {
+    // This pattern does not support cases tensor shape is smaller than
+    // one instruction size, it will be processed by LinearLayout converter
+    return Value();
   }
 
   auto numReps = mfmaLayout.getRepForOperand(shape, kWidth, opIdx);

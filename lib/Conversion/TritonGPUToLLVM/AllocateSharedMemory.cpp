@@ -23,7 +23,7 @@ struct AllocateSharedMemory
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
-    ModuleAllocation allocation = ModuleAllocation::get(mod);
+    ModuleAllocation allocation(mod);
 
     mod.walk([&](FunctionOpInterface funcOp) {
       funcOp.walk([&](Operation *op) {

@@ -8,23 +8,24 @@ endif()
 
 include(ExternalProject)
 
-set(CMAKE_CXX_STANDARD 17)
-
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-project(triton CXX)
+project(triton CXX C)
 include(CTest)
 
-if(NOT WIN32)
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-endif()
-
-
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Options
+if(WIN32)
+  set(DEFAULT_BUILD_PROTON OFF)
+else()
+  set(DEFAULT_BUILD_PROTON ON)
+endif()
+
+# Define the option with the determined default value
+option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ${DEFAULT_BUILD_PROTON})
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
-option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ON)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
@@ -44,15 +45,33 @@ if(TRITON_BUILD_WITH_CCACHE)
   endif()
 endif()
 
+set(TRITON_PARALLEL_LINK_JOBS "" CACHE STRING
+  "Define the maximum number of concurrent link jobs (Ninja only).")
+if (TRITON_PARALLEL_LINK_JOBS)
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS link_job_pool=${TRITON_PARALLEL_LINK_JOBS})
+    set(CMAKE_JOB_POOL_LINK link_job_pool)
+endif()
+
 
 # Ensure Python3 vars are set correctly
 # used conditionally in this file and by lit tests
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
-set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
-set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
-set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
-set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
+if(NOT MSVC)
+  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+  set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
+  set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
+else()
+  set(CMAKE_CXX_STANDARD 20)
+  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor")
+  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor")
+  set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  set(CMAKE_STATIC_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+endif()
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -70,7 +89,15 @@ endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
+if(NOT MSVC)
+  if(NOT WIN32)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -fPIC")
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -Wno-deprecated")
+  endif()
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS")
+endif()
 
 
 # #########
@@ -124,7 +151,11 @@ endfunction()
 
 
 # Disable warnings that show up in external code (gtest;pybind11)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+if(NOT MSVC)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX- /wd4244 /wd4624 /wd4715 /wd4530")
+endif()
 
 include_directories(".")
 include_directories(${MLIR_INCLUDE_DIRS})
@@ -134,7 +165,8 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
-# link_directories(${LLVM_LIBRARY_DIR})
+link_directories(${LLVM_LIBRARY_DIR})
+
 add_subdirectory(include)
 add_subdirectory(lib)
 
@@ -163,6 +195,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # using pip install.
     include_directories(${PYTHON_INCLUDE_DIRS})
     include_directories(${PYBIND11_INCLUDE_DIR})
+    message(STATUS "PYTHON_LIB_DIRS ${PYTHON_LIB_DIRS}")
+    link_directories(${PYTHON_LIB_DIRS})
   else()
     # Otherwise, we might be building from top CMakeLists.txt directly.
     # Try to find Python and pybind11 packages.
@@ -199,6 +233,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   if (TRITON_BUILD_PROTON)
     add_subdirectory(third_party/proton)
   endif()
+  # We always build proton dialect
+  list(APPEND TRITON_PLUGIN_NAMES "proton")
+  add_subdirectory(third_party/proton/dialect)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
@@ -245,7 +282,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
           LLVMAArch64CodeGen
           LLVMAArch64AsmParser
       )
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
       list(APPEND TRITON_LIBRARIES
           LLVMX86CodeGen
           LLVMX86AsmParser
@@ -280,6 +317,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
   target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
+    set_target_properties(triton PROPERTIES SUFFIX ".pyd")
+    set_target_properties(triton PROPERTIES PREFIX "lib")
   else()
     target_link_libraries(triton PRIVATE z)
   endif()
@@ -305,7 +344,10 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
+  add_subdirectory(third_party/proton/dialect)
 endif()
+
+find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)

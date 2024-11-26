@@ -1,7 +1,8 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 
 using namespace mlir;
 using namespace mlir::triton;

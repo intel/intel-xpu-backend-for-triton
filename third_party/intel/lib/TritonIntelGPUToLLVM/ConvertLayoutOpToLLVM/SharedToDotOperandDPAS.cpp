@@ -5,6 +5,7 @@
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
 using mlir::triton::gpu::getShapePerCTA;
+using mlir::triton::gpu::MemDescType;
 using mlir::triton::gpu::SharedEncodingAttr;
 using mlir::triton::gpu::intel::DpasEncodingAttr;
 
