@@ -115,7 +115,7 @@ public:
     auto dpasCap = ttg::intel::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan =
-        ttg::intel::DpasEncodingAttr::getOpsPerChannel(dpasCap, elemType);
+        ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
     size_t rank = retShape.size();
@@ -127,7 +127,7 @@ public:
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
 
-    if (dpasCap.executionSize == 16 /* PVC */) {
+    if (dpasCap.isPVC() || dpasCap.isFalconShore()) {
       unsigned dpasElemBitWidths =
           oldAType.getElementType().getIntOrFloatBitWidth();
 
@@ -205,46 +205,64 @@ public:
   matchAndRewrite(tt::DotScaledOp scaledDotOp,
                   PatternRewriter &rewriter) const override {
     RankedTensorType oldRetType = scaledDotOp.getType();
-    if (!oldRetType.getEncoding() ||
-        isa<ttg::intel::DpasEncodingAttr>(oldRetType.getEncoding()))
-      return failure();
+    if (!isa_and_nonnull<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
+      return rewriter.notifyMatchFailure(
+          scaledDotOp, "expected blocked encoding result tensor");
 
-    MLIRContext *ctx = scaledDotOp.getContext();
+    unsigned rank = oldRetType.getRank();
+    if (rank == 3)
+      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: 3d case");
+
     TensorValue a = scaledDotOp.getLhs();
     TensorValue b = scaledDotOp.getRhs();
-    TensorValue scale = scaledDotOp.getLhsScale();
-    tt::ScaleDotElemType aType = scaledDotOp.getLhsType();
-    tt::ScaleDotElemType bType = scaledDotOp.getRhsType();
+    TensorValue aScale = scaledDotOp.getLhsScale();
+    TensorValue bScale = scaledDotOp.getRhsScale();
+    if (bScale)
+      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: RHS scale");
+    if (aScale && bScale)
+      return rewriter.notifyMatchFailure(scaledDotOp,
+                                         "NYI: both LHS and RHS scale");
+    assert(aScale && "LHS scale missing");
 
-    assert((aType == tt::ScaleDotElemType::E4M3 ||
-            aType == tt::ScaleDotElemType::E5M2 ||
-            aType == tt::ScaleDotElemType::E2M1) &&
-           "NYI: lhs supports fp4 or fp8");
-    assert(bType == tt::ScaleDotElemType::E4M3 ||
-           bType == tt::ScaleDotElemType::E5M2 ||
-           bType == tt::ScaleDotElemType::BF16 &&
-               "NYI: rhs supports fp8 and bf16");
+    tt::ScaleDotElemType aElemType = scaledDotOp.getLhsType();
+    tt::ScaleDotElemType bElemType = scaledDotOp.getRhsType();
+
+    auto supportsTypes = [](tt::ScaleDotElemType elemType) {
+      return elemType == tt::ScaleDotElemType::E2M1 ||
+             elemType == tt::ScaleDotElemType::E4M3 ||
+             elemType == tt::ScaleDotElemType::E5M2 ||
+             elemType == tt::ScaleDotElemType::BF16;
+    };
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: mxfp6 operand");
+
+    MLIRContext *ctx = scaledDotOp.getContext();
+    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
 
     // Convert accumulator.
     ttg::intel::DpasEncodingAttr dpasEnc =
         getDPASEncoding(rewriter, scaledDotOp);
+    llvm::errs() << "dpasEnc: " << dpasEnc << "\n";
+
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), dpasEnc);
     TensorValue oldAcc = scaledDotOp.getC();
     TensorValue newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
 
+    unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
+    if (aElemType == tt::ScaleDotElemType::E2M1)
+      opsPerChannel *= 2;
+
     // Upcast A operand.
     auto dpasEncForA = ttg::intel::DpasEncodingAttr::get(
         ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
-        dpasEnc.getExecutionSize(), 2 * dpasEnc.getOpsPerChannel(),
-        dpasEnc.getWarpsPerCTA(), dpasEnc.getRepCluster(),
-        dpasEnc.getSubGroupSize());
+        dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
+        dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
     auto newAEncoding = ttg::DotOperandEncodingAttr::get(
         ctx, 0, dpasEncForA, dpasEncForA.getOpsPerChannel());
-    a = createArg(rewriter, a, aType, newAEncoding);
+    a = createArg(rewriter, a, aElemType, newAEncoding);
 
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
     unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
     SmallVector<unsigned> threadsPerWarp{instrShapeM, warpSize / instrShapeM};
@@ -252,26 +270,29 @@ public:
     auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
         ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(),
         newAEncoding.getCTAOrder(), CTALayout);
-    scale = createScale(rewriter, scale, newScaleEncoding);
+    aScale = createScale(rewriter, aScale, newScaleEncoding);
 
     auto retTypeEncoding = ttg::DotOperandEncodingAttr::get(
         ctx, 0, dpasEnc, dpasEnc.getOpsPerChannel());
-    a = createUpcastMxfpOp(rewriter, a, scale, aType, retTypeEncoding);
+    Value scaledA =
+        createUpcastMxfpOp(rewriter, a, aScale, aElemType, retTypeEncoding);
 
     // Create B operand.
-    assert(bType != tt::ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
+    assert(bElemType != tt::ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
     auto newBEncoding = ttg::DotOperandEncodingAttr::get(
         ctx, 1, dpasEnc, dpasEnc.getOpsPerChannel());
-    b = createArg(rewriter, b, bType, newBEncoding);
+    b = createArg(rewriter, b, bElemType, newBEncoding);
 
     auto newDot = rewriter.create<tt::DotOp>(scaledDotOp.getLoc(), newRetType,
-                                             a, b, newAcc);
+                                             scaledA, b, newAcc);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(scaledDotOp, oldRetType,
                                                       newDot);
     return success();
   }
 
 private:
+  // TODO: this works only when the operand to scale is on the LHS, extend to
+  // support scaling the RHS operand.
   ttg::intel::DpasEncodingAttr
   getDPASEncoding(PatternRewriter &rewriter,
                   tt::DotScaledOp scaledDotOp) const {
@@ -279,8 +300,7 @@ private:
     auto dpasCap = ttg::intel::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = scaledDotOp.getRhs().getType().getElementType();
     unsigned opsPerChan =
-        ttg::intel::DpasEncodingAttr::getOpsPerChannel(dpasCap, elemType);
-
+        ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
     unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
     SmallVector<unsigned> warpsPerTile = {numWarps, 1};
 

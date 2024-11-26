@@ -93,14 +93,27 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getContigPerThread() const;
 
     struct DPASCapability {
-      uint32_t systolicDepth;
-      uint32_t repeatCount;
-      uint32_t executionSize;
-      uint32_t opsChanBitWidths;
-    };
+      DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
+      DPASCapability() = default;
 
+      bool isPVC() const {
+        return executionSize == 16;
+      }
+      bool isFalconShore() const {
+        return executionSize == 16;
+      }
+      bool isATSM() const {
+        return executionSize == 8;
+      }
+
+      static constexpr unsigned systolicDepth = 8u;
+      static constexpr unsigned repeatCount = 8u;
+      static constexpr unsigned opsChanBitWidths = 32u;
+      unsigned executionSize = 0u;
+    };
+    
     static DPASCapability getDPASCapability(mlir::ModuleOp mod);
-    static unsigned getOpsPerChannel(DPASCapability dpasCap, Type elemType);
+    static unsigned getOpsPerChannel(Type elemType);
   }];
 
   let hasCustomAssemblyFormat = 1;

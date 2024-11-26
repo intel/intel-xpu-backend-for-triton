@@ -384,51 +384,27 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
 DpasEncodingAttr::DPASCapability
 DpasEncodingAttr::getDPASCapability(ModuleOp mod) {
   assert(mod && "expected a valid module");
-
   if (!mod->hasAttrOfType<IntegerAttr>(
           triton::gpu::intel::TritonIntelGPUDialect::getMinSGSizeAttrName()))
-    return {};
+    return DPASCapability();
 
   unsigned minSGSize =
       mod->getAttrOfType<IntegerAttr>(
              triton::gpu::intel::TritonIntelGPUDialect::getMinSGSizeAttrName())
           .getInt();
-
-  switch (minSGSize) {
-  case 8: {
-    DPASCapability cap;
-    cap.systolicDepth = 8;
-    cap.repeatCount = 8;
-    cap.executionSize = 8;
-    cap.opsChanBitWidths = 32;
-    return cap;
-  }
-  case 16: {
-    DPASCapability cap;
-    cap.systolicDepth = 8;
-    cap.repeatCount = 8;
-    cap.executionSize = 16;
-    cap.opsChanBitWidths = 32;
-    return cap;
-  }
-  default:
-    return {};
-  }
+  assert(minSGSize == 8 || minSGSize == 16 && "unsupported minSGSize");
+  return DPASCapability(minSGSize);
 }
 
-unsigned
-DpasEncodingAttr::getOpsPerChannel(DpasEncodingAttr::DPASCapability dpasCap,
-                                   Type elemType) {
+unsigned DpasEncodingAttr::getOpsPerChannel(Type elemType) {
   if (!elemType.isIntOrFloat())
     llvm::report_fatal_error("unsupported type for DpasEncodingAttr");
 
   unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
-
-  // We are upcasting FP8 to FP16
   if (elemType.isFloat8E5M2() || elemType.isFloat8E4M3FN())
-    dpasElemBitWidths = 2 * dpasElemBitWidths;
+    dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
 
-  return dpasCap.opsChanBitWidths / dpasElemBitWidths;
+  return DPASCapability::opsChanBitWidths / dpasElemBitWidths;
 }
 
 LogicalResult DpasEncodingAttr::verify(

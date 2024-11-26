@@ -115,6 +115,7 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
     } else {
       auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+
       const int opIdx = oldEncoding.getOpIdx();
       const bool hasBatch = xShape.size() == 3;
       const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
@@ -127,12 +128,10 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       Attribute newVEncoding;
       if (auto dpasEncoding =
               dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
-        auto mod = operands[0].getDefiningOp()->getParentOfType<ModuleOp>();
-        auto dpasCap = intel::DpasEncodingAttr::getDPASCapability(mod);
         auto newDpasEncoding = intel::DpasEncodingAttr::get(
-            ctx, dpasCap.repeatCount, dpasCap.systolicDepth,
-            dpasCap.executionSize,
-            intel::DpasEncodingAttr::getOpsPerChannel(dpasCap, elemType),
+            ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
+            dpasEncoding.getExecutionSize(),
+            intel::DpasEncodingAttr::getOpsPerChannel(elemType),
             dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
             dpasEncoding.getSubGroupSize());
         newVEncoding = DotOperandEncodingAttr::get(
