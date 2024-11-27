@@ -73,7 +73,7 @@ namespace {
   ///           warpsPerCTA[1],
   ///           oldShape[1] / (executionSize * repCluster[1] * warpsPerCTA[1]),
   ///           warpsPerCTA[0]]
-  /// - Encoding: `#triton_gpu.blocked<{
+  /// - Encoding: `#ttg.blocked<{
   ///                 sizePerThread = [1, repeatCount, repCluster[1], repCluster[0], 1, oldShape[1] / (executionSize * repCluster[1] * warpsPerCTA[1]), 1],
   ///                 threadsPerWarp = [executionSize, 1, 1, 1, 1, 1, 1],
   ///                 warpsPerCTA = [1, 1, 1, 1, warpsPerCTA[1], 1, warpsPerCTA[0]],
@@ -136,7 +136,7 @@ namespace {
   ///                       repCluster[0],
   ///                       warpsPerCTA[1],
   ///                       warpsPerCTA[0]]
-  /// - Encoding: `#triton_gpu.blocked<{
+  /// - Encoding: `#ttg.blocked<{
   ///                 sizePerThread = [executionSize, repeatCount * repCluster[0] / executionSize, 1, 1, 1],
   ///                 threadsPerWarp = [1, executionSize / repCluster[0], repCluster[0], 1, 1],
   ///                 warpsPerCTA = [1, 1, 1, warpsPerCTA[1], warpsPerCTA[0]],
@@ -160,7 +160,7 @@ namespace {
   ///                       repeatCount * repCluster[0],
   ///                       warpsPerCTA[1],
   ///                       warpsPerCTA[0]]
-  /// - Encoding: `#triton_gpu.blocked<{
+  /// - Encoding: `#ttg.blocked<{
   ///                 sizePerThread = [executionSize, repeatCount * repCluster[0] / executionSize, 1, 1],
   ///                 threadsPerWarp = [1, executionSize, 1, 1],
   ///                 warpsPerCTA = [1, 1, warpsPerCTA[1], warpsPerCTA[0]],
