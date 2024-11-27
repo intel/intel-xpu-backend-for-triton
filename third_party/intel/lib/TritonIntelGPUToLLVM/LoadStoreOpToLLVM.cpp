@@ -117,15 +117,13 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
       blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
   assert(elems.size() == 7 &&
          "unexpected number of values unpacked from a block pointer");
-  BlockPointerValues values{
-      .base = elems[6],
-      .baseWidth = elems[3],
-      .baseHeight = elems[2],
-      .rowStride = elems[4],
-      .colStride = elems[5],
-      .offsetBaseX = elems[1],
-      .offsetBaseY = elems[0],
-  };
+  BlockPointerValues values{/*base=*/elems[6],
+                            /*baseWidth=*/elems[3],
+                            /*baseHeight=*/elems[2],
+                            /*rowStride=*/elems[4],
+                            /*colStride=*/elems[5],
+                            /*offsetBaseX=*/elems[1],
+                            /*offsetBaseY=*/elems[0]};
   return values;
 }
 
