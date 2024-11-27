@@ -383,8 +383,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 16 
     tt.return
   }
 
-  // CHECK: @issue_2752
-  tt.func public @issue_2752(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+  // CHECK: @issue_2762
+  tt.func public @issue_2762(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %c128_i32 = arith.constant 128 : i32
     %c0_i32 = arith.constant 0 : i32
     %c262144_i64 = arith.constant 262144 : i64
