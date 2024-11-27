@@ -161,8 +161,7 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
-link_directories(${LLVM_LIBRARY_DIR})
-
+# link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
 
