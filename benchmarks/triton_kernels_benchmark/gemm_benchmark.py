@@ -32,7 +32,7 @@ use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [2, 3]
+            num_stages=s, num_warps=32) for s in [2, 3, 4]
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
