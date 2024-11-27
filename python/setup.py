@@ -138,7 +138,7 @@ def set_env_vars(vs_path, arch="x64"):
         raise FileNotFoundError(f"vcvarsall.bat not found in expected path: {vcvarsall_path}")
 
     command = ["call", vcvarsall_path, arch, "&&", "set"]
-    output = subprocess.check_output(command, shell=True, text=True)
+    output = subprocess.check_output(command, text=True)
 
     for line in output.splitlines():
         if '=' in line:
