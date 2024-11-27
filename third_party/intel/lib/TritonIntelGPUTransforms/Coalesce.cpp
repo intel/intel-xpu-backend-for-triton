@@ -122,6 +122,8 @@ private:
   // Find the defining makeTensorPtrOp operation of the given value.
   static std::optional<tt::MakeTensorPtrOp>
   findDefiningMakeTensorPtrOp(Value val) {
+    LDBG("Attempting to find `makeTensorPtrOp` defining: " << val);
+
     if (auto arg = dyn_cast<BlockArgument>(val)) {
       Operation *parentOp = val.getParentBlock()->getParentOp();
       assert(isa<scf::ForOp>(parentOp) && "Expected a scf::ForOp");
@@ -134,6 +136,14 @@ private:
       return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
     if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
       return makePtrOp;
+    if (auto opRes = dyn_cast<OpResult>(val)) {
+      Operation *defOp = opRes.getOwner();
+      if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+        Value val = forOp.getYieldedValues()[opRes.getResultNumber()];
+        return findDefiningMakeTensorPtrOp(val);
+      }
+      assert(false && "unhandled operation");
+    }
 
     return std::nullopt;
   }
@@ -369,12 +379,14 @@ public:
     });
 
     LLVM_DEBUG({
-      DBGS() << "\nlayoutMap:\n";
+      DBGS() << "layoutMap:\n";
+      if (layoutMap.empty())
+        DBGS() << "\t<empty>";
       for (auto [op, encoding] : layoutMap) {
-        DBGS() << "op: " << *op << "\n";
-        DBGS() << "encoding: " << encoding << "\n\n";
+        DBGS() << "\top: " << *op << "\n";
+        DBGS() << "\tencoding: " << encoding << "\n";
       }
-      llvm::errs() << "\n\n";
+      llvm::errs() << "\n";
     });
 
     // For each memory op that has a layout L1:
