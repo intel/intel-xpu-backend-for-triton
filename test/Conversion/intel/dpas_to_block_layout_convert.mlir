@@ -6,7 +6,7 @@
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 67584 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @convert_dpas(
 // CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>,
-// CHECK-SAME:                                          %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, reqd_work_group_size = array<i32: 512, 1, 1>} {
+// CHECK-SAME:                                          %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, reqd_work_group_size = array<i32: 1, 1, 512>} {
   tt.func public @convert_dpas(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
@@ -69,7 +69,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
 module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 67584 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @convert_dpas(
 // CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>,
-// CHECK-SAME:                                          %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, reqd_work_group_size = array<i32: 512, 1, 1>} {
+// CHECK-SAME:                                          %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, reqd_work_group_size = array<i32: 1, 1, 512>} {
   tt.func public @convert_dpas(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
