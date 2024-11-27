@@ -29,7 +29,7 @@ on:
         type: string
         default: "[]"
       use_pyenv_python:
-        description: Use Python built with pyenv 
+        description: Use Python built with pyenv
         type: boolean
         default: false
 
@@ -76,7 +76,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
+
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         if: ${{ inputs.use_pyenv_python }}
         uses: ./.github/actions/setup-pyenv-python
