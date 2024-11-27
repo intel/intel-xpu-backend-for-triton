@@ -244,13 +244,21 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
         build_flags.addLargeGRFSizeFlag();
 
-        auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
-            binary_ptr, binary_size, kernel_name, l0_device, l0_context,
-            build_flags(), is_spv);
+        try {
+          auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
+              binary_ptr, binary_size, kernel_name, l0_device, l0_context,
+              build_flags(), is_spv);
 
-        if (debugEnabled)
-          std::cout << "(I): Kernel has now " << n_spills << " spills"
-                    << std::endl;
+          if (debugEnabled)
+            std::cout << "(I): Kernel has now " << n_spills << " spills"
+                      << std::endl;
+        } catch (const std::exception &e) {
+          std::cerr << "[Ignoring] Error during Intel loadBinary with large "
+                       "registers: "
+                    << e.what() << std::endl;
+          // construct previous working version
+          build_flags = BuildFlags(build_flags_ptr);
+        }
       }
     }
 
