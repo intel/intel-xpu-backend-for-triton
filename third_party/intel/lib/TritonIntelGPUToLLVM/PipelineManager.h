@@ -144,7 +144,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
 
     newFuncOp.setReqdWorkGroupSize(
-        ArrayRef<int>{threadsPerWarp * numWarps, 1, 1});
+        ArrayRef<int>{1, 1, threadsPerWarp * numWarps});
     newFuncOp.setIntelReqdSubGroupSize(threadsPerWarp);
 
     if (!LLVM::isKernel(funcOp)) {
