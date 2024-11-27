@@ -694,6 +694,27 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return res;
   }
 
+  int getNumContiguousRowsForTranspose(const LinearLayout &srcLayout,
+                                       const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = getContext();
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp =
+        *dstLayout.invertAndCompose(srcLayout).quotient({kWarp, kBlock});
+    // Basic case: the number of contiguous rows is 0.
+    if (comp.getBasis(kLane, 0)[0] == 1)
+      return 1;
+    // In other case, we only allow all threads handled by a single element to
+    // be contiguous, so we can simply:
+    int32_t sizePerThread = comp.getOutDimSize(kRegister);
+    int32_t threadsPerWarp = comp.getOutDimSize(kLane);
+    assert(sizePerThread % threadsPerWarp == 0 && "Invalid transpose");
+    return sizePerThread / threadsPerWarp;
+  }
+
   void performSubGroupTranspose(ConvertLayoutOp op,
                                 const LinearLayout &srcLayout,
                                 const LinearLayout &dstLayout,
@@ -738,8 +759,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         })
         .Default([](auto) { llvm_unreachable("Unsupported type"); });
 
-    SmallVector<Value> outVals =
-        performSubGroupTranspose(loc, inVals, rewriter);
+    SmallVector<Value> outVals = performSubGroupTranspose(
+        loc, inVals, rewriter,
+        getNumContiguousRowsForTranspose(srcLayout, dstLayout));
 
     TypeSwitch<Type>(origElemTy)
         .Case([&](FloatType floatTy) {
@@ -788,7 +810,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   SmallVector<Value>
   performSubGroupTranspose(Location loc, ArrayRef<Value> inVals,
-                           ConversionPatternRewriter &rewriter) const {
+                           ConversionPatternRewriter &rewriter,
+                           int numContiguousRows) const {
     Type elementType = inVals.front().getType();
     auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
 
@@ -828,12 +851,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Each work-item will load a row (but the last garbage element) and go to
     // the next row it needs to handle.
-    int32_t workItemStride = rowLength * threadsPerWarp;
+
+    int32_t workItemStride =
+        numContiguousRows == 1 ? rowLength * threadsPerWarp : rowLength;
     Value workItemOffset =
-        mul(subGroupLocalId, int_val(offsetBitWidth, workItemStride));
+        mul(subGroupLocalId,
+            int_val(offsetBitWidth, numContiguousRows * rowLength));
     Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
                                 ValueRange{workItemOffset}, /*inbounds=*/true);
     int32_t rowsPerThread = numRows / threadsPerWarp;
+    assert((numContiguousRows == 1 || numContiguousRows == rowsPerThread) &&
+           "In case of more than one contiguous rows per thread, these must be "
+           "consecutive");
     // We may not be able to load rows in a single operation if the sub-group
     // size exceeds a given threshold (16):
     unsigned vecLoadWidth = getVecLoadWidth(threadsPerWarp);
