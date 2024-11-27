@@ -486,7 +486,6 @@ class CMakeBuild(build_ext):
             os.makedirs(self.build_temp)
         # python directories
         python_include_dir = sysconfig.get_path("platinclude")
-        python_lib_dir = sysconfig.get_path("platstdlib")
         cmake_args = [
             "-G", "Ninja",  # Ninja is much faster than make
             "-DCMAKE_MAKE_PROGRAM=" +
@@ -495,10 +494,13 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
             "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
-            "-DPYTHON_LIB_DIRS=" + python_lib_dir,
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
+        if platform.system() == "Windows":
+            installed_base = sysconfig.get_config_var('installed_base')
+            py_lib_dirs = os.getenv("PYTHON_LIB_DIRS", os.path.join(installed_base, "libs"))
+            cmake_args.append("-DPYTHON_LIB_DIRS=" + py_lib_dirs)
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
         cmake_args.extend(thirdparty_cmake_args)
