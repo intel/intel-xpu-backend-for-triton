@@ -81,7 +81,7 @@ jobs:
         if: ${{ inputs.use_pyenv_python }}
         uses: ./.github/actions/setup-pyenv-python
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Identify Python version
         run: |
