@@ -29,9 +29,10 @@ on:
         type: string
         default: "[]"
       use_pyenv_python:
-        description: Use system Python
+        description: Use Python built with pyenv 
         type: boolean
         default: false
+
   schedule:
     - cron: "5 23 * * *"
   pull_request:
@@ -75,6 +76,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
 
       - name: Identify Python version
         run: |
