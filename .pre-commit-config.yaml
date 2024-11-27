@@ -65,7 +65,7 @@ repos:
     rev: '1.7.9'
     hooks:
     - id: bandit
-      files: '^(benchmarks|scripts|third_party/intel)/.*\.py$'
+      files: '^(benchmarks|scripts|third_party/intel|python/triton/runtime)/.*\.py$'
       args: ["-c", "bandit.yaml", "-s", "B404,B603,B607"]
       stages: [pre-commit, pre-push, manual]
 
