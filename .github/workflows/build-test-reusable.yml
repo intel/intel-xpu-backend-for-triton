@@ -57,7 +57,7 @@ on:
         type: string
         default: runner-0.0.20
       use_pyenv_python:
-        description: Use Python built with pyenv 
+        description: Use Python built with pyenv
         type: boolean
         default: false
 

@@ -33,7 +33,7 @@ on:
         type: boolean
         default: false
       use_pyenv_python:
-        description: Use Python built with pyenv 
+        description: Use Python built with pyenv
         type: boolean
         default: false
 
