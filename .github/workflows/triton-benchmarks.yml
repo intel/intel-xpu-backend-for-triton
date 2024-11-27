@@ -28,7 +28,7 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
-      use_system_python:
+      use_pyenv_python:
         description: Use system Python
         type: boolean
         default: false
@@ -71,7 +71,7 @@ jobs:
           key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
       - name: Install Python
-        if: ${{ !(inputs.use_system_python || false) }}
+        if: ${{ !(inputs.use_pyenv_python || false) }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
