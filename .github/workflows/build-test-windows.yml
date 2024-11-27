@@ -29,7 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
@@ -39,18 +39,24 @@ jobs:
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
 
+      - name: Setup PyTorch
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
+          python -c 'import torch;print(torch.__version__)'
+
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
       # runner.
-      - name: Build Triton
+      - name: Setup Triton
         run: |
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 certifi cython cmake
           python -m certifi
           pip install -v --no-build-isolation '.[build]'
+          python -c 'import triton; print(triton.__version__)'
 
-      - name: Clean
+      - name: Clean up workspace
         if: ${{ always() }}
         run: |
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
