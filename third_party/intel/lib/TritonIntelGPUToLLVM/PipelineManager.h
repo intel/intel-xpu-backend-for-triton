@@ -116,9 +116,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setLinkage(LLVM::Linkage::External);
     }
 
-    newFuncOp->setAttr(
-        TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
-        rewriter.getDenseI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    newFuncOp.setReqdWorkGroupSize(
+        ArrayRef<int>{threadsPerWarp * numWarps, 1, 1});
     newFuncOp.setIntelReqdSubGroupSize(threadsPerWarp);
 
     if (!LLVM::isKernel(funcOp)) {
