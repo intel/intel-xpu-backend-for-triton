@@ -84,17 +84,16 @@ if(NOT WIN32)
 endif()
 
 if(TRITON_BUILD_UT)
+  # This is an aggregate target for all unit tests.
+  add_custom_target(TritonUnitTests)
+  set_target_properties(TritonUnitTests PROPERTIES FOLDER "Triton/Tests")
   include(AddTritonUnitTest)
 endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(NOT MSVC)
-  if(NOT WIN32)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -fPIC")
-  else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -Wno-deprecated")
-  endif()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS")
 endif()
@@ -165,8 +164,7 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
-link_directories(${LLVM_LIBRARY_DIR})
-
+# link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
 
@@ -355,4 +353,10 @@ add_subdirectory(test)
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)
+  # This target runs all the unit tests.
+  add_custom_target(check-triton-unit-tests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS TritonUnitTests
+    USES_TERMINAL
+  )
 endif()
