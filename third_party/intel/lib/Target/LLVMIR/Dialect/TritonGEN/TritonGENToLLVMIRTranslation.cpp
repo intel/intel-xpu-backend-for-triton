@@ -50,9 +50,6 @@ public:
                                           decorationAttr);
     }
     if (attrName ==
-        triton::TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName())
-      return handleTritonGenAttr(op, attribute, moduleTranslation);
-    if (attrName ==
         triton::TritonGEN::TritonGENDialect::getOpenCLKernelsAttrName())
       return handleTritonGenOpenCLKernelsAttr(op, moduleTranslation);
     return success();
@@ -104,59 +101,6 @@ private:
         "spirv.DecorationCacheControlINTEL";
     inst->setMetadata(decorationCacheControlMDName,
                       llvm::MDNode::get(ctx, decorations));
-    return success();
-  }
-
-  LogicalResult
-  handleTritonGenAttr(Operation *op, NamedAttribute attribute,
-                      LLVM::ModuleTranslation &moduleTranslation) const {
-    llvm::LLVMContext &llvmContext = moduleTranslation.getLLVMContext();
-    llvm::Function *llvmFunc =
-        moduleTranslation.lookupFunction(cast<LLVM::LLVMFuncOp>(op).getName());
-    if (isKernel(op))
-      amendKernel(llvmContext, llvmFunc, attribute);
-    return success();
-  }
-
-  // Checks if the given operation is a kernel function.
-  bool isKernel(Operation *op) const {
-    auto fn = dyn_cast<LLVM::LLVMFuncOp>(op);
-    return fn && fn.getCConv() == LLVM::CConv::SPIR_KERNEL;
-  }
-
-  // The attribute is converted into metadata and added to the function.
-  void amendKernel(llvm::LLVMContext &llvmContext, llvm::Function *llvmFunc,
-                   NamedAttribute attribute) const {
-    StringRef name = attribute.getName().getValue();
-    assert(name == triton::TritonGEN::TritonGENDialect::
-                       getMaxWorkGroupSizeAttrName() &&
-           "Unexpected attribute");
-    SmallVector<llvm::Metadata *, 3> metadata;
-    llvm::Type *i64 = llvm::IntegerType::get(llvmContext, 64);
-    for (int32_t i :
-         cast<DenseI32ArrayAttr>(attribute.getValue()).asArrayRef()) {
-      llvm::Constant *constant = llvm::ConstantInt::get(i64, i);
-      metadata.push_back(llvm::ConstantAsMetadata::get(constant));
-    }
-    llvm::MDNode *node = llvm::MDNode::get(llvmContext, metadata);
-    llvmFunc->setMetadata(name.drop_front(11), node);
-  }
-
-  static LogicalResult
-  handleTritonGenOpenCLKernelsAttr(Operation *op,
-                                   LLVM::ModuleTranslation &moduleTranslation) {
-    auto mlirFunc = dyn_cast<LLVM::LLVMFuncOp>(op);
-    if (!mlirFunc)
-      return op->emitOpError("triton_gen.opencl_kernels attribute attached to "
-                             "non-function operation");
-    llvm::Function *func = moduleTranslation.lookupFunction(mlirFunc.getName());
-    assert(func && "Function not found");
-    constexpr StringLiteral openCLKernelsMDName = "opencl.kernels";
-    llvm::NamedMDNode *openCLKernels =
-        moduleTranslation.getOrInsertNamedModuleMetadata(openCLKernelsMDName);
-    llvm::Metadata *kernelRef = llvm::ConstantAsMetadata::get(func);
-    openCLKernels->addOperand(
-        llvm::MDNode::get(moduleTranslation.getLLVMContext(), kernelRef));
     return success();
   }
 };

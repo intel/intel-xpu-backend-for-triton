@@ -26,12 +26,6 @@ def TritonGEN_Dialect : Dialect {
   let extraClassDeclaration = [{
     /// Get the name of the attribute used to annotate max work group size
     /// required for kernels.
-    static constexpr ::llvm::StringLiteral getMaxWorkGroupSizeAttrName() {
-      return ::llvm::StringLiteral("triton_gen.max_work_group_size");
-    }
-
-    /// Get the name of the attribute used to annotate max work group size
-    /// required for kernels.
     static constexpr ::llvm::StringLiteral getOpenCLKernelsAttrName() {
       return ::llvm::StringLiteral("triton_gen.opencl_kernels");
     }
