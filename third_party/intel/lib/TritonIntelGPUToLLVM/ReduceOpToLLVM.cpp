@@ -182,11 +182,17 @@ private:
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
     unsigned threadOffsetOnReductionAxis =
         helper.getThreadOffsetOnReductionAxis();
+    SmallVector<Value> acc;
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
-      SmallVector<Value> &acc = accs[key];
-      warpReduce(rewriter, op.getLoc(), acc, op, sizeIntraWarps,
-                 threadOffsetOnReductionAxis);
+      acc.push_back(accs[key][0]);
+    }
+    warpReduce(rewriter, op.getLoc(), acc, op, sizeIntraWarps,
+               threadOffsetOnReductionAxis);
+    auto iter = acc.begin();
+    for (auto it : accs) {
+      const SmallVector<unsigned> &key = it.first;
+      accs[key][0] = *iter++;
     }
   }
 
