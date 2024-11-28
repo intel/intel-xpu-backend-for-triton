@@ -28,10 +28,11 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
-      use_system_python:
-        description: Use system Python
+      use_pyenv_python:
+        description: Use Python built with pyenv
         type: boolean
         default: false
+
   schedule:
     - cron: "5 23 * * *"
   pull_request:
@@ -71,8 +72,14 @@ jobs:
           key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
       - name: Install Python
-        if: ${{ !(inputs.use_system_python || false) }}
+        if: ${{ !(inputs.use_pyenv_python || false) }}
         uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -151,7 +158,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           # Default path:
           TRITON_INTEL_ADVANCED_PATH=0 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra" \
           IGC_DisableLoopUnroll=1 \
           python gemm_benchmark.py --reports $REPORTS
@@ -167,7 +173,6 @@ jobs:
           cd benchmarks/triton_kernels_benchmark
           # Advanced path:
           TRITON_INTEL_ADVANCED_PATH=1 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra" \
           IGC_DisableLoopUnroll=1 \
           python gemm_benchmark.py --reports $REPORTS

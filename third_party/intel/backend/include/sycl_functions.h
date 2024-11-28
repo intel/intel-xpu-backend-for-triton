@@ -135,7 +135,7 @@ create_function(ze_module_handle_t module, std::string_view func_name) {
 
 void printModuleKernelName(ze_module_handle_t hModule) {
   uint32_t Count = 0;
-  auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
+  [[maybe_unused]] auto ret = zeModuleGetKernelNames(hModule, &Count, nullptr);
   assert(ret == ZE_RESULT_SUCCESS);
   std::unique_ptr<const char *[]> PNames(new const char *[Count]);
   ret = zeModuleGetKernelNames(hModule, &Count, PNames.get());

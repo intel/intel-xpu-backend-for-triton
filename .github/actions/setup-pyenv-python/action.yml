@@ -1,0 +1,52 @@
+name: setup-pyenv-python
+description: Setup Python via pyenv
+inputs:
+  python-version:
+    description: Python version to setup
+  pyenv-version:
+    description: Pyenv version to setup
+    default: "v2.4.19"
+runs:
+  using: "composite"
+  steps:
+    - name: Clone pyenv
+      uses: actions/checkout@v4
+      with:
+        repository: "pyenv/pyenv"
+        ref: ${{ inputs.pyenv-version }}
+        path: pyenv
+
+    - name: Setup environment variables
+      shell: bash
+      run: |
+        echo PATH="${PWD}/pyenv/bin:${PATH}" >> "${GITHUB_ENV}"
+        echo PYENV_ROOT="${PWD}/pyenv" >> "${GITHUB_ENV}"
+
+    - name: Setup pyenv into profile
+      shell: bash
+      run: |
+        eval "$(pyenv init -)" >> ~/.profile
+
+    - name: Install required packages
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libncurses5-dev libbz2-dev libreadline-dev libsqlite3-dev libssl-dev zlib1g-dev liblzma-dev
+
+    - name: Setup Python
+      shell: bash
+      run: |
+        set -x
+        pyenv install ${{ inputs.python-version }}
+        pyenv global ${{ inputs.python-version }}
+        echo PATH="$(dirname $(pyenv which python${{ inputs.python-version }})):$PATH" >> ${GITHUB_ENV}
+
+    - name: Use python as python3
+      shell: bash
+      run: |
+        set -x
+        ls -l ~/.local/bin/
+        ln -sf $(which pip${{ inputs.python-version }}) ~/.local/bin/pip
+        ln -sf $(which python${{ inputs.python-version }}) ~/.local/bin/python
+        ln -sf $(which pip${{ inputs.python-version }}) ~/.local/bin/pip3
+        ln -sf $(which python${{ inputs.python-version }}) ~/.local/bin/python3

@@ -33,15 +33,6 @@ namespace {
 
 #define S(v) StringAttr::get(ctx, (v))
 
-// Returns ["out0", "out1", ..., "out<rank-1>"].
-SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
-  SmallVector<StringAttr> ret;
-  for (int i = 0; i < rank; i++) {
-    ret.push_back(S("dim" + llvm::Twine(i)));
-  }
-  return ret;
-}
-
 // Returns a 1D -> ND layout that's equivalent to creating a 1D -> 1D mapping of
 // size product(shape) and then reshaping to permute(shape, order).
 LinearLayout identityND(StringAttr inDimName, ArrayRef<unsigned> shape,

@@ -1,9 +1,9 @@
 // RUN: TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 triton-opt %s --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [16, 2], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [16, 2], order = [1, 0]}>
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
-#dot1 = #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
 
 // COM: Test that, instead of 2D block reads, the compiler generates address payload create/set/load builtins.
 // CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
@@ -13,7 +13,7 @@
 // CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_setBlock2DAddressPayloadBlockX(!llvm.ptr {llvm.nonnull}, i32) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = write, inaccessibleMem = none>, no_unwind, will_return}
 // CHECK-DAG: llvm.func spir_funccc @__builtin_IB_subgroup_createBlock2DAddressPayload(i64, i32, i32, i32, i32, i32, i32, i32, i32) -> !llvm.ptr attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind}
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, triton_gpu.shared = 33792 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 32 : i32, ttg.shared = 33792 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_with_addr_payload_opt(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i64, %arg7: i64) {
     // CHECK-LABEL: @matmul_kernel_with_addr_payload_opt
     // CHECK: [[CMP:%.*]] = llvm.icmp "slt" {{.*}}, %arg4 : i64

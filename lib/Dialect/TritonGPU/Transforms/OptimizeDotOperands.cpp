@@ -157,7 +157,7 @@ public:
     if (auto srcCvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
       srcTy = srcCvt.getSrc().getType();
     }
-    auto sharedLoadTy = cast<RankedTensorType>(cvtOp.getType());
+    RankedTensorType sharedLoadTy = cvtOp.getType();
     auto cvtEncoding =
         dyn_cast<DotOperandEncodingAttr>(sharedLoadTy.getEncoding());
     if (!cvtEncoding)

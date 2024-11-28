@@ -57,6 +57,7 @@ class XPUOptions:
     sanitize_overflow: bool = False
     generate_native_code: bool = False
     advanced_path: bool = False
+    one_matrix_per_load_for_bt: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -268,7 +269,7 @@ class XPUBackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options):
         # warp-specialization mutates num_warps
-        num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
+        num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
         threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
@@ -293,7 +294,7 @@ class XPUBackend(BaseBackend):
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
         intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
@@ -315,7 +316,7 @@ class XPUBackend(BaseBackend):
             intel.post_process_llir(llvm_mod)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["shared"] = src.get_int_attr("ttg.shared")
         ret = str(llvm_mod)
         del llvm_mod
         del context

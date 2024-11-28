@@ -51,10 +51,9 @@ struct AllocateSharedMemory
       });
     });
     int32_t initialSharedMemorySize = 0;
-    if (IntegerAttr sharedAttr =
-            mod->getAttrOfType<IntegerAttr>("triton_gpu.shared"))
+    if (IntegerAttr sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared"))
       initialSharedMemorySize = sharedAttr.getInt();
-    mod->setAttr("triton_gpu.shared",
+    mod->setAttr("ttg.shared",
                  IntegerAttr::get(IntegerType::get(ctx, 32),
                                   initialSharedMemorySize +
                                       allocation.getSharedMemorySize()));
