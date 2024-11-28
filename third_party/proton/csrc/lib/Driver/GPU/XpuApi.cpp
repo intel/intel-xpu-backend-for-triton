@@ -1,10 +1,8 @@
 #include "Driver/GPU/XpuApi.h"
 #include "Driver/Dispatch.h"
 
-#include "sycl_functions.h"
 #include <level_zero/ze_api.h>
 #include <string>
-#include <vector>
 
 namespace proton {
 
@@ -43,16 +41,27 @@ DEFINE_DISPATCH(ExternLibCuda, deviceGet, cuDeviceGet, CUdevice *, int)
 
 // FIXME: for this initialization is needed
 // ref: initDevices
-static std::vector<std::pair<sycl::device, ze_device_handle_t>>
-    g_sycl_l0_device_list;
+// static std::vector<std::pair<sycl::device, ze_device_handle_t>>
+//    g_sycl_l0_device_list;
 
 // FIXME: probably `DEFINE_DISPATCH` should be used in this function
 Device getDevice(uint64_t index) {
   // ref: getDeviceProperties
-  const auto device = g_sycl_l0_device_list[index];
+
+  // FIXME: double check that initialization is needed
+  zeInit(ZE_INIT_FLAG_GPU_ONLY);
+
+  // FIXME: For now I use the naive approach that the device index from PTI
+  // record coincides with the default numbering of all devices
+
+  uint32_t driverCount = 1;
+  ze_driver_handle_t driverHandle;
+  zeDriverGet(&driverCount, &driverHandle);
+  uint32_t deviceCount = 1;
 
   // Get device handle
-  ze_device_handle_t phDevice = device.second;
+  ze_device_handle_t phDevice;
+  zeDeviceGet(driverHandle, &deviceCount, &phDevice);
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
