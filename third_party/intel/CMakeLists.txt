@@ -17,6 +17,8 @@ add_triton_plugin(TritonXPU
   TritonToTritonGPUWarp
 )
 
+target_link_libraries(TritonXPU PRIVATE Python3::Module pybind11::headers)
+
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)
 endif()
