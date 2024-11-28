@@ -163,9 +163,6 @@ class XPUUtils(object):
     def get_current_device(self):
         return self.current_device
 
-    def get_event_pool(self):
-        return self.event_pool
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
