@@ -13,6 +13,9 @@ target_link_libraries(triton-opt PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
+  TritonIntelLLVMIR
+  TritonIntelGPUIR
+  TritonIntelGPUTransforms
   MLIRGPUToROCDLTransforms
   ${dialect_libs}
   ${conversion_libs}
@@ -88,6 +91,7 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMSupport
   LLVMOption
   LLVMCodeGen
+  TritonIntelLLVMIR
   TritonIntelGPUIR
   )
 export_executable_symbols_for_plugins(triton-llvm-opt)
