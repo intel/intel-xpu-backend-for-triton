@@ -12,8 +12,6 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from packaging.version import Version
-from packaging.specifiers import SpecifierSet
 
 
 def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
@@ -51,7 +49,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
     except importlib.metadata.PackageNotFoundError:
         raise AssertionError(assertion_message)
 
-    if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
+    if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
     sycl_dir = None

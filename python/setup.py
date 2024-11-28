@@ -758,13 +758,6 @@ def get_git_commit_hash(length=8):
         return ""
 
 
-def get_install_requires():
-    install_requires = [
-        "packaging",  # used by third_party/intel/backend/driver.py
-    ]  # yapf: disable
-    return install_requires
-
-
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="3.2.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -774,7 +767,6 @@ setup(
     long_description="",
     packages=get_packages(),
     entry_points=get_entry_points(),
-    install_requires=get_install_requires(),
     package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
