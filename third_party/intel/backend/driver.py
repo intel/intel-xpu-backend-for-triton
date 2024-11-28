@@ -49,7 +49,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
     except importlib.metadata.PackageNotFoundError:
         raise AssertionError(assertion_message)
 
-    if not sycl_rt.get("version", "0.0.0").startswith("2025"):
+    if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
     sycl_dir = None
