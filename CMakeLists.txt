@@ -187,9 +187,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   # Python Interpreter is used to run lit tests
   find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
   find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
-  if(PYTHON_INCLUDE_DIRS)
-    message(STATUS "PYTHON_LIB_DIRS ${PYTHON_LIB_DIRS}")
-    link_directories(${PYTHON_LIB_DIRS})
 
   if (DEFINED TRITON_PLUGIN_DIRS)
     foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
