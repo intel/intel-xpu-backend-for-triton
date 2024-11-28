@@ -56,7 +56,8 @@ jobs:
         run: |
           cd ${{ env.NEW_WORKSPACE }}
           cd python
-          pip install -U wheel pybind11 cython cmake
+          # setuptools>=69.5.1 to for #3690: Fixed logging errors: 'underlying buffer has been detached' (issue #1631).
+          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
           pip install -v --no-build-isolation '.[build,tests,tutorials]'
 
       - name: Triton version
@@ -65,6 +66,8 @@ jobs:
 
       - name: Run tutorials
         run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          $env:ZE_PATH = "C:\level_zero"
           bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --tutorial
 
       - name: Clean up workspace
