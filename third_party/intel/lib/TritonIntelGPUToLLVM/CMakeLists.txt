@@ -22,6 +22,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TypeConverter.cpp
     UpcastMXFPToLLVM.cpp
     Utility.cpp
+    vISAAsmFormat.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen

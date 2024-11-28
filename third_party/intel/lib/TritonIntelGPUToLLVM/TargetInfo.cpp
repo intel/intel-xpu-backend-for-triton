@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/vISAAsmFormat.h"
+
 #include "SPIRVSubgroupOps.h"
 #include "Utility.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
@@ -194,12 +196,125 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (!supportedOp)
     return false;
 
-  auto mod = op->getParentOfType<ModuleOp>();
-  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  if (acc.size() == 16 && isa<arith::AddFOp, arith::MaxNumFOp>(reduceOp)) {
+    VectorType reduceTy = vec_ty(acc[0].getType(), acc.size());
+    Value batchedReduceVal = rewriter.create<LLVM::UndefOp>(loc, reduceTy);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      batchedReduceVal =
+          b.insert_element(reduceTy, batchedReduceVal, acc[i], b.i32_val(i));
+    }
+    VISABuilder vISABuilder;
+    std::string batchedHorizontalReduce;
+    if (isa<arith::AddFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
 
-  for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = warpReduceHelper(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
-                              warpSize);
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "add (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else if (isa<arith::MaxNumFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
+
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "max (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else {
+      llvm_unreachable("batched reduce WIP");
+    }
+
+    auto &bReduceOp = *vISABuilder.create<>(batchedHorizontalReduce);
+    //    auto res = vISABuilder.newOperand("=rw.u");
+    auto res = vISABuilder.newOperand("=rw");
+    auto in = vISABuilder.newOperand(batchedReduceVal, "rw");
+    bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
+    Type resultTy = reduceTy.getElementType();
+    Value ret = vISABuilder.launch(rewriter, loc, resultTy, true);
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      // The output of the inline vISA has to be the non-uniform value.
+      // Have to shuffle the result to get the reduce value.
+      acc[i] = LLVM::intel::shuffleIdx(loc, rewriter, ret, i);
+    }
+
+  } else {
+    auto mod = op->getParentOfType<ModuleOp>();
+    unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      acc[i] = warpReduceHelper(rewriter, loc, acc[i], reduceOp,
+                                numLaneToReduce, warpSize);
+    }
   }
 
   return true;
