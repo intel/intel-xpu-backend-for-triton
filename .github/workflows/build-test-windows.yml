@@ -42,6 +42,9 @@ jobs:
       - name: Setup PyTorch
         run: |
           pip install (Get-Item C:\pytorch\dist\*.whl)
+
+      - name: PyTorch version
+        run: |
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           $env:ZE_PATH = "C:\level_zero"
           python -c 'import torch;print(torch.__version__)'
@@ -53,10 +56,16 @@ jobs:
         run: |
           cd ${{ env.NEW_WORKSPACE }}
           cd python
-          pip install -U wheel pybind11 certifi cython cmake
-          python -m certifi
-          pip install -v --no-build-isolation '.[build]'
+          pip install -U wheel pybind11 cython cmake
+          pip install -v --no-build-isolation '.[build,tests,tutorials]'
+
+      - name: Triton version
+        run: |
           python -c 'import triton; print(triton.__version__)'
+
+      - name: Run tutorials
+        run: |
+          bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --tutorial
 
       - name: Clean up workspace
         if: ${{ always() }}
