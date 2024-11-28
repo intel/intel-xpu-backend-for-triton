@@ -186,7 +186,8 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
       fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
-          loc, dTy, valc, valA, valB, pA, pB, RC);
+          loc, dTy, bitcast(valc, cTy), bitcast(valA, aTy), bitcast(valB, bTy),
+          pA, pB, RC);
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -345,8 +346,7 @@ private:
                                         i32_val(k));
               }
               vals[{b, i * repClusterOuter + repOuter,
-                    j * repClusterInner + repInner}] =
-                  bitcast(matVal, dotOperandType);
+                    j * repClusterInner + repInner}] = matVal;
             }
           }
         }

@@ -250,8 +250,22 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fwd_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
+          TRITON_INTEL_DISABLE_LARGE_BLOCK_SIZE_IO_FOR_TRANS_DOT_B=1 \
           python flash_attention_fwd_benchmark.py --reports $REPORTS
 
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+
+      - name: Run Triton FA kernel benchmark (+ reduction)
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fwd_benchmark.py') }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          TRITON_INTEL_DISABLE_LARGE_BLOCK_SIZE_IO_FOR_TRANS_DOT_B=1 \
+          TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY=1 \
+          python flash_attention_fwd_benchmark.py --reports $REPORTS
+
+          TAG="${TAG}-reduction"
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
@@ -261,6 +275,7 @@ jobs:
         run: |
           cd benchmarks/triton_kernels_benchmark
           TRITON_INTEL_ADVANCED_PATH=0 \
+          TRITON_INTEL_DISABLE_LARGE_BLOCK_SIZE_IO_FOR_TRANS_DOT_B=1 \
           TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR" \
           python flash_attention_fwd_benchmark.py --reports $REPORTS
