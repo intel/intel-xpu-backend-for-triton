@@ -338,6 +338,19 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
+static PyObject *waitOnSYCLQueue(PyObject *self, PyObject *args) {
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyLong_AsVoidPtr(cap)))
+    return NULL;
+  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
+  sycl_queue->wait();
+
+  return Py_None;
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -347,6 +360,8 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
+    {"wait_on_sycl_queue", waitOnSYCLQueue, METH_VARARGS,
+     "call wait on a specific sycl::queue"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 

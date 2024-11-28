@@ -99,6 +99,16 @@ def test_print(func: str, data_type: str, device: str):
 
     x = torch.arange(0, N, dtype=torch.int32, device=device).to(getattr(torch, data_type))
     y = torch.zeros((N, ), dtype=x.dtype, device=device)
+
+    if device == "xpu":
+
+        def exit_hook(lazy_dict: triton.compiler.LazyDict):
+            # Need this for xpu device to capture print results before child process exit
+            # torch.xpu.synchronize() does not work because it just sync on reserved stream
+            triton.runtime.driver.active.utils.wait()
+
+        triton.compiler.CompiledKernel.launch_exit_hook = exit_hook
+
     if func == "device_print":
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_scalar":
@@ -130,12 +140,6 @@ def test_print(func: str, data_type: str, device: str):
         kernel_print_pointer[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     else:
         assert f"Unknown kernel: {func}"
-
-    if device == "xpu":
-        # FIXME: remove trigger to get output from kernel
-        repr(x)
-        repr(y)
-
     if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
        func != "device_print_pointer" and func != "device_print_scalar":
@@ -143,7 +147,8 @@ def test_print(func: str, data_type: str, device: str):
 
     # Wait until driver complete all the jobs for the device_print, especially test_subprocess
     # require this which captures stdout when child exits.
-    getattr(torch, device).synchronize()
+    if device != "xpu":
+        getattr(torch, device).synchronize()
 
 
 if __name__ == "__main__":
