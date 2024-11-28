@@ -18,7 +18,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // CHECK:         }
 
 // CHECK:         llvm.func spir_kernelcc @reduce_sum(
-// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 1, 1, 128>} {
+// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>} {
 // CHECK:           %[[VAL_2:.*]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK:           %[[VAL_3:.*]] = llvm.extractelement %[[VAL_0]]{{\[}}%[[VAL_2]] : i32] : vector<16xf32>
 // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -78,7 +78,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   }
 
 // CHECK:         llvm.func spir_kernelcc @reduce_max(
-// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 1, 1, 128>} {
+// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>} {
 // CHECK:           %[[VAL_2:.*]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK:           %[[VAL_3:.*]] = llvm.extractelement %[[VAL_0]]{{\[}}%[[VAL_2]] : i32] : vector<16xf32>
 // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(1 : i32) : i32
