@@ -53,7 +53,8 @@ void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateLoadStoreOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     const TargetInfo &targetInfo, RewritePatternSet &patterns,
-    const ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
+    const ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit,
+    bool oneMatrixPerLoadForBT);
 
 void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
