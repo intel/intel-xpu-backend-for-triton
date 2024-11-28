@@ -16,6 +16,7 @@ permissions: read-all
 
 env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
+  ZE_PATH: C:\level_zero
 
 jobs:
   build:
@@ -42,8 +43,9 @@ jobs:
       - name: Setup PyTorch
         run: |
           pip install (Get-Item C:\pytorch\dist\*.whl)
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          $env:ZE_PATH = "C:\level_zero"
+
+      - name: PyTorch version
+        run: |
           python -c 'import torch;print(torch.__version__)'
 
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
@@ -52,18 +54,18 @@ jobs:
       - name: Setup Triton
         run: |
           cd ${{ env.NEW_WORKSPACE }}
-
-          cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 && set' | ForEach-Object {
-              if ($_ -match '^(.*?)=(.*)$') {
-                  [Environment]::SetEnvironmentVariable($matches[1], $matches[2])
-              }
-          }
+          Invoke-BatchFile '"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64'
 
           cd python
           pip install -U wheel pybind11 certifi cython cmake setuptools>=65.6.1
-          python -m certifi
-          pip install -v --no-build-isolation '.[build]'
+          pip install -v --no-build-isolation '.[build,tests,tutorials]'
           python -c 'import triton; print(triton.__version__)'
+
+      - name: Run tutorials
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+
+          bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --tutorial
 
       - name: Clean up workspace
         if: ${{ always() }}
