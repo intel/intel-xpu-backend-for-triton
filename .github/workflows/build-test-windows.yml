@@ -42,6 +42,7 @@ jobs:
       - name: Setup PyTorch
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import torch;print(torch.__version__)'
 
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
