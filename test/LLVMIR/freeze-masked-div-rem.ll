@@ -15,7 +15,7 @@ if.end:
   ; CHECK: [[F0:%.*]] = freeze i8 %yy
   ; CHECK-NEXT: %z = sdiv i8 %x, [[F0:%.*]]
   %z = sdiv i8 %x, %yy
-  br i1 %cmp, label %if2.then, label %if2.end 
+  br i1 %cmp, label %if2.then, label %if2.end
 
 if2.then:
   store i8 %z, ptr %v, align 8
@@ -46,7 +46,7 @@ if.end:
   ; CHECK: [[F1:%.*]] = freeze i8 %bb
   ; CHECK-NEXT: %zz = sdiv i8 %x, [[F1:%.*]]
   %zz = sdiv i8 %x, %bb
-  br i1 %cmp, label %if2.then, label %if2.end 
+  br i1 %cmp, label %if2.then, label %if2.end
 
 if2.then:
   store i8 %z, ptr %v, align 8
