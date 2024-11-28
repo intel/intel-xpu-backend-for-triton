@@ -227,8 +227,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // xpupti::subscribe<true>(&subscriber, callbackFn, nullptr);
-  xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
   ptiViewSetCallbacks(allocBuffer, completeBuffer);
+  xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
   // setGraphCallbacks(subscriber, /*enable=*/true);
   // setRuntimeCallbacks(subscriber, /*enable=*/true);
   // setDriverCallbacks(subscriber, /*enable=*/true);
