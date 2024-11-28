@@ -69,8 +69,9 @@ struct ConvertTritonGPUToLLVM
           ConvertTritonGPUToLLVM> {
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
   ConvertTritonGPUToLLVM() = default;
-  ConvertTritonGPUToLLVM(bool advancedPath) {
+  ConvertTritonGPUToLLVM(bool advancedPath, bool oneMatrixPerLoadForBT) {
     this->advancedPath = advancedPath;
+    this->oneMatrixPerLoadForBT = oneMatrixPerLoadForBT;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -92,7 +93,7 @@ struct ConvertTritonGPUToLLVM
                               getSupportDPASAttrName()) &&
              "Target do not support blocked load/mma");
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
-        mod, context, isAdvancedPathEnabled);
+        mod, context, isAdvancedPathEnabled, oneMatrixPerLoadForBT);
     mlir::LowerToLLVMOptions option(context);
     mlir::triton::intel::TargetInfo targetInfo;
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option, targetInfo,

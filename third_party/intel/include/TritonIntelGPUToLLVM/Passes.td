@@ -31,6 +31,9 @@ def ConvertTritonIntelGPUToLLVM
     Option<"advancedPath", "advanced_path",
            "bool", /*default*/"false",
            "enable advanced path">,
+    Option<"oneMatrixPerLoadForBT", "one_matrix_per_load_for_bt",
+           "bool", /*default*/"false",
+           "Only load one DPAS operands per load for transposed B matrix">,
   ];
 }
 

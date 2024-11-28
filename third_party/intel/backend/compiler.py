@@ -57,6 +57,7 @@ class XPUOptions:
     sanitize_overflow: bool = False
     generate_native_code: bool = False
     advanced_path: bool = False
+    one_matrix_per_load_for_bt: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -293,7 +294,7 @@ class XPUBackend(BaseBackend):
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
         intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
