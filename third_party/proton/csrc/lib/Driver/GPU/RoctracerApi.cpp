@@ -67,8 +67,8 @@ char *getOpString(uint32_t domain, uint32_t op, uint32_t kind) {
                                      &ExternLibRoctracer::lib);
   if (func == nullptr)
 #ifdef WIN32
-    func = reinterpret_cast<roctracer_op_string_t>(
-        GetProcAddress((HMODULE)ExternLibRoctracer::lib, "roctracer_op_string"));
+    func = reinterpret_cast<roctracer_op_string_t>(GetProcAddress(
+        (HMODULE)ExternLibRoctracer::lib, "roctracer_op_string"));
 #else
     func = reinterpret_cast<roctracer_op_string_t>(
         dlsym(ExternLibRoctracer::lib, "roctracer_op_string"));
