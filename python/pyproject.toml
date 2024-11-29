@@ -3,9 +3,34 @@
 requires = ["setuptools>=60.8.0", "wheel", "cmake>=3.18", "ninja>=1.11.1", "pybind11>=2.13.1"]
 
 [project]
+name = 'triton'
+dynamic = [
+  'version'
+]
+description= 'A language and compiler for custom Deep Learning operations'
+readme = 'README.md'
+authors = [
+  { name = 'Philippe Tillet', email='phil@openai.com' },
+]
+license = {file = 'LICENSE'}
+requires-python = '>=3.8'
 dependencies = [
   "setuptools>=60.8.0"
 ]
+classifiers=[
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+repository = 'https://github.com/triton-lang/triton/'
 
 # We're incrementally switching from autopep8 to ruff.
 [tool.autopep8]
