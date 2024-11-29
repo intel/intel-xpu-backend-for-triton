@@ -67,7 +67,7 @@ public:
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // First reuse the existing handle
-      *lib = GetModuleHandle(libraryName);
+      *lib = GetModuleHandle(name);
     }
     if (*lib == nullptr) {
       // If not found, try to load it from LD_LIBRARY_PATH
