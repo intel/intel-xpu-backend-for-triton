@@ -126,7 +126,7 @@ public:
   exec(FnT &handler, const char *functionName, Args... args) {
     init(ExternLib::name, &ExternLib::lib);
     if (handler == nullptr) {
-#ifdef Win32
+#ifdef WIN32
       handler = reinterpret_cast<FnT>(GetProcAddress(ExternLib::lib, functionName));
 #else
       handler = reinterpret_cast<FnT>(dlsym(ExternLib::lib, functionName));
