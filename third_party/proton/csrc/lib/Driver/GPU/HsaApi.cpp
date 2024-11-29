@@ -32,7 +32,7 @@ hsa_status_t iterateAgents(hsa_status_t (*callback)(hsa_agent_t agent,
   if (func == nullptr)
 #ifdef WIN32
     func = reinterpret_cast<hsa_iterate_agents_t>(
-        GetProcAddress((HMODULE)ExternLibHip::lib, "hsa_iterate_agents"));
+        GetProcAddress((HMODULE)ExternLibHsa::lib, "hsa_iterate_agents"));
 #else
     func = reinterpret_cast<hsa_iterate_agents_t>(
         dlsym(ExternLibHsa::lib, "hsa_iterate_agents"));
