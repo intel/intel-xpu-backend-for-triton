@@ -232,6 +232,8 @@ public:
                                             benefit);
       intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                           benefit);
+      mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
+                                                   targetInfo, benefit);
       intel::populateViewOpToLLVMPatterns(typeConverter, patterns, benefit);
 
       intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
