@@ -93,7 +93,7 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getContigPerThread() const;
 
     struct DPASCapability {
-      DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
+      explicit DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
       DPASCapability() = default;
 
       bool isPVC() const {
