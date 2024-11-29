@@ -15,7 +15,6 @@ struct ExternLibCupti : public ExternLibBase {
 #else
   static constexpr const char *name = "libcupti.so";
 #endif
-
 #ifdef CUPTI_LIB_DIR
   static constexpr const char *defaultDir = TOSTRING(CUPTI_LIB_DIR);
 #else
