@@ -116,12 +116,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setLinkage(LLVM::Linkage::External);
     }
 
-    NamedAttrList attrs;
-    attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-    attrs.append(TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr({threadsPerWarp}));
-    newFuncOp->setDialectAttrs(attrs);
+    newFuncOp->setAttr(
+        TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
+        rewriter.getDenseI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    newFuncOp.setIntelReqdSubGroupSize(threadsPerWarp);
 
     if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
@@ -181,8 +179,10 @@ struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced)
-      : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced) {}
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
+                                 bool oneMatrixPerLoadForBT)
+      : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
+        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
@@ -225,8 +225,9 @@ public:
       intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateElementwiseOpToLLVMPatterns(
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-      intel::populateLoadStoreOpToLLVMPatterns(
-          typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
+      intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
+                                               patterns, axisInfoAnalysis,
+                                               benefit, oneMatrixPerLoadForBT);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
@@ -275,6 +276,7 @@ private:
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
+  bool oneMatrixPerLoadForBT = false;
 };
 
 } // namespace mlir::triton::intel

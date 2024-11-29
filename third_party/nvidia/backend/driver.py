@@ -24,11 +24,6 @@ def libcuda_dirs():
     env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
     if env_libcuda_path:
         return [env_libcuda_path]
-    if os.name == "nt":
-        installed_base = sysconfig.get_config_var('installed_base')
-        dirs = [os.path.join(os.environ.get("CUDA_PATH"), "lib", "x64")]
-        dirs += [os.getenv("PYTHON_LIB_DIRS", os.path.join(installed_base, "libs"))]
-        return dirs
 
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
     # each line looks like the following:
@@ -244,6 +239,15 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{{', '.join(f'&arg{i}' for i in params) if params else 'NULL'}}};
   if (gridX*gridY*gridZ > 0) {{
+    CUcontext pctx;
+    CUDA_CHECK(cuCtxGetCurrent(&pctx));
+    if (!pctx) {{
+      // Ensure device context.
+      CUdevice device;
+      CUDA_CHECK(cuDeviceGet(&device, 0));
+      CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+      CUDA_CHECK(cuCtxSetCurrent(pctx));
+    }}
     if (num_ctas == 1) {{
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
     }} else {{

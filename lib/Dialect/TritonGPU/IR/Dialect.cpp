@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -22,6 +23,7 @@
 
 // Include TableGen'erated code
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/TypeInterfaces.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -656,6 +658,36 @@ LinearLayout ensureLayoutNotSmallerThan(
   return ret;
 }
 
+// Returns ["dim0", "dim1", ..., "dim<rank-1>"].
+SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
+  SmallVector<StringAttr> ret;
+  for (int i = 0; i < rank; i++) {
+    ret.push_back(StringAttr::get(ctx, "dim" + llvm::Twine(i)));
+  }
+  return ret;
+}
+
+// Returns a 1D -> ND layout into [dim0, dim1, ...] that's equivalent to
+// creating a 1D -> 1D mapping of size product(shape) and then reshaping to
+// permute(shape, order).
+LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
+                                ArrayRef<unsigned> order) {
+  assert(shape.size() == order.size());
+  MLIRContext *ctx = inDimName.getContext();
+  auto rank = shape.size();
+
+  // The order in triton is written wrt. [dim0, dim1, ...].
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  LinearLayout ret = LinearLayout::empty();
+  for (int i = 0; i < shape.size(); i++) {
+    // Start with the most-minor dimension, which is order[0].
+    int dim = order[i];
+    ret *= LinearLayout::identity1D(shape[dim], inDimName, outDimNames[dim]);
+  }
+  return ret;
+}
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
@@ -746,10 +778,10 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
 //===----------------------------------------------------------------------===//
 // Attribute methods
 //===----------------------------------------------------------------------===//
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrInterfaces.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/AttrInterfaces.cpp.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/AttrDefs.cpp.inc"
 
 SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
   return SliceEncodingAttr::get(getContext(), axis, *this);
@@ -1052,23 +1084,18 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     elemsPerThread[rank - 1] = (idx == 0) ? rep[2] * kWidth : rep[2];
     return elemsPerThread;
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-    if (mma.isAmpere() || mma.isHopper()) {
-      auto bitwidth = getPointeeType(eltTy).getIntOrFloatBitWidth();
-      auto rep = mma.getRepForOperand(shape, bitwidth, kWidth, idx);
-      auto sizePerThread = getSizePerThread();
-      auto elemsPerKRep = mma.isHopper() ? (kWidth * 2) : (32 / bitwidth * 2);
-      if (rank == 3)
-        elemsPerThread[0] = rep[0];
-      elemsPerThread[rank - 2] =
-          (idx == 0)
-              ? rep[1] * sizePerThread[rank - 2]
-              : std::max<int>(rep[1] * elemsPerKRep, sizePerThread[rank - 2]);
-      elemsPerThread[rank - 1] =
-          (idx == 0)
-              ? std::max<int>(rep[2] * elemsPerKRep, sizePerThread[rank - 1])
-              : rep[2] * sizePerThread[rank - 1];
-      return elemsPerThread;
+    assert(getCTALayout(*this) ==
+               CTALayoutAttr::getDefault(getContext(), rank) &&
+           "NYI");
+    auto sizePerThread = getSizePerThread();
+    auto threadsPerWarp = getThreadsPerWarp();
+    auto warpsPerCTA = getWarpsPerCTA();
+    SmallVector<unsigned> regs;
+    for (auto [n, nsize, nThread, nWarp] :
+         llvm::zip(shape, sizePerThread, threadsPerWarp, warpsPerCTA)) {
+      regs.push_back(std::max<int64_t>(nsize, n / (nThread * nWarp)));
     }
+    return regs;
   }
 
   if (auto mmaParent = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
@@ -1178,24 +1205,22 @@ LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned opIdx, Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
-    return emitError()
-           << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
-           << opIdx;
+    return emitError() << "ttg.dot_op opIdx paramenter can be 0 or 1, got: "
+                       << opIdx;
   }
   if (!parent) {
-    return emitError() << "triton_gpu.dot_op parent paramenter cannot be null";
+    return emitError() << "ttg.dot_op parent paramenter cannot be null";
   }
   if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (kWidth != 0 && !(parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError() << "triton_gpu.dot_op kWidth parameter can only be "
+      return emitError() << "ttg.dot_op kWidth parameter can only be "
                             "non-zero for Ampere or Hopper MMA parent";
     if (kWidth == 0 && (parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is mandatory for "
-                "Ampere or Hopper MMA parent";
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "Ampere or Hopper MMA parent";
     if (opIdx != 0 && parentAttr.isHopper())
       return emitError()
-             << "triton_gpu.dot_op opIdx parameter must be 0 for "
+             << "ttg.dot_op opIdx parameter must be 0 for "
                 "Hopper MMA parent, since Hopper WGMMA only allows first "
                 "operand to be in registers";
     return success();
@@ -1204,44 +1229,40 @@ LogicalResult DotOperandEncodingAttr::verify(
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     if (kWidth != 16 && parentAttr.getVersion() == 1 ||
         kWidth != 8 && parentAttr.getVersion() == 2)
-      return emitError() << "triton_gpu.dot_op kWidth parameter must be 16 for "
+      return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
                             "gfx11 and 8 for gfx12";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     if (kWidth == 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is mandatory for "
-                "MFMA parent";
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "MFMA parent";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::DpasEncodingAttr>(parent)) {
     if (kWidth != parentAttr.getOpsPerChannel())
-      return emitError() << "triton_gpu.dot_op kWidth parameter must match the "
+      return emitError() << "ttg.dot_op kWidth parameter must match the "
                             "parent's opsPerChannel";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
     if (kWidth != 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is not supported "
-                "when the parent is a warp layout";
+      return emitError() << "ttg.dot_op kWidth parameter is not supported "
+                            "when the parent is a warp layout";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is not supported "
-                "when the parent is a blocked layout";
+      return emitError() << "ttg.dot_op kWidth parameter is not supported "
+                            "when the parent is a blocked layout";
     return success();
   }
 
-  return emitError() << "triton_gpu.dot_op unexpected parent layout: "
-                     << parent;
+  return emitError() << "ttg.dot_op unexpected parent layout: " << parent;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2386,35 +2407,41 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
                                         int kWidth, int opIdx) const {
+  assert(
+      kWidth >= 32 / bitwidth &&
+      "kWidth must be >= 32 / bitwidth for this function to be well-defined");
   auto rank = shape.size();
+  // Broadcast long K
   auto warpsPerCTA = getWarpsPerCTA();
+  auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
+  warpsPerCTA[kDim] = 1;
 
-  // {batch, m, n, k}
-  // Hopper path never uses the n value, since this method is only invoked
-  // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
-  // TODO: rep per operand is not accurate for Hopper. It is currently done that
-  // way to allow us to get the correct total number of elements. this will be
-  // fixed when moving to linear layout.
-  SmallVector<int> shapePerWarp = {
-      1, 16, 8, isHopper() ? 4 * 2 * kWidth : 4 * 64 / bitwidth};
-  int numRepBatch =
-      rank == 3
-          ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))
-          : 1;
-
-  if (opIdx == 0) {
-    return {numRepBatch,
-            std::max<int64_t>(1, /*repM=*/shape[rank - 2] /
-                                     (shapePerWarp[1] * warpsPerCTA[rank - 2])),
-            std::max<int64_t>(1, /*repK=*/shape[rank - 1] / shapePerWarp[3])};
-  } else {
-    assert(opIdx == 1);
-    return {
-        numRepBatch,
-        std::max<int64_t>(1, /*repK=*/shape[rank - 2] / shapePerWarp[3]),
-        std::max<int64_t>(1, /*repN=*/shape[rank - 1] /
-                                 (shapePerWarp[2] * warpsPerCTA[rank - 1]))};
+  SmallVector<int> tileSize;
+  if (rank == 3) {
+    tileSize.push_back(1);
   }
+  if (opIdx == 0) {
+    // m x k
+    tileSize.push_back(16);
+    tileSize.push_back(4 * 64 / bitwidth);
+  } else {
+    // k x n
+    // Hopper path never uses the n value, since this method is only invoked
+    // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
+    // so it's fine if the n is incorrect here
+    tileSize.push_back(4 * 64 / bitwidth);
+    tileSize.push_back(8);
+  }
+
+  SmallVector<int64_t> numRep;
+  // Lezcano: This is odd. Why do we always return a vector of size 3?
+  if (rank != 3) {
+    numRep.push_back(1);
+  }
+  for (auto [s, size, warp] : llvm::zip(shape, tileSize, warpsPerCTA)) {
+    numRep.push_back(std::max<int64_t>(1, s / (size * warp)));
+  }
+  return numRep;
 }
 
 SmallVector<unsigned>
@@ -3711,12 +3738,52 @@ void mlir::triton::gpu::dumpHWLayout(RankedTensorType tensorType) {
   llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/true);
 }
 
+struct TensorModel
+    : public triton::gpu::TensorOrMemDesc::ExternalModel<TensorModel,
+                                                         RankedTensorType> {
+  Type getElementType(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getElementType();
+  }
+  Attribute getEncoding(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getEncoding();
+  }
+  ArrayRef<int64_t> getShape(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getShape();
+  }
+  int64_t getRank(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getRank();
+  }
+  int64_t getElementTypeBitWidth(Type pointer) const {
+    return cast<RankedTensorType>(pointer).getElementTypeBitWidth();
+  }
+};
+
+struct MemDescModel
+    : public triton::gpu::TensorOrMemDesc::ExternalModel<MemDescModel,
+                                                         MemDescType> {
+  Type getElementType(Type pointer) const {
+    return cast<MemDescType>(pointer).getElementType();
+  }
+  Attribute getEncoding(Type pointer) const {
+    return cast<MemDescType>(pointer).getEncoding();
+  }
+  ArrayRef<int64_t> getShape(Type pointer) const {
+    return cast<MemDescType>(pointer).getShape();
+  }
+  int64_t getRank(Type pointer) const {
+    return cast<MemDescType>(pointer).getShape().size();
+  }
+  int64_t getElementTypeBitWidth(Type pointer) const {
+    return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
+  }
+};
+
 void TritonGPUDialect::initialize() {
   registerTypes();
 
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/AttrDefs.cpp.inc"
       >();
   addOperations<
 #define GET_OP_LIST
@@ -3725,6 +3792,9 @@ void TritonGPUDialect::initialize() {
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonGPUInferLayoutInterface>();
+
+  RankedTensorType::attachInterface<TensorModel>(*getContext());
+  MemDescType::attachInterface<MemDescModel>(*getContext());
 }
 
 // verify TritonGPU ops

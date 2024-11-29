@@ -1,21 +1,5 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
-llvm.func @triton_gen.split_barrier_signal() {
-  // CHECK-LABEL: triton_gen.split_barrier_signal
-  // CHECK: triton_gen.split_barrier_signal {mem_fence = None, mem_scope = WorkGroup}
-  triton_gen.split_barrier_signal {mem_fence=None, mem_scope=WorkGroup}
-  llvm.return
-}
-
-llvm.func @triton_gen.split_barrier_wait() {
-  // CHECK-LABEL: triton_gen.split_barrier_wait
-  // CHECK: triton_gen.split_barrier_wait {mem_fence = Local, mem_scope = SubGroup}
-  triton_gen.split_barrier_wait {mem_fence=Local, mem_scope=SubGroup}
-  llvm.return
-}
-
-// -----
-
 module attributes {
   spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 32>>
 } {

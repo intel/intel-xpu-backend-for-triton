@@ -99,45 +99,6 @@ public:
   using BufferIdSetT = DenseSet<BufferId>;
   using FuncAllocMapT = CallGraph<Allocation>::FuncDataMapT;
 
-  /// A class that represents a shared memory buffer
-  struct BufferT {
-    /// Explicit: triton_gpu.local_alloc
-    /// Scratch: triton_gpu.convert_layout
-    /// Virtual: triton.call
-    enum class BufferKind { Explicit, Scratch, Virtual };
-
-    /// MT: thread-safe
-    inline static std::atomic<BufferId> nextId = 0;
-
-    BufferKind kind;
-    BufferId id;
-    size_t size;
-    size_t alignment;
-    size_t offset;
-
-    bool operator==(const BufferT &other) const { return id == other.id; }
-    bool operator<(const BufferT &other) const { return id < other.id; }
-
-    BufferT() : BufferT(BufferKind::Explicit, 0) {}
-    BufferT(BufferKind kind, size_t size, size_t alignment = 4,
-            size_t offset = 0)
-        : kind(kind), id(nextId++), size(size), alignment(alignment),
-          offset(offset) {}
-
-    size_t setOffsetAligned(size_t newOffset) {
-      return offset = llvm::alignTo(newOffset, alignment);
-    }
-  };
-
-  /// Op -> Scratch Buffer
-  using OpScratchMapT = DenseMap<Operation *, BufferT *>;
-  /// Value -> Explicit Buffer
-  using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
-  /// Value -> Alias Buffer
-  using AliasBufferMapT = llvm::MapVector<Value, llvm::SetVector<BufferT *>>;
-  /// BufferId -> Buffer
-  using BufferSetT = std::map<BufferId, BufferT>;
-
   static constexpr BufferId InvalidBufferId =
       std::numeric_limits<BufferId>::max();
 
@@ -152,12 +113,6 @@ public:
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
-
-  const OpScratchMapT &getOpScratch() const { return opScratch; }
-  const OpScratchMapT &getOpVirtual() const { return opVirtual; }
-  const ValueBufferMapT &getValueBuffer() const { return valueBuffer; }
-  const AliasBufferMapT &getAliasBuffer() const { return aliasBuffer; }
-  void setSharedMemorySize(size_t size) { sharedMemorySize = size; }
 
   /// Returns the offset of the given buffer in the shared memory.
   size_t getOffset(BufferId bufferId) const {
@@ -222,6 +177,47 @@ public:
   /// Returns mapping from operation to list of live LDS buffers
   std::map<Operation *, SmallVector<BufferId>> getLiveBuffers();
 
+private:
+  /// A class that represents a shared memory buffer
+  struct BufferT {
+    /// Explicit: ttg.local_alloc
+    /// Scratch: ttg.convert_layout
+    /// Virtual: triton.call
+    enum class BufferKind { Explicit, Scratch, Virtual };
+
+    /// MT: thread-safe
+    inline static std::atomic<BufferId> nextId = 0;
+
+    BufferKind kind;
+    BufferId id;
+    size_t size;
+    size_t alignment;
+    size_t offset;
+
+    bool operator==(const BufferT &other) const { return id == other.id; }
+    bool operator<(const BufferT &other) const { return id < other.id; }
+
+    BufferT() : BufferT(BufferKind::Explicit, 0) {}
+    BufferT(BufferKind kind, size_t size, size_t alignment = 4,
+            size_t offset = 0)
+        : kind(kind), id(nextId++), size(size), alignment(alignment),
+          offset(offset) {}
+
+    size_t setOffsetAligned(size_t newOffset) {
+      return offset = llvm::alignTo(newOffset, alignment);
+    }
+  };
+
+  /// Op -> Scratch Buffer
+  using OpScratchMapT = DenseMap<Operation *, BufferT *>;
+  /// Value -> Explicit Buffer
+  using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
+  /// Value -> Alias Buffer
+  using AliasBufferMapT = llvm::MapVector<Value, llvm::SetVector<BufferT *>>;
+  /// BufferId -> Buffer
+  using BufferSetT = std::map<BufferId, BufferT>;
+
+private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
   void addBuffer(KeyType &key, Args &&...args) {
     auto buffer = BufferT(Kind, std::forward<Args>(args)...);
@@ -247,6 +243,8 @@ private:
   AliasBufferMapT aliasBuffer;
   BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
+
+  friend class triton::AllocationAnalysis;
 };
 
 /// Static analysis that computes the allocation of shared memory buffers

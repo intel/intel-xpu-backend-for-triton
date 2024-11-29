@@ -9,10 +9,10 @@
 // TritonGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
 #define GET_OP_CLASSES
+#include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
 namespace mlir {
@@ -213,6 +213,10 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
 LinearLayout ensureLayoutNotSmallerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
+
+SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
+LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
+                                ArrayRef<unsigned> order);
 
 // Dump information about which threads/registers contain each of the tensor
 // elements.

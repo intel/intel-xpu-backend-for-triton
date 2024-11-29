@@ -21,7 +21,7 @@ namespace ttgi = mlir::triton::gpu::intel;
 namespace {
 
 /// Represent a candidate load operation which is used by operations that
-/// convert its layout to a 'dot' layout (e.g. triton_gpu.convert_layout).
+/// convert its layout to a 'dot' layout (e.g. ttg.convert_layout).
 struct LoadDotOperand {
   LoadDotOperand(tt::LoadOp load,
                  ttg::DotOperandEncodingAttr dotOperandEncoding)
