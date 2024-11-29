@@ -1,7 +1,13 @@
 #ifndef PROTON_DRIVER_DISPATCH_H_
 #define PROTON_DRIVER_DISPATCH_H_
 
+#ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include <stdexcept>
 #include <string>
@@ -57,6 +63,31 @@ template <typename ExternLib> class Dispatch {
 public:
   Dispatch() = delete;
 
+#ifdef WIN32
+  static void init(const char *name, void **lib) {
+    if (*lib == nullptr) {
+      // First reuse the existing handle
+      *lib = GetModuleHandle(libraryName);
+    }
+    if (*lib == nullptr) {
+      // If not found, try to load it from LD_LIBRARY_PATH
+      *lib = LoadLibraryA(name);
+    }
+    if (*lib == nullptr) {
+      // If still not found, try to load it from the default path
+      auto dir = std::string(ExternLib::defaultDir);
+      if (dir.length() > 0) {
+        auto fullPath = dir + "/" + name;
+        *lib = LoadLibraryA(fullPath.c_str());
+      }
+    }
+    if (*lib == nullptr) {
+      throw std::runtime_error("Could not find `" + std::string(name) +
+                               "`. Make sure it is in your "
+                               "LD_LIBRARY_PATH.");
+    }
+  }
+#else
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // First reuse the existing handle
@@ -80,6 +111,7 @@ public:
                                "LD_LIBRARY_PATH.");
     }
   }
+#endif
 
   static void check(typename ExternLib::RetType ret, const char *functionName) {
     if (ret != ExternLib::success) {
@@ -94,7 +126,11 @@ public:
   exec(FnT &handler, const char *functionName, Args... args) {
     init(ExternLib::name, &ExternLib::lib);
     if (handler == nullptr) {
+#ifdef Win32
+      handler = reinterpret_cast<FnT>(GetProcAddress(ExternLib::lib, functionName));
+#else
       handler = reinterpret_cast<FnT>(dlsym(ExternLib::lib, functionName));
+#endif
       if (handler == nullptr) {
         throw std::runtime_error("Failed to load " +
                                  std::string(ExternLib::name));
