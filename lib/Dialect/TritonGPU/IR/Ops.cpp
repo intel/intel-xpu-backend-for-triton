@@ -1,3 +1,4 @@
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -114,17 +115,36 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
     } else {
       auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-      auto newVEncoding = DotOperandEncodingAttr::get(
-          ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
-          oldEncoding.getKWidth() * 2);
-      // Figure out the K dimension for the input A/B, given that the return
-      // type is upcasted A/B type so we need to update the proper dim size.
+
       const int opIdx = oldEncoding.getOpIdx();
       const bool hasBatch = xShape.size() == 3;
       const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
       newShape[kIdx] *= 2;
-      retTy = RankedTensorType::get(newShape, FloatType::getBF16(ctx),
-                                    newVEncoding);
+      Type elemType = FloatType::getBF16(ctx);
+
+      // Note: For Intel the dot operands layout's kWidth parameter must
+      // match the parent's DPAS layout opsPerChannel so we need to materialize
+      // a new DPAS layout.
+      Attribute newVEncoding;
+      if (auto dpasEncoding =
+              dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
+        auto newDpasEncoding = intel::DpasEncodingAttr::get(
+            ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
+            dpasEncoding.getExecutionSize(),
+            intel::DpasEncodingAttr::getOpsPerChannel(elemType),
+            dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
+            dpasEncoding.getSubGroupSize());
+        newVEncoding = DotOperandEncodingAttr::get(
+            ctx, oldEncoding.getOpIdx(), newDpasEncoding,
+            newDpasEncoding.getOpsPerChannel());
+      } else {
+        // Figure out the K dimension for the input A/B, given that the return
+        // type is upcasted A/B type so we need to update the proper dim size.
+        newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
+                                                   oldEncoding.getParent(),
+                                                   oldEncoding.getKWidth() * 2);
+      }
+      retTy = RankedTensorType::get(newShape, elemType, newVEncoding);
     }
     inferredReturnTypes.push_back(retTy);
   } else {
