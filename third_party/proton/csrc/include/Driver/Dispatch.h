@@ -127,7 +127,8 @@ public:
     init(ExternLib::name, &ExternLib::lib);
     if (handler == nullptr) {
 #ifdef WIN32
-      handler = reinterpret_cast<FnT>(GetProcAddress(ExternLib::lib, functionName));
+      handler = reinterpret_cast<FnT>(
+          GetProcAddress((HMODULE)(ExternLib::lib), functionName));
 #else
       handler = reinterpret_cast<FnT>(dlsym(ExternLib::lib, functionName));
 #endif
