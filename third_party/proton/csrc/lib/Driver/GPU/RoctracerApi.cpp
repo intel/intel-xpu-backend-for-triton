@@ -7,7 +7,12 @@ namespace roctracer {
 
 struct ExternLibRoctracer : public ExternLibBase {
   using RetType = roctracer_status_t;
+#ifdef WIN32
+  // Looks like there is no support for Windows yet
+  static constexpr const char *name = "roctracer64.dll";
+#else
   static constexpr const char *name = "libroctracer64.so";
+#endif
   static constexpr const char *defaultDir = "";
   static constexpr RetType success = ROCTRACER_STATUS_SUCCESS;
   static void *lib;

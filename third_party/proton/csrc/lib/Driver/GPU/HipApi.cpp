@@ -9,7 +9,11 @@ namespace hip {
 
 struct ExternLibHip : public ExternLibBase {
   using RetType = hipError_t;
+#ifdef WIN32
+  static constexpr const char *name = "amdhip64.dll";
+#else
   static constexpr const char *name = "libamdhip64.so";
+#endif
   static constexpr const char *defaultDir = "";
   static constexpr RetType success = hipSuccess;
   static void *lib;

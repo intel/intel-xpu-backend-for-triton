@@ -7,7 +7,11 @@ namespace hsa {
 
 struct ExternLibHsa : public ExternLibBase {
   using RetType = hsa_status_t;
+#ifdef WIN32
+  static constexpr const char *name = "hsa-runtime64.dll";
+#else
   static constexpr const char *name = "libhsa-runtime64.so";
+#endif
   static constexpr const char *defaultDir = "";
   static constexpr RetType success = HSA_STATUS_SUCCESS;
   static void *lib;
