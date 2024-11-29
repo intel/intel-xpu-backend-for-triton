@@ -70,7 +70,6 @@ class CMakeBuild():
             f"-DUSE_IPEX={int(self.use_ipex)}",
             "-DCMAKE_INSTALL_PREFIX=" + self.extdir,
             "-DPython3_ROOT_DIR:FILEPATH=" + sys.exec_prefix,
-            "-DCMAKE_VERBOSE_MAKEFILE=TRUE",
             "-DCMAKE_C_COMPILER=icx",
             "-DCMAKE_CXX_COMPILER=icpx",
             "-DCMAKE_BUILD_TYPE=" + self.build_type,
