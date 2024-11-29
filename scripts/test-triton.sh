@@ -263,10 +263,7 @@ run_benchmark_gemm() {
   python setup.py install
 
   echo "Default path:"
-  TRITON_INTEL_ADVANCED_PATH=0 \
-    IGC_VISAOptions=" -enableBCR -nolocalra" \
-    IGC_DisableLoopUnroll=1 \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
@@ -283,10 +280,7 @@ run_benchmark_attention() {
   python setup.py install
 
   echo "Default path:"
-  TRITON_INTEL_ADVANCED_PATH=0 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
