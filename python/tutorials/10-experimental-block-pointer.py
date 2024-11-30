@@ -95,6 +95,8 @@ import torch
 import triton
 import triton.language as tl
 
+DEVICE = triton.runtime.driver.active.get_current_target().backend
+
 
 @triton.autotune(
     configs=[
@@ -345,23 +347,23 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
                 #  [ 1  1  1 ... ],
                 #  [ 0  1  1 ... ], ... ]
                 # in order only add 3 values per result matrix element.
-                a = torch.randn(shape, device='xpu', dtype=dtype)
-                b = torch.eye(shape[-2], device='xpu', dtype=dtype) + torch.diag(
-                    torch.ones(shape[-2] - 1, device='xpu', dtype=dtype), diagonal=1) + torch.diag(
-                        torch.ones(shape[-2] - 1, device='xpu', dtype=dtype), diagonal=-1)
+                a = torch.randn(shape, device=DEVICE, dtype=dtype)
+                b = torch.eye(shape[-2], device=DEVICE, dtype=dtype) + torch.diag(
+                    torch.ones(shape[-2] - 1, device=DEVICE, dtype=dtype), diagonal=1) + torch.diag(
+                        torch.ones(shape[-2] - 1, device=DEVICE, dtype=dtype), diagonal=-1)
                 # duplicate b on batch dimension.
                 if len(shape) == 3:
                     b = b.unsqueeze(0).repeat(shape[0], 1, 1)
             else:
-                a = torch.randn(shape, device='xpu', dtype=dtype)
-                b = torch.randn(shape, device='xpu', dtype=dtype)
+                a = torch.randn(shape, device=DEVICE, dtype=dtype)
+                b = torch.randn(shape, device=DEVICE, dtype=dtype)
             torch_output = torch.matmul(a, b).to(dtype=res_dtype)
         else:
-            a = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
-            b = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
+            a = torch.randint(low=-127, high=128, size=shape, device=DEVICE, dtype=dtype)
+            b = torch.randint(low=-127, high=128, size=shape, device=DEVICE, dtype=dtype)
             # torch.matmul clamps values to input dtype; IPEX doesn't support int32 matmul
             torch_output = torch.matmul(a.to(device='cpu', dtype=accum_dtype),
-                                        b.to(device='cpu', dtype=accum_dtype)).to(device='xpu', dtype=res_dtype)
+                                        b.to(device='cpu', dtype=accum_dtype)).to(device=DEVICE, dtype=res_dtype)
 
         triton_output = matmul(a, b, accum_dtype, res_dtype)
 
@@ -408,8 +410,8 @@ configs.append(
 
 @triton.testing.perf_report(configs)
 def benchmark(M, N, K, provider):
-    a = torch.randn((M, K), device='xpu', dtype=torch.float16)
-    b = torch.randn((K, N), device='xpu', dtype=torch.float16)
+    a = torch.randn((M, K), device=DEVICE, dtype=torch.float16)
+    b = torch.randn((K, N), device=DEVICE, dtype=torch.float16)
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == ref_lib.lower():

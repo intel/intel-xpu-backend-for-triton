@@ -31,6 +31,8 @@ import torch
 import triton
 import triton.language as tl
 
+DEVICE = triton.runtime.driver.active.get_current_target().backend
+
 
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
@@ -145,7 +147,7 @@ def grouped_matmul_kernel(
 
 
 def group_gemm_fn(group_A, group_B):
-    device = torch.device('xpu')
+    device = torch.device(DEVICE)
     assert len(group_A) == len(group_B)
     group_size = len(group_A)
 
@@ -201,8 +203,8 @@ for i in range(group_size):
     M = group_m[i]
     N = group_n[i]
     K = group_k[i]
-    A = torch.rand((M, K), device="xpu", dtype=torch.float16)
-    B = torch.rand((K, N), device="xpu", dtype=torch.float16)
+    A = torch.rand((M, K), device=DEVICE, dtype=torch.float16)
+    B = torch.rand((K, N), device=DEVICE, dtype=torch.float16)
     group_A.append(A)
     group_B.append(B)
 
@@ -264,9 +266,9 @@ def benchmark(N, provider):
     g_lds = []
     group_C = []
     for i in range(group_size):
-        A = torch.rand((N, N), device="xpu", dtype=torch.float16)
-        B = torch.rand((N, N), device="xpu", dtype=torch.float16)
-        C = torch.empty((N, N), device="xpu", dtype=torch.float16)
+        A = torch.rand((N, N), device=DEVICE, dtype=torch.float16)
+        B = torch.rand((N, N), device=DEVICE, dtype=torch.float16)
+        C = torch.empty((N, N), device=DEVICE, dtype=torch.float16)
         group_A.append(A)
         group_B.append(B)
         group_C.append(C)
@@ -276,11 +278,11 @@ def benchmark(N, provider):
         g_sizes += [N, N, N]
         g_lds += [N, N, N]
 
-    d_a_ptrs = torch.tensor(A_addrs, device="xpu")
-    d_b_ptrs = torch.tensor(B_addrs, device="xpu")
-    d_c_ptrs = torch.tensor(C_addrs, device="xpu")
-    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device="xpu")
-    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device="xpu")
+    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE)
+    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE)
+    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE)
+    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
 
     quantiles = [0.5, 0.2, 0.8]
     if provider == ref_lib.lower():

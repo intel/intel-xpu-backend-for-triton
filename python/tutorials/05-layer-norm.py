@@ -34,6 +34,9 @@ import torch
 import triton
 import triton.language as tl
 
+DEVICE = triton.runtime.driver.active.get_current_target().backend
+
+
 try:
     # This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it
     # should not be added to extras_require in setup.py.
@@ -290,7 +293,7 @@ class LayerNorm(torch.autograd.Function):
 layer_norm = LayerNorm.apply
 
 
-def test_layer_norm(M, N, dtype, eps=1e-5, device='xpu'):
+def test_layer_norm(M, N, dtype, eps=1e-5, device=DEVICE):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
@@ -329,7 +332,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='xpu'):
         plot_name='layer-norm-backward',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'},
     ))
-def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='xpu'):
+def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device=DEVICE):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
