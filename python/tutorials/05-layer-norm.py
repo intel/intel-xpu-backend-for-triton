@@ -34,9 +34,6 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
-
-
 try:
     # This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it
     # should not be added to extras_require in setup.py.
@@ -44,6 +41,8 @@ try:
     HAS_APEX = True
 except ModuleNotFoundError:
     HAS_APEX = False
+
+DEVICE = triton.runtime.driver.active.get_current_target().backend
 
 
 @triton.jit
