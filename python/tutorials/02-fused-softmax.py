@@ -112,8 +112,7 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-device = getattr(torch, DEVICE).current_device()
-properties = driver.active.utils.get_device_properties(device)
+properties = driver.active.utils.get_device_properties(DEVICE)
 NUM_SM = properties["multiprocessor_count"]
 SIZE_SMEM = properties["max_shared_mem"]
 WARPS_PER_EU = 8  # TODO: Get from properties
