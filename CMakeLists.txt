@@ -221,7 +221,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(TRITON_LIBRARIES
     ${triton_libs}
     ${triton_plugins}
-    TritonSPIRV
 
     # mlir
     MLIRAMDGPUDialect

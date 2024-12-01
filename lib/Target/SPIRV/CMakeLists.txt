@@ -15,3 +15,6 @@ add_mlir_translation_library(TritonSPIRV
 
 # Add SPIRV-LLVM-Translator include directory.
 target_include_directories(TritonSPIRV PRIVATE ${SPIRVToLLVMTranslator_INCLUDE_DIR})
+
+set_property(GLOBAL APPEND PROPERTY TRITON_LIBS TritonSPIRV)
+llvm_update_compile_flags(TritonSPIRV)
