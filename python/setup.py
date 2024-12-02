@@ -806,6 +806,8 @@ setup(
             "isort",
             "numpy",
             "pytest",
+            "pytest-forked",
+            "pytest-xdist",
             "scipy>=1.7.1",
             "llnl-hatchet",
         ],
