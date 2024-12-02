@@ -8,6 +8,7 @@
 
 #include "TargetInfo.h"
 #include "Utility.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -107,6 +108,77 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
+namespace {
+
+template <typename GroupOp>
+Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
+                         Value acc, unsigned numLanesToReduce,
+                         unsigned warpSize) {
+  auto spvGroupOp = spirv::GroupOperation::Reduce;
+  Value clusterSize;
+  if (numLanesToReduce != warpSize) {
+    spvGroupOp = spirv::GroupOperation::ClusteredReduce;
+    clusterSize = rewriter.create<arith::ConstantOp>(
+        loc, rewriter.getI32Type(),
+        rewriter.getI32IntegerAttr(numLanesToReduce));
+  }
+
+  Value result = rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
+                                          spvGroupOp, acc, clusterSize);
+  return result;
+}
+
+Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
+                       Operation *reduceOp, unsigned numLanesToReduce,
+                       unsigned warpSize) {
+  auto resultType = reduceOp->getResult(0).getType();
+  Value warpReduce =
+      llvm::TypeSwitch<mlir::Operation *, Value>(reduceOp)
+          .Case<arith::AddFOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformFAddOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::AddIOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformIAddOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::MulFOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformFMulOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::MulIOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformIMulOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::MaxNumFOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformFMaxOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::MinNumFOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformFMinOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::AndIOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformBitwiseAndOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::OrIOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformBitwiseOrOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::XOrIOp>([&](auto) {
+            return createSPIRVGroupOp<spirv::GroupNonUniformBitwiseXorOp>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Default([](auto) {
+            llvm_unreachable("Unsupported reduction");
+            return Value();
+          });
+  return warpReduce;
+}
+
+} // namespace
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
@@ -134,28 +206,22 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       reduceOp->getOperand(1) != block.getArgument(1))
     return false;
 
-  auto reduceKind =
-      llvm::TypeSwitch<mlir::Operation *, std::optional<TritonGEN::ReduceKind>>(
-          reduceOp)
-          .Case<arith::AddFOp, arith::AddIOp>(
-              [&](auto) { return TritonGEN::ReduceKind::ADD; })
-          .Case<arith::MulFOp, arith::MulIOp>(
-              [&](auto) { return TritonGEN::ReduceKind::MUL; })
-          .Case<arith::MaxNumFOp>(
-              [&](auto) { return TritonGEN::ReduceKind::MAX; })
-          .Case<arith::MinNumFOp>(
-              [&](auto) { return TritonGEN::ReduceKind::MIN; })
-          .Case<arith::AndIOp>([&](auto) { return TritonGEN::ReduceKind::AND; })
-          .Case<arith::OrIOp>([&](auto) { return TritonGEN::ReduceKind::OR; })
-          .Case<arith::XOrIOp>([&](auto) { return TritonGEN::ReduceKind::XOR; })
-          .Default([](auto) { return std::nullopt; });
-  if (reduceKind == std::nullopt)
+  auto supportedOp =
+      llvm::TypeSwitch<mlir::Operation *, bool>(reduceOp)
+          .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+                arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+                arith::XOrIOp>([&](auto) { return true; })
+          .Default([](auto) { return false; });
+
+  if (!supportedOp)
     return false;
 
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
   for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = rewriter.create<TritonGEN::SubGroupReduceOp>(
-        loc, reduceOp->getResult(0).getType(), acc[i], *reduceKind,
-        numLaneToReduce);
+    acc[i] = warpReduceHelper(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+                              warpSize);
   }
 
   return true;

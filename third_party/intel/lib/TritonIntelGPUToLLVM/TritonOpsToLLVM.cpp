@@ -6,6 +6,7 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -561,7 +562,7 @@ public:
   using ConvertTritonGPUOpToLLVMPattern<
       ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReduceOp op, ReduceOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -585,16 +586,24 @@ public:
     using AllReduceOperation = mlir::gpu::AllReduceOperation;
     AllReduceOperation redKind;
     if (isa<arith::AddFOp>(combine))
-      redKind = AllReduceOperation::ADD;
+      replaceWithSPIRVOp<mlir::spirv::GroupNonUniformFAddOp>(op, adaptor,
+                                                             rewriter);
     else if (isa<arith::MaxNumFOp>(combine))
-      redKind = AllReduceOperation::MAXNUMF;
+      replaceWithSPIRVOp<mlir::spirv::GroupNonUniformFMaxOp>(op, adaptor,
+                                                             rewriter);
     else
       llvm_unreachable("Unhandled reduction kind");
 
-    Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, adaptor.getSrcs()[0], redKind, true);
-    rewriter.replaceOp(op, result);
     return success();
+  }
+
+private:
+  template <typename ReplaceOp>
+  void replaceWithSPIRVOp(ReduceOp op, ReduceOpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const {
+    rewriter.replaceOpWithNewOp<ReplaceOp>(
+        op, typeConverter->convertType(op.getType(0)), spirv::Scope::Subgroup,
+        spirv::GroupOperation::Reduce, adaptor.getSrcs()[0], Value());
   }
 };
 
