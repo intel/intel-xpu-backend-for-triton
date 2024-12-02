@@ -31,7 +31,8 @@ namespace {
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp,
                 ttg::intel::DpasEncodingAttr::DPASCapability dpasCap,
-                const ArrayRef<int64_t> shape, unsigned numWarps, const SmallVector<unsigned>& order) {
+                const ArrayRef<int64_t> shape, unsigned numWarps,
+                const SmallVector<unsigned> &order) {
 
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -63,6 +64,7 @@ getWarpsPerTile(tt::DotOp dotOp,
       ceil<uint32_t>(dpasCap.repeatCount, dpasCap.executionSize);
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
+  llvm::errs() << "rowColRation: " << rowColRatio << ", colRowRatio: " << colRowRatio << ", ret: " << ret[0] << ", " << ret[1] << "\n";
 
   int rowDim = order[rank - 2], colDim = order[rank - 1];
   do {
@@ -118,25 +120,29 @@ public:
     unsigned opsPerChan =
         ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
 
-    // We are upcasting FP8 to FP16
-    if (oldAType.getElementType().isFloat8E5M2() ||
-        oldAType.getElementType().isFloat8E4M3FN())
-      dpasElemBitWidths = 2 * dpasElemBitWidths;
-
-    SmallVector<unsigned> order;
+    SmallVector<unsigned> order = {1, 0}; // TODO: acceptable default arg?
+    // llvm::errs() << "a: " << a << "\n";
     Operation *aOp = a.getDefiningOp();
-    if (isa<ttg::ConvertLayoutOp>(aOp)) {
-      assert(aOp->getNumOperands() == 1);
-      auto aLoad = aOp->getOperand(0);
-      order = triton::gpu::getOrder(
-          cast<RankedTensorType>(aLoad.getType()).getEncoding());
+    if (aOp) {
+      // llvm::errs() << "Processing a op: " << *aOp << "\n";
+      Attribute layout;
+      if (isa<ttg::ConvertLayoutOp>(aOp)) {
+        // TODO: convertlayoutop converts the order to match dpas, so we need to
+        // "look through" the conversion. is there a way to prevent the
+        // conversion in the first place?
+        assert(aOp->getNumOperands() == 1);
+        layout =
+            cast<RankedTensorType>(aOp->getOperand(0).getType()).getEncoding();
+      } else {
+        assert(aOp->getNumResults() == 1);
+        layout =
+            cast<RankedTensorType>(aOp->getResult(0).getType()).getEncoding();
+      }
+      order = triton::gpu::getOrder(layout);
     } else {
-      assert(isa<tt::LoadOp>(aOp) && "expecting load input to DPAS");
-      assert(aOp->getNumResults() == 1);
-      auto ret = aOp->getResult(0);
-      order = triton::gpu::getOrder(
-          cast<RankedTensorType>(ret.getType()).getEncoding());
+      // llvm::errs() << "no A op for A: " << a << "\n";
     }
+    llvm::errs() << "order: " << order[0] << ", " << order[1] << "\n";
 
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps, order);
