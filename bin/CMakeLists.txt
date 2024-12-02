@@ -14,8 +14,6 @@ target_link_libraries(triton-opt PRIVATE
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
   TritonIntelLLVMIR
-  TritonIntelGPUIR
-  TritonIntelGPUTransforms
   MLIRGPUToROCDLTransforms
   ${dialect_libs}
   ${conversion_libs}
