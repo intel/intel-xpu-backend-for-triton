@@ -1,5 +1,6 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SPIRVSubgroupOps.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -583,27 +584,16 @@ public:
     Operation *combine = &*combineOp.front().getOperations().begin();
 
     // FIXME: support all possible reduction modes
-    using AllReduceOperation = mlir::gpu::AllReduceOperation;
-    AllReduceOperation redKind;
-    if (isa<arith::AddFOp>(combine))
-      replaceWithSPIRVOp<mlir::spirv::GroupNonUniformFAddOp>(op, adaptor,
-                                                             rewriter);
-    else if (isa<arith::MaxNumFOp>(combine))
-      replaceWithSPIRVOp<mlir::spirv::GroupNonUniformFMaxOp>(op, adaptor,
-                                                             rewriter);
-    else
-      llvm_unreachable("Unhandled reduction kind");
+    TypeSwitch<Operation *>(combine).Case<arith::AddFOp, arith::MaxNumFOp>(
+        [&](auto reduce) {
+          rewriter.replaceOpWithNewOp<
+              intel::SPIRVArithmeticGroupOpTy<decltype(reduce)>>(
+              op, typeConverter->convertType(op.getType(0)),
+              spirv::Scope::Subgroup, spirv::GroupOperation::Reduce,
+              adaptor.getSrcs()[0], Value());
+        });
 
     return success();
-  }
-
-private:
-  template <typename ReplaceOp>
-  void replaceWithSPIRVOp(ReduceOp op, ReduceOpAdaptor adaptor,
-                          ConversionPatternRewriter &rewriter) const {
-    rewriter.replaceOpWithNewOp<ReplaceOp>(
-        op, typeConverter->convertType(op.getType(0)), spirv::Scope::Subgroup,
-        spirv::GroupOperation::Reduce, adaptor.getSrcs()[0], Value());
   }
 };
 
