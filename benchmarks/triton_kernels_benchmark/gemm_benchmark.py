@@ -268,6 +268,7 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
 def benchmark(B, M, N, K, provider):
     a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
 
+    torch.manual_seed(0)
     a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
     b = torch.rand(b_shape, device='xpu', dtype=torch.bfloat16)
 
@@ -291,10 +292,10 @@ def benchmark(B, M, N, K, provider):
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
-            c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
+            c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
         else:
             assert len(a.shape) == 2, 'Expecting shape of length 2'
-            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
+            c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
         torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
@@ -304,13 +305,13 @@ def benchmark(B, M, N, K, provider):
                                                                  kernel_name='matmul_kernel_with_block_pointers')
     elif provider == 'xetla':
         if B == 1:
-            c = torch.empty((M, N), device='xpu', dtype=torch.float32)
-            acc = torch.empty((M, N), device='xpu', dtype=torch.float32)
-            cnt = torch.empty((M, N), device='xpu', dtype=torch.int32)
+            c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+            acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+            cnt = torch.zeros((M, N), device='xpu', dtype=torch.int32)
         else:
-            c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
-            acc = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
-            cnt = torch.empty((B, M, N), device='xpu', dtype=torch.int32)
+            c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+            acc = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+            cnt = torch.zeros((B, M, N), device='xpu', dtype=torch.int32)
         name = f'gemm_shape_{B}_{M}_{K}_{N}'
         # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
         # better performance.
