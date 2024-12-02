@@ -1,7 +1,6 @@
 add_subdirectory(Analysis)
 add_subdirectory(Dialect)
 add_subdirectory(GPUToTritonGEN)
-add_subdirectory(LLVMIR)
 add_subdirectory(Target)
 add_subdirectory(TritonAnnotateModule)
 add_subdirectory(TritonGENToLLVM)

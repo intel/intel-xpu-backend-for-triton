@@ -16,7 +16,7 @@
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
-#include "intel/lib/LLVMIR/LLVMPasses.h"
+#include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
