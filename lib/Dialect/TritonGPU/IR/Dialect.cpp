@@ -1074,9 +1074,6 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     return regs;
   }
 
-  if (auto mmaParent = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
-    return mmaParent.getElemsPerThreadForOperands(shape, eltTy, getOpIdx());
-  }
   llvm_unreachable("getElemsPerThread is not supported for dot operand");
   return SmallVector<unsigned>();
 }
