@@ -60,6 +60,7 @@ class XPUOptions:
     generate_native_code: bool = False
     advanced_path: bool = False
     one_matrix_per_load_for_bt: bool = False
+    shared: int = 0
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -363,6 +364,8 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_spv(src, metadata, options):
+        if src is not str:
+            src = str(src)
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         if options.grf_mode == 'small':
