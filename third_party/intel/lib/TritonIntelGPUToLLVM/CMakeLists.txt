@@ -26,6 +26,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
     ViewOpToLLVM.cpp
+    VISAASMFormat.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen
