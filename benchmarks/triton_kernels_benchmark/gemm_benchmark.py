@@ -227,28 +227,28 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['B', 'M', 'K', 'N'],
+        x_names=['B', 'M', 'N', 'K'],
         # different possible values for `x_name`
         x_vals=[[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] +  #
         [  #
-            [1, 1, 5120, 13824],  #
-            [1, 4, 4096, 12288],  #
+            [1, 1, 13824, 5120],  #
+            [1, 4, 12288, 4096],  #
             [1, 512, 8192, 8192],  #
             [1, 512, 8192, 32768],  #
             [1, 512, 32768, 8192],  #
-            [1, 1024, 16384, 8192],  #
-            [1, 1024, 28672, 8192],  #
-            [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
-            [1, 4096, 16384, 8192],  #
-            [1, 8192, 16384, 1024],  #
-            [1, 8192, 16384, 4096],  #
+            [1, 1024, 8192, 16384],  #
+            [1, 1024, 8192, 28672],  #
+            [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
+            [1, 4096, 8192, 16384],  #
+            [1, 8192, 1024, 16384],  #
+            [1, 8192, 4096, 16384],  #
             [1, 16384, 1024, 8192],  #
             [1, 16384, 4096, 8192],  #
             [1, 16384, 8192, 1024],  #
             [1, 16384, 8192, 4096],  #
             [4, 32768, 128, 4096],  #
             [4, 32768, 4096, 128],  #
-            [32, 4096, 4096, 128],  #
+            [32, 4096, 128, 4096],  #
             [4096, 8, 128, 16384],  #
             [4096, 8, 16384, 128]
         ],
@@ -315,7 +315,7 @@ def benchmark(B, M, N, K, provider):
         name = f'gemm_shape_{B}_{M}_{K}_{N}'
         # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
         # better performance.
-        if (B, M, K, N) == (1, 3072, 4096, 3072):
+        if (B, M, N, K) == (1, 3072, 3072, 4096):
             name = 'gemm_streamk_shape_3072_4096_3072'
         func = getattr(xetla_kernel, name)
         xetla_fn = lambda: func(a, b, c, acc, cnt)
