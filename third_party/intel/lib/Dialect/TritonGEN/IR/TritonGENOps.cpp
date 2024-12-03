@@ -49,23 +49,6 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
 }
 
 //===----------------------------------------------------------------------===//
-// gen.sub_group_reduce
-//===----------------------------------------------------------------------===//
-
-LogicalResult TritonGEN::SubGroupReduceOp::verify() {
-  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
-  if (!attr)
-    return this->emitOpError("expecting valid target env attribute");
-
-  if (getSize() < 1 || getSize() > TritonGEN::getSubgroupSize(*this) ||
-      !llvm::isPowerOf2_32(getSize()))
-    return this->emitOpError(
-        "expecting size to be a power of 2 between 1 and subgroup size");
-
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
 // gen.matrix.dpas
 //===----------------------------------------------------------------------===//
 

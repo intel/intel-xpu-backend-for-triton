@@ -1500,63 +1500,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "triton_
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @reduce_all(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>) {
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_addf
+    // CHECK: @_Z27__spirv_GroupNonUniformFAddiif
     %0 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.addf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_addi
+    // CHECK: @_Z27__spirv_GroupNonUniformIAddiij
     %1 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.addi %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_mulf
+    // CHECK: @_Z27__spirv_GroupNonUniformFMuliif
     %2 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.mulf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_muli
+    // CHECK: @_Z27__spirv_GroupNonUniformIMuliij
     %3 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.muli %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_maxf
+    // CHECK: @_Z27__spirv_GroupNonUniformFMaxiif
     %4 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.maxnumf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_minf
+    // CHECK: @_Z27__spirv_GroupNonUniformFMiniif
     %5 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.minnumf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_andi
+    // CHECK: @_Z33__spirv_GroupNonUniformBitwiseAndiij
     %6 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.andi %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z31sub_group_non_uniform_reduce_ori
+    // CHECK: @_Z32__spirv_GroupNonUniformBitwiseOriij
     %7 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.ori %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z32sub_group_non_uniform_reduce_xori
+    // CHECK: @_Z33__spirv_GroupNonUniformBitwiseXoriij
     %8 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.xori %arg4, %arg5 : i32
@@ -1575,63 +1575,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @reduce_cluster(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>) {
 
-    // CHECK: @_Z30sub_group_clustered_reduce_addfj
+    // CHECK: @_Z27__spirv_GroupNonUniformFAddiif
     %0 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.addf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z30sub_group_clustered_reduce_addij
+    // CHECK: @_Z27__spirv_GroupNonUniformIAddiij
     %1 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.addi %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z30sub_group_clustered_reduce_mulfj
+    // CHECK: @_Z27__spirv_GroupNonUniformFMuliif
     %2 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.mulf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z30sub_group_clustered_reduce_mulij
+    // CHECK: @_Z27__spirv_GroupNonUniformIMuliij
     %3 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.muli %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z30sub_group_clustered_reduce_maxfj
+    // CHECK: @_Z27__spirv_GroupNonUniformFMaxiif
     %4 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.maxnumf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z30sub_group_clustered_reduce_minfj
+    // CHECK: @_Z27__spirv_GroupNonUniformFMiniif
     %5 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
     ^bb0(%arg4: f32, %arg5: f32):
       %48 = arith.minnumf %arg4, %arg5 : f32
       tt.reduce.return %48 : f32
     }) : (tensor<256x1xf32, #blocked>) -> tensor<1xf32, #slice>
 
-    // CHECK: @_Z30sub_group_clustered_reduce_andij
+    // CHECK: @_Z33__spirv_GroupNonUniformBitwiseAndiij
     %6 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.andi %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z29sub_group_clustered_reduce_orij
+    // CHECK: @_Z32__spirv_GroupNonUniformBitwiseOriij
     %7 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.ori %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: @_Z30sub_group_clustered_reduce_xorij
+    // CHECK: @_Z33__spirv_GroupNonUniformBitwiseXoriij
     %8 = "tt.reduce"(%arg) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i32, %arg5: i32):
       %48 = arith.xori %arg4, %arg5 : i32
@@ -1645,9 +1645,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // -----
 
 // CHECK-LABEL: sum_reduction
-// CHECK: llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_addi(%{{.*}}) {{.*}} : (i32) -> i32
+// CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, i32, i32) -> i32
 // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-// CHECK: llvm.call spir_funccc @_Z30sub_group_clustered_reduce_addij(%{{.*}}, %{{.*}}) {{.*}}convergent{{.*}}no_unwind{{.*}}will_return{{.*}} : (i32, i32) -> i32
+// CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
 // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
