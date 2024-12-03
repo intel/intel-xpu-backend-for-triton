@@ -154,6 +154,18 @@ public:
   matchAndRewrite(OpType op, typename OpType::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto ptrType = cast<PointerType>(op.getPtr().getType());
+    // scalar load/store
+    if (!isa<RankedTensorType>(ptrType.getPointeeType())) {
+      if constexpr (std::is_same_v<OpType, LoadOp>) {
+        auto newLoad = rewriter.create<LLVM::LoadOp>(op.getLoc(), op.getType(),
+                                                     adaptor.getPtr());
+        rewriter.replaceOp(op, newLoad);
+        return success();
+      }
+      assert(0 && "add more support");
+      return failure();
+    }
+    // blocked load/store
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
     assert(tensorType.getRank() == 2 &&
            "only support 2d load/store/prefetch for now");
