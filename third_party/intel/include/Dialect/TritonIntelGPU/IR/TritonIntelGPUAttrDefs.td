@@ -74,7 +74,6 @@ along the row (resp. col) dimension.
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-
     SmallVector<unsigned> getDPASInstShapeA() const;
     SmallVector<unsigned> getDPASInstShapeB() const;
     SmallVector<unsigned> getDPASInstShapeC() const;
@@ -91,7 +90,30 @@ along the row (resp. col) dimension.
       return true;
     }
 
-    SmallVector<unsigned> getContigPerThread();
+    SmallVector<unsigned> getContigPerThread() const;
+
+    struct DPASCapability {
+      explicit DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
+      DPASCapability() = default;
+
+      bool isPVC() const {
+        return executionSize == 16;
+      }
+      bool isFalconShore() const {
+        return executionSize == 16;
+      }
+      bool isATSM() const {
+        return executionSize == 8;
+      }
+
+      static constexpr unsigned systolicDepth = 8u;
+      static constexpr unsigned repeatCount = 8u;
+      static constexpr unsigned opsChanBitWidths = 32u;
+      unsigned executionSize = 0u;
+    };
+
+    static DPASCapability getDPASCapability(mlir::ModuleOp mod);
+    static unsigned getOpsPerChannel(Type elemType);
   }];
 
   let hasCustomAssemblyFormat = 1;

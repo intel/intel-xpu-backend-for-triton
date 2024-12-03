@@ -382,4 +382,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
     }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     tt.return
   }
+
+  // CHECK: @issue_2762
+  tt.func public @issue_2762(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c262144_i64 = arith.constant 262144 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c512_i64 = arith.constant 512 : i64
+    %c32_i32 = arith.constant 32 : i32
+    %c512_i32 = arith.constant 512 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c32_i32 : i32
+    %4 = arith.divsi %1, %c512_i32 : i32
+    %5 = arith.remsi %1, %c512_i32 : i32
+    // CHECK: [[PTR1:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<1x32x128xf32, [[BLOCKED_LAYOUT1]]>>
+    %y = tt.make_tensor_ptr %arg0, [%c512_i64, %c512_i64, %c512_i64], [%c1_i64, %c512_i64, %c262144_i64], [%4, %5, %c0_i32] {order = array<i32: 2, 1, 0>} : <tensor<1x32x128xf32, #blocked1>>
+    // CHECK: [[RES:%.*]] = scf.for {{.*}} iter_args([[ARG1:%.*]] = [[PTR1]]) -> (!tt.ptr<tensor<1x32x128xf32, [[BLOCKED_LAYOUT1]]>>)
+    %8:1 = scf.for %arg5 = %c0_i32 to %c512_i32 step %c128_i32 iter_args(%arg7 = %y) -> (!tt.ptr<tensor<1x32x128xf32, #blocked1>>) : i32 {
+      // CHECK: scf.yield [[ARG1]] : !tt.ptr<tensor<1x32x128xf32, [[BLOCKED_LAYOUT1]]>>
+      scf.yield %arg7 : !tt.ptr<tensor<1x32x128xf32, #blocked1>>
+    }
+    // CHECK: [[LOAD_RES:%.*]] = tt.load [[RES]] : !tt.ptr<tensor<1x32x128xf32, [[BLOCKED_LAYOUT1]]>>
+    // CHECK: ttg.convert_layout [[LOAD_RES]] : tensor<1x32x128xf32, [[BLOCKED_LAYOUT1]]> -> tensor<1x32x128xf32, [[BLOCKED_LAYOUT2]]>
+    %res = tt.load %8#0 : !tt.ptr<tensor<1x32x128xf32, #blocked1>>
+    tt.return
+  }
 }

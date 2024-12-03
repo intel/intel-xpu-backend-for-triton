@@ -13,8 +13,7 @@ target_link_libraries(triton-opt PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonIntelGPUIR
-  TritonIntelGPUTransforms
+  TritonIntelLLVMIR
   MLIRGPUToROCDLTransforms
   ${dialect_libs}
   ${conversion_libs}
@@ -25,7 +24,6 @@ target_link_libraries(triton-opt PRIVATE
   MLIROptLib
   MLIRPass
   MLIRTransforms
-  MLIRSPIRVDialect
 )
 
 mlir_check_all_link_libraries(triton-opt)
@@ -40,7 +38,6 @@ target_link_libraries(triton-reduce PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonIntelGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -62,7 +59,6 @@ target_link_libraries(triton-lsp PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonIntelGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -93,6 +89,7 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMSupport
   LLVMOption
   LLVMCodeGen
+  TritonIntelLLVMIR
   TritonIntelGPUIR
   )
 export_executable_symbols_for_plugins(triton-llvm-opt)
@@ -102,7 +99,6 @@ add_llvm_executable(triton-tensor-layout triton-tensor-layout.cpp PARTIAL_SOURCE
 target_link_libraries(triton-tensor-layout PRIVATE
   TritonGPUIR
   TritonNvidiaGPUIR
-  TritonIntelGPUIR
   ${triton_libs}
   ${conversion_libs}
   ${dialect_libs}
@@ -125,7 +121,6 @@ target_link_libraries(triton-translate
   MLIRIR
   MLIRParser
   MLIRPass
-  MLIRSPIRVDialect
   MLIRTranslateLib
   MLIRSupport
   TritonGENToLLVMIRTranslation

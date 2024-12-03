@@ -478,133 +478,6 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
 namespace {
 
 //===----------------------------------------------------------------------===//
-// Synchronization Ops Lowerings
-//===----------------------------------------------------------------------===//
-
-struct TritonSubGroupBase {
-protected:
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, TritonGEN::SubGroupReduceOp,
-                                 TritonGEN::SubGroupScanOp>::value>>
-  static Value extend(OpType op, Value val, Type type,
-                      ConversionPatternRewriter &rewriter) {
-    Location loc = op.getLoc();
-    unsigned bitWidth = type.getIntOrFloatBitWidth();
-
-    if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
-                                  TritonGEN::SubGroupScanOp>::value) {
-      if (type.isInteger() && bitWidth < 8)
-        val = zext(i8_ty, val);
-    }
-
-    return val;
-  }
-
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, TritonGEN::SubGroupReduceOp,
-                                 TritonGEN::SubGroupScanOp>::value>>
-  static Value truncate(OpType op, Value val, Type type,
-                        ConversionPatternRewriter &rewriter) {
-    Location loc = op.getLoc();
-    unsigned bitWidth = type.getIntOrFloatBitWidth();
-
-    if constexpr (llvm::is_one_of<OpType, TritonGEN::SubGroupReduceOp,
-                                  TritonGEN::SubGroupScanOp>::value) {
-      if (type.isInteger() && bitWidth < 8)
-        val = trunc(type, val);
-      return val;
-    }
-
-    return val;
-  }
-};
-
-struct TritonSubGroupReduceLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupReduceOp>,
-      public TritonSubGroupBase {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::SubGroupReduceOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::SubGroupReduceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    Value val = op.getValue();
-    Type origTy = val.getType();
-    val = TritonSubGroupBase::extend(op, val, origTy, rewriter);
-    Type valTy = val.getType();
-    SmallVector<Type> argTypes{valTy};
-    SmallVector<bool> argIsUnsigned{false};
-    SmallVector<Value> args{val};
-    bool useCluster = (getSubgroupSize(op) != op.getSize());
-
-    std::string fnName = "sub_group_";
-    fnName += useCluster ? "clustered_" : "non_uniform_";
-    fnName += "reduce_" + stringifyReduceKind(op.getKind()).str();
-    LLVMFuncAttributeOptions funcAttrs{};
-    if (useCluster) {
-      argTypes.push_back(i32_ty);
-      argIsUnsigned.push_back(true);
-      auto size = rewriter.create<LLVM::ConstantOp>(
-          loc, i32_ty, static_cast<int>(op.getSize()));
-      args.push_back(size);
-      MLIRContext *ctx = rewriter.getContext();
-      funcAttrs = convergentNoUnwindWillReturnAttrs;
-    }
-    fnName = intel::mangle(fnName, argTypes, argIsUnsigned);
-
-    Value result = createDeviceFunctionCall(rewriter, fnName, valTy, argTypes,
-                                            args, {}, funcAttrs)
-                       .getResult();
-    result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
-struct TritonSubGroupScanLowering
-    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupScanOp>,
-      public TritonSubGroupBase {
-  using ConvertOpToLLVMPattern<
-      TritonGEN::SubGroupScanOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(TritonGEN::SubGroupScanOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Value val = op.getValue();
-    Type origTy = val.getType();
-    val = TritonSubGroupBase::extend(op, op.getValue(), origTy, rewriter);
-    Type valTy = val.getType();
-    SmallVector<Type> argTypes{valTy};
-    SmallVector<Value> args{val};
-
-    std::string fnName = "sub_group_non_uniform_scan_";
-    switch (op.getScanKind()) {
-    case TritonGEN::ScanKind::EXCLUSIVE:
-      fnName += "exclusive_";
-      break;
-    case TritonGEN::ScanKind::INCLUSIVE:
-      fnName += "inclusive_";
-      break;
-    default:
-      llvm_unreachable("unhandled scan kind");
-    };
-
-    fnName += stringifyReduceKind(op.getReduceKind()).str();
-    fnName = intel::mangle(fnName, valTy);
-
-    Value result =
-        createDeviceFunctionCall(rewriter, fnName, valTy, argTypes, args, {},
-                                 convergentNoUnwindWillReturnAttrs)
-            .getResult();
-    result = TritonSubGroupBase::truncate(op, result, origTy, rewriter);
-    rewriter.replaceOp(op, result);
-
-    return success();
-  }
-};
-
-//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
@@ -1027,8 +900,7 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
   patterns
-      .add<TritonSubGroupReduceLowering, TritonSubGroupScanLowering,
-           TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+      .add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
            TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
            TritonSubGroupBlockWriteLowering>(converter);
