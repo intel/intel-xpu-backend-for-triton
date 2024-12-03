@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from .._C.libtriton import get_cache_invalidating_env_vars, ir
+from .._C.libtriton import get_cache_invalidating_env_vars, ir, llvm
 from ..backends import backends
 from ..backends.compiler import GPUTarget
 from .. import __version__
@@ -88,13 +88,11 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path, context, backend):
+    def __init__(self, path, backend):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.src = path.read_text()
-        ir.load_dialects(context)
-        backend.load_dialects(context)
 
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
@@ -104,7 +102,22 @@ class IRSource:
             signature = match.group(2)
             types = re.findall(arg_type_pattern[self.ext], signature)
             self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+        elif self.ext == "llir":
+            llvm.init_targets()
+            context = llvm.context()
+            self.module = llvm.parse_llvm_module(self.path, context)
+            fns = self.module.get_functions()
+            for f in fns:
+                if f.is_declaration():
+                    continue
+                if f.get_calling_conv() == 76:  # llvm.CallingConvention.spir_kernel: The LLVM is bind by triton itself.
+                    self.name = "@" + f.name
+                    self.signature = {k: ty for k, ty in enumerate(f.get_signature())}
+                    break
         else:
+            context = ir.context()
+            ir.load_dialects(context)
+            backend.load_dialects(context)
             self.module = ir.parse_mlir_module(self.path, context)
             fn_name = self.module.get_entry_func_name()
             self.name = "@" + fn_name
@@ -116,6 +129,8 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
+        if self.ext == "llir":
+            return self.module
         self.module.context = context
         return self.module
 
@@ -223,8 +238,7 @@ def compile(src, target=None, options=None):
     # create backend
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
-        context = ir.context()
-        src = IRSource(src, context, backend)
+        src = IRSource(src, backend)
 
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
@@ -251,7 +265,11 @@ def compile(src, target=None, options=None):
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
     if not always_compile and metadata_path is not None:
         # cache hit!
-        return CompiledKernel(src, metadata_group, hash)
+        # metadata = json.loads(Path(metadata_path).read_text())
+        if not os.environ.get("TRITON_USE_CACHED_LLIR", "0") == "1":
+            return CompiledKernel(src, metadata_group, hash)
+        src = IRSource(metadata_group["_attn_fwd.llir"], backend)
+        ir_source = True
     # initialize metadata
     metadata = {
         "hash": hash,
@@ -274,6 +292,8 @@ def compile(src, target=None, options=None):
         context = ir.context()
         ir.load_dialects(context)
         backend.load_dialects(context)
+    else:
+        context = None
 
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
@@ -314,7 +334,8 @@ def compile(src, target=None, options=None):
     # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
     # multithreading in the MLIR context
     if not os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-        context.disable_multithreading()
+        if context is not None:
+            context.disable_multithreading()
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
