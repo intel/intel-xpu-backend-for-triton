@@ -1,9 +1,13 @@
+#include "intel/include/TritonIntelGPUToLLVM/VISAASMFormat.h"
+
 #include "PatternTritonGPUOpToLLVM.h"
 #include "ReduceScanCommon.h"
 #include "Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <vector>
+
+#include "llvm/Support/FormatVariadic.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -419,10 +423,123 @@ private:
     rewriter.replaceOp(op, results);
   }
 };
+
+class SIMDReduceOpConversion final
+    : public ConvertTritonGPUOpToLLVMPattern<
+          mlir::triton::gpu::intel::SIMDReduceOp> {
+public:
+  using OpTy = mlir::triton::gpu::intel::SIMDReduceOp;
+
+  SIMDReduceOpConversion(LLVMTypeConverter &typeConverter,
+                         const TargetInfoBase &targetInfo,
+                         PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<OpTy>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  static SmallVector<ArrayRef<Value>> splitInBatches(ArrayRef<Value> srcValues,
+                                                     size_t batchSize) {
+    SmallVector<ArrayRef<Value>> batches;
+    for (; !srcValues.empty(); srcValues = srcValues.drop_front(batchSize))
+      batches.push_back(srcValues.take_front(batchSize));
+    return batches;
+  }
+
+  LogicalResult
+  matchAndRewrite(OpTy simdReduce, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Location loc = simdReduce->getLoc();
+
+    SmallVector<Value> srcValues =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    // TODO: Implement relevant types.
+    if (!srcValues.front().getType().isF32())
+      return failure();
+
+    // TODO: Implement mapping for all reduction kinds.
+    if (simdReduce.getOp() != TritonGEN::ReduceKind::ADD &&
+        simdReduce.getOp() != TritonGEN::ReduceKind::MAX)
+      return failure();
+
+    auto mod = simdReduce->getParentOfType<ModuleOp>();
+    constexpr unsigned supportedSIMDSize = 16;
+    unsigned subGroupSize =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    // Only SIMD 16 is supported.
+    if (subGroupSize != supportedSIMDSize)
+      return failure();
+    assert(srcValues.size() % subGroupSize == 0 &&
+           "Expecting splittable input");
+    SmallVector<Value> results(srcValues.size() / subGroupSize);
+    constexpr StringLiteral asmTemplate = R"({
+.decl temp_result v_type=G type=f num_elts=128 align=wordx32
+{0} (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, 8)<16;8,1>
+{0} (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> temp_result(0, 4)<8;4,1>
+{0} (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> temp_result(2, 4)<8;4,1>
+{0} (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> temp_result(4, 4)<8;4,1>
+{0} (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> temp_result(6, 4)<8;4,1>
+{0} (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> temp_result(0, 2)<4;2,1>
+{0} (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> temp_result(2, 2)<4;2,1>
+{0} (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> temp_result(0, 1)<2;1,0>
+})";
+    std::string batchedHorizontalReduce =
+        llvm::formatv(asmTemplate.data(), getASMOperation(simdReduce.getOp()))
+            .str();
+    constexpr unsigned vecWidth = 16;
+    VectorType reduceTy = vec_ty(srcValues.front().getType(), vecWidth);
+    llvm::transform(
+        splitInBatches(srcValues, subGroupSize), std::begin(results),
+        [&](ArrayRef<Value> inputs) {
+          auto inputRange = llvm::enumerate(inputs);
+          Value batchedReduceVal = std::accumulate(
+              std::begin(inputRange), std::end(inputRange),
+              rewriter.create<LLVM::PoisonOp>(loc, reduceTy).getRes(),
+              [reduceTy, loc, &rewriter](Value acc, auto entry) -> Value {
+                auto [index, src] = entry;
+                auto b = TritonLLVMOpBuilder(loc, rewriter);
+                return b.insert_element(reduceTy, acc, src, b.i32_val(index));
+              });
+          VISABuilder vISABuilder;
+          VISAInstr &bReduceOp = *vISABuilder.create<>(batchedHorizontalReduce);
+          VISABuilder::Operand *res = vISABuilder.newOperand("=rw");
+          VISABuilder::Operand *in =
+              vISABuilder.newOperand(batchedReduceVal, "rw");
+          bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
+          Type resultTy = reduceTy.getElementType();
+          return vISABuilder.launch(rewriter, loc, resultTy, true);
+        });
+    Value packedRes = packLLElements(loc, getTypeConverter(), results, rewriter,
+                                     simdReduce.getRes().getType());
+    rewriter.replaceOp(simdReduce, packedRes);
+    return success();
+  }
+
+private:
+  static StringRef getASMOperation(TritonGEN::ReduceKind op) {
+    switch (op) {
+    case TritonGEN::ReduceKind::ADD:
+      return "add";
+    case TritonGEN::ReduceKind::MAX:
+      return "max";
+    default:
+      llvm_unreachable("Unhandled kind");
+    }
+  }
+
+  const TargetInfoBase &targetInfo;
+};
 } // namespace
 
 void mlir::triton::intel::populateReduceOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<ReduceOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<ReduceOpConversion, SIMDReduceOpConversion>(typeConverter,
+                                                           targetInfo, benefit);
 }
