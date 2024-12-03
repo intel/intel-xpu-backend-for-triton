@@ -345,6 +345,7 @@ def ty_to_cpp(ty):
         "fp32": "float",
         "f32": "float",
         "fp64": "double",
+        "float": "float",
     }[ty]
 
 
