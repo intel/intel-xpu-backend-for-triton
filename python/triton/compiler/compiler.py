@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
-from .._C.libtriton import get_cache_invalidating_env_vars, ir
+from .._C.libtriton import get_cache_invalidating_env_vars, ir, llvm
 from ..backends import backends
 from ..backends.compiler import Language
 from ..backends.compiler import BaseBackend, GPUTarget
@@ -85,14 +85,12 @@ class ASTSource:
 
 class IRSource:
 
-    def __init__(self, path, context, backend):
+    def __init__(self, path, backend):
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
         self.language = Language.TRITON
         self.src = path.read_text()
-        ir.load_dialects(context)
-        backend.load_dialects(context)
 
         # We don't have a easy-to-use PTX parser that we can use, so keep that regex for now.
         # TODO - replace with a proper parser
@@ -102,8 +100,24 @@ class IRSource:
             signature = match.group(2)
             types = re.findall(arg_type_pattern[self.ext], signature)
             self.signature = {k: convert_type_repr(ty) for k, ty in enumerate(types)}
+        elif self.ext == "llir":
+            llvm.init_targets()
+            context = llvm.context()
+            self.module = llvm.parse_llvm_module(self.path, context)
+            fns = self.module.get_functions()
+            for f in fns:
+                if f.is_declaration():
+                    continue
+                if f.get_calling_conv() == 76:  # llvm.CallingConvention.spir_kernel: The LLVM is bind by triton itself.
+                    self.name = "@" + f.name
+                    self.signature = {k: ty for k, ty in enumerate(f.get_signature())}
+                    break
         else:
+            context = ir.context()
+            ir.load_dialects(context)
+            backend.load_dialects(context)
             self.module = ir.parse_mlir_module(self.path, context)
+            self.module.context = context
             fn_name = self.module.get_entry_func_name()
             self.name = "@" + fn_name
             funcOp = self.module.get_function(fn_name)
@@ -114,7 +128,9 @@ class IRSource:
         return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
 
     def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
-        self.module.context = context
+        if self.ext == "llir":
+            return self.module
+        # self.module.context = context
         return self.module
 
     def parse_options(self):
@@ -233,8 +249,7 @@ def compile(src, target=None, options=None, _env_vars=None):
     # create backend
     if ir_source:
         assert isinstance(src, str), "source must be either AST or a filepath"
-        context = ir.context()
-        src = IRSource(src, context, backend)
+        src = IRSource(src, backend)
 
     extra_options = src.parse_options()
     options = backend.parse_options(dict(options or dict(), **extra_options))
@@ -259,48 +274,63 @@ def compile(src, target=None, options=None, _env_vars=None):
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
     always_compile = knobs.compilation.always_compile
+    compile_src = src
     if not always_compile and metadata_path is not None:
         # cache hit!
-        res = CompiledKernel(src, metadata_group, hash)
-        if compilation_listener:
-            compilation_listener(
-                src=src,
-                metadata=res.metadata._asdict(),
-                metadata_group=metadata_group,
-                times=timer.end(),
-                cache_hit=True,
-            )
-        return res
-
-    # initialize metadata
-    metadata = {
-        "hash": hash,
-        "target": target,
-        **options.__dict__,
-        **env_vars,
-    }
+        use_ir = os.environ.get("TRITON_USE_CACHED_LLIR", None)
+        if use_ir is not None:
+            # use cached LLIR
+            metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
+            metadata = json.loads(metadata_path.read_text())
+            llir_src = [metadata_group[ir_src] for ir_src in metadata_group if use_ir in ir_src]
+            print("johnlu use ir_src:", llir_src[0])
+            ir_src = IRSource(llir_src[0], backend)
+            ir_src.signature = src.signature
+            compile_src = ir_src
+            ir_source = True
+        else:
+            res = CompiledKernel(src, metadata_group, hash)
+            if compilation_listener:
+                compilation_listener(
+                    src=src,
+                    metadata=res.metadata._asdict(),
+                    metadata_group=metadata_group,
+                    times=timer.end(),
+                    cache_hit=True,
+                )
+            return res
+    else:
+        # initialize metadata
+        metadata = {
+            "hash": hash,
+            "target": target,
+            **options.__dict__,
+            **env_vars,
+        }
 
     metadata["cache_dir"] = fn_cache_manager.cache_dir
     metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
-    backend.add_stages(stages, options, src.language)
-    first_stage = list(stages.keys()).index(src.ext)
+    backend.add_stages(stages, options, compile_src.language)
+    first_stage = list(stages.keys()).index(compile_src.ext)
     # when the source is an IR file, don't apply the passes related to this stage. This makes it easier to write IR level tests.
     if ir_source:
         first_stage += 1
 
     # For IRSource, we have already grabbed the context + called both
     # ir.load_dialects and backend.load_dialects.
-    if not isinstance(src, IRSource):
+    if not isinstance(compile_src, IRSource):
         context = ir.context()
         ir.load_dialects(context)
         backend.load_dialects(context)
+    else:
+        context = None
 
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
     try:
-        module = src.make_ir(target, options, codegen_fns, module_map, context)
+        module = compile_src.make_ir(target, options, codegen_fns, module_map, context)
     except Exception as e:
         filter_traceback(e)
         raise
@@ -360,7 +390,8 @@ def compile(src, target=None, options=None, _env_vars=None):
     # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
     # multithreading in the MLIR context
     if not knobs.compilation.enable_asan:
-        context.disable_multithreading()
+        if context is not None:
+            context.disable_multithreading()
 
     # notify any listener
     if compilation_listener:

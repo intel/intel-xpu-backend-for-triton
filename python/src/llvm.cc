@@ -248,6 +248,31 @@ void init_triton_llvm(py::module &&m) {
       // External functions that are definitions (i.e. not declarations) are
       // kernel functions.
       .def("is_declaration", &llvm::Function::isDeclaration)
+      .def("get_calling_conv", &llvm::Function::getCallingConv)
+      .def("get_signature",
+           [](llvm::Function *func) {
+             std::vector<std::string> strVec;
+
+             llvm::FunctionType *funcType = func->getFunctionType();
+             llvm::Type *returnType = funcType->getReturnType();
+             unsigned numParams = funcType->getNumParams();
+             for (unsigned i = 0; i != numParams; ++i) {
+               std::string tempType;
+               llvm::raw_string_ostream os(tempType);
+
+               auto ty = funcType->getParamType(i);
+               if (auto ptrType = dyn_cast<PointerType>(ty)) {
+                 auto pAddrSpace = ptrType->getAddressSpace();
+                 if (pAddrSpace == 3)
+                   continue;
+                 os << "*";
+               } else {
+                 ty->print(os);
+               }
+               strVec.push_back(tempType);
+             }
+             return strVec;
+           })
       .def("is_external_linkage", [](llvm::Function *fn) {
         return fn->getLinkage() == llvm::GlobalValue::ExternalLinkage;
       });
@@ -450,6 +475,23 @@ void init_triton_llvm(py::module &&m) {
           return py::str(obj);
       },
       ret::take_ownership);
+
+  m.def(
+      "parse_llvm_module",
+      [](const std::string &inputFilename, llvm::LLVMContext &ctx) {
+        llvm::SMDiagnostic err;
+        std::unique_ptr<llvm::Module> llvmMod =
+            llvm::parseIRFile(inputFilename, err, ctx);
+        if (!llvmMod) {
+          llvm::report_fatal_error(
+              "failed to parse IR: " + err.getMessage() +
+              " at Line number: " + std::to_string(err.getLineNo()) +
+              " Column number: " + std::to_string(err.getColumnNo()) +
+              " Filename: " + err.getFilename().str());
+        }
+        return llvmMod;
+      },
+      py::keep_alive<0, 2>());
 
   m.def("init_targets", []() {
     static std::once_flag init_flag;
