@@ -53,6 +53,7 @@ class XPUOptions:
     arch: str = None
     # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
+    shared: int = 0
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -445,6 +446,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
         os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
+        if src is not str:
+            src = str(src)
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
