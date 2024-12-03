@@ -189,7 +189,7 @@ run_core_tests() {
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    pytest --verbose --device xpu runtime/
+    pytest --verbose --device xpu runtime/ --ignore=language/test_cublas.py
 
   TRITON_TEST_SUITE=debug \
     pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
