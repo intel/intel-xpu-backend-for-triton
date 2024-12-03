@@ -6,8 +6,8 @@
 
 using namespace llvm;
 
-static bool processPhiNode(BasicBlock &BB, PHINode *PhiNode) {
-  if (!any_of(PhiNode->incoming_values(), [](Use &U) {
+static bool processPhiNode(PHINode *PhiNode) {
+  if (none_of(PhiNode->incoming_values(), [](Use &U) {
         Constant *C = dyn_cast<Constant>(&U);
         return isa<UndefValue>(U) || C && C->isNullValue();
       })) {
@@ -15,7 +15,8 @@ static bool processPhiNode(BasicBlock &BB, PHINode *PhiNode) {
   }
 
   bool Changed = false;
-  for (Instruction &I : BB) {
+  BasicBlock *BB = const_cast<BasicBlock *>(PhiNode->getParent());
+  for (Instruction &I : *BB) {
     if (I.getOpcode() == Instruction::SDiv ||
         I.getOpcode() == Instruction::SRem) {
       const size_t OpIdx = 1;
@@ -35,7 +36,7 @@ static bool runOnFunction(Function &F) {
 
   for (BasicBlock &BB : F) {
     for (PHINode &PhiNode : BB.phis()) {
-      Changed |= processPhiNode(BB, &PhiNode);
+      Changed |= processPhiNode(&PhiNode);
     }
   }
 
