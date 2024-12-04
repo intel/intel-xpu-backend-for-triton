@@ -25,7 +25,7 @@ def num_warps(_builder=None):
 
 def convert_fp8e4b15_to_float16(arg, _builder):
     # Need to bitcast the source first because it's represented as tensor of i8 in MLIR.
-    tmp_ty = _builder.get_block_ty(_builder.get_fp8e4m3b11fnuz_ty(), arg.type.shape)
+    tmp_ty = _builder.get_block_ty(_builder.get_fp8e4nv_ty(), arg.type.shape)
     tmp = _builder.create_bitcast(arg.handle, tmp_ty)
     # Now generate FpToFp op for upcast.
     dst_ty = core.block_type(core.float16, arg.type.get_block_shapes())
