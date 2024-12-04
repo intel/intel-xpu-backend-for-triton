@@ -95,6 +95,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     return amendedFuncOp;
   }
 
+  static void addToOpenCLKernels(Operation *funcOp,
+                                 ConversionPatternRewriter &rewriter);
+
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -114,6 +117,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (LLVM::isKernel(funcOp)) {
       newFuncOp.setCConv(LLVM::CConv::SPIR_KERNEL);
       newFuncOp.setLinkage(LLVM::Linkage::External);
+      addToOpenCLKernels(newFuncOp, rewriter);
     }
 
     newFuncOp->setAttr(
