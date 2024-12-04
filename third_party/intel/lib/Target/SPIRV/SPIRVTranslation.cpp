@@ -1,4 +1,4 @@
-#include "triton/Target/SPIRV/SPIRVTranslation.h"
+#include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include <optional>
 
 #include "LLVMSPIRVLib.h"
