@@ -40,7 +40,7 @@ def libcuda_dirs():
     else:
         msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
         msg += ' (requires sudo) to refresh the linker cache.'
-    # assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
+    assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
     return dirs
 
 
@@ -82,14 +82,13 @@ class CudaUtils(object):
         return cls.instance
 
     def __init__(self):
-        # mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "cuda_utils")
-        # self.load_binary = mod.load_binary
-        # self.get_device_properties = mod.get_device_properties
-        # self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
-        # self.set_printf_fifo_size = mod.set_printf_fifo_size
-        # self.fill_1d_tma_descriptor = mod.fill_1d_tma_descriptor
-        # self.fill_2d_tma_descriptor = mod.fill_2d_tma_descriptor
-        pass
+        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "cuda_utils")
+        self.load_binary = mod.load_binary
+        self.get_device_properties = mod.get_device_properties
+        self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
+        self.set_printf_fifo_size = mod.set_printf_fifo_size
+        self.fill_1d_tma_descriptor = mod.fill_1d_tma_descriptor
+        self.fill_2d_tma_descriptor = mod.fill_2d_tma_descriptor
 
 
 # ------------------------
@@ -501,11 +500,11 @@ class CudaDriver(GPUDriver):
         super().__init__()
 
     def get_current_target(self):
-        # device = self.get_current_device()
-        # capability = self.get_device_capability(device)
-        # capability = capability[0] * 10 + capability[1]
-        # warp_size = 32
-        return GPUTarget("cuda", 90, 32)
+        device = self.get_current_device()
+        capability = self.get_device_capability(device)
+        capability = capability[0] * 10 + capability[1]
+        warp_size = 32
+        return GPUTarget("cuda", capability, warp_size)
 
     def get_device_interface(self):
         import torch
