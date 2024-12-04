@@ -103,6 +103,24 @@ private:
                       llvm::MDNode::get(ctx, decorations));
     return success();
   }
+
+  static LogicalResult
+  handleTritonGenOpenCLKernelsAttr(Operation *op,
+                                   LLVM::ModuleTranslation &moduleTranslation) {
+    auto mlirFunc = dyn_cast<LLVM::LLVMFuncOp>(op);
+    if (!mlirFunc)
+      return op->emitOpError("triton_gen.opencl_kernels attribute attached to "
+                             "non-function operation");
+    llvm::Function *func = moduleTranslation.lookupFunction(mlirFunc.getName());
+    assert(func && "Function not found");
+    constexpr StringLiteral openCLKernelsMDName = "opencl.kernels";
+    llvm::NamedMDNode *openCLKernels =
+        moduleTranslation.getOrInsertNamedModuleMetadata(openCLKernelsMDName);
+    llvm::Metadata *kernelRef = llvm::ConstantAsMetadata::get(func);
+    openCLKernels->addOperand(
+        llvm::MDNode::get(moduleTranslation.getLLVMContext(), kernelRef));
+    return success();
+  }
 };
 } // namespace
 
