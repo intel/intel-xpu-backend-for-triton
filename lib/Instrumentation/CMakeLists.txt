@@ -36,5 +36,7 @@ foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
      # This is set to -fvisibility=hidden in the top level CMake file
      # which causes the llvmGetPassPluginInfo symbol to be hidden and
      # an "entry point not found" error. Reset it just for this target
-     target_compile_options(${plugin} PRIVATE -fvisibility=default -fno-rtti)
+     if(NOT MSVC)
+         target_compile_options(${plugin} PRIVATE -fvisibility=default -fno-rtti)
+     endif()
 endforeach()
