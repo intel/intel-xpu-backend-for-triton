@@ -18,7 +18,7 @@
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 #include "intel/lib/LLVMIR/LLVMPasses.h"
 
-#include "triton/Target/SPIRV/SPIRVTranslation.h"
+#include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include <pybind11/pybind11.h>
