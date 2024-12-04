@@ -43,7 +43,6 @@ set(LINK_FLAGS "-fsycl -lze_loader")
 set(SYCL_FUNCTIONS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/intel/backend/include")
 set(TARGET_NAME SPIRVRunner)
 add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp $<TARGET_OBJECTS:llvm_parser>)
-#add_subdirectory(libs)
 target_include_directories(${TARGET_NAME} PRIVATE
 	"${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
 set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS}")
