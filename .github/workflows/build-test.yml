@@ -85,7 +85,7 @@ jobs:
           python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
 
           # to avoid changing `.pre-commit-config.yaml` common file
-          pip install bandit
+          pip install bandit==1.7.9
           bandit -c bandit.yaml -s "B101,B404,B603,B607" -r ./benchmarks/ ./scripts/ ./third_party/intel/
 
       - name: Save pip cache
