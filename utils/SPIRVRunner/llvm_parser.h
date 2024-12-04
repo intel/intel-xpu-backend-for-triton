@@ -7,7 +7,7 @@ class command_line_parser {
 public:
   struct options {
     std::string output_tensor;
-    bool enable_profiling;
+    bool get_kernel_time;
   };
 
   command_line_parser(int argc, char **argv);

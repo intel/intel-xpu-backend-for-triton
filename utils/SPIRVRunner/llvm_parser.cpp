@@ -15,7 +15,7 @@ command_line_parser::options command_line_parser::parse() {
 
   options opts;
   opts.output_tensor = output_tensor;
-  opts.enable_profiling = enable_profiling;
+  opts.get_kernel_time = enable_profiling;
 
   return opts;
 }
