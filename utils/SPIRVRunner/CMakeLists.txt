@@ -20,7 +20,8 @@ find_package(Torch REQUIRED)
 find_package(LLVM REQUIRED CONFIG)
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(LLVM_LIBS Support)
+add_library(llvm_parser OBJECT llvm_parser.cpp)
+target_compile_options(llvm_parser PRIVATE -fno-rtti)
 
 include(ExternalProject)
 ExternalProject_Add(
@@ -40,14 +41,14 @@ set(COMPILE_FLAGS "-fsycl -Wall -fpreview-breaking-changes")
 set(LINK_FLAGS "-fsycl -lze_loader")
 
 set(SYCL_FUNCTIONS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/intel/backend/include")
-
 set(TARGET_NAME SPIRVRunner)
-add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp)
+add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp $<TARGET_OBJECTS:llvm_parser>)
+#add_subdirectory(libs)
 target_include_directories(${TARGET_NAME} PRIVATE
-	"${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${LLVM_INCLUDE_DIRS})
+	"${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
 set_target_properties(${TARGET_NAME} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS}")
 set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 add_dependencies(${TARGET_NAME} json)
-
+llvm_map_components_to_libnames(LLVM_LIBS Support)
 target_link_libraries(${TARGET_NAME} PRIVATE "${TORCH_LIBRARIES}" "${LLVM_LIBS}")
 set_property(TARGET ${TARGET_NAME} PROPERTY CXX_STANDARD 17)

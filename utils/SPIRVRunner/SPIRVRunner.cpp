@@ -11,11 +11,10 @@
 #include <regex>
 #include <string>
 #include <vector>
-
 #include "sycl_functions.h"
-#include "llvm/Support/CommandLine.h"
+//#include "llvm/Support/CommandLine.h"
 #include <nlohmann/json.hpp>
-
+#include "llvm_parser.h"
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 
@@ -393,22 +392,12 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
 
 int main(int argc, char **argv) {
   try {
-    llvm::cl::opt<std::string> out_tensor_name(
-        "o", llvm::cl::desc("Specify Output Tensor Name"),
-        llvm::cl::value_desc("filename"));
-    llvm::cl::opt<bool> enable_profiling("p",
-                                         llvm::cl::desc("Enable Profiling"));
-    llvm::cl::ParseCommandLineOptions(argc, argv);
-    if (argc < 3) {
-      llvm::cl::PrintHelpMessage();
-      throw std::runtime_error("Insufficient arguments provided \n");
-    }
-
-    bool get_kernel_time = enable_profiling;
+    command_line_parser cli(argc, argv);
+    auto cliopts = cli.parse();
 
     // initialize sycl runtime
     sycl::queue q;
-    if (get_kernel_time) {
+    if (cliopts.get_kernel_time) {
       sycl::property_list prop_list{sycl::property::queue::enable_profiling()};
       q = sycl::queue(sycl::gpu_selector_v, exception_handler, prop_list);
     } else {
@@ -421,7 +410,7 @@ int main(int argc, char **argv) {
     initDevices(&q);
 
     // Parse the JSON file and create argument dictionary
-    KernelArguments tritonArgDict(out_tensor_name);
+    KernelArguments tritonArgDict(cliopts.output_tensor);
 
     // read spirv
     auto spirv = read_spirv(tritonArgDict.spv_name);
@@ -435,7 +424,7 @@ int main(int argc, char **argv) {
     std::cout << "Loaded kernel with " << n_regs << " registers and "
               << n_spills << " register spills." << std::endl;
 
-    auto output = launchKernel(q, kernel, tritonArgDict, get_kernel_time);
+    auto output = launchKernel(q, kernel, tritonArgDict, cliopts.get_kernel_time);
 
     auto output_tensor = tritonArgDict.spirv_dump_dir + "/cpp_outs.pt";
     write_tensor(output_tensor, output);
