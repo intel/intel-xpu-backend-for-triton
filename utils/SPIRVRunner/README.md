@@ -52,9 +52,9 @@ USAGE: SPIRVRunner [options]
 General options:
 
   -o <string> - <Specify Output Tensor Name>
-  
+
   -p          - Enable kernel time profiling
- ``` 
+ ```
 
 
 Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copied back to the CPU and written to disk. Additionally, the name must match the tensor's name (tensor_) and number as specified in the JSON file. Please refer args_data.json file.
