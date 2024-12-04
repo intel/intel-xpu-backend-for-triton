@@ -2,19 +2,18 @@
 #include <sycl/sycl.hpp>
 #include <torch/torch.h>
 
+#include "llvm_parser.h"
+#include "sycl_functions.h"
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <ios>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <regex>
 #include <string>
 #include <vector>
-#include "sycl_functions.h"
-//#include "llvm/Support/CommandLine.h"
-#include <nlohmann/json.hpp>
-#include "llvm_parser.h"
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 
@@ -424,7 +423,8 @@ int main(int argc, char **argv) {
     std::cout << "Loaded kernel with " << n_regs << " registers and "
               << n_spills << " register spills." << std::endl;
 
-    auto output = launchKernel(q, kernel, tritonArgDict, cliopts.get_kernel_time);
+    auto output =
+        launchKernel(q, kernel, tritonArgDict, cliopts.get_kernel_time);
 
     auto output_tensor = tritonArgDict.spirv_dump_dir + "/cpp_outs.pt";
     write_tensor(output_tensor, output);
