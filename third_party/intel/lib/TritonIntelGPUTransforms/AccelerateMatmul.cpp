@@ -278,7 +278,7 @@ private:
     return {newA, newB};
   }
 
-  template <int opIdx>
+  template <unsigned opIdx>
   TensorValue convertScaledOperand(OpDescriptor opDesc,
                                    ttg::intel::DpasEncodingAttr dpasEnc,
                                    RankedTensorType retType, ModuleOp mod,
@@ -319,7 +319,7 @@ private:
     return createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
   }
 
-  template <int opIdx>
+  template <unsigned opIdx>
   TensorValue convertUnscaledOperand(OpDescriptor opDesc,
                                      ttg::intel::DpasEncodingAttr dpasEnc,
                                      RankedTensorType retType,
