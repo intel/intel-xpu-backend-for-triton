@@ -1,11 +1,13 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SPIRVSubgroupOps.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -46,7 +48,7 @@ static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
       VectorType::get(maxBlockStoreWidth, vecTy.getElementType());
   Value offset = i32_val(subGroupSize);
   for (int i = 0; i < vecTy.getNumElements() / maxBlockStoreWidth; ++i) {
-    rewriter.create<TritonGEN::SIMDBlockWriteOp>(
+    rewriter.create<TritonGEN::SubGroupBlockWriteOp>(
         loc, base,
         rewriter
             .create<triton::gpu::intel::ExtractOp>(loc, decomposedVecTy, val, i)
@@ -313,7 +315,7 @@ private:
           i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
       SmallVector<Value> values;
       for (int i = 0; i < 64 / maxBlockLoadi16Width; ++i) {
-        auto simdRead = rewriter.create<TritonGEN::SIMDBlockReadOp>(
+        auto simdRead = rewriter.create<TritonGEN::SubGroupBlockReadOp>(
             loc, decomposedVecTy, base);
         values.push_back(simdRead.getRes());
         base = gep(ptrToSharedMemTy, decomposedVecTy, base, offset);
@@ -561,7 +563,7 @@ public:
   using ConvertTritonGPUOpToLLVMPattern<
       ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReduceOp op, ReduceOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -582,18 +584,15 @@ public:
     Operation *combine = &*combineOp.front().getOperations().begin();
 
     // FIXME: support all possible reduction modes
-    using AllReduceOperation = mlir::gpu::AllReduceOperation;
-    AllReduceOperation redKind;
-    if (isa<arith::AddFOp>(combine))
-      redKind = AllReduceOperation::ADD;
-    else if (isa<arith::MaxNumFOp>(combine))
-      redKind = AllReduceOperation::MAXNUMF;
-    else
-      llvm_unreachable("Unhandled reduction kind");
+    TypeSwitch<Operation *>(combine).Case<arith::AddFOp, arith::MaxNumFOp>(
+        [&](auto reduce) {
+          rewriter.replaceOpWithNewOp<
+              intel::SPIRVArithmeticGroupOpTy<decltype(reduce)>>(
+              op, typeConverter->convertType(op.getType(0)),
+              spirv::Scope::Subgroup, spirv::GroupOperation::Reduce,
+              adaptor.getSrcs()[0], Value());
+        });
 
-    Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, adaptor.getSrcs()[0], redKind, true);
-    rewriter.replaceOp(op, result);
     return success();
   }
 };

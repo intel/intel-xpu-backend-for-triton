@@ -5,7 +5,7 @@
 
 namespace mlir {
 
-constexpr static char AttrWorkloadName[] = "triton_gpu.workload";
+constexpr static char AttrWorkloadName[] = "ttg.workload";
 enum class Workload {
   // TODO: add more
   None = 0, // pattern not match any of below

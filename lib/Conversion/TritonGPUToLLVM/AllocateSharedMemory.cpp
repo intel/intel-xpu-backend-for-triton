@@ -23,7 +23,7 @@ struct AllocateSharedMemory
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
-    ModuleAllocation allocation = ModuleAllocation::get(mod);
+    ModuleAllocation allocation(mod);
 
     mod.walk([&](FunctionOpInterface funcOp) {
       funcOp.walk([&](Operation *op) {
@@ -44,7 +44,7 @@ struct AllocateSharedMemory
                     IntegerAttr::get(IntegerType::get(ctx, 32), offset));
       });
     });
-    mod->setAttr("triton_gpu.shared",
+    mod->setAttr("ttg.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));
   }

@@ -14,7 +14,7 @@ import json
 from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import List, Optional
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
@@ -103,6 +103,56 @@ class BackendInstaller:
         ]
 
 
+def find_vswhere():
+    program_files = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+    vswhere_path = Path(program_files) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if vswhere_path.exists():
+        return vswhere_path
+    return None
+
+
+def find_visual_studio(version_ranges):
+    vswhere = find_vswhere()
+    if not vswhere:
+        raise FileNotFoundError("vswhere.exe not found.")
+
+    for version_range in version_ranges:
+        command = [
+            str(vswhere), "-version", version_range, "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-products", "*", "-property", "installationPath", "-prerelease"
+        ]
+
+        try:
+            output = subprocess.check_output(command, text=True).strip()
+            if output:
+                return output.split("\n")[0]
+        except subprocess.CalledProcessError:
+            continue
+
+    return None
+
+
+def set_env_vars(vs_path, arch="x64"):
+    vcvarsall_path = Path(vs_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+    if not vcvarsall_path.exists():
+        raise FileNotFoundError(f"vcvarsall.bat not found in expected path: {vcvarsall_path}")
+
+    command = ["call", vcvarsall_path, arch, "&&", "set"]
+    output = subprocess.check_output(command, shell=True, text=True)
+
+    for line in output.splitlines():
+        if '=' in line:
+            var, value = line.split('=', 1)
+            os.environ[var] = value
+
+
+def initialize_visual_studio_env(version_ranges, arch="x64"):
+    vs_path = find_visual_studio(version_ranges)
+    if not vs_path:
+        raise EnvironmentError("Visual Studio not found in specified version ranges.")
+    set_env_vars(vs_path, arch)
+
+
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
 def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
@@ -148,13 +198,15 @@ def is_offline_build() -> bool:
 # --- third party packages -----
 
 
-class Package(NamedTuple):
+@dataclass
+class Package:
     package: str
     name: str
     url: str
     include_flag: str
     lib_flag: str
     syspath_var_name: str
+    sym_name: Optional[str] = None
 
 
 # json
@@ -196,6 +248,8 @@ def get_llvm_package_info():
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
             )
             return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+    elif system == 'Windows':
+        system_suffix = "windows-x64"
     else:
         print(
             f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
@@ -207,8 +261,10 @@ def get_llvm_package_info():
     with open(llvm_hash_path, "r") as llvm_hash_file:
         rev = llvm_hash_file.read(8)
     name = f"llvm-{rev}-{system_suffix}"
+    # Create a stable symlink that doesn't include revision
+    sym_name = f"llvm-{system_suffix}"
     url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
-    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+    return Package("llvm", name, url, "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH", sym_name=sym_name)
 
 
 def open_url(url):
@@ -231,6 +287,20 @@ def get_triton_cache_path():
     if not user_home:
         raise RuntimeError("Could not find user home directory")
     return os.path.join(user_home, ".triton")
+
+
+def update_symlink(link_path, source_path):
+    source_path = Path(source_path)
+    link_path = Path(link_path)
+
+    if link_path.is_symlink():
+        link_path.unlink()
+    elif link_path.exists():
+        shutil.rmtree(link_path)
+
+    print(f"creating symlink: {link_path} -> {source_path}", file=sys.stderr)
+    link_path.absolute().parent.mkdir(parents=True, exist_ok=True)  # Ensure link's parent directory exists
+    link_path.symlink_to(source_path, target_is_directory=True)
 
 
 def get_thirdparty_packages(packages: list):
@@ -269,6 +339,10 @@ def get_thirdparty_packages(packages: list):
             thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
         if p.lib_flag:
             thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
+        if p.sym_name is not None:
+            sym_link_path = os.path.join(package_root_dir, p.sym_name)
+            update_symlink(sym_link_path, package_dir)
+
     return thirdparty_cmake_args
 
 
@@ -281,10 +355,10 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
     base_dir = os.path.dirname(__file__)
     system = platform.system()
     try:
-        arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
+        arch = {"x86_64": "64", "AMD64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
-    supported = {"Linux": "linux", "Darwin": "linux"}
+    supported = {"Linux": "linux", "Darwin": "linux", "Windows": "win"}
     url = url_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
@@ -379,7 +453,7 @@ class CMakeBuild(build_ext):
             pybind11_include_dir = os.path.join(pybind11_sys_path, "include")
         else:
             pybind11_include_dir = pybind11.get_include()
-        return [f"-DPYBIND11_INCLUDE_DIR={pybind11_include_dir}"]
+        return [f"-Dpybind11_INCLUDE_DIR='{pybind11_include_dir}'", f"-Dpybind11_DIR='{pybind11.get_cmake_dir()}'"]
 
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info()])
@@ -401,6 +475,8 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
+        if platform.system() == "Windows":
+            initialize_visual_studio_env(["[17.0,18.0)", "[16.0,17.0)"])
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
@@ -417,7 +493,7 @@ class CMakeBuild(build_ext):
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
-            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPYTHON_INCLUDE_DIRS=" + python_include_dir,
+            "-DPython3_INCLUDE_DIR=" + python_include_dir,
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
@@ -465,6 +541,7 @@ class CMakeBuild(build_ext):
             "TRITON_BUILD_PROTON",
             "TRITON_BUILD_TUTORIALS",
             "TRITON_BUILD_WITH_CCACHE",
+            "TRITON_PARALLEL_LINK_JOBS",
         ]
         cmake_args += [f"-D{option}={os.getenv(option)}" for option in passthrough_args if option in os.environ]
 
@@ -564,11 +641,7 @@ backends = [*BackendInstaller.copy(["intel", "nvidia", "amd"]), *BackendInstalle
 
 def add_link_to_backends():
     for backend in backends:
-        if os.path.islink(backend.install_dir):
-            os.unlink(backend.install_dir)
-        if os.path.exists(backend.install_dir):
-            shutil.rmtree(backend.install_dir)
-        os.symlink(backend.backend_dir, backend.install_dir)
+        update_symlink(backend.install_dir, backend.backend_dir)
 
         if backend.language_dir:
             # Link the contents of each backend's `language` directory into
@@ -577,21 +650,13 @@ def add_link_to_backends():
             for x in os.listdir(backend.language_dir):
                 src_dir = os.path.join(backend.language_dir, x)
                 install_dir = os.path.join(extra_dir, x)
-                if os.path.islink(install_dir):
-                    os.unlink(install_dir)
-                if os.path.exists(install_dir):
-                    shutil.rmtree(install_dir)
-                os.symlink(src_dir, install_dir)
+                update_symlink(install_dir, src_dir)
 
 
 def add_link_to_proton():
     proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton"))
     proton_install_dir = os.path.join(os.path.dirname(__file__), "triton", "profiler")
-    if os.path.islink(proton_install_dir):
-        os.unlink(proton_install_dir)
-    if os.path.exists(proton_install_dir):
-        shutil.rmtree(proton_install_dir)
-    os.symlink(proton_dir, proton_install_dir)
+    update_symlink(proton_install_dir, proton_dir)
 
 
 def add_links():
@@ -693,13 +758,6 @@ def get_git_commit_hash(length=8):
         return ""
 
 
-def get_install_requires():
-    install_requires = [
-        "packaging",  # used by third_party/intel/backend/compiler.py
-    ]  # yapf: disable
-    return install_requires
-
-
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="3.2.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -707,9 +765,9 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
+    install_requires=["setuptools>=40.8.0"],
     packages=get_packages(),
     entry_points=get_entry_points(),
-    install_requires=get_install_requires(),
     package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
@@ -749,6 +807,8 @@ setup(
             "isort",
             "numpy",
             "pytest",
+            "pytest-forked",
+            "pytest-xdist",
             "scipy>=1.7.1",
             "llnl-hatchet",
         ],

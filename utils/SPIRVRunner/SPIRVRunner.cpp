@@ -2,19 +2,18 @@
 #include <sycl/sycl.hpp>
 #include <torch/torch.h>
 
+#include "llvm_parser.h"
+#include "sycl_functions.h"
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <ios>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <regex>
 #include <string>
 #include <vector>
-
-#include "sycl_functions.h"
-#include <nlohmann/json.hpp>
-
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 
@@ -122,6 +121,26 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
+sycl::context get_default_context(const sycl::device &sycl_device) {
+  const auto &platform = sycl_device.get_platform();
+#ifdef WIN32
+  sycl::context ctx;
+  try {
+    ctx = platform.ext_oneapi_get_default_context();
+  } catch (const std::runtime_error &ex) {
+    // This exception is thrown on Windows because
+    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // ignored it seems.
+#if _DEBUG
+    std::cout << "ERROR: " << ex.what() << std::endl;
+#endif
+  }
+  return ctx;
+#else
+  return platform.ext_oneapi_get_default_context();
+#endif
+}
+
 /** SYCL Functions **/
 std::tuple<sycl::kernel_bundle<sycl::bundle_state::executable>, sycl::kernel,
            int32_t, int32_t>
@@ -138,7 +157,8 @@ loadBinary(const std::string &kernel_name, const std::string &build_flags,
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[deviceId];
   const sycl::device sycl_device = sycl_l0_device_pair.first;
 
-  const auto ctx = sycl_device.get_platform().ext_oneapi_get_default_context();
+  const auto &ctx = get_default_context(sycl_device);
+
   const auto l0_device =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
   const auto l0_context =
@@ -247,7 +267,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
 
-  uint32_t expected_num_params =
+  [[maybe_unused]] uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
 
   size_t global_range_x =
@@ -390,38 +410,14 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   return triton_args.host_outbuffer;
 }
 
-bool check_option_amoung_argv(int argc, char **argv, std::string option) {
-  bool res = false;
-  if (argc > 2) {
-    // optional parameters can be in any order
-    for (int i = 2; i < argc; i++) {
-      if (argv[i] == option) {
-        res = true;
-        break;
-      }
-    }
-  }
-  return res;
-}
-
 int main(int argc, char **argv) {
   try {
-    std::string enable_profiling = "--enable-profiling";
-    if (argc < 2) {
-      std::cout << "Help: " << std::endl;
-      std::cout << "<Executable> <Output Tensor Name>" << std::endl;
-      std::cout << "./build/SPIRVRunner tensor_2" << std::endl;
-      std::cout << "To get kernel time, use:" << std::endl;
-      std::cout << "./build/SPIRVRunner tensor_2 " << enable_profiling
-                << std::endl;
-      throw std::runtime_error("Input arguments are missing \n");
-    }
+    command_line_parser cli(argc, argv);
+    auto cliopts = cli.parse();
 
     // initialize sycl runtime
-    bool get_kernel_time =
-        check_option_amoung_argv(argc, argv, enable_profiling);
     sycl::queue q;
-    if (get_kernel_time) {
+    if (cliopts.get_kernel_time) {
       sycl::property_list prop_list{sycl::property::queue::enable_profiling()};
       q = sycl::queue(sycl::gpu_selector_v, exception_handler, prop_list);
     } else {
@@ -434,7 +430,7 @@ int main(int argc, char **argv) {
     initDevices(&q);
 
     // Parse the JSON file and create argument dictionary
-    KernelArguments tritonArgDict(argv[1]);
+    KernelArguments tritonArgDict(cliopts.output_tensor);
 
     // read spirv
     auto spirv = read_spirv(tritonArgDict.spv_name);
@@ -448,7 +444,8 @@ int main(int argc, char **argv) {
     std::cout << "Loaded kernel with " << n_regs << " registers and "
               << n_spills << " register spills." << std::endl;
 
-    auto output = launchKernel(q, kernel, tritonArgDict, get_kernel_time);
+    auto output =
+        launchKernel(q, kernel, tritonArgDict, cliopts.get_kernel_time);
 
     auto output_tensor = tritonArgDict.spirv_dump_dir + "/cpp_outs.pt";
     write_tensor(output_tensor, output);

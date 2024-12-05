@@ -1,5 +1,7 @@
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -52,15 +54,17 @@ LogicalResult UpcastMXFPOp::verify() {
   if (!dotEncoding) {
     return emitOpError("Expected a DotOperandEncodingAttr for values");
   }
-  auto blockedScale = dyn_cast<BlockedEncodingAttr>(layoutScale);
-  if (!blockedScale) {
-    return emitOpError("Expected a BlockOperandEncoding for scales");
+  if (!isa<BlockedEncodingAttr, LinearEncodingAttr>(layoutScale)) {
+    return emitOpError(
+        "Expected a BlockOperandEncoding or LinearOperandEncoding "
+        "for scales");
   }
 
   if (isa<NvidiaMmaEncodingAttr>(dotEncoding.getParent())) {
     // Necessary to keep all of the scales of a given block of values in the
     // same warp
-    auto threadsPerWarp = blockedScale.getThreadsPerWarp();
+    auto threadsPerWarp =
+        cast<DistributedEncodingTrait>(layoutScale).getThreadsPerWarp();
     if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
       return emitOpError("Expected threads per warp to be {16, 2}");
     }
@@ -111,23 +115,85 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
     } else {
       auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-      auto newVEncoding = DotOperandEncodingAttr::get(
-          ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
-          oldEncoding.getKWidth() * 2);
-      // Figure out the K dimension for the input A/B, given that the return
-      // type is upcasted A/B type so we need to update the proper dim size.
+
       const int opIdx = oldEncoding.getOpIdx();
       const bool hasBatch = xShape.size() == 3;
       const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
       newShape[kIdx] *= 2;
-      retTy = RankedTensorType::get(newShape, FloatType::getBF16(ctx),
-                                    newVEncoding);
+      Type elemType = FloatType::getBF16(ctx);
+
+      // Note: For Intel the dot operands layout's kWidth parameter must match
+      // the parent's DPAS layout opsPerChannel so we need to materialize a new
+      // DPAS layout.
+      Attribute newVEncoding;
+      if (auto dpasEncoding =
+              dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
+        auto newDpasEncoding = intel::DpasEncodingAttr::get(
+            ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
+            dpasEncoding.getExecutionSize(),
+            intel::DpasEncodingAttr::getOpsPerChannel(elemType),
+            dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
+            dpasEncoding.getSubGroupSize());
+        newVEncoding = DotOperandEncodingAttr::get(
+            ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
+      } else {
+        // Figure out the K dimension for the input A/B, given that the return
+        // type is upcasted A/B type so we need to update the proper dim size.
+        newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
+                                                   oldEncoding.getParent(),
+                                                   oldEncoding.getKWidth() * 2);
+      }
+      retTy = RankedTensorType::get(newShape, elemType, newVEncoding);
     }
     inferredReturnTypes.push_back(retTy);
   } else {
     inferredReturnTypes.push_back(xTy);
   }
 
+  return success();
+}
+
+OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
+  // transpose(x, order=[0, 1, ...]) -> x
+  if (isIota(getOrder())) {
+    return getSrc();
+  }
+
+  // transpose(transpose(x)) -> transpose(x)
+  if (auto innerTrans = getSrc().getDefiningOp<MemDescTransOp>()) {
+    setOrder(applyPermutation(innerTrans.getOrder(), getOrder()));
+    setOperand(innerTrans.getSrc());
+    return getResult();
+  }
+
+  return {};
+}
+
+LogicalResult MemDescTransOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  // type is the same as the input
+  auto argTy = cast<MemDescType>(operands[0].getType());
+  auto order = properties.as<Properties *>()->order.asArrayRef();
+  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+
+  auto retEltTy = argTy.getElementType();
+  Attribute argEncoding = argTy.getEncoding();
+  Attribute retEncoding;
+  if (argEncoding) {
+    Dialect &dialect = argEncoding.getDialect();
+    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    if (inferLayoutInterface
+            ->inferTransOpEncoding(argEncoding, order, retEncoding)
+            .failed()) {
+      return failure();
+    }
+  }
+  auto memDescTy = cast<MemDescType>(argTy);
+  inferredReturnTypes.push_back(MemDescType::get(
+      retShape, retEltTy, retEncoding, memDescTy.getMemorySpace(),
+      memDescTy.getMutableMemory()));
   return success();
 }
 

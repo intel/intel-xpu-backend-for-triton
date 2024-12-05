@@ -2,8 +2,10 @@ import functools
 import os
 import sysconfig
 import hashlib
+import sysconfig
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -139,7 +141,7 @@ def make_launcher(constants, signature, ids):
             "int8_t": "b",
             "int16_t": "h",
             "int32_t": "i",
-            "int64_t": "l",
+            "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
             "uint32_t": "I",
@@ -235,7 +237,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 #endif
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  void *params[] = {{ {', '.join(params)} }};
+  void *params[] = {{{', '.join(f'&arg{i}' for i in params) if params else 'NULL'}}};
   if (gridX*gridY*gridZ > 0) {{
     if (num_ctas == 1) {{
       CUDA_CHECK(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
@@ -304,6 +306,9 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
         PyErr_Format(PyExc_ValueError,
                      "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
         ptr_info.valid = false;
+    }} else if (status != CUDA_SUCCESS) {{
+        CUDA_CHECK(status);  // Catch any other cuda API errors
+        ptr_info.valid = false;
     }}
     ptr_info.dev_ptr = dev_ptr;
     Py_DECREF(ret);  // Thanks ChatGPT!
@@ -360,7 +365,22 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   return (CUtensorMap*)(ptr_as_uint);
 }}
 
+static void ensureCudaContext() {{
+  CUcontext pctx;
+  CUDA_CHECK(cuCtxGetCurrent(&pctx));
+  if (!pctx) {{
+    // Ensure device context.
+    CUdevice device;
+    CUDA_CHECK(cuDeviceGet(&device, 0));
+    CUDA_CHECK(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK(cuCtxSetCurrent(pctx));
+  }}
+}}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
+  // ensure cuda context is valid before calling any CUDA APIs, e.g. before getPointer calls cuPointerGetAttributes
+  ensureCudaContext();
+
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;

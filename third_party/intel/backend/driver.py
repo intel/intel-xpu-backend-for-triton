@@ -12,8 +12,6 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from packaging.version import Version
-from packaging.specifiers import SpecifierSet
 
 
 def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
@@ -34,7 +32,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
 
-    if shutil.which("icpx"):
+    if shutil.which("icpx") and os.name != "nt":
         # only `icpx` compiler knows where sycl runtime binaries and header files are
         return include_dir, None
 
@@ -51,7 +49,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
     except importlib.metadata.PackageNotFoundError:
         raise AssertionError(assertion_message)
 
-    if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
+    if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
     sycl_dir = None
@@ -74,7 +72,9 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader', 'sycl']
+        self.libraries = ['ze_loader']
+        if os.name != "nt":
+            self.libraries += ["sycl"]
 
     @cached_property
     def _compute_compilation_options_lazy(self):
@@ -85,6 +85,8 @@ class CompilationHelper:
         include_dir, self._libsycl_dir = find_sycl(include_dir)
         if self._libsycl_dir:
             library_dir += [self._libsycl_dir]
+        if os.name == "nt":
+            library_dir += [os.path.join(ze_root, "lib")]
 
         dirname = os.path.dirname(os.path.realpath(__file__))
         include_dir += [os.path.join(dirname, "include")]
@@ -157,16 +159,17 @@ class XPUUtils(object):
         self.context = mod.init_context(self.get_sycl_queue())
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
+        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
 
     def get_current_device(self):
         return self.current_device
 
-    def get_event_pool(self):
-        return self.event_pool
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
+
+    def wait(self):
+        self.wait_on_sycl_queue(self.get_sycl_queue())
 
 
 # ------------------------
@@ -215,7 +218,7 @@ def make_launcher(constants, signature, ids):
             "int8_t": "b",
             "int16_t": "h",
             "int32_t": "i",
-            "int64_t": "l",
+            "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
             "uint32_t": "I",

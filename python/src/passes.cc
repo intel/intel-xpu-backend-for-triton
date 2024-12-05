@@ -17,8 +17,7 @@ namespace py = pybind11;
 
 void init_triton_analysis(py::module &&m) {
   py::class_<mlir::ModuleAllocation>(m, "allocation", py::module_local())
-      .def(py::init(
-          &mlir::ModuleAllocation::get<mlir::triton::AllocationAnalysis>));
+      .def(py::init<mlir::ModuleOp>());
   py::class_<mlir::ModuleMembarAnalysis>(m, "membar", py::module_local())
       .def(py::init<mlir::ModuleAllocation *>())
       .def("run", &mlir::ModuleMembarAnalysis::run);
@@ -73,6 +72,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUOptimizeAccumulatorInit);
   ADD_PASS_OPTION_WRAPPER_1("add_loop_scheduling",
                             createTritonGPULoopScheduling, int);
+  ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
+                     createTritonGPUCoalesceAsyncCopy);
 }
 
 void init_triton_passes_convert(py::module &&m) {

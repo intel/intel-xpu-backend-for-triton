@@ -56,6 +56,8 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = False
     generate_native_code: bool = False
+    advanced_path: bool = False
+    one_matrix_per_load_for_bt: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -226,14 +228,14 @@ class XPUBackend(BaseBackend):
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
-        opt.threads_per_warp = ir.ttgpuir.get_threads_per_warp(mod)
+        opt.threads_per_warp = intel.get_threads_per_warp(mod)
 
         # Run the TTIR -> TTGIR pass pipeline.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
         if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
-                and os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1"):
+                and (os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1" or opt.advanced_path)):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
@@ -253,7 +255,6 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
-            intel.passes.ttgpuir.add_optimize_elementwise_parallelism(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -267,10 +268,10 @@ class XPUBackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options):
         # warp-specialization mutates num_warps
-        num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
+        num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-        threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
+        threads_per_warp = intel.get_threads_per_warp(src)
         metadata["threads_per_warp"] = threads_per_warp
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -292,7 +293,7 @@ class XPUBackend(BaseBackend):
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             intel.passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
         intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
@@ -314,7 +315,7 @@ class XPUBackend(BaseBackend):
             intel.post_process_llir(llvm_mod)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["shared"] = src.get_int_attr("ttg.shared")
         ret = str(llvm_mod)
         del llvm_mod
         del context

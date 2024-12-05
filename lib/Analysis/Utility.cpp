@@ -11,7 +11,6 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -415,6 +414,17 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
+    : gatherOp(gatherOp) {}
+
+unsigned GatherLoweringHelper::getScratchSizeInBytes() {
+  // For now, lower the gather op by writing the source tensor to shared memory.
+  // TODO(jeff): Leverage locality to avoid using scratch space when possible.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  return product(srcType.getShape()) *
+         ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
+}
+
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   if (shape.empty())
     return 0;
@@ -540,7 +550,8 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
+  auto elemTy =
+      cast<triton::gpu::TensorOrMemDesc>(value.getType()).getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
@@ -634,7 +645,8 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
-             (elementTypeSize == 16 || elementTypeSize == 8);
+             (elementTypeSize == 16 || elementTypeSize == 8) &&
+             dotOperandLayout.getKWidth() == 32 / elementTypeSize;
   return ans;
 }
 

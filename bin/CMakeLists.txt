@@ -1,6 +1,5 @@
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
 get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-get_property(translation_libs GLOBAL PROPERTY MLIR_TRANSLATION_LIBS)
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
 add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
@@ -13,8 +12,7 @@ target_link_libraries(triton-opt PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonIntelGPUIR
-  TritonIntelGPUTransforms
+  TritonIntelLLVMIR
   MLIRGPUToROCDLTransforms
   ${dialect_libs}
   ${conversion_libs}
@@ -25,7 +23,6 @@ target_link_libraries(triton-opt PRIVATE
   MLIROptLib
   MLIRPass
   MLIRTransforms
-  MLIRSPIRVDialect
 )
 
 mlir_check_all_link_libraries(triton-opt)
@@ -40,7 +37,6 @@ target_link_libraries(triton-reduce PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonIntelGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -62,7 +58,6 @@ target_link_libraries(triton-lsp PRIVATE
   TritonTransforms
   TritonGPUTransforms
   TritonNvidiaGPUTransforms
-  TritonIntelGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -93,6 +88,7 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMSupport
   LLVMOption
   LLVMCodeGen
+  TritonIntelLLVMIR
   TritonIntelGPUIR
   )
 export_executable_symbols_for_plugins(triton-llvm-opt)
@@ -107,26 +103,3 @@ target_link_libraries(triton-tensor-layout PRIVATE
   ${dialect_libs}
   TritonTestAnalysis
   )
-
-add_llvm_executable(triton-translate
-  triton-translate.cpp
-
-  PARTIAL_SOURCES_INTENDED
-  DEPENDS
-  intrinsics_gen
-  SUPPORT_PLUGINS
-)
-llvm_update_compile_flags(triton-translate)
-target_link_libraries(triton-translate
-  PRIVATE
-  ${dialect_libs}
-  ${translation_libs}
-  MLIRIR
-  MLIRParser
-  MLIRPass
-  MLIRSPIRVDialect
-  MLIRTranslateLib
-  MLIRSupport
-  TritonGENToLLVMIRTranslation
-)
-mlir_check_link_libraries(triton-translate)

@@ -148,13 +148,13 @@ public:
         getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repBatch, repM, repK,
-        typeConverter->convertType(ATensorTy.getElementType()), aTy, 0);
+        typeConverter->convertType(ATensorTy.getElementType()), 0);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repBatch, repN, repK,
-        typeConverter->convertType(BTensorTy.getElementType()), bTy, 1);
+        typeConverter->convertType(BTensorTy.getElementType()), 1);
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
         loadedC, repBatch, repM, repN,
-        typeConverter->convertType(CTensorTy.getElementType()), cTy, 2);
+        typeConverter->convertType(CTensorTy.getElementType()), 2);
 
     Type resElemTy = DTensorTy.getElementType();
 
@@ -186,7 +186,8 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
       fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
-          loc, dTy, valc, valA, valB, pA, pB, RC);
+          loc, dTy, bitcast(valc, cTy), bitcast(valA, aTy), bitcast(valB, bTy),
+          pA, pB, RC);
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -298,7 +299,6 @@ private:
   ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
                                                  int64_t outer, int64_t inner,
                                                  Type elemTy,
-                                                 Type dotOperandType,
                                                  uint32_t opIdx) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
@@ -345,8 +345,7 @@ private:
                                         i32_val(k));
               }
               vals[{b, i * repClusterOuter + repOuter,
-                    j * repClusterInner + repInner}] =
-                  bitcast(matVal, dotOperandType);
+                    j * repClusterInner + repInner}] = matVal;
             }
           }
         }

@@ -95,7 +95,7 @@ static Value getStackPointer(PatternRewriter &rewriter,
   auto mod = funcOp->getParentOfType<ModuleOp>();
   LLVM::LLVMPointerType ptrTy = ptr_ty(
       rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
-  if (mod->getAttrOfType<IntegerAttr>("triton_gpu.shared").getInt() == 0)
+  if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0)
     return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
   return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
@@ -571,12 +571,6 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type) {
-  if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout))
-    return emitOffsetForDpasLayout(dpasLayout, type);
-  if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
-    return emitOffsetForDotOpLayout(dotLayout, type);
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout))
-    return ::intel::emitOffsetForSliceLayout(sliceLayout, type);
   return mlir::emitOffsetForLayout(layout, type);
 }
 
@@ -775,7 +769,7 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 }
 
 inline SmallVector<Value>
-loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
+loadSharedToDistributed(RankedTensorType dstTy, triton::gpu::MemDescType srcTy,
                         Type elemLlvmTy, SharedMemoryObject &memObj,
                         Location loc, RewriterBase &rewriter,
                         const TargetInfoBase &target) {
@@ -797,10 +791,11 @@ loadSharedToDistributed(RankedTensorType dstTy, MemDescType srcTy,
   return ret;
 }
 
-inline void storeDistributedToShared(MemDescType dstTy, RankedTensorType srcTy,
-                                     Type elemLlvmTy, ArrayRef<Value> srcVals,
-                                     Value smemBase, ArrayRef<Value> dstStrides,
-                                     Location loc, RewriterBase &rewriter,
+inline void storeDistributedToShared(triton::gpu::MemDescType dstTy,
+                                     RankedTensorType srcTy, Type elemLlvmTy,
+                                     ArrayRef<Value> srcVals, Value smemBase,
+                                     ArrayRef<Value> dstStrides, Location loc,
+                                     RewriterBase &rewriter,
                                      const TargetInfoBase &target) {
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,

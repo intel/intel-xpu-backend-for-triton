@@ -36,7 +36,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
     auto order = triton::gpu::getOrder(layout);
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
     Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
@@ -117,15 +117,13 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
       blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
   assert(elems.size() == 7 &&
          "unexpected number of values unpacked from a block pointer");
-  BlockPointerValues values{
-      .base = elems[6],
-      .baseWidth = elems[3],
-      .baseHeight = elems[2],
-      .rowStride = elems[4],
-      .colStride = elems[5],
-      .offsetBaseX = elems[1],
-      .offsetBaseY = elems[0],
-  };
+  BlockPointerValues values{/*base=*/elems[6],
+                            /*baseWidth=*/elems[3],
+                            /*baseHeight=*/elems[2],
+                            /*rowStride=*/elems[4],
+                            /*colStride=*/elems[5],
+                            /*offsetBaseX=*/elems[1],
+                            /*offsetBaseY=*/elems[0]};
   return values;
 }
 
@@ -485,9 +483,10 @@ struct LoadOpConversion
       TritonIntelGPUToLLVMTypeConverter &converter,
       const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      PatternBenefit benefit)
+      PatternBenefit benefit, bool oneMatrixPerLoadForBT)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass),
+        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT) {}
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
@@ -628,8 +627,7 @@ struct LoadOpConversion
 
       std::swap(tileHeight, tileWidth);
 
-      if (triton::tools::getBoolEnv(
-              "TRITON_INTEL_DISABLE_LARGE_BLOCK_SIZE_IO_FOR_TRANS_DOT_B")) {
+      if (oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
         numOperandsPer2DLoadM = 1;
       } else {
@@ -987,6 +985,9 @@ struct LoadOpConversion
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
+
+private:
+  bool oneMatrixPerLoadForBT;
 };
 
 struct StoreOpConversion
@@ -1639,8 +1640,10 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     const TargetInfo &targetInfo, RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
-  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion, PrefetchOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
+    PatternBenefit benefit, bool oneMatrixPerLoadForBT) {
+  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, StoreOpConversion,
+               PrefetchOpConversion>(typeConverter, targetInfo,
+                                     axisInfoAnalysis, benefit);
+  patterns.add<LoadOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
+                                 benefit, oneMatrixPerLoadForBT);
 }

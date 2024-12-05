@@ -56,8 +56,8 @@ on:
         description: Runner label for version
         type: string
         default: runner-0.0.20
-      use_system_python:
-        description: Use system Python
+      use_pyenv_python:
+        description: Use Python built with pyenv
         type: boolean
         default: false
 
@@ -94,9 +94,15 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
-      - name: Install Python ${{ inputs.python_version }}
-        if: ${{ !inputs.use_system_python }}
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
         uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
         with:
           python-version: ${{ inputs.python_version }}
 

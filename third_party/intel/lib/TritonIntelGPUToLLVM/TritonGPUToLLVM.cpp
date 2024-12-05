@@ -68,6 +68,11 @@ struct ConvertTritonGPUToLLVM
     : public triton::gpu::intel::impl::ConvertTritonIntelGPUToLLVMBase<
           ConvertTritonGPUToLLVM> {
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
+  ConvertTritonGPUToLLVM() = default;
+  ConvertTritonGPUToLLVM(bool advancedPath, bool oneMatrixPerLoadForBT) {
+    this->advancedPath = advancedPath;
+    this->oneMatrixPerLoadForBT = oneMatrixPerLoadForBT;
+  }
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect, TritonGEN::TritonGENDialect,
@@ -78,15 +83,18 @@ struct ConvertTritonGPUToLLVM
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
-    mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
-        mod, context);
-    mlir::LowerToLLVMOptions option(context);
     bool isAdvancedPathEnabled =
-        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                         getSupportSG2DBlockAttrName()) &&
-        mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                         getSupportDPASAttrName()) &&
-        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH");
+        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH") ||
+        advancedPath;
+    if (isAdvancedPathEnabled)
+      assert(mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                              getSupportSG2DBlockAttrName()) &&
+             mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                              getSupportDPASAttrName()) &&
+             "Target do not support blocked load/mma");
+    mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
+        mod, context, isAdvancedPathEnabled, oneMatrixPerLoadForBT);
+    mlir::LowerToLLVMOptions option(context);
     mlir::triton::intel::TargetInfo targetInfo;
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option, targetInfo,
                                                     isAdvancedPathEnabled);
@@ -97,8 +105,8 @@ struct ConvertTritonGPUToLLVM
 
     // Allocate shared memory and set barrier
     if (!pipelineManager.skipSharedMemoryAllocation()) {
-      ModuleAllocation allocation =
-          ModuleAllocation::get<triton::intel::AllocationAnalysis>(mod);
+      ModuleAllocation allocation(
+          mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
       ModuleMembarAnalysis membarPass(&allocation, ::mlir::intel::membarFilter);
       membarPass.run();
     }
