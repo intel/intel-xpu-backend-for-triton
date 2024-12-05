@@ -4,6 +4,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include <iostream>
 
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -11,6 +12,7 @@
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -210,18 +212,13 @@ public:
           scaledDotOp, "expected blocked encoding result tensor");
 
     unsigned rank = oldRetType.getRank();
-    if (rank == 3)
-      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: 3d case");
+    assert(rank < 3 && "NYI: 3d case");
 
     TensorValue a = scaledDotOp.getLhs();
     TensorValue b = scaledDotOp.getRhs();
     TensorValue aScale = scaledDotOp.getLhsScale();
     TensorValue bScale = scaledDotOp.getRhsScale();
-    if (bScale)
-      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: RHS scale");
-    if (aScale && bScale)
-      return rewriter.notifyMatchFailure(scaledDotOp,
-                                         "NYI: both LHS and RHS scale");
+    assert(!bScale && "NYI: RHS scale");
     assert(aScale && "LHS scale missing");
 
     tt::ScaleDotElemType aElemType = scaledDotOp.getLhsType();
@@ -233,8 +230,8 @@ public:
              elemType == tt::ScaleDotElemType::E5M2 ||
              elemType == tt::ScaleDotElemType::BF16;
     };
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
-      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: mxfp6 operand");
+    assert(supportsTypes(aElemType) && supportsTypes(bElemType) &&
+           "NYI: mxfp6 operand");
 
     MLIRContext *ctx = scaledDotOp.getContext();
     auto mod = scaledDotOp->getParentOfType<ModuleOp>();
@@ -242,7 +239,6 @@ public:
     // Convert accumulator.
     ttg::intel::DpasEncodingAttr dpasEnc =
         getDPASEncoding(rewriter, scaledDotOp);
-    llvm::errs() << "dpasEnc: " << dpasEnc << "\n";
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), dpasEnc);
@@ -250,32 +246,43 @@ public:
     TensorValue newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         oldAcc.getLoc(), newRetType, oldAcc);
 
-    unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
-    if (aElemType == tt::ScaleDotElemType::E2M1)
-      opsPerChannel *= 2;
+    // unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
+    // if (aElemType == tt::ScaleDotElemType::E2M1)
+    //   opsPerChannel *= 2;
 
     // Upcast A operand.
-    auto dpasEncForA = ttg::intel::DpasEncodingAttr::get(
-        ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
-        dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-        dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
-    auto newAEncoding = ttg::DotOperandEncodingAttr::get(
-        ctx, 0, dpasEncForA, dpasEncForA.getOpsPerChannel());
-    a = createArg(rewriter, a, aElemType, newAEncoding);
+    auto aScaleEncoding =
+        dyn_cast<ttg::BlockedEncodingAttr>(aScale.getType().getEncoding());
+    assert(aScaleEncoding && "expected blocked encoding for A scale");
 
-    unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
-    SmallVector<unsigned> threadsPerWarp{instrShapeM, warpSize / instrShapeM};
-    auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
-    auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
-        ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(),
-        newAEncoding.getCTAOrder(), CTALayout);
-    aScale = createScale(rewriter, aScale, newScaleEncoding);
+    // Respect to
+    // https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+    // the scalingBlockSize should be 32 for E5M2, E4M3 and E2M1
+    unsigned scalingBlockSize = 32;
+    if (aElemType == tt::ScaleDotElemType::E2M1)
+      scalingBlockSize = 16;
+    auto scaledAEncoding = ttg::BlockedEncodingAttr::get(
+        ctx, {1, scalingBlockSize}, aScaleEncoding.getThreadsPerWarp(),
+        aScaleEncoding.getWarpsPerCTA(), aScaleEncoding.getCTAOrder(),
+        aScaleEncoding.getCTALayout());
 
-    auto retTypeEncoding = ttg::DotOperandEncodingAttr::get(
+    a = createArg(rewriter, a, aElemType, scaledAEncoding);
+
+    // unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    // unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
+    // SmallVector<unsigned> threadsPerWarp{instrShapeM, warpSize /
+    // instrShapeM}; auto CTALayout =
+    // ttg::getCTALayout(oldRetType.getEncoding()); auto newScaleEncoding =
+    // ttg::BlockedEncodingAttr::get(
+    //     ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(),
+    //     newAEncoding.getCTAOrder(), CTALayout);
+    // aScale = createScale(rewriter, aScale, newScaleEncoding);
+    std::cout << "!!! check convert to dot enc before dotAencoding "
+              << std::endl;
+    auto dotAEncoding = ttg::DotOperandEncodingAttr::get(
         ctx, 0, dpasEnc, dpasEnc.getOpsPerChannel());
     Value scaledA =
-        createUpcastMxfpOp(rewriter, a, aScale, aElemType, retTypeEncoding);
+        createUpcastMxfpOp(rewriter, a, aScale, aElemType, dotAEncoding);
 
     // Create B operand.
     assert(bElemType != tt::ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
@@ -301,6 +308,8 @@ private:
     Type elemType = scaledDotOp.getRhs().getType().getElementType();
     unsigned opsPerChan =
         ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
+    if (scaledDotOp.getLhsType() == tt::ScaleDotElemType::E2M1)
+      opsPerChan *= 2;
     unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
     SmallVector<unsigned> warpsPerTile = {numWarps, 1};
 
@@ -360,9 +369,13 @@ private:
       retType = RankedTensorType::get(
           newShape, FloatType::getBF16(rewriter.getContext()), retTypeEncoding);
     }
-    // TODO: Check whether constructing without explicit retType works.
-    return rewriter.create<ttg::UpcastMXFPOp>(a.getLoc(), retType, a, scale,
-                                              type);
+    Value castedVal =
+        rewriter.create<ttg::UpcastMXFPOp>(a.getLoc(), a, scale, type);
+    castedVal.dump();
+    retType.dump();
+    std::cout << "!!! check convert to dot enc  " << std::endl;
+    return rewriter.create<ttg::ConvertLayoutOp>(a.getLoc(), retType,
+                                                 castedVal);
   }
 };
 
