@@ -66,7 +66,7 @@ jobs:
 
       - name: Get commit ID from Triton's spirv-llvm-translator.conf
         if: ${{ env.TARGET_PRID == null }}
-        run: echo "CID_CURRENT=$(cat third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf)" >> $GITHUB_ENV
+        run: echo "CID_CURRENT=$(<third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf)" >> $GITHUB_ENV
 
       - name: Checkout SPIRV-LLVM-Translator
         if: ${{ env.TARGET_PRID == null }}
@@ -82,7 +82,7 @@ jobs:
         run: |
           echo "CID_LATEST=$(git -C external/SPIRV-LLVM-Translator rev-parse HEAD)" >> $GITHUB_ENV
 
-      # the latest valid cid has been weitten to spirv-llvm-translator.conf
+      # the latest valid cid has been written to spirv-llvm-translator.conf
       - name: Search the latest valid Translator cid
         if: ${{ env.TARGET_PRID == null }}
         run: |
