@@ -136,6 +136,7 @@ Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
   Value warpReduce =
       TypeSwitch<mlir::Operation *, Value>(reduceOp)
           .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+                arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
                 arith::MaxNumFOp, arith::MinNumFOp>([&](auto groupOp) {
             return createSPIRVGroupOp<
                 SPIRVArithmeticGroupOpTy<decltype(groupOp)>>(
@@ -182,9 +183,11 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       reduceOp->getOperand(1) != block.getArgument(1))
     return false;
 
-  auto supportedOp = isa<arith::AddFOp, arith::AddIOp, arith::MulFOp,
-                         arith::MulIOp, arith::MaxNumFOp, arith::MinNumFOp,
-                         arith::AndIOp, arith::OrIOp, arith::XOrIOp>(reduceOp);
+  auto supportedOp =
+      isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+          arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+          arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+          arith::XOrIOp>(reduceOp);
 
   if (!supportedOp)
     return false;
