@@ -219,7 +219,7 @@ def make_launcher(constants, signature, ids, warp_size):
             "long": "l",
             "int8_t": "b",
             "int16_t": "h",
-            "int32_t": "l",
+            "int32_t": "i",
             "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
