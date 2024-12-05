@@ -122,9 +122,9 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       newShape[kIdx] *= 2;
       Type elemType = FloatType::getBF16(ctx);
 
-      // Note: For Intel the dot operands layout's kWidth parameter must
-      // match the parent's DPAS layout opsPerChannel so we need to materialize
-      // a new DPAS layout.
+      // Note: For Intel the dot operands layout's kWidth parameter must match
+      // the parent's DPAS layout opsPerChannel so we need to materialize a new
+      // DPAS layout.
       Attribute newVEncoding;
       if (auto dpasEncoding =
               dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
@@ -135,8 +135,7 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
             dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
             dpasEncoding.getSubGroupSize());
         newVEncoding = DotOperandEncodingAttr::get(
-            ctx, oldEncoding.getOpIdx(), newDpasEncoding,
-            newDpasEncoding.getOpsPerChannel());
+            ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
       } else {
         // Figure out the K dimension for the input A/B, given that the return
         // type is upcasted A/B type so we need to update the proper dim size.
