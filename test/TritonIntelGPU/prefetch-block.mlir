@@ -33,7 +33,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 1 : i32}
     // CHECK-NEXT: [[B3:%.*]] = tt.advance [[B2]], {{.*}} : <tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT: [[B4:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>>
 
-    // CHECK:      spirv.INTEL.ControlBarrierArrive <Workgroup> <Workgroup> <None>
+    // CHECK:      spirv.INTEL.ControlBarrierArrive <Workgroup>, <Workgroup>, <None>
     // CHECK-NEXT: scf.for [[IV:%.*]] = [[CST_ZERO]] to [[CST_4096]] step [[CST_32]]
     // CHECK-SAME:      iter_args([[CST:%.*]] = {{.*}}, [[A6:%.*]] = [[A4]], [[B6:%.*]] = [[B4]], [[A5:%.*]] = [[A3]], [[B5:%.*]] = [[B3]])
     // CHECK-NEXT:   [[LD_A:%.*]] = tt.load [[A6]]
@@ -45,11 +45,11 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 1 : i32}
     // CHECK-DAG:    tt.advance [[A6]], {{.*}} : <tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>>
     // CHECK-NEXT:   tt.advance [[B5]], {{.*}} : <tensor<32x256xf16, #blocked2>>
     // CHECK-DAG:    tt.advance [[B6]], {{.*}} : <tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>>
-    // CHECK:        spirv.INTEL.ControlBarrierWait <Workgroup> <Workgroup> <None>
-    // CHECK-NEXT:   spirv.INTEL.ControlBarrierArrive <Workgroup> <Workgroup> <None>
+    // CHECK:        spirv.INTEL.ControlBarrierWait <Workgroup>, <Workgroup>, <None>
+    // CHECK-NEXT:   spirv.INTEL.ControlBarrierArrive <Workgroup>, <Workgroup>, <None>
     // CHECK-NEXT:   scf.yield {{.*}}
     // CHECK-NEXT: }
-    // CHECK-NEXT: spirv.INTEL.ControlBarrierWait <Workgroup> <Workgroup> <None>
+    // CHECK-NEXT: spirv.INTEL.ControlBarrierWait <Workgroup>, <Workgroup>, <None>
 
     %c64_i32 = arith.constant 64 : i32
     %c16_i32 = arith.constant 16 : i32

@@ -35,7 +35,7 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
 def TritonGEN_MatrixElemType : AnyTypeOf<[AnyI8, AnyI16, AnyI32, F32, F16, BF16]>;
 
 def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
-  Results<(outs FixedVectorOfAnyRank<[TritonGEN_MatrixElemType]>:$d)>,
+  Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$d)>,
   Arguments<(ins
     FixedVectorOfRankAndType<[1], [TritonGEN_MatrixElemType]>:$c,
     FixedVectorOfRankAndType<[1], [TritonGEN_MatrixElemType]>:$a,
@@ -82,7 +82,7 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
 }
 
 def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
-  Results<(outs FixedVectorOfAnyRank<[TritonGEN_MatrixElemType]>:$res)>,
+  Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$res)>,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
     I32:$base_width,
@@ -145,7 +145,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     I32Attr:$tile_width,
     I32Attr:$tile_height,
     I32Attr:$v_blocks,
-    FixedVectorOfAnyRank<[TritonGEN_MatrixElemType]>:$stored_val,
+    FixedVectorOf<[TritonGEN_MatrixElemType]>:$stored_val,
     DefaultValuedAttr<TritonGEN_StoreCacheControl, "::mlir::triton::TritonGEN::StoreCacheControl::DEFAULT">:$cache_control
   )> {
 
