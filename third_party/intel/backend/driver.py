@@ -217,7 +217,7 @@ def make_launcher(constants, signature, ids):
             "long": "l",
             "int8_t": "b",
             "int16_t": "h",
-            "int32_t": "i",
+            "int32_t": "l",
             "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
