@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import setuptools
 import platform
-from .CLFinder import initialize_visual_studio_env
+from ...CLFinder import initialize_visual_studio_env
 
 
 def is_xpu():

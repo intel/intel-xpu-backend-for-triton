@@ -26,6 +26,8 @@ from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel
 
+from CLFinder import initialize_visual_studio_env
+
 import pybind11
 
 
@@ -101,56 +103,6 @@ class BackendInstaller:
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)
         ]
-
-
-def find_vswhere():
-    program_files = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
-    vswhere_path = Path(program_files) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
-    if vswhere_path.exists():
-        return vswhere_path
-    return None
-
-
-def find_visual_studio(version_ranges):
-    vswhere = find_vswhere()
-    if not vswhere:
-        raise FileNotFoundError("vswhere.exe not found.")
-
-    for version_range in version_ranges:
-        command = [
-            str(vswhere), "-version", version_range, "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-products", "*", "-property", "installationPath", "-prerelease"
-        ]
-
-        try:
-            output = subprocess.check_output(command, text=True).strip()
-            if output:
-                return output.split("\n")[0]
-        except subprocess.CalledProcessError:
-            continue
-
-    return None
-
-
-def set_env_vars(vs_path, arch="x64"):
-    vcvarsall_path = Path(vs_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
-    if not vcvarsall_path.exists():
-        raise FileNotFoundError(f"vcvarsall.bat not found in expected path: {vcvarsall_path}")
-
-    command = ["call", vcvarsall_path, arch, "&&", "set"]
-    output = subprocess.check_output(command, shell=True, text=True)
-
-    for line in output.splitlines():
-        if '=' in line:
-            var, value = line.split('=', 1)
-            os.environ[var] = value
-
-
-def initialize_visual_studio_env(version_ranges, arch="x64"):
-    vs_path = find_visual_studio(version_ranges)
-    if not vs_path:
-        raise EnvironmentError("Visual Studio not found in specified version ranges.")
-    set_env_vars(vs_path, arch)
 
 
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
