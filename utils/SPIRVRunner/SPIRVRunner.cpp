@@ -2,19 +2,18 @@
 #include <sycl/sycl.hpp>
 #include <torch/torch.h>
 
+#include "llvm_parser.h"
+#include "sycl_functions.h"
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <ios>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <regex>
 #include <string>
 #include <vector>
-
-#include "sycl_functions.h"
-#include <nlohmann/json.hpp>
-
 using json = nlohmann::json;
 using ordered_json = nlohmann::ordered_json;
 
@@ -411,38 +410,14 @@ at::Tensor launchKernel(sycl::queue stream, sycl::kernel kernel,
   return triton_args.host_outbuffer;
 }
 
-bool check_option_amoung_argv(int argc, char **argv, std::string option) {
-  bool res = false;
-  if (argc > 2) {
-    // optional parameters can be in any order
-    for (int i = 2; i < argc; i++) {
-      if (argv[i] == option) {
-        res = true;
-        break;
-      }
-    }
-  }
-  return res;
-}
-
 int main(int argc, char **argv) {
   try {
-    std::string enable_profiling = "--enable-profiling";
-    if (argc < 2) {
-      std::cout << "Help: " << std::endl;
-      std::cout << "<Executable> <Output Tensor Name>" << std::endl;
-      std::cout << "./build/SPIRVRunner tensor_2" << std::endl;
-      std::cout << "To get kernel time, use:" << std::endl;
-      std::cout << "./build/SPIRVRunner tensor_2 " << enable_profiling
-                << std::endl;
-      throw std::runtime_error("Input arguments are missing \n");
-    }
+    command_line_parser cli(argc, argv);
+    auto cliopts = cli.parse();
 
     // initialize sycl runtime
-    bool get_kernel_time =
-        check_option_amoung_argv(argc, argv, enable_profiling);
     sycl::queue q;
-    if (get_kernel_time) {
+    if (cliopts.get_kernel_time) {
       sycl::property_list prop_list{sycl::property::queue::enable_profiling()};
       q = sycl::queue(sycl::gpu_selector_v, exception_handler, prop_list);
     } else {
@@ -455,7 +430,7 @@ int main(int argc, char **argv) {
     initDevices(&q);
 
     // Parse the JSON file and create argument dictionary
-    KernelArguments tritonArgDict(argv[1]);
+    KernelArguments tritonArgDict(cliopts.output_tensor);
 
     // read spirv
     auto spirv = read_spirv(tritonArgDict.spv_name);
@@ -469,7 +444,8 @@ int main(int argc, char **argv) {
     std::cout << "Loaded kernel with " << n_regs << " registers and "
               << n_spills << " register spills." << std::endl;
 
-    auto output = launchKernel(q, kernel, tritonArgDict, get_kernel_time);
+    auto output =
+        launchKernel(q, kernel, tritonArgDict, cliopts.get_kernel_time);
 
     auto output_tensor = tritonArgDict.spirv_dump_dir + "/cpp_outs.pt";
     write_tensor(output_tensor, output);
