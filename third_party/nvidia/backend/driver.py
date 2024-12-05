@@ -2,10 +2,8 @@ import functools
 import os
 import sysconfig
 import hashlib
-import sysconfig
 import subprocess
 import tempfile
-import sys
 from pathlib import Path
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
