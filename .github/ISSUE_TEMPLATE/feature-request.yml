@@ -1,0 +1,15 @@
+name: 🚀 Feature request
+description: Submit a request for a new Intel XPU Backend for Triton feature
+
+body:
+- type: textarea
+  attributes:
+    label: 🚀 Feature description
+    description: >
+      A clear and concise description of the feature request.
+    validations:
+      required: true
+- type: markdown
+  attributes:
+    value: >
+      Thanks for contributing 🎉
