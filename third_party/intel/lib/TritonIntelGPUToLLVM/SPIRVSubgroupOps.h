@@ -35,6 +35,18 @@ template <> struct SPIRVArithmeticGroupOp<arith::MulFOp> {
 template <> struct SPIRVArithmeticGroupOp<arith::MulIOp> {
   using type = spirv::GroupNonUniformIMulOp;
 };
+template <> struct SPIRVArithmeticGroupOp<arith::MaxSIOp> {
+  using type = spirv::GroupNonUniformSMaxOp;
+};
+template <> struct SPIRVArithmeticGroupOp<arith::MaxUIOp> {
+  using type = spirv::GroupNonUniformUMaxOp;
+};
+template <> struct SPIRVArithmeticGroupOp<arith::MinSIOp> {
+  using type = spirv::GroupNonUniformSMinOp;
+};
+template <> struct SPIRVArithmeticGroupOp<arith::MinUIOp> {
+  using type = spirv::GroupNonUniformUMinOp;
+};
 template <> struct SPIRVArithmeticGroupOp<arith::MaxNumFOp> {
   using type = spirv::GroupNonUniformFMaxOp;
 };
