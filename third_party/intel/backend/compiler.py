@@ -228,7 +228,7 @@ class XPUBackend(BaseBackend):
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
-        opt.threads_per_warp = ir.ttgpuir.get_threads_per_warp(mod)
+        opt.threads_per_warp = intel.get_threads_per_warp(mod)
 
         # Run the TTIR -> TTGIR pass pipeline.
         pm = ir.pass_manager(mod.context)
@@ -271,7 +271,7 @@ class XPUBackend(BaseBackend):
         num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-        threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
+        threads_per_warp = intel.get_threads_per_warp(src)
         metadata["threads_per_warp"] = threads_per_warp
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)

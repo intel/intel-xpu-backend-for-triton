@@ -234,6 +234,11 @@ void init_triton_intel(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
+  m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
+    auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    return py::int_(ret);
+  });
+
   // May do this after llvm ir according to user fmath flag.
   m.def("set_fast_math", [](mlir::ModuleOp mod) {
     using namespace mlir;
