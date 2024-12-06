@@ -386,8 +386,9 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
           tb.index = triton_args.dev_buffers.size() - 1;
           triton_args.host_outbuffers.push_back(tb);
           std::cout
-              << "Tensor output: "
-              << triton_args.host_outbuffers.back().buffer_ptr.sizes() << ", "
+              << "Tensor output[" << tb.index
+              << "]: " << triton_args.host_outbuffers.back().buffer_ptr.sizes()
+              << ", "
               << triton_args.host_outbuffers.back().buffer_ptr.scalar_type()
               << " (" << triton_args.host_outbuffers.back().buffer_ptr.nbytes()
               << " bytes)" << std::endl;
