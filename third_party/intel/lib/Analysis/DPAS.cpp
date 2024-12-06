@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Casting.h"
+#include <iostream>
 
 namespace mlir::triton::gpu::intel {
 
@@ -150,9 +151,10 @@ DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
         if ((aElemTy.isFloat8E4M3FN() || aElemTy.isFloat8E5M2()) &&
             bElemTy.isFloat4E2M1FN())
           return DPASEngineType::FP32_FP32_FP8_FP4;
-        if (aElemTy.isFloat4E2M1FN() && bElemTy.isBF16())
+        // 2 E2M1 are packed into 1 int8
+        if (aElemTy.isInteger(8) && bElemTy.isBF16())
           return DPASEngineType::FP32_FP32_FP4_BF16;
-        if (aElemTy.isFloat4E2M1FN() &&
+        if (aElemTy.isInteger(8) &&
             (bElemTy.isFloat8E4M3FN() || bElemTy.isFloat8E5M2()))
           return DPASEngineType::FP32_FP32_FP4_FP8;
       }

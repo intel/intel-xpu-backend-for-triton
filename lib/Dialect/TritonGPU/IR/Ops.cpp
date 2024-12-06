@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
@@ -109,6 +110,8 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
   auto xShape = xTy.getShape();
 
   auto encoding = xTy.getEncoding();
+  bool upcastMXFPUseDotOpEnc =
+      mlir::triton::tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING");
 
   if (typeEncoded == ScaleDotElemType::E2M1) {
     RankedTensorType retTy;
@@ -118,34 +121,47 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       newShape.back() *= 2;
       retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
     } else {
-      auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-
-      const int opIdx = oldEncoding.getOpIdx();
-      const bool hasBatch = xShape.size() == 3;
-      const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
-      newShape[kIdx] *= 2;
       Type elemType = FloatType::getBF16(ctx);
-
-      // Note: For Intel the dot operands layout's kWidth parameter must match
-      // the parent's DPAS layout opsPerChannel so we need to materialize a new
-      // DPAS layout.
       Attribute newVEncoding;
-      if (auto dpasEncoding =
-              dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
-        auto newDpasEncoding = intel::DpasEncodingAttr::get(
-            ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
-            dpasEncoding.getExecutionSize(),
-            intel::DpasEncodingAttr::getOpsPerChannel(elemType),
-            dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
-            dpasEncoding.getSubGroupSize());
-        newVEncoding = DotOperandEncodingAttr::get(
-            ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
+      if (upcastMXFPUseDotOpEnc) {
+        auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+
+        const int opIdx = oldEncoding.getOpIdx();
+        const bool hasBatch = xShape.size() == 3;
+        const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
+        newShape[kIdx] *= 2;
+
+        // Note: For Intel the dot operands layout's kWidth parameter must match
+        // the parent's DPAS layout opsPerChannel so we need to materialize a
+        // new DPAS layout.
+        if (auto dpasEncoding =
+                dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
+          auto newDpasEncoding = intel::DpasEncodingAttr::get(
+              ctx, dpasEncoding.getRepeatCount(),
+              dpasEncoding.getSystolicDepth(), dpasEncoding.getExecutionSize(),
+              intel::DpasEncodingAttr::getOpsPerChannel(elemType),
+              dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
+              dpasEncoding.getSubGroupSize());
+          newVEncoding = DotOperandEncodingAttr::get(
+              ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
+        } else {
+          // Figure out the K dimension for the input A/B, given that the return
+          // type is upcasted A/B type so we need to update the proper dim size.
+          newVEncoding = DotOperandEncodingAttr::get(
+              ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
+              oldEncoding.getKWidth() * 2);
+        }
       } else {
-        // Figure out the K dimension for the input A/B, given that the return
-        // type is upcasted A/B type so we need to update the proper dim size.
-        newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
-                                                   oldEncoding.getParent(),
-                                                   oldEncoding.getKWidth() * 2);
+        auto oldEncoding = dyn_cast<BlockedEncodingAttr>(encoding);
+        assert(oldEncoding &&
+               "Expected a blocked encoding for UpcastMXFP op result.");
+        newShape.back() *= 2;
+        SmallVector<unsigned> sizePerThread = oldEncoding.getSizePerThread();
+        sizePerThread.back() *= 2;
+        newVEncoding = BlockedEncodingAttr::get(
+            ctx, sizePerThread, oldEncoding.getThreadsPerWarp(),
+            oldEncoding.getWarpsPerCTA(), oldEncoding.getCTAOrder(),
+            oldEncoding.getCTALayout());
       }
       retTy = RankedTensorType::get(newShape, elemType, newVEncoding);
     }

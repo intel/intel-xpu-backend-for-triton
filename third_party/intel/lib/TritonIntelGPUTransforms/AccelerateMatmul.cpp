@@ -252,8 +252,7 @@ public:
 
 private:
   bool upcastMXFPUseDotOpEnc =
-      mlir::triton::tools::getBoolEnv(
-          "TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING") == 1;
+      mlir::triton::tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING");
 
   struct OpDescriptor {
     TensorValue op;
@@ -294,11 +293,12 @@ private:
     assert(opDesc.scale && "Expecting valid operand & scale");
 
     unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
-    if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
-      opsPerChannel *= 2;
 
     MLIRContext *ctx = opDesc.op.getContext();
+    unsigned rank = retType.getRank();
     if (upcastMXFPUseDotOpEnc) {
+      if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
+        opsPerChannel *= 2;
       auto opEncoding = ttg::intel::DpasEncodingAttr::get(
           ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
           dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
@@ -313,7 +313,6 @@ private:
       unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
       SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
                                               warpSize / instrShapeM};
-      unsigned rank = retType.getRank();
       int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
       SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
       warpsPerCTA[0] = numWarps;
@@ -334,10 +333,13 @@ private:
       // https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
       // the scalingBlockSize should be 32 for E5M2, E4M3 and E2M1
       unsigned scalingBlockSize = 32;
+      // 2 FP4E2M1 are packed in 1 I8
       if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
         scalingBlockSize = 16;
+      SmallVector<unsigned, 2> sizePerThread(rank, 1);
+      sizePerThread[rank - 1 - opIdx] = scalingBlockSize;
       auto newOpEncoding = ttg::BlockedEncodingAttr::get(
-          ctx, {1, scalingBlockSize}, scaleEncoding.getThreadsPerWarp(),
+          ctx, sizePerThread, scaleEncoding.getThreadsPerWarp(),
           scaleEncoding.getWarpsPerCTA(), scaleEncoding.getCTAOrder(),
           scaleEncoding.getCTALayout());
 
