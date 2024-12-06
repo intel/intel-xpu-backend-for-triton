@@ -1,7 +1,7 @@
 /// Trimmed down clone of llvm opt to be able to test triton custom llvm ir
 /// passes.
 #include "lib/Target/LLVMIR/LLVMPasses.h"
-#include "third_party/intel/lib/LLVMIR/LLVMPasses.h"
+#include "third_party/intel/lib/Target/LLVMIR/LLVMPasses.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"

@@ -13,7 +13,6 @@ add_triton_plugin(TritonXPU
 
   LINK_LIBS
   MLIRGPUToLLVMSPV
-  PostProcessLLVMIR
   TritonGENToLLVM
   TritonGENToLLVMIRTranslation
   TritonIntelGPUToLLVM
