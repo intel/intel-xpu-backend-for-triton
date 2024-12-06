@@ -334,7 +334,7 @@ test_triton() {
   fi
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
-    # run_regression_tests
+    run_regression_tests
   fi
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
