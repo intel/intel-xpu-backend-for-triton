@@ -27,7 +27,8 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 def is_hip():
@@ -112,8 +113,7 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-device = getattr(torch, DEVICE).current_device()
-properties = driver.active.utils.get_device_properties(device)
+properties = driver.active.utils.get_device_properties(DEVICE.index)
 NUM_SM = properties["multiprocessor_count"]
 SIZE_SMEM = properties["max_shared_mem"]
 WARPS_PER_EU = 8  # TODO: Get from properties
@@ -229,8 +229,8 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
     ))
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device=DEVICE, dtype=torch.float32)
-    stream = getattr(torch, DEVICE).Stream()
-    getattr(torch, DEVICE).set_stream(stream)
+    stream = getattr(torch, DEVICE.type).Stream()
+    getattr(torch, DEVICE.type).set_stream(stream)
     if provider == 'torch':
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':

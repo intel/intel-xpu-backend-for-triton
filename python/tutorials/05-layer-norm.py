@@ -42,7 +42,8 @@ try:
 except ModuleNotFoundError:
     HAS_APEX = False
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 @triton.jit
