@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import setuptools
 import platform
-from ...CLFinder import initialize_visual_studio_env
 
 
 def is_xpu():
@@ -60,7 +59,6 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         cc = gcc if gcc is not None else clang
         if platform.system() == "Windows":
             cc = "cl"
-            initialize_visual_studio_env(["[17.0,18.0)", "[16.0,17.0)"])
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10

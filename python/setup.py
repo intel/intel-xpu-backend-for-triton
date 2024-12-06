@@ -26,8 +26,6 @@ from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel
 
-from CLFinder import initialize_visual_studio_env
-
 import pybind11
 
 
@@ -427,8 +425,6 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        if platform.system() == "Windows":
-            initialize_visual_studio_env(["[17.0,18.0)", "[16.0,17.0)"])
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
