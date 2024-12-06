@@ -297,17 +297,14 @@ run_benchmarks() {
   cd $TRITON_PROJ/benchmarks
   python setup.py install
   for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
-    if ! [ -f "$file" ]; then
-      continue
-    fi
-    benchmark=$(basename -- "$file")
-    if [[ $benchmark = @("__init__.py"|"benchmark_driver.py"|"benchmark_testing.py") ]]; then
+    benchmark=$(basename -- "$file" .py)
+    if [[ $benchmark = @("__init__"|"benchmark_driver"|"benchmark_testing") ]]; then
       continue
     fi
     echo
-    echo "****** Running ${benchmark%.py} ******"
+    echo "****** Running ${benchmark} ******"
     echo
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/$benchmark
+    python $file
   done
 }
 
