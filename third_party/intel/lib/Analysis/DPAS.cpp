@@ -75,7 +75,7 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
 
 DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
   if (auto dotOp = dyn_cast<DotOp>(op))
-    return DPASAnalysis::getDPASType<DotOp>(dotOp);
+    return DPASAnalysis::getDPASType(dotOp);
   if (auto dotScaledOp = dyn_cast<DotScaledOp>(op))
     return DPASAnalysis::getDPASType(dotScaledOp);
   return DPASEngineType::NOT_APPLICABLE;
