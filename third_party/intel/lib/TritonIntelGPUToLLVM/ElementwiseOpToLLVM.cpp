@@ -974,7 +974,7 @@ struct FpToFpOpConversion
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
+    auto F8E4M3B15TyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
     auto F16TyID = TypeID::get<Float16Type>();
