@@ -251,7 +251,7 @@ public:
   }
 
 private:
-  bool upcastMXFPUseDotOpEnc =
+  const bool upcastMXFPUseDotOpEnc =
       mlir::triton::tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING");
 
   struct OpDescriptor {
@@ -265,23 +265,22 @@ private:
                   triton::gpu::intel::DpasEncodingAttr dpasEnc,
                   RankedTensorType newRetType, ModuleOp mod,
                   PatternRewriter &rewriter) const {
+    assert((aDesc.scale || bDesc.scale) && "No scale provided");
+    assert(!(aDesc.scale && bDesc.scale) && "NYI: Both LHS and RHS scale");
+
     if (aDesc.scale) {
-      assert(bDesc.scale == nullptr && "NYI: both LHS and RHS scale");
       TensorValue newA =
           convertScaledOperand<0>(aDesc, dpasEnc, newRetType, mod, rewriter);
       TensorValue newB =
           convertUnscaledOperand<1>(bDesc, dpasEnc, newRetType, rewriter);
       return {newA, newB};
     }
-    if (bDesc.scale) {
-      assert(aDesc.scale == nullptr && "NYI: both LHS and RHS scale");
-      TensorValue newB =
-          convertScaledOperand<1>(bDesc, dpasEnc, newRetType, mod, rewriter);
-      TensorValue newA =
-          convertUnscaledOperand<0>(aDesc, dpasEnc, newRetType, rewriter);
-      return {newA, newB};
-    }
-    assert(false && "Both LHS and RHS unscaled");
+
+    TensorValue newB =
+        convertScaledOperand<1>(bDesc, dpasEnc, newRetType, mod, rewriter);
+    TensorValue newA =
+        convertUnscaledOperand<0>(aDesc, dpasEnc, newRetType, rewriter);
+    return {newA, newB};
   }
 
   template <unsigned opIdx>

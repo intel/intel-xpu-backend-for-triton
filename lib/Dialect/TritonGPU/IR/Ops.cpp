@@ -52,50 +52,52 @@ LogicalResult UpcastMXFPOp::verify() {
   }
 
   /// TODO: Temporarily disabled this check to allow for the blocked encoding.
-  /// we need to re-enable this check once we have the dot op encoding
-  /// UpcastMXFPOp lowering
-  // auto dotEncoding = dyn_cast<DotOperandEncodingAttr>(layoutX);
-  // if (!dotEncoding) {
-  //   return emitOpError("Expected a DotOperandEncodingAttr for values");
-  // }
+  /// Enable once we have the dot op encoding UpcastMXFPOp lowering.
+  auto dotEncoding = dyn_cast<DotOperandEncodingAttr>(layoutX);
+  if (mlir::triton::tools::getBoolEnv(
+          "TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING") &&
+      !dotEncoding) {
+    return emitOpError("Expected a DotOperandEncodingAttr for values");
+  }
   if (!isa<BlockedEncodingAttr, LinearEncodingAttr>(layoutScale)) {
     return emitOpError(
         "Expected a BlockOperandEncoding or LinearOperandEncoding "
         "for scales");
   }
+  if (!dotEncoding)
+    return success();
 
-  // if (isa<NvidiaMmaEncodingAttr>(dotEncoding.getParent())) {
-  //   // Necessary to keep all of the scales of a given block of values in the
-  //   // same warp
-  //   auto threadsPerWarp =
-  //       cast<DistributedEncodingTrait>(layoutScale).getThreadsPerWarp();
-  //   if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
-  //     return emitOpError("Expected threads per warp to be {16, 2}");
-  //   }
-  // }
+  if (isa<NvidiaMmaEncodingAttr>(dotEncoding.getParent())) {
+    // Necessary to keep all of the scales of a given block of values in the
+    // same warp
+    auto threadsPerWarp =
+        cast<DistributedEncodingTrait>(layoutScale).getThreadsPerWarp();
+    if (threadsPerWarp != ArrayRef<unsigned>({16, 2})) {
+      return emitOpError("Expected threads per warp to be {16, 2}");
+    }
+  }
 
-  // // Change to support fp8 types
-  // const auto elemsPacked = fpType == ScaleDotElemType::E2M1 ? 2 : 1;
-  // // Figure out the K dimension for the input A/B. For A/B scale, the K
-  // // dimension is always the last dimension.
-  // const int opIdx = dotEncoding.getOpIdx();
-  // const bool hasBatch = xShape.size() == 3;
-  // const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
+  // Change to support fp8 types
+  const auto elemsPacked = fpType == ScaleDotElemType::E2M1 ? 2 : 1;
+  // Figure out the K dimension for the input A/B. For A/B scale, the K
+  // dimension is always the last dimension.
+  const int opIdx = dotEncoding.getOpIdx();
+  const bool hasBatch = xShape.size() == 3;
+  const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
 
-  // if (xShape[kIdx] != (32 / elemsPacked) * scaleShape.back()) {
-  //   return emitOpError("K dimension of first operand must be 16 times "
-  //                      "larger than last/K dimension of the second operand");
-  // }
+  if (xShape[kIdx] != (32 / elemsPacked) * scaleShape.back()) {
+    return emitOpError("K dimension of first operand must be 16 times "
+                       "larger than last/K dimension of the second operand");
+  }
 
-  // // Check other dimensions match too. For input A/B, we need to figure out
-  // the
-  // // index for the M/N dimension. For scale, it's always {(batch), M/N, K}.
-  // const int mnIdx = (opIdx == 0 ? 0 : 1) + hasBatch;
-  // if (hasBatch && xShape[0] != scaleShape[0])
-  //   return emitOpError("batch dimension must match between operands");
-  // if (xShape[mnIdx] != scaleShape[hasBatch]) {
-  //   return emitOpError("M/N dimension must match between operands");
-  // }
+  // Check other dimensions match too. For input A/B, we need to figure out the
+  // index for the M/N dimension. For scale, it's always {(batch), M/N, K}.
+  const int mnIdx = (opIdx == 0 ? 0 : 1) + hasBatch;
+  if (hasBatch && xShape[0] != scaleShape[0])
+    return emitOpError("batch dimension must match between operands");
+  if (xShape[mnIdx] != scaleShape[hasBatch]) {
+    return emitOpError("M/N dimension must match between operands");
+  }
 
   return success();
 }
@@ -110,8 +112,6 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
   auto xShape = xTy.getShape();
 
   auto encoding = xTy.getEncoding();
-  bool upcastMXFPUseDotOpEnc =
-      mlir::triton::tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING");
 
   if (typeEncoded == ScaleDotElemType::E2M1) {
     RankedTensorType retTy;
@@ -122,10 +122,8 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
     } else {
       Type elemType = FloatType::getBF16(ctx);
-      Attribute newVEncoding;
-      if (upcastMXFPUseDotOpEnc) {
-        auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-
+      Attribute newVEncoding = nullptr;
+      if (auto oldEncoding = dyn_cast<DotOperandEncodingAttr>(encoding)) {
         const int opIdx = oldEncoding.getOpIdx();
         const bool hasBatch = xShape.size() == 3;
         const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
@@ -151,10 +149,9 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
               ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
               oldEncoding.getKWidth() * 2);
         }
-      } else {
-        auto oldEncoding = dyn_cast<BlockedEncodingAttr>(encoding);
-        assert(oldEncoding &&
-               "Expected a blocked encoding for UpcastMXFP op result.");
+      } else if (auto oldEncoding = dyn_cast<BlockedEncodingAttr>(encoding)) {
+        // TODO: Temporary code, remove once upcast_mxfp support dot encoding.
+        assert(!tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING"));
         newShape.back() *= 2;
         SmallVector<unsigned> sizePerThread = oldEncoding.getSizePerThread();
         sizePerThread.back() *= 2;
