@@ -355,7 +355,8 @@ at::TensorOptions getTensorOptions(const std::string &dtype) {
 }
 
 std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
-                        KernelArguments triton_args, bool get_kernel_time) {
+                                       KernelArguments triton_args,
+                                       bool get_kernel_time) {
 
   auto tensor_ptr = [](const torch::Tensor &t) -> void * {
     return static_cast<void *>(t.data_ptr());
