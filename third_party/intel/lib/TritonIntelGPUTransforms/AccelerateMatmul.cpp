@@ -12,6 +12,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
 
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
@@ -250,6 +251,10 @@ public:
   }
 
 private:
+  bool upcastMXFPUseDotOpEnc =
+      mlir::triton::tools::getBoolEnv(
+          "TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING") == 1;
+
   struct OpDescriptor {
     TensorValue op;
     triton::ScaleDotElemType elemType;
@@ -269,13 +274,15 @@ private:
           convertUnscaledOperand<1>(bDesc, dpasEnc, newRetType, rewriter);
       return {newA, newB};
     }
-
-    assert((bDesc.scale && !aDesc.scale) && "NYI: both LHS and RHS scale");
-    TensorValue newB =
-        convertScaledOperand<1>(bDesc, dpasEnc, newRetType, mod, rewriter);
-    TensorValue newA =
-        convertUnscaledOperand<0>(aDesc, dpasEnc, newRetType, rewriter);
-    return {newA, newB};
+    if (bDesc.scale) {
+      assert(aDesc.scale == nullptr && "NYI: both LHS and RHS scale");
+      TensorValue newB =
+          convertScaledOperand<1>(bDesc, dpasEnc, newRetType, mod, rewriter);
+      TensorValue newA =
+          convertUnscaledOperand<0>(aDesc, dpasEnc, newRetType, rewriter);
+      return {newA, newB};
+    }
+    assert(false && "Both LHS and RHS unscaled");
   }
 
   template <unsigned opIdx>
@@ -291,32 +298,68 @@ private:
       opsPerChannel *= 2;
 
     MLIRContext *ctx = opDesc.op.getContext();
-    auto opEncoding = ttg::intel::DpasEncodingAttr::get(
-        ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
-        dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-        dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
+    if (upcastMXFPUseDotOpEnc) {
+      auto opEncoding = ttg::intel::DpasEncodingAttr::get(
+          ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
+          dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
+          dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
 
-    auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
-        ctx, opIdx, opEncoding, opEncoding.getOpsPerChannel());
-    TensorValue op =
-        createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
+      auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
+          ctx, opIdx, opEncoding, opEncoding.getOpsPerChannel());
+      TensorValue op =
+          createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
 
-    unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
-    SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
-                                            warpSize / instrShapeM};
-    unsigned rank = retType.getRank();
-    int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
-    SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
-    warpsPerCTA[0] = numWarps;
-    auto CTALayout = ttg::getCTALayout(retType.getEncoding());
+      unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+      unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
+      SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
+                                              warpSize / instrShapeM};
+      unsigned rank = retType.getRank();
+      int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+      SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
+      warpsPerCTA[0] = numWarps;
+      auto CTALayout = ttg::getCTALayout(retType.getEncoding());
 
-    auto newScaleEncoding =
-        ttg::BlockedEncodingAttr::get(ctx, {1, 1}, threadsPerWarp, warpsPerCTA,
-                                      newOpEncoding.getCTAOrder(), CTALayout);
-    TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
+      auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
+          ctx, {1, 1}, threadsPerWarp, warpsPerCTA, newOpEncoding.getCTAOrder(),
+          CTALayout);
+      TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
 
-    return createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
+      return createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
+    } else {
+      auto scaleEncoding = dyn_cast<ttg::BlockedEncodingAttr>(
+          opDesc.scale.getType().getEncoding());
+      assert(scaleEncoding && "Expecting blocked encoding for scale");
+
+      // Referring to
+      // https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+      // the scalingBlockSize should be 32 for E5M2, E4M3 and E2M1
+      unsigned scalingBlockSize = 32;
+      if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
+        scalingBlockSize = 16;
+      auto newOpEncoding = ttg::BlockedEncodingAttr::get(
+          ctx, {1, scalingBlockSize}, scaleEncoding.getThreadsPerWarp(),
+          scaleEncoding.getWarpsPerCTA(), scaleEncoding.getCTAOrder(),
+          scaleEncoding.getCTALayout());
+
+      TensorValue op =
+          createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
+      TensorValue scale = opDesc.scale;
+
+      auto retDpasEncoding = ttg::intel::DpasEncodingAttr::get(
+          ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
+          dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
+          dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
+      auto retDotOpEncoding = ttg::DotOperandEncodingAttr::get(
+          ctx, opIdx, retDpasEncoding, retDpasEncoding.getOpsPerChannel());
+
+      auto upcastOp = createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
+
+      auto retType = cast<RankedTensorType>(upcastOp.getType());
+      retType = RankedTensorType::get(
+          retType.getShape(), retType.getElementType(), retDotOpEncoding);
+      return rewriter.create<ttg::ConvertLayoutOp>(opDesc.op.getLoc(), retType,
+                                                   upcastOp);
+    }
   }
 
   template <unsigned opIdx>

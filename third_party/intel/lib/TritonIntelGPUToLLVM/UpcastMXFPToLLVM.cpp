@@ -46,25 +46,10 @@ public:
     if (fpType == ScaleDotElemType::E2M1)
       xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
 
-    // Each thread owns elements of 4 mxfp vectors so we need 4 scales
-    // Letting c = tid / 4 * 2, we need the elements from threads c, c + 1, c +
-    // 16, c + 17
-    auto c = mul(udiv(laneId, i32_val(4)), i32_val(2));
-    std::array<Value, 4> ci = {c, add(c, i32_val(1)), add(c, i32_val(16)),
-                               add(c, i32_val(17))};
-
     for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
-      // column major as per the DotOperandEncoding(opidx=0) layout
-      auto si = std::array<Value, 4>{
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[0]),
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[2]),
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[1]),
-          targetInfo.shuffleIdx(rewriter, loc, scaleVal, ci[3]),
-      };
-
       for (int j = 0; j < 32; ++j) {
-        xVals[32 * i + j] =
-            LLVM::mxfpScaleBf16(rewriter, loc, xVals[32 * i + j], si[j / 8]);
+        xVals[32 * i + j] = LLVM::intel::mxfpScaleBf16(
+            rewriter, loc, xVals[32 * i + j], scaleVal);
       }
     }
 

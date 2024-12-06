@@ -3441,10 +3441,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
     if is_xpu():
-        # if "e2m1" in (normal_type, mxfp_type):
-        #     pytest.skip("scaled_dot e2m1 isn't supported on XPU")
-        if rhs_scale:
-            pytest.skip("scaled_dot with rhs_scale isn't supported on XPU")
+        if "e2m1" in (normal_type, mxfp_type):
+            pytest.skip("scaled_dot e2m1 isn't supported on XPU")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
