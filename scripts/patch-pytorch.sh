@@ -16,3 +16,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 cd "$REPO_ROOT"
 
 curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
+curl -sSL https://github.com/pytorch/pytorch/pull/142242.diff | git apply -
