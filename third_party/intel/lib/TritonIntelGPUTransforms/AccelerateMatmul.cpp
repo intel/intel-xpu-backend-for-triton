@@ -64,7 +64,6 @@ getWarpsPerTile(tt::DotOp dotOp,
       ceil<uint32_t>(dpasCap.repeatCount, dpasCap.executionSize);
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
-  llvm::errs() << "rowColRation: " << rowColRatio << ", colRowRatio: " << colRowRatio << ", ret: " << ret[0] << ", " << ret[1] << "\n";
 
   int rowDim = order[rank - 2], colDim = order[rank - 1];
   do {
@@ -80,7 +79,6 @@ getWarpsPerTile(tt::DotOp dotOp,
       ret[colDim] *= 2;
     }
   } while (true);
-
   return ret;
 }
 
@@ -120,29 +118,18 @@ public:
     unsigned opsPerChan =
         ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
 
-    SmallVector<unsigned> order = {1, 0}; // TODO: acceptable default arg?
-    // llvm::errs() << "a: " << a << "\n";
+    SmallVector<unsigned> order = {0, 1};
     Operation *aOp = a.getDefiningOp();
-    if (aOp) {
-      // llvm::errs() << "Processing a op: " << *aOp << "\n";
-      Attribute layout;
-      if (isa<ttg::ConvertLayoutOp>(aOp)) {
-        // TODO: convertlayoutop converts the order to match dpas, so we need to
-        // "look through" the conversion. is there a way to prevent the
-        // conversion in the first place?
-        assert(aOp->getNumOperands() == 1);
-        layout =
-            cast<RankedTensorType>(aOp->getOperand(0).getType()).getEncoding();
-      } else {
-        assert(aOp->getNumResults() == 1);
-        layout =
-            cast<RankedTensorType>(aOp->getResult(0).getType()).getEncoding();
-      }
-      order = triton::gpu::getOrder(layout);
-    } else {
-      // llvm::errs() << "no A op for A: " << a << "\n";
+    if (aOp && isa<ttg::ConvertLayoutOp>(aOp)) {
+      auto valueToConvert = aOp->getOperand(0);
+      aOp = valueToConvert.getDefiningOp();
     }
-    llvm::errs() << "order: " << order[0] << ", " << order[1] << "\n";
+    if (aOp && isa<tt::LoadOp>(aOp)) {
+      assert(aOp->getNumResults() == 1);
+      Attribute layout =
+          cast<RankedTensorType>(aOp->getResult(0).getType()).getEncoding();
+      order = triton::gpu::getOrder(layout);
+    }
 
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps, order);
