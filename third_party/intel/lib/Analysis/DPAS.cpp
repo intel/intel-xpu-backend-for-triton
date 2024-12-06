@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Casting.h"
 #include <iostream>
+#include <type_traits>
 
 namespace mlir::triton::gpu::intel {
 
@@ -23,6 +24,7 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
     funcOp.walk([&](Operation *op) {
       if (!isa<DotOp, DotScaledOp>(op))
         return;
+
       if (it != funcToDotMap.end())
         it->second.push_back(op);
       else
@@ -72,21 +74,36 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
 }
 
 DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
-  RankedTensorType aTy, bTy, cTy, dTy;
-  Type aElemTy, bElemTy, cElemTy, dElemTy;
+  if (auto dotOp = dyn_cast<DotOp>(op))
+    return DPASAnalysis::getDPASType<DotOp>(dotOp);
+  if (auto dotScaledOp = dyn_cast<DotScaledOp>(op))
+    return DPASAnalysis::getDPASType(dotScaledOp);
+  return DPASEngineType::NOT_APPLICABLE;
+}
 
-  if (auto dotOp = dyn_cast<DotOp>(op)) {
+// This function determines the DPAS engine type for the given operation.
+// It checks the element types of the tensors involved in the operation
+// and returns the appropriate DPAS engine type based on the type combinations.
+template <typename OpTy>
+typename std::enable_if<llvm::is_one_of<OpTy, DotOp, DotScaledOp>::value,
+                        DPASAnalysis::DPASEngineType>::type
+DPASAnalysis::getDPASType(OpTy op) {
+  auto cTy = cast<RankedTensorType>(op.getC().getType());
+  auto dTy = cast<RankedTensorType>(op.getD().getType());
+  Type cElemTy = cTy.getElementType();
+  Type dElemTy = dTy.getElementType();
+
+  assert(cElemTy == dElemTy && "Unexpected element type mismatch");
+
+  RankedTensorType aTy, bTy;
+  Type aElemTy, bElemTy;
+
+  if constexpr (std::is_same_v<OpTy, DotOp>) {
     // d = a * b + c
-    aTy = cast<RankedTensorType>(dotOp.getA().getType());
-    bTy = cast<RankedTensorType>(dotOp.getB().getType());
-    cTy = cast<RankedTensorType>(dotOp.getC().getType());
-    dTy = cast<RankedTensorType>(dotOp.getD().getType());
+    aTy = cast<RankedTensorType>(op.getA().getType());
+    bTy = cast<RankedTensorType>(op.getB().getType());
     aElemTy = aTy.getElementType();
     bElemTy = bTy.getElementType();
-    cElemTy = cTy.getElementType();
-    dElemTy = dTy.getElementType();
-
-    assert(cElemTy == dElemTy && "Unexpected element type mismatch");
 
     if (aElemTy != bElemTy)
       return DPASEngineType::NOT_APPLICABLE;
@@ -105,8 +122,7 @@ DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
           return DPASEngineType::FP32_FP32_FP16_FP16;
         if (aElemTy.isBF16())
           return DPASEngineType::FP32_FP32_BF16_BF16;
-        if (aElemTy.isF32() &&
-            dotOp.getInputPrecision() == InputPrecision::TF32)
+        if (aElemTy.isF32() && op.getInputPrecision() == InputPrecision::TF32)
           return DPASEngineType::FP32_FP32_TF32_TF32;
         // For FP8XFP8->FP32, upcast to FP16
         if (aElemTy.isFloat8E5M2())
@@ -123,17 +139,11 @@ DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
     }
   }
 
-  if (auto scaledDot = dyn_cast<DotScaledOp>(op)) {
-    aTy = cast<RankedTensorType>(scaledDot.getLhs().getType());
-    bTy = cast<RankedTensorType>(scaledDot.getRhs().getType());
-    cTy = cast<RankedTensorType>(scaledDot.getC().getType());
-    dTy = cast<RankedTensorType>(scaledDot.getD().getType());
+  if constexpr (std::is_same_v<OpTy, DotScaledOp>) {
+    aTy = cast<RankedTensorType>(op.getLhs().getType());
+    bTy = cast<RankedTensorType>(op.getRhs().getType());
     aElemTy = aTy.getElementType();
     bElemTy = bTy.getElementType();
-    cElemTy = cTy.getElementType();
-    dElemTy = dTy.getElementType();
-
-    assert(cElemTy == dElemTy && "Unexpected element type mismatch");
 
     if (isa<FloatType>(dElemTy)) {
       if (dElemTy.isF32()) {
@@ -162,5 +172,11 @@ DPASAnalysis::DPASEngineType DPASAnalysis::getDPASType(Operation *op) {
   }
   return DPASEngineType::NOT_APPLICABLE;
 }
+
+// Explicit instantiations.
+template DPASAnalysis::DPASEngineType
+DPASAnalysis::getDPASType<DotOp>(DotOp op);
+template DPASAnalysis::DPASEngineType
+DPASAnalysis::getDPASType<DotScaledOp>(DotScaledOp op);
 
 } // namespace mlir::triton::gpu::intel

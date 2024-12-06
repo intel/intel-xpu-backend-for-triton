@@ -47,8 +47,15 @@ public:
   ///    (aka threads per warp) size.
   Result canUseDPAS(FunctionOpInterface funcOp) const;
 
-  /// Given a DotOp operation, return its DPAS engine type.
+  /// Given a 'DotOp' or 'ScaledDot' operation, return its DPAS engine type.
   static DPASEngineType getDPASType(Operation *op);
+
+  // clang-format off
+  template <typename OpTy>
+  typename std::enable_if<llvm::is_one_of<OpTy, DotOp, DotScaledOp>::value,
+                          DPASAnalysis::DPASEngineType>::type
+  static getDPASType(OpTy);
+  // clang-format on
 
 private:
   mlir::ModuleOp mod;
