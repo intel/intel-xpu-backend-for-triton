@@ -150,7 +150,8 @@ DPASAnalysis::getDPASType(OpTy op) {
         if (aElemTy.isBF16() &&
             (bElemTy.isFloat8E4M3FN() || bElemTy.isFloat8E5M2()))
           return DPASEngineType::FP32_FP32_BF16_FP8;
-        if (aElemTy.isBF16() && bElemTy.isFloat4E2M1FN())
+        // 2 E2M1 are packed into 1 int8
+        if (aElemTy.isBF16() && bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_BF16_FP4;
         if ((aElemTy.isFloat8E4M3FN() || aElemTy.isFloat8E5M2()) &&
             bElemTy.isBF16())
@@ -159,9 +160,8 @@ DPASAnalysis::getDPASType(OpTy op) {
             (bElemTy.isFloat8E4M3FN() || bElemTy.isFloat8E5M2()))
           return DPASEngineType::FP32_FP32_FP8_FP8;
         if ((aElemTy.isFloat8E4M3FN() || aElemTy.isFloat8E5M2()) &&
-            bElemTy.isFloat4E2M1FN())
+            bElemTy.isInteger(8))
           return DPASEngineType::FP32_FP32_FP8_FP4;
-        // 2 E2M1 are packed into 1 int8
         if (aElemTy.isInteger(8) && bElemTy.isBF16())
           return DPASEngineType::FP32_FP32_FP4_BF16;
         if (aElemTy.isInteger(8) &&

@@ -159,21 +159,4 @@ LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   return printFunc;
 }
 
-Value mxfpScaleBf16(ConversionPatternRewriter &rewriter, Location loc, Value v,
-                    Value scale) {
-  Value vBf16 = bitcast(v, bf16_ty);
-  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
-  Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
-
-  Value v0 = mlir::triton::intel::convertBf16ToFp32(loc, rewriter, vBf16);
-  Value v1 = mlir::triton::intel::convertBf16ToFp32(loc, rewriter, scaleBf16);
-  auto result = rewriter.create<LLVM::FMulOp>(loc, f32_ty, v0, v1);
-  auto undefRounding = static_cast<mlir::triton::RoundingMode>(-1);
-  Value scaledBf16 = mlir::triton::intel::convertFp32ToBf16(
-      loc, rewriter, result, undefRounding);
-  // Value scaledBf16 = fmul(vBf16, scaleBf16);
-  // Account for NaN in the scale as per the mxfp specification.
-  return select(scaleIsNan, nanBf16, scaledBf16);
-};
 } // namespace mlir::LLVM::intel
