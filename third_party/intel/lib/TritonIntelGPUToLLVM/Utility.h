@@ -135,6 +135,9 @@ Value llPrintf(StringRef msg, ValueRange args,
                ConversionPatternRewriter &rewriter,
                const TargetInfoBase &targetInfo,
                int *formatStrByteCount = nullptr);
+
+Value mxfpScaleBf16(ConversionPatternRewriter &rewriter, Location loc, Value v,
+                    Value scale);
 } // namespace mlir::LLVM::intel
 
 // -----------------------------------------------------------------------
