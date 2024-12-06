@@ -9,7 +9,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include <array>
 
 using namespace mlir;
 using namespace mlir::triton;
