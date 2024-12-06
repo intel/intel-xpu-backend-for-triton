@@ -1,7 +1,5 @@
 import glob
 import os
-from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,6 +8,7 @@ import numpy as np
 import pytest
 
 import triton
+from triton._internal_testing import is_cuda, is_xpu
 from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dir, library_dirs
 from triton.backends.intel.driver import compilation_helper
@@ -101,20 +100,9 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 }"""
 
 
-def dump_tmp_files(tmp_dir):
-    src_path = Path(tmp_dir)
-    des_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aot_dump")
-    if os.path.exists(des_path):
-        shutil.rmtree(des_path)
-    try:
-        shutil.copytree(src_path, des_path)
-        print(f"Dump files {src_path} copied to {des_path}")
-    except Exception:
-        pass
-
-
-def gen_kernel_library(dir, device, libname):
-    if device == "cuda":
+def gen_kernel_library(dir, libname):
+    if is_cuda():
+        print("is_cuda is ture")
         c_files = glob.glob(os.path.join(dir, "*.c"))
         subprocess.run(
             ["gcc"] + c_files + ["-I", include_dir[0], "-c", "-fPIC"],
@@ -128,7 +116,7 @@ def gen_kernel_library(dir, device, libname):
             command.extend(["-L", lib_dir])
         subprocess.run(command, check=True, cwd=dir)
 
-    if device == "xpu":
+    if is_xpu():
         cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
         command = ["icpx"] + cpp_files + ["-I", compilation_helper.include_dir[0], "-c", "-fsycl", "-fPIC"]
         subprocess.run(
@@ -147,7 +135,7 @@ def gen_kernel_library(dir, device, libname):
         subprocess.run(command, check=True, cwd=dir)
 
 
-def gen_test_bin(dir, device, M, N, K, exe="test", algo_id=0):
+def gen_test_bin(dir, M, N, K, exe="test", algo_id=0):
     test_src = f"""
 int main(int argc, char **argv) {{
   int M = {M}, N = {N}, K = {K};
@@ -206,7 +194,7 @@ int main(int argc, char **argv) {{
 }}
 """
     src = test_utils_src + test_src
-    if device == "xpu":
+    if is_xpu():
         src = f"""
 #include "kernel.h"
 #include <assert.h>
@@ -295,12 +283,12 @@ int main(int argc, char ** argv) {{
 }}
 """
     src_name = "test.c"
-    if device == "xpu":
+    if is_xpu():
         src_name = "test.cpp"
     with open(os.path.join(dir, src_name), "w") as file:
         file.write(src)
 
-    if device == "cuda":
+    if is_cuda():
         command = ["gcc", "test.c"]
         for inc_dir in include_dir:
             command.extend(["-I", inc_dir])
@@ -308,7 +296,7 @@ int main(int argc, char ** argv) {{
             command.extend(["-L", lib_dir])
         command.extend(["-l", "cuda", "-L", dir, "-l", "kernel", "-o", exe])
 
-    if device == "xpu":
+    if is_xpu():
         command = ["icpx", "test.cpp"]
         for inc_dir in compilation_helper.include_dir:
             command.extend(["-I", inc_dir])
@@ -333,7 +321,7 @@ def write_triton_kernels(dir, src, util_src):
     return kernel_path
 
 
-def _compile_kernel(dir, device, signature, kernel_name, out_name, out_path, num_warps, grid, kernel_path):
+def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, grid, kernel_path):
     compiler_path = os.path.join(triton.tools.__path__[0], "compile.py")
 
     subprocess.run(
@@ -342,8 +330,6 @@ def _compile_kernel(dir, device, signature, kernel_name, out_name, out_path, num
             compiler_path,
             "-n",
             kernel_name,
-            "--device",
-            device,
             "--signature",
             signature,
             "--out-name",
@@ -362,14 +348,13 @@ def _compile_kernel(dir, device, signature, kernel_name, out_name, out_path, num
 
 
 # Edge case kernel with no specialization
-def compile_aot_kernel_no_specialization(dir, kernel_path, device, dtype, BM, BN, BK):
+def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK):
     # compile all desired configs
     sig = f"*fp32, *{dtype}, *{dtype}, i32, i32, i32, i32, i32, i32, i32, i32, i32, {BM}, {BN}, {BK}"
     name = f"matmul_{dtype}"
     grid = f"M/{BM}, N/{BN}, 1"
     _compile_kernel(
         dir=dir,
-        device=device,
         signature=sig,
         kernel_name="kernel",
         out_name=name,
@@ -380,7 +365,7 @@ def compile_aot_kernel_no_specialization(dir, kernel_path, device, dtype, BM, BN
     )
 
 
-def compile_aot_kernels(dir, kernel_path, device, dtype, BM, BN, BK, ha_hb_hints):
+def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
     # compile all desired configs
     for ha in ha_hb_hints:
         for hb in ha_hb_hints:
@@ -389,7 +374,6 @@ def compile_aot_kernels(dir, kernel_path, device, dtype, BM, BN, BK, ha_hb_hints
             grid = f"M/{BM}, N/{BN}, 1"
             _compile_kernel(
                 dir=dir,
-                device=device,
                 signature=sig,
                 kernel_name="kernel",
                 out_name=name,
@@ -400,12 +384,12 @@ def compile_aot_kernels(dir, kernel_path, device, dtype, BM, BN, BK, ha_hb_hints
             )
 
 
-def link_aot_kernels(dir, device):
+def link_aot_kernels(dir):
     linker_path = os.path.join(triton.tools.__path__[0], "link.py")
 
     # link all desired configs
     h_files = glob.glob(os.path.join(dir, "*.h"))
-    subprocess.run([sys.executable, linker_path] + h_files + ["-d", f"{device}", "-o", "kernel"], check=True, cwd=dir)
+    subprocess.run([sys.executable, linker_path] + h_files + ["-o", "kernel"], check=True, cwd=dir)
 
 
 def generate_matmul_test_data(dir, M, N, K):
@@ -420,24 +404,23 @@ def generate_matmul_test_data(dir, M, N, K):
 
 
 # Test edge case where the provided kernel signature has no specializations
-def test_compile_link_matmul_no_specialization(device):
+def test_compile_link_matmul_no_specialization():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
-        device = device
-        if device == "xpu":
+        if is_xpu():
             pytest.skip("FIXME: AssertionError on XPU")
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, device, dtype, BM, BN, BK)
-        link_aot_kernels(tmp_dir, device)
+        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
+        link_aot_kernels(tmp_dir)
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, device, "libkernel.so")
-        gen_test_bin(tmp_dir, device, M, N, K)
+        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
         a, b, a_path, b_path, c_path = generate_matmul_test_data(tmp_dir, M, N, K)
@@ -454,7 +437,7 @@ def test_compile_link_matmul_no_specialization(device):
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-def test_compile_link_matmul(device):
+def test_compile_link_matmul():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -462,13 +445,13 @@ def test_compile_link_matmul(device):
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, device, dtype, BM, BN, BK, ha_hb_hints=["", ":16"])
-        link_aot_kernels(tmp_dir, device)
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=["", ":16"])
+        link_aot_kernels(tmp_dir)
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, device, "libkernel.so")
-        gen_test_bin(tmp_dir, device, M, N, K)
+        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
         a, b, a_path, b_path, c_path = generate_matmul_test_data(tmp_dir, M, N, K)
@@ -485,7 +468,7 @@ def test_compile_link_matmul(device):
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-def test_launcher_has_no_available_kernel(device):
+def test_launcher_has_no_available_kernel():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -493,13 +476,13 @@ def test_launcher_has_no_available_kernel(device):
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, device, dtype, BM, BN, BK, ha_hb_hints=[":1"])
-        link_aot_kernels(tmp_dir, device)
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[":1"])
+        link_aot_kernels(tmp_dir)
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, device, "libkernel.so")
-        gen_test_bin(tmp_dir, device, M, N, K)
+        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
         a, b, a_path, b_path, c_path = generate_matmul_test_data(tmp_dir, M, N, K)
@@ -520,7 +503,7 @@ def test_launcher_has_no_available_kernel(device):
         assert "kernel launch failed" in result.stderr
 
 
-def test_compile_link_autotune_matmul(device):
+def test_compile_link_autotune_matmul():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -537,11 +520,11 @@ def test_compile_link_autotune_matmul(device):
 
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
-            compile_aot_kernels(tmp_dir, kernel_path, device, dtype, BM, BN, BK, ha_hb_hints=["", ":16"])
+            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=["", ":16"])
 
-        link_aot_kernels(tmp_dir, device)
+        link_aot_kernels(tmp_dir)
 
-        gen_kernel_library(tmp_dir, device, "libkernel.so")
+        gen_kernel_library(tmp_dir, "libkernel.so")
 
         # compile test case
         M, N, K = 64, 64, 64
@@ -552,7 +535,7 @@ def test_compile_link_autotune_matmul(device):
         for algo_id in range(len(tile_sizes)):
             # generate and run test case
             test_name = f"test_{algo_id}"
-            gen_test_bin(tmp_dir, device, M, N, K, exe=test_name, algo_id=algo_id)
+            gen_test_bin(tmp_dir, M, N, K, exe=test_name, algo_id=algo_id)
 
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH")

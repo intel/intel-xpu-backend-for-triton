@@ -4,6 +4,8 @@ from typing import Sequence, Union
 
 from dataclasses import dataclass
 
+from triton._internal_testing import is_cuda, is_xpu
+
 
 def _exists(x):
     return x is not None
@@ -131,14 +133,14 @@ def gen_signature(m):
 
 
 # generate declarations of kernels with meta-parameter and constant values
-def make_algo_decls(device: str, name: str, metas: Sequence[KernelLinkerMeta]) -> str:
-    if device == "cuda":
+def make_algo_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+    if is_cuda():
         return f"""
 CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])});
 void load_{name}();
 void unload_{name}();
         """
-    if device == "xpu":
+    if is_xpu():
         return f"""
 int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])});
 void load_{name}();
@@ -147,15 +149,15 @@ void unload_{name}();
 
 
 # generate declarations of kernels with meta-parameter and constant values
-def make_global_decl(device: str, meta: KernelLinkerMeta) -> str:
-    if device == "cuda":
+def make_global_decl(meta: KernelLinkerMeta) -> str:
+    if is_cuda():
         return f"""
 CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)});
 CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id);
 void load_{meta.orig_kernel_name}();
 void unload_{meta.orig_kernel_name}();
         """
-    if device == "xpu":
+    if is_xpu():
         return f"""
 int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
 int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
@@ -165,11 +167,11 @@ void unload_{meta.orig_kernel_name}();
 
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
-def make_default_algo_kernel(device: str, meta: KernelLinkerMeta) -> str:
-    if device == "cuda":
+def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
+    if is_cuda():
         src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
         src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
-    if device == "xpu":
+    if is_xpu():
         src = f"int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)}){{\n"
         src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
     src += "}\n"
@@ -177,28 +179,28 @@ def make_default_algo_kernel(device: str, meta: KernelLinkerMeta) -> str:
 
 
 # generate dispatcher function for kernels with different integer value hints
-def make_kernel_hints_dispatcher(device: str, name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        if device == "cuda":
+        if is_cuda():
             src += f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
-        if device == "xpu":
+        if is_xpu():
             src += f"int32_t {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(sycl::queue &stream, {gen_signature(meta)});\n"
     src += "\n"
-    if device == "cuda":
+    if is_cuda():
         src += (f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{")
-    if device == "xpu":
+    if is_xpu():
         src += (f"int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])}){{")
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        if device == "cuda":
+        if is_cuda():
             cond_fn = (  #
                 lambda val, hint: f"({val} % {hint} == 0)"  #
                 if hint == 16  #
                 else f"({val} == {hint})"  #
                 if hint == 1  #
                 else None)
-        if device == "xpu":
+        if is_xpu():
             cond_fn = (  #
                 lambda val, hint: f"(reinterpret_cast<uintptr_t>({val}) % {hint} == 0)"  #
                 if val in ('A', 'B', 'C')  #
@@ -214,14 +216,14 @@ def make_kernel_hints_dispatcher(device: str, name: str, metas: Sequence[KernelL
         src += (f"  if ({conds})\n" if any(meta.sizes) else "if (1)\n"
                 )  # Edge case where no specializations hence no dispatching required
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
-        if device == "cuda":
+        if is_cuda():
             src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
-        if device == "xpu":
+        if is_xpu():
             src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
     src += "\n"
-    if device == "cuda":
+    if is_cuda():
         src += "  return CUDA_ERROR_INVALID_VALUE;\n"
-    if device == "xpu":
+    if is_xpu():
         src += "  return -6;\n"
     src += "}\n"
 
@@ -238,26 +240,26 @@ def make_kernel_hints_dispatcher(device: str, name: str, metas: Sequence[KernelL
 
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
-def make_kernel_meta_const_dispatcher(device: str, meta: KernelLinkerMeta) -> str:
-    if device == "cuda":
+def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
+    if is_cuda():
         src = f"CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
-    if device == "xpu":
+    if is_xpu():
         src = f"int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
-    if device == "cuda":
+    if is_cuda():
         src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
-    if device == "xpu":
+    if is_xpu():
         src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
     src += "}\n"
     return src
 
 
 # generate definition of function pointers of kernel dispatchers based on meta-parameter and constant values
-def make_func_pointers(device: str, names: str, meta: KernelLinkerMeta) -> str:
+def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
     # the table of hint dispatchers
-    if device == "cuda":
+    if is_cuda():
         src = f"typedef CUresult (*kernel_func_t)(CUstream stream, {gen_signature_with_full_args(meta)});\n"
-    if device == "xpu":
+    if is_xpu():
         src = f"typedef int32_t (*kernel_func_t)(sycl::queue &stream, {gen_signature_with_full_args(meta)});\n"
     src += f"kernel_func_t {meta.orig_kernel_name}_kernels[] = {{\n"
     for name in names:
@@ -316,7 +318,6 @@ if __name__ == "__main__":
         default="",
         help="String to prefix kernel dispatcher names",
     )
-    parser.add_argument("--device", "-d", type=str, default="cuda", help="Backend device name")
     args = parser.parse_args()
 
     # metadata
@@ -329,15 +330,15 @@ if __name__ == "__main__":
         parser.extract_linker_meta(h_str)
 
     # generate headers
-    algo_decls = [make_algo_decls(args.device, name, meta) for name, meta in parser.kernels.items()]
+    algo_decls = [make_algo_decls(name, meta) for name, meta in parser.kernels.items()]
     meta_lists = [meta for name, meta in parser.kernels.items()]
     meta = meta_lists[0][0]
     get_num_algos_decl = make_get_num_algos_decl(meta)
-    global_decl = make_global_decl(args.device, meta)
+    global_decl = make_global_decl(meta)
     with args.out.with_suffix(".h").open("w") as fp:
-        if args.device == "cuda":
+        if is_cuda():
             out = "#include <cuda.h>\n"
-        if args.device == "xpu":
+        if is_xpu():
             out = "#include <level_zero/ze_api.h>\n"
             out += "#include <sycl/sycl.hpp>\n"
             out += "#include <stdint.h>\n"
@@ -350,14 +351,14 @@ if __name__ == "__main__":
         fp.write(out)
 
     # generate source
-    defs = [make_kernel_hints_dispatcher(args.device, name, meta) for name, meta in parser.kernels.items()]
+    defs = [make_kernel_hints_dispatcher(name, meta) for name, meta in parser.kernels.items()]
     names = [name for name in parser.kernels.keys()]
-    func_pointers_def = make_func_pointers(args.device, names, meta)
-    meta_const_def = make_kernel_meta_const_dispatcher(args.device, meta)
+    func_pointers_def = make_func_pointers(names, meta)
+    meta_const_def = make_kernel_meta_const_dispatcher(meta)
     load_unload_def = make_kernel_load_def(names, meta)
     get_num_algos_def = make_get_num_algos_def(meta)
-    default_algo_kernel = make_default_algo_kernel(args.device, meta)
-    if args.device == "cuda":
+    default_algo_kernel = make_default_algo_kernel(meta)
+    if is_cuda():
         with args.out.with_suffix(".c").open("w") as fp:
             out = ""
             out += "#include <cuda.h>\n"
@@ -376,7 +377,7 @@ if __name__ == "__main__":
             out += "\n"
             out += default_algo_kernel
             fp.write(out)
-    if args.device == "xpu":
+    if is_xpu():
         with args.out.with_suffix(".cpp").open("w") as fp:
             out = ""
             out += "#include <level_zero/ze_api.h>\n"

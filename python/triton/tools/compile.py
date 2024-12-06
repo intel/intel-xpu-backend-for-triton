@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 import triton
+from triton._internal_testing import is_cuda, is_xpu
 import triton.backends
 from triton.compiler.code_generator import kernel_suffix
 
@@ -53,7 +54,6 @@ if __name__ == "__main__":
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
     parser.add_argument("--grf-mode", "-gm", type=str, default="large", help="Detemine spv build flags")
-    parser.add_argument("--device", "-d", type=str, default="cuda", help="Backend device name")
     args = parser.parse_args()
 
     out_name = args.out_name if args.out_name else args.kernel_name
@@ -114,14 +114,15 @@ if __name__ == "__main__":
         constants.update({kernel.arg_names[p]: v})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
-    if args.device == "xpu":
+    if is_xpu():
         opts = {
             "num_warps": args.num_warps, "num_stages": args.num_stages, "threads_per_warp": args.threads_per_warp,
             "grf_mode": args.grf_mode
         }
     ccinfo = triton.compile(src, options=opts)
-    if args.device == "cuda" and ccinfo.metadata.global_scratch_size > 0:
-        raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
+    if is_cuda():
+        if ccinfo.metadata.global_scratch_size > 0:
+            raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
 
     arg_names = []
     arg_types = []
@@ -140,7 +141,7 @@ if __name__ == "__main__":
     # dump C stub code
     suffix = kernel_suffix(signature.values(), attrs)
     func_name = '_'.join([out_name, sig_hash, suffix])
-    if args.device == "cuda":
+    if is_cuda():
         from triton.backends.nvidia.driver import ty_to_cpp
         hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
         params = {
@@ -161,7 +162,11 @@ if __name__ == "__main__":
             "gridZ": grid[2],
             "_placeholder": "",
         }
-    if args.device == "xpu":
+        for ext in ['h', 'c']:
+            template_path = Path(__file__).parent / f"compile.{ext}"
+            with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
+                fp.write(Path(template_path).read_text().format(**params))
+    if is_xpu():
         from triton.backends.intel.driver import ty_to_cpp
         hex_ = str(binascii.hexlify(ccinfo.asm["spv"]))[2:-1]
         params = {
@@ -186,7 +191,7 @@ if __name__ == "__main__":
             "gridZ": grid[2],
             "_placeholder": "",
         }
-    for ext in ['h', 'cpp']:
-        template_path = Path(__file__).parent / f"compile_xpu.{ext}"
-        with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
-            fp.write(Path(template_path).read_text().format(**params))
+        for ext in ['h', 'cpp']:
+            template_path = Path(__file__).parent / f"compile_xpu.{ext}"
+            with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
+                fp.write(Path(template_path).read_text().format(**params))
