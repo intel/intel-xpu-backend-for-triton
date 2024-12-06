@@ -152,9 +152,10 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
       } else if (auto oldEncoding = dyn_cast<BlockedEncodingAttr>(encoding)) {
         // TODO: Temporary code, remove once upcast_mxfp support dot encoding.
         assert(!tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING"));
-        newShape.back() *= 2;
         SmallVector<unsigned> sizePerThread = oldEncoding.getSizePerThread();
-        sizePerThread.back() *= 2;
+        int opIdx = sizePerThread.back() == 1 ? 1 : 0;
+        sizePerThread[!opIdx] *= 2;
+        newShape[!opIdx] *= 2;
         newVEncoding = BlockedEncodingAttr::get(
             ctx, sizePerThread, oldEncoding.getThreadsPerWarp(),
             oldEncoding.getWarpsPerCTA(), oldEncoding.getCTAOrder(),

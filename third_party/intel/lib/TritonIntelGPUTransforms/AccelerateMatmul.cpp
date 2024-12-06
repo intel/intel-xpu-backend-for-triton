@@ -291,10 +291,12 @@ private:
     static_assert(opIdx == 0 || opIdx == 1, "Illegal operand index");
     assert(opDesc.scale && "Expecting valid operand & scale");
 
-    unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
-
     MLIRContext *ctx = opDesc.op.getContext();
+    unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
     unsigned rank = retType.getRank();
+
     if (upcastMXFPUseDotOpEnc) {
       if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
         opsPerChannel *= 2;
@@ -312,7 +314,6 @@ private:
       unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
       SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
                                               warpSize / instrShapeM};
-      int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
       SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
       warpsPerCTA[0] = numWarps;
       auto CTALayout = ttg::getCTALayout(retType.getEncoding());
@@ -323,44 +324,52 @@ private:
       TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
 
       return createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
-    } else {
-      auto scaleEncoding = dyn_cast<ttg::BlockedEncodingAttr>(
-          opDesc.scale.getType().getEncoding());
-      assert(scaleEncoding && "Expecting blocked encoding for scale");
-
-      // Referring to
-      // https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
-      // the scalingBlockSize should be 32 for E5M2, E4M3 and E2M1
-      unsigned scalingBlockSize = 32;
-      // 2 FP4E2M1 are packed in 1 I8
-      if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
-        scalingBlockSize = 16;
-      SmallVector<unsigned, 2> sizePerThread(rank, 1);
-      sizePerThread[rank - 1 - opIdx] = scalingBlockSize;
-      auto newOpEncoding = ttg::BlockedEncodingAttr::get(
-          ctx, sizePerThread, scaleEncoding.getThreadsPerWarp(),
-          scaleEncoding.getWarpsPerCTA(), scaleEncoding.getCTAOrder(),
-          scaleEncoding.getCTALayout());
-
-      TensorValue op =
-          createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
-      TensorValue scale = opDesc.scale;
-
-      auto retDpasEncoding = ttg::intel::DpasEncodingAttr::get(
-          ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
-          dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-          dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
-      auto retDotOpEncoding = ttg::DotOperandEncodingAttr::get(
-          ctx, opIdx, retDpasEncoding, retDpasEncoding.getOpsPerChannel());
-
-      auto upcastOp = createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
-
-      auto retType = cast<RankedTensorType>(upcastOp.getType());
-      retType = RankedTensorType::get(
-          retType.getShape(), retType.getElementType(), retDotOpEncoding);
-      return rewriter.create<ttg::ConvertLayoutOp>(opDesc.op.getLoc(), retType,
-                                                   upcastOp);
     }
+
+    auto scaleEncoding = dyn_cast<ttg::BlockedEncodingAttr>(
+        opDesc.scale.getType().getEncoding());
+    assert(scaleEncoding && "Expecting blocked encoding for scale");
+
+    // Referring to
+    // https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+    // the scalingBlockSize should be 32 for E5M2, E4M3 and E2M1
+    unsigned scalingBlockSize = 32;
+    // 2 FP4E2M1 are packed in 1 I8
+    if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
+      scalingBlockSize = 16;
+    SmallVector<unsigned> sizePerThread = {1, 1};
+    SmallVector<unsigned> threadsPerWarp = {1, 1};
+    sizePerThread[!opIdx] = scalingBlockSize;
+    threadsPerWarp[opIdx] = warpSize;
+    SmallVector<unsigned> warpsPerCTA = {numWarps, 1};
+
+    auto newOpEncoding = ttg::BlockedEncodingAttr::get(
+        ctx, sizePerThread, threadsPerWarp, warpsPerCTA,
+        scaleEncoding.getCTAOrder(), scaleEncoding.getCTALayout());
+    TensorValue op =
+        createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
+
+    warpsPerCTA = opIdx ? SmallVector<unsigned>{1, numWarps}
+                        : SmallVector<unsigned>{numWarps, 1};
+    auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
+        ctx, {1, 1}, {warpSize, 1}, warpsPerCTA, scaleEncoding.getCTAOrder(),
+        scaleEncoding.getCTALayout());
+    TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
+
+    auto retDpasEncoding = ttg::intel::DpasEncodingAttr::get(
+        ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
+        dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
+        dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
+    auto retDotOpEncoding = ttg::DotOperandEncodingAttr::get(
+        ctx, opIdx, retDpasEncoding, retDpasEncoding.getOpsPerChannel());
+
+    auto upcastOp = createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
+
+    auto resultType = cast<RankedTensorType>(upcastOp.getType());
+    resultType = RankedTensorType::get(
+        resultType.getShape(), resultType.getElementType(), retDotOpEncoding);
+    return rewriter.create<ttg::ConvertLayoutOp>(opDesc.op.getLoc(), resultType,
+                                                 upcastOp);
   }
 
   template <unsigned opIdx>
