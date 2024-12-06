@@ -127,6 +127,8 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
+Value mxfpScaleBf16(ConversionPatternRewriter &rewriter, Location loc, Value v,
+                    Value scale);
 } // namespace mlir::LLVM::intel
 
 // -----------------------------------------------------------------------

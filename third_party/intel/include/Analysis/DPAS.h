@@ -24,6 +24,14 @@ public:
     FP32_FP32_TF32_TF32,
     FP16_FP16_FP16_FP16,
     BF16_BF16_BF16_BF16,
+    // data types for dot scaled.
+    FP32_FP32_BF16_FP8,
+    FP32_FP32_BF16_FP4,
+    FP32_FP32_FP8_BF16,
+    FP32_FP32_FP8_FP8,
+    FP32_FP32_FP8_FP4,
+    FP32_FP32_FP4_BF16,
+    FP32_FP32_FP4_FP8,
     U32_U32_U8_U8,
     S32_S32_S8_S8,
     NOT_APPLICABLE
@@ -40,16 +48,16 @@ public:
   Result canUseDPAS(FunctionOpInterface funcOp) const;
 
   /// Given a DotOp operation, return its DPAS engine type.
-  static DPASEngineType getDPASType(DotOp op);
+  static DPASEngineType getDPASType(Operation *op);
 
 private:
   mlir::ModuleOp mod;
 
-  /// Tracks Dot operations and their DPAS engine type.
-  std::map<DotOp, DPASEngineType> dotToDPASEngineMap;
+  /// Tracks Dot/DotScaled operations and their DPAS engine type.
+  std::map<Operation *, DPASEngineType> dotToDPASEngineMap;
 
-  /// Tracks the Dot operations contained in a function.
-  std::map<FunctionOpInterface, SmallVector<DotOp>> funcToDotMap;
+  /// Tracks the Dot/DotScaled operations contained in a function.
+  std::map<FunctionOpInterface, SmallVector<Operation *>> funcToDotMap;
 };
 
 } // namespace mlir::triton::gpu::intel
