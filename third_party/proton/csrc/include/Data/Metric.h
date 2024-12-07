@@ -2,6 +2,7 @@
 #define PROTON_DATA_METRIC_H_
 
 #include "Utility/Traits.h"
+#include <string>
 #include <variant>
 #include <vector>
 

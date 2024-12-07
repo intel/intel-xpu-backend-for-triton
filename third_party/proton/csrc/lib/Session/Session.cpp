@@ -4,6 +4,7 @@
 #include "Data/TreeData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
+#include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Utility/String.h"
 
 namespace proton {
@@ -15,6 +16,9 @@ Profiler *getProfiler(const std::string &profilerName) {
   }
   if (proton::toLower(profilerName) == "cupti_pcsampling") {
     return &CuptiProfiler::instance().enablePCSampling();
+  }
+  if (proton::toLower(profilerName) == "xpupti") {
+    return &XpuptiProfiler::instance();
   }
   if (proton::toLower(profilerName) == "roctracer") {
     return &RoctracerProfiler::instance();

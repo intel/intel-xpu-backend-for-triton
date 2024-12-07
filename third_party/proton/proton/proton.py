@@ -16,7 +16,7 @@ def parse_arguments():
 """, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-n", "--name", type=str, help="Name of the profiling session")
     parser.add_argument("-b", "--backend", type=str, help="Profiling backend", default=None,
-                        choices=["cupti", "cupti_pcsampling", "roctracer"])
+                        choices=["cupti", "xpupti", "cupti_pcsampling", "roctracer"])
     parser.add_argument("-c", "--context", type=str, help="Profiling context", default="shadow",
                         choices=["shadow", "python"])
     parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree"])
