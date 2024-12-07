@@ -515,7 +515,10 @@ struct LoadOpConversion
     const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
     DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
-    auto dotOrder = dotLayout.getThreadOrder();
+    // The getThreadOrder doesn't support Intel MMA layout.
+    //  auto dotOrder = dotLayout.getThreadOrder();
+    // FIXME: Hard code the dot layout with row major thread order.
+    SmallVector<unsigned> dotOrder{1, 0};
     size_t rank = dotOrder.size();
     const bool valueRowMajor =
         (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);

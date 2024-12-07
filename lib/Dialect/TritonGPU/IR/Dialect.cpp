@@ -86,6 +86,15 @@ unsigned getTotalElemsPerThread(Type type) {
   if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
     return 1;
   auto tensorType = cast<RankedTensorType>(type);
+
+  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(
+      tensorType.getShape(), tensorType.getEncoding());
+  if (ll.has_value()) {
+    MLIRContext *ctx = tensorType.getContext();
+    auto kRegister = StringAttr::get(ctx, "register");
+    return ll->getInDimSize(kRegister);
+  }
+  // fallback to legacy layout interface.
   return getTotalElemsPerThread(tensorType.getEncoding(), tensorType.getShape(),
                                 tensorType.getElementType());
 }
@@ -316,11 +325,11 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     // with Intel layouts.
     // More details:
     // https://github.com/intel/intel-xpu-backend-for-triton/pull/2517
-    if (dyn_cast<intel::DpasEncodingAttr>(dotLayout.getParent())) {
-      SmallVector<unsigned> order(rank);
-      std::iota(order.rbegin(), order.rend(), 0);
-      return order;
-    }
+    //    if (dyn_cast<intel::DpasEncodingAttr>(dotLayout.getParent())) {
+    //      SmallVector<unsigned> order(rank);
+    //      std::iota(order.rbegin(), order.rend(), 0);
+    //      return order;
+    //    }
     return getOrderForDotOperand(dotLayout.getOpIdx(), rank, /*kMajor*/ true);
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -1120,10 +1129,11 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
       return amdWmmaParent.getTotalElemsPerThreadForOperand(
           shape, eltTy, getKWidth(), getOpIdx());
     }
-    if (auto dpasParent = mlir::dyn_cast<intel::DpasEncodingAttr>(mmaParent)) {
-      return dpasParent.getTotalElemsPerThreadForOperand(
-          shape, eltTy, getKWidth(), getOpIdx());
-    }
+    //    if (auto dpasParent =
+    //    mlir::dyn_cast<intel::DpasEncodingAttr>(mmaParent)) {
+    //      return dpasParent.getTotalElemsPerThreadForOperand(
+    //          shape, eltTy, getKWidth(), getOpIdx());
+    //    }
   }
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
     auto shapePerCTA = getShapePerCTA(*this, shape);
@@ -1188,17 +1198,19 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return {};
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadOrder() const {
-  // FIXME: delete if branch for `DpasEncodingAttr` and provide more
-  // general solution to make `getOrderForDotOperand` function compatible
-  // with Intel layouts.
-  // More details:
-  // https://github.com/intel/intel-xpu-backend-for-triton/pull/2517
-  if (mlir::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
-    return ::getOrder(*this);
-  } else {
-    return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
-                                 /*kMajor*/ true);
-  }
+  //  // FIXME: delete if branch for `DpasEncodingAttr` and provide more
+  //  // general solution to make `getOrderForDotOperand` function compatible
+  //  // with Intel layouts.
+  //  // More details:
+  //  // https://github.com/intel/intel-xpu-backend-for-triton/pull/2517
+  //  if (mlir::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
+  //    return ::getOrder(*this);
+  //  } else {
+  //    return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
+  //                                 /*kMajor*/ true);
+  //  }
+  return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
+                               /*kMajor*/ true);
 }
 
 LogicalResult DotOperandEncodingAttr::verify(
@@ -1241,17 +1253,14 @@ LogicalResult DotOperandEncodingAttr::verify(
     return success();
   }
 
-  if (auto parentAttr = mlir::dyn_cast<intel::DpasEncodingAttr>(parent)) {
-    if (kWidth != parentAttr.getOpsPerChannel())
-      return emitError() << "ttg.dot_op kWidth parameter must match the "
-                            "parent's opsPerChannel";
-    return success();
-  }
-
   if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
     if (kWidth != 0)
       return emitError() << "ttg.dot_op kWidth parameter is not supported "
                             "when the parent is a warp layout";
+    return success();
+  }
+
+  if (auto parentAttr = mlir::dyn_cast<MmaEncodingTrait>(parent)) {
     return success();
   }
 
@@ -3239,8 +3248,7 @@ struct CanonicalizeConvertFromConvert
     auto srcType = op.getSrc().getType();
     auto dstType = op.getType();
     if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
-        (mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) ||
-         mlir::isa<intel::DpasEncodingAttr>(srcType.getEncoding())))
+        mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
       return failure();
 
     // for hopper MMAv3
