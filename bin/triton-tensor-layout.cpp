@@ -80,9 +80,17 @@ static cl::opt<std::string> TensorStr(
 //===--------------------------------------------------------------------===//
 
 LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
+  StringRef dialectName = tensorType.getEncoding().getDialect().getNamespace();
+
   // Dispatch to the corresponding dialect helper function to print the layout.
-  os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
-  return success();
+  if (dialectName == "ttg") {
+    os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
+    return success();
+  }
+
+  llvm::errs() << "Unsupported tensor layout attribute: "
+               << tensorType.getEncoding() << "\n";
+  return failure();
 }
 
 LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
