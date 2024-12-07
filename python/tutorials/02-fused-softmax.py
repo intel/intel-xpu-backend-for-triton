@@ -27,8 +27,7 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
-DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
-                      triton.runtime.driver.active.get_current_device())
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
 def is_hip():
@@ -122,7 +121,6 @@ MAX_NUM_WG = 64  # TODO: Get from properties
 WARP_SIZE = properties["sub_group_sizes"][-1]
 WG_SIZE = properties["max_work_group_size"]
 max_num_warps = WG_SIZE // WARP_SIZE
-target = triton.runtime.driver.active.get_current_target()
 warps_per_sm = WARPS_PER_EU * EU_PER_SM
 max_num_resident_warps = NUM_SM * warps_per_sm
 kernels = {}
