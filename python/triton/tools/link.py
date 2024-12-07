@@ -36,7 +36,7 @@ class HeaderParser:
         # [name, hash, suffix]
         self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
         # [(type, name)]
-        self.c_sig = re.compile("[\\s]*(\\w+)\\s(\\w+)[,]?")
+        self.c_sig = re.compile(r"\s*(\w+\*?)\s+(\w+)[,]?\s*")
         # [d|c]
         self.arg_suffix = re.compile("[c,d]")
 
@@ -131,48 +131,81 @@ def gen_signature(m):
 
 
 # generate declarations of kernels with meta-parameter and constant values
-def make_algo_decls(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
-    return f"""
+def make_algo_decls(device: str, name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+    if device == "cuda":
+        return f"""
 CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])});
 void load_{name}();
 void unload_{name}();
-    """
+        """
+    if device == "xpu":
+        return f"""
+int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])});
+void load_{name}();
+void unload_{name}();
+        """
 
 
 # generate declarations of kernels with meta-parameter and constant values
-def make_global_decl(meta: KernelLinkerMeta) -> str:
-    return f"""
+def make_global_decl(device: str, meta: KernelLinkerMeta) -> str:
+    if device == "cuda":
+        return f"""
 CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)});
 CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id);
 void load_{meta.orig_kernel_name}();
 void unload_{meta.orig_kernel_name}();
-    """
+        """
+    if device == "xpu":
+        return f"""
+int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
+int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
+void load_{meta.orig_kernel_name}();
+void unload_{meta.orig_kernel_name}();
+        """
 
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
-def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
-    src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
-    src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
+def make_default_algo_kernel(device: str, meta: KernelLinkerMeta) -> str:
+    if device == "cuda":
+        src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
+        src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
+    if device == "xpu":
+        src = f"int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)}){{\n"
+        src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
     src += "}\n"
     return src
 
 
 # generate dispatcher function for kernels with different integer value hints
-def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -> str:
+def make_kernel_hints_dispatcher(device: str, name: str, metas: Sequence[KernelLinkerMeta]) -> str:
     src = f"// launcher for: {name}\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        src += f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
+        if device == "cuda":
+            src += f"CUresult {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(CUstream stream, {gen_signature(meta)});\n"
+        if device == "xpu":
+            src += f"int32_t {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(sycl::queue &stream, {gen_signature(meta)});\n"
     src += "\n"
-
-    src += (f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{")
+    if device == "cuda":
+        src += (f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{")
+    if device == "xpu":
+        src += (f"int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])}){{")
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
-        cond_fn = (  #
-            lambda val, hint: f"({val} % {hint} == 0)"  #
-            if hint == 16  #
-            else f"({val} == {hint})"  #
-            if hint == 1  #
-            else None)
+        if device == "cuda":
+            cond_fn = (  #
+                lambda val, hint: f"({val} % {hint} == 0)"  #
+                if hint == 16  #
+                else f"({val} == {hint})"  #
+                if hint == 1  #
+                else None)
+        if device == "xpu":
+            cond_fn = (  #
+                lambda val, hint: f"(reinterpret_cast<uintptr_t>({val}) % {hint} == 0)"  #
+                if val in ('A', 'B', 'C')  #
+                else f"({val} % {hint} == 0)" if hint == 16  #
+                else f"({val} == {hint})"  #
+                if hint == 1  #
+                else None)
         conds = " && ".join([  #
             cond_fn(val, hint)  #
             for val, hint in zip(meta.arg_names, meta.sizes)  #
@@ -181,9 +214,15 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
         src += (f"  if ({conds})\n" if any(meta.sizes) else "if (1)\n"
                 )  # Edge case where no specializations hence no dispatching required
         arg_names = [arg for arg, hint in zip(meta.arg_names, meta.sizes) if hint != 1]
-        src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
+        if device == "cuda":
+            src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
+        if device == "xpu":
+            src += f"    return {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(stream, {', '.join(arg_names)});\n"
     src += "\n"
-    src += "  return CUDA_ERROR_INVALID_VALUE;\n"
+    if device == "cuda":
+        src += "  return CUDA_ERROR_INVALID_VALUE;\n"
+    if device == "xpu":
+        src += "  return -6;\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:
@@ -199,18 +238,27 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
 
 
 # generate dispatcher function for kernels with different meta-parameter and constant values
-def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
-    src = f"CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+def make_kernel_meta_const_dispatcher(device: str, meta: KernelLinkerMeta) -> str:
+    if device == "cuda":
+        src = f"CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+    if device == "xpu":
+        src = f"int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
-    src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
+    if device == "cuda":
+        src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
+    if device == "xpu":
+        src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
     src += "}\n"
     return src
 
 
 # generate definition of function pointers of kernel dispatchers based on meta-parameter and constant values
-def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
+def make_func_pointers(device: str, names: str, meta: KernelLinkerMeta) -> str:
     # the table of hint dispatchers
-    src = f"typedef CUresult (*kernel_func_t)(CUstream stream, {gen_signature_with_full_args(meta)});\n"
+    if device == "cuda":
+        src = f"typedef CUresult (*kernel_func_t)(CUstream stream, {gen_signature_with_full_args(meta)});\n"
+    if device == "xpu":
+        src = f"typedef int32_t (*kernel_func_t)(sycl::queue &stream, {gen_signature_with_full_args(meta)});\n"
     src += f"kernel_func_t {meta.orig_kernel_name}_kernels[] = {{\n"
     for name in names:
         src += f"  {name},\n"
@@ -268,6 +316,7 @@ if __name__ == "__main__":
         default="",
         help="String to prefix kernel dispatcher names",
     )
+    parser.add_argument("--device", "-d", type=str, default="cuda", help="Backend device name")
     args = parser.parse_args()
 
     # metadata
@@ -280,13 +329,19 @@ if __name__ == "__main__":
         parser.extract_linker_meta(h_str)
 
     # generate headers
-    algo_decls = [make_algo_decls(name, meta) for name, meta in parser.kernels.items()]
+    algo_decls = [make_algo_decls(args.device, name, meta) for name, meta in parser.kernels.items()]
     meta_lists = [meta for name, meta in parser.kernels.items()]
     meta = meta_lists[0][0]
     get_num_algos_decl = make_get_num_algos_decl(meta)
-    global_decl = make_global_decl(meta)
+    global_decl = make_global_decl(args.device, meta)
     with args.out.with_suffix(".h").open("w") as fp:
-        out = "#include <cuda.h>\n"
+        if args.device == "cuda":
+            out = "#include <cuda.h>\n"
+        if args.device == "xpu":
+            out = "#include <level_zero/ze_api.h>\n"
+            out += "#include <sycl/sycl.hpp>\n"
+            out += "#include <stdint.h>\n"
+            out += "#include <stdio.h>\n"
         out += "\n".join(algo_decls)
         out += "\n"
         out += get_num_algos_decl
@@ -295,28 +350,50 @@ if __name__ == "__main__":
         fp.write(out)
 
     # generate source
-    defs = [make_kernel_hints_dispatcher(name, meta) for name, meta in parser.kernels.items()]
+    defs = [make_kernel_hints_dispatcher(args.device, name, meta) for name, meta in parser.kernels.items()]
     names = [name for name in parser.kernels.keys()]
-    func_pointers_def = make_func_pointers(names, meta)
-    meta_const_def = make_kernel_meta_const_dispatcher(meta)
+    func_pointers_def = make_func_pointers(args.device, names, meta)
+    meta_const_def = make_kernel_meta_const_dispatcher(args.device, meta)
     load_unload_def = make_kernel_load_def(names, meta)
     get_num_algos_def = make_get_num_algos_def(meta)
-    default_algo_kernel = make_default_algo_kernel(meta)
-    with args.out.with_suffix(".c").open("w") as fp:
-        out = ""
-        out += "#include <cuda.h>\n"
-        out += "#include <stdint.h>\n"
-        out += "#include <assert.h>\n"
-        out += "\n"
-        out += "\n".join(defs)
-        out += "\n"
-        out += func_pointers_def
-        out += "\n"
-        out += get_num_algos_def
-        out += "\n"
-        out += meta_const_def
-        out += "\n"
-        out += load_unload_def
-        out += "\n"
-        out += default_algo_kernel
-        fp.write(out)
+    default_algo_kernel = make_default_algo_kernel(args.device, meta)
+    if args.device == "cuda":
+        with args.out.with_suffix(".c").open("w") as fp:
+            out = ""
+            out += "#include <cuda.h>\n"
+            out += "#include <stdint.h>\n"
+            out += "#include <assert.h>\n"
+            out += "\n"
+            out += "\n".join(defs)
+            out += "\n"
+            out += func_pointers_def
+            out += "\n"
+            out += get_num_algos_def
+            out += "\n"
+            out += meta_const_def
+            out += "\n"
+            out += load_unload_def
+            out += "\n"
+            out += default_algo_kernel
+            fp.write(out)
+    if args.device == "xpu":
+        with args.out.with_suffix(".cpp").open("w") as fp:
+            out = ""
+            out += "#include <level_zero/ze_api.h>\n"
+            out += "#include <sycl/sycl.hpp>\n"
+            out += "#include <stdint.h>\n"
+            out += "#include <assert.h>\n"
+            out += "#include <cstdint>\n"
+            out += "\n"
+            out += "\n".join(defs)
+            out += "\n"
+            out += func_pointers_def
+            out += "\n"
+            out += get_num_algos_def
+            out += "\n"
+            out += meta_const_def
+            out += "\n"
+            out += load_unload_def
+            out += "\n"
+            out += default_algo_kernel
+            fp.write(out)
