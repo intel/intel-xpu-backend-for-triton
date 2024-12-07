@@ -25,6 +25,8 @@ from triton.language.extra import libdevice
 
 from pathlib import Path
 
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
 
 @triton.jit
 def asin_kernel(
@@ -49,8 +51,8 @@ def asin_kernel(
 
 torch.manual_seed(0)
 size = 98432
-x = torch.rand(size, device='xpu')
-output_triton = torch.zeros(size, device='xpu')
+x = torch.rand(size, device=DEVICE)
+output_triton = torch.zeros(size, device=DEVICE)
 output_torch = torch.asin(x)
 n_elements = output_torch.numel()
 grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )

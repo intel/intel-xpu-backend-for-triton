@@ -499,6 +499,9 @@ class XPUDriver(DriverBase):
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
 
+    def get_active_torch_device(self):
+        return torch.device("xpu", self.get_current_device())
+
     @staticmethod
     def is_active():
         return torch.xpu.is_available()
