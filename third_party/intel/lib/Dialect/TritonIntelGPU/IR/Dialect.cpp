@@ -134,7 +134,7 @@ SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
 SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
-  unsigned threadsPerWarp = getSubGroupSize();
+  unsigned threadsPerWarp = getThreadsPerWarp_();
   auto shapeC = getDPASInstShapeC();
   unsigned elemsNum = product<unsigned>(shapeC);
   unsigned elemsPerThread = elemsNum / threadsPerWarp;
@@ -255,7 +255,7 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
     ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, int opIdx) const {
   auto shapePerCTA = getShapePerCTA(*this, shape);
   auto rep = getDPASRepetitions(shapePerCTA, opIdx);
-  auto threadsPerWar = getSubGroupSize();
+  auto threadsPerWar = getThreadsPerWarp_();
   size_t rank = shape.size();
   if (opIdx == 0) {
     auto shapeA = getShapeA();
@@ -291,7 +291,7 @@ SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
   auto executionSize = getExecutionSize();
-  auto subGroupSize = getSubGroupSize();
+  auto subGroupSize = getThreadsPerWarp_();
   if (subGroupSize < executionSize) {
     llvm::report_fatal_error("DpasEncodingAttr sub-group size could not be "
                              "smaller than the execution size");
@@ -308,7 +308,7 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
   assert((rank == 2 || rank == 3) && "unexpected rank number for Dpas layout");
   if (opIdx == 0) {
     SmallVector<unsigned> shapeA = getDPASInstShapeA();
-    unsigned subGroupSize = getSubGroupSize();
+    unsigned subGroupSize = getThreadsPerWarp_();
     unsigned opsPerChannel = getOpsPerChannel();
 
     // pack the value to i16 for scalar bit width <=16.
@@ -327,7 +327,7 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
 
   if (opIdx == 1) {
     auto shapeB = getShapeB();
-    auto subGroupSize = getSubGroupSize();
+    auto subGroupSize = getThreadsPerWarp_();
     auto executionSize = getExecutionSize();
     if (subGroupSize < executionSize) {
       llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
@@ -362,7 +362,7 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
   assert(rank == 2 || rank == 3);
   SmallVector<unsigned> contigPerThread(rank, 1);
 
-  unsigned threadsPerWarp = getSubGroupSize();
+  unsigned threadsPerWarp = getThreadsPerWarp_();
   auto instShapeC = getDPASInstShapeC();
   // The software vectorization vectorized the value as C array: int a[N] -> int
   // a[N][threadsPerWarp]
@@ -497,7 +497,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", "
-          << "threadsPerWarp = " << getSubGroupSize() << ", "
+          << "threadsPerWarp = " << getThreadsPerWarp_() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
           << "repCluster = [" << repCluster << "], " << "A = [" << rA << "], "
           << "B = [" << rB << "], " << "C = [" << rC << "]" << "}>";
