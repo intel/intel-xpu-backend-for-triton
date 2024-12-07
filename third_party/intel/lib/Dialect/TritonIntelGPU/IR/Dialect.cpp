@@ -342,21 +342,6 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
   llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
 }
 
-SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
-    ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
-  SmallVector<unsigned> sizePerThread = getSizePerThreadForOperand(0, opIdx);
-  SmallVector<int64_t> repetitions = getDPASRepetitions(shape, opIdx);
-
-  size_t rank = shape.size();
-  SmallVector<unsigned> elemsPerThread(rank);
-  if (rank == 3)
-    elemsPerThread[0] = repetitions[0];
-  elemsPerThread[rank - 2] = sizePerThread[0] * repetitions[1];
-  elemsPerThread[rank - 1] = sizePerThread[1] * repetitions[2];
-
-  return elemsPerThread;
-};
-
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
   size_t rank = getWarpsPerCTA().size();
   assert(rank == 2 || rank == 3);
