@@ -25,7 +25,7 @@ COMMIT_IDS=$(git -C $TRITON_PROJ/external/SPIRV-LLVM-Translator log --format="%H
 cd $TRITON_PROJ
 FOUND=false
 for cid in $COMMIT_IDS; do
-    echo "$cid" > ./lib/Target/SPIRV/spirv-llvm-translator.conf
+    echo "$cid" > third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf
 
     BUILD_STATUS=PASS
     echo "::group::Building Triton for $cid"
@@ -52,5 +52,5 @@ for cid in $COMMIT_IDS; do
 done
 
 if [ "$FOUND" = false ]; then
-    git restore ./lib/Target/SPIRV/spirv-llvm-translator.conf
+    git restore third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf
 fi

@@ -307,7 +307,9 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
-  if (isa<DotOp, AtomicCASOp>(op))
+  // TODO: we should estimate the cost of the not propagating layout for
+  // AtomicCAS and UpcastMXFP ops for further performance consideration.
+  if (isa<DotOp, AtomicCASOp, UpcastMXFPOp>(op))
     return true;
   if (isa<AtomicRMWOp>(op))
     if (auto tensorType =

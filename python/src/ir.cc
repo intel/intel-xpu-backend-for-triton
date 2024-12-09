@@ -807,11 +807,6 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI8Type();
            })
-      .def("get_fp8e4m3b11fnuz_ty",
-           [](TritonOpBuilder &self) -> Type {
-             // TODO: align with upstream code to use i8
-             return self.getBuilder().getType<Float8E4M3B11FNUZType>();
-           })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getType<Float8E5M2Type>();
@@ -1680,11 +1675,11 @@ void init_triton_ir(py::module &&m) {
              if (haveDiagnostics) {
                context->printOpOnDiagnostic(true);
                context->printStackTraceOnDiagnostic(true);
+               context->getDiagEngine().registerHandler([](Diagnostic &diag) {
+                 llvm::outs() << diag << "\n";
+                 return success();
+               });
              }
-             context->getDiagEngine().registerHandler([](Diagnostic &diag) {
-               llvm::outs() << diag << "\n";
-               return success();
-             });
              if (haveDump) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
