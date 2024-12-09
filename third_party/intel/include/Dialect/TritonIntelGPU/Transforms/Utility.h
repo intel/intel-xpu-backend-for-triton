@@ -27,7 +27,7 @@ RankedTensorType getRankedTensorType(Type type);
 bool isDivisible(Value value, unsigned divisor);
 
 // Infers the encoding of the source of op given the result encoding.
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
+Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
