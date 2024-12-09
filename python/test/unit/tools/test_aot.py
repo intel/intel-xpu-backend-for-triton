@@ -102,7 +102,6 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 
 def gen_kernel_library(dir, libname):
     if is_cuda():
-        print("is_cuda is ture")
         c_files = glob.glob(os.path.join(dir, "*.c"))
         subprocess.run(
             ["gcc"] + c_files + ["-I", include_dir[0], "-c", "-fPIC"],
