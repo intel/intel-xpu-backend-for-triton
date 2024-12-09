@@ -101,7 +101,7 @@ def path_to_spvbin():
 
 def extract_spvbin(file_path):
     dis, _ = path_to_spvbin()
-    spv_str = subprocess.check_output([dis] + [file_path]).decode("utf-8")
+    spv_str = subprocess.check_output([dis, file_path], text=True)
     return spv_str
 
 

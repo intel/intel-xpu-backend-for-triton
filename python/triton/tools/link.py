@@ -37,8 +37,8 @@ class HeaderParser:
         self.linker_directives = re.compile("//[\\s]*tt-linker:[\\s]*([\\w]+):(.+):(.+)")
         # [name, hash, suffix]
         self.kernel_name = re.compile("^([\\w]+)_([\\w]+)_([\\w]+)$")
-        # [(type, name)]
-        self.c_sig = re.compile(r"\s*(\w+\*?)\s+(\w+)[,]?\s*")
+        # [(type, name)], or [(type*, name)]
+        self.c_sig = re.compile("[\\s]*(\\w+\\*?)\\s(\\w+)[,]?")
         # [d|c]
         self.arg_suffix = re.compile("[c,d]")
 
@@ -170,10 +170,10 @@ void unload_{meta.orig_kernel_name}();
 def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
     if is_cuda():
         src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
-        src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
+        src += f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n"
     if is_xpu():
         src = f"int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)}){{\n"
-        src += (f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n")
+        src += f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n"
     src += "}\n"
     return src
 
@@ -188,9 +188,9 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
             src += f"int32_t {meta.orig_kernel_name}_{meta.sig_hash}_{meta.suffix}(sycl::queue &stream, {gen_signature(meta)});\n"
     src += "\n"
     if is_cuda():
-        src += (f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{")
+        src += f"CUresult {name}(CUstream stream, {gen_signature_with_full_args(metas[-1])}){{"
     if is_xpu():
-        src += (f"int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])}){{")
+        src += f"int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])}){{"
     src += "\n"
     for meta in sorted(metas, key=lambda m: -m.num_specs):
         if is_cuda():

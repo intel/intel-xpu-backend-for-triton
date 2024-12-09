@@ -100,8 +100,28 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 }"""
 
 
+def gen_kernel_library_xpu(dir, libname):
+    cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
+    subprocess.run(
+        ["icpx"] + cpp_files + ["-I", compilation_helper.include_dir[0], "-c", "-fsycl", "-fPIC"],
+        check=True,
+        cwd=dir,
+    )
+    o_files = glob.glob(os.path.join(dir, "*.o"))
+
+    command = ["icpx", "-fsycl", "-lze_loader", *o_files, "-shared", "-o", libname]
+    for lib_dir in compilation_helper.library_dir:
+        command.extend(["-L", lib_dir])
+    if compilation_helper.libsycl_dir:
+        for lib_dir in compilation_helper.libsycl_dir:
+            command.extend(["-L", lib_dir])
+    subprocess.run(command, check=True, cwd=dir)
+
+
 def gen_kernel_library(dir, libname):
-    if is_cuda():
+    if is_xpu():
+        gen_kernel_library_xpu(dir, libname)
+    else:
         c_files = glob.glob(os.path.join(dir, "*.c"))
         subprocess.run(
             ["gcc"] + c_files + ["-I", include_dir[0], "-c", "-fPIC"],
@@ -113,24 +133,6 @@ def gen_kernel_library(dir, libname):
         command = ["gcc", *o_files, "-shared", "-o", libname]
         for lib_dir in library_dirs():
             command.extend(["-L", lib_dir])
-        subprocess.run(command, check=True, cwd=dir)
-
-    if is_xpu():
-        cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
-        command = ["icpx"] + cpp_files + ["-I", compilation_helper.include_dir[0], "-c", "-fsycl", "-fPIC"]
-        subprocess.run(
-            command,
-            check=True,
-            cwd=dir,
-        )
-        o_files = glob.glob(os.path.join(dir, "*.o"))
-
-        command = ["icpx", "-fsycl", "-lze_loader", *o_files, "-shared", "-o", libname]
-        for lib_dir in compilation_helper.library_dir:
-            command.extend(["-L", lib_dir])
-        if compilation_helper.libsycl_dir:
-            for lib_dir in compilation_helper.libsycl_dir:
-                command.extend(["-L", lib_dir])
         subprocess.run(command, check=True, cwd=dir)
 
 
@@ -426,7 +428,7 @@ def test_compile_link_matmul_no_specialization():
 
         # run test case
         env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
 
         subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
         # read data and compare against reference
@@ -457,7 +459,7 @@ def test_compile_link_matmul():
 
         # run test case
         env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
         subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
         # read data and compare against reference
@@ -488,7 +490,7 @@ def test_launcher_has_no_available_kernel():
 
         # run test case
         env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
         result = subprocess.run(
             ["./test", a_path, b_path, c_path],
             env=env,
@@ -537,7 +539,7 @@ def test_compile_link_autotune_matmul():
             gen_test_bin(tmp_dir, M, N, K, exe=test_name, algo_id=algo_id)
 
             env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH")
+            env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
             subprocess.run(
                 [f"./{test_name}", a_path, b_path, c_path],
                 check=True,
