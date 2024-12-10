@@ -204,7 +204,8 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
             cond_fn = (  #
                 lambda val, hint: f"(reinterpret_cast<uintptr_t>({val}) % {hint} == 0)"  #
                 if val in ('A', 'B', 'C')  #
-                else f"({val} % {hint} == 0)" if hint == 16  #
+                else f"({val} % {hint} == 0)"  #
+                if hint == 16  #
                 else f"({val} == {hint})"  #
                 if hint == 1  #
                 else None)
@@ -224,7 +225,7 @@ def make_kernel_hints_dispatcher(name: str, metas: Sequence[KernelLinkerMeta]) -
     if is_cuda():
         src += "  return CUDA_ERROR_INVALID_VALUE;\n"
     if is_xpu():
-        src += "  return -6;\n"
+        src += "  return ZE_RESULT_ERROR_INVALID_ARGUMENT;\n"
     src += "}\n"
 
     for mode in ["load", "unload"]:

@@ -429,7 +429,6 @@ def test_compile_link_matmul_no_specialization():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-
         subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
