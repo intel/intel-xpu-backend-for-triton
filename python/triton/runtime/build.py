@@ -6,7 +6,6 @@ import os
 import shutil
 import subprocess
 import setuptools
-import platform
 
 
 def is_xpu():
@@ -25,7 +24,7 @@ def quiet():
 
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
-    if cc in ["cl", "clang-cl"]:
+    if os.name == "nt":
         cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
@@ -36,9 +35,7 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
         cc_cmd += [f"/LIBPATH:{dir}" for dir in library_dirs]
         cc_cmd += [f'{lib}.lib' for lib in libraries]
     else:
-        cc_cmd = [cc, src, "-O3", "-shared", "-Wno-psabi"]
-        if os.name != "nt":
-            cc_cmd += ["-fPIC"]
+        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi"]
         cc_cmd += [f'-l{lib}' for lib in libraries]
         cc_cmd += [f"-L{dir}" for dir in library_dirs]
         cc_cmd += [f"-I{dir}" for dir in include_dirs]
@@ -57,8 +54,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
-        if platform.system() == "Windows":
-            cc = "cl"
+        if os.name == "nt":
+            cc = shutil.which("cl")
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10
@@ -115,7 +112,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         language='c',
         sources=[src],
         include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3' if "-O3" in cc_cmd else "/O2"],
+        extra_compile_args=extra_compile_args + ['-O3' if os.name != "nt" else "/O2"],
         extra_link_args=extra_link_args,
         library_dirs=library_dirs,
         libraries=libraries,

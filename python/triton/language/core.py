@@ -1004,13 +1004,7 @@ class tensor(_value):
         """
         Alias for :py:func:`tensor.cast`.
         """
-        # Triton doesn't like core functions calling other core functions, so we
-        # just copy-paste the implementation of cast here.  It's not too bad.
-        dtype = _unwrap_if_constexpr(dtype)
-        bitcast = _unwrap_if_constexpr(bitcast)
-        if bitcast:
-            return semantic.bitcast(self, dtype, _builder)
-        return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
+        return cast(self, dtype, fp_downcast_rounding, bitcast, _builder=_builder)
 
     # Type stubs for functions added by the _tensor_member_fn decorator.
     # (Unfortunately these can't be created automatically.)
@@ -1594,8 +1588,9 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
     :type bitcast: bool, optional
     """
     input = semantic.to_tensor(input, _builder)
-    if isinstance(bitcast, constexpr):
-        bitcast = bitcast.value
+    dtype = _constexpr_to_value(dtype)
+    fp_downcast_rounding = _constexpr_to_value(fp_downcast_rounding)
+    bitcast = _constexpr_to_value(bitcast)
     if bitcast:
         return semantic.bitcast(input, dtype, _builder)
     return semantic.cast(input, dtype, _builder, fp_downcast_rounding)
@@ -1647,8 +1642,10 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks in microscaling format.
+
     lhs and rhs use microscaling formats described here:
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+
     :param lhs: The first tensor to be multiplied.
     :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param lhs_scale: Scale factor for lhs tensor.
