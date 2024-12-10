@@ -171,9 +171,9 @@ def group_gemm_fn(group_A, group_B):
         g_lds += [A.stride(0), B.stride(0), C.stride(0)]
 
     # note these are device tensors
-    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE)
-    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE)
-    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE)
+    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE, dtype=torch.uint64)
+    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE, dtype=torch.uint64)
+    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE, dtype=torch.uint64)
     d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
     d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
     # we use a fixed number of CTA, and it's auto-tunable
@@ -277,9 +277,9 @@ def benchmark(N, provider):
         g_sizes += [N, N, N]
         g_lds += [N, N, N]
 
-    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE)
-    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE)
-    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE)
+    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE, dtype=torch.uint64)
+    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE, dtype=torch.uint64)
+    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE, dtype=torch.uint64)
     d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
     d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
 
