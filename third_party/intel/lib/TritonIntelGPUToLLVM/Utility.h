@@ -770,17 +770,17 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 
 inline SmallVector<Value>
 loadSharedToDistributed(RankedTensorType dstTy, triton::gpu::MemDescType srcTy,
-                        Type elemLlvmTy, SharedMemoryObject &memObj,
+                        Type elemLlvmTy, const SharedMemoryObject &smemObj,
                         Location loc, RewriterBase &rewriter,
                         const TargetInfoBase &target) {
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, memObj.getBase(),
-      memObj.getStrides(), loc, rewriter, target,
-      [&](VectorType vecTy, Value vecAddr) {
+      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
+      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
+
         for (int v = 0; v < vecTy.getNumElements(); v++) {
           ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
         }
@@ -791,15 +791,15 @@ loadSharedToDistributed(RankedTensorType dstTy, triton::gpu::MemDescType srcTy,
   return ret;
 }
 
-inline void storeDistributedToShared(triton::gpu::MemDescType dstTy,
-                                     RankedTensorType srcTy, Type elemLlvmTy,
-                                     ArrayRef<Value> srcVals, Value smemBase,
-                                     ArrayRef<Value> dstStrides, Location loc,
-                                     RewriterBase &rewriter,
-                                     const TargetInfoBase &target) {
+inline void
+storeDistributedToShared(triton::gpu::MemDescType dstTy, RankedTensorType srcTy,
+                         Type elemLlvmTy, ArrayRef<Value> srcVals,
+                         const SharedMemoryObject &smemObj, Location loc,
+                         RewriterBase &rewriter, const TargetInfoBase &target,
+                         std::pair<size_t, Type> *const llvmOpCount) {
   bool success = emitTransferBetweenRegistersAndShared(
-      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemBase,
-      dstStrides, loc, rewriter, target, [&](VectorType vecTy, Value vecAddr) {
+      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
+      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
         srcVals = srcVals.drop_front(vecTy.getNumElements());
 
@@ -810,7 +810,12 @@ inline void storeDistributedToShared(triton::gpu::MemDescType dstTy,
         store(vec, vecAddr)
             .setAlignment(vecTy.getNumElements() *
                           elemLlvmTy.getIntOrFloatBitWidth() / 8);
+        if (llvmOpCount) {
+          ++(llvmOpCount->first);
+          llvmOpCount->second = vecTy;
+        }
       });
+
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from register to shared");
 }
