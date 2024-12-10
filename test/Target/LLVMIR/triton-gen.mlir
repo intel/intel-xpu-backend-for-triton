@@ -32,3 +32,18 @@ llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr) {
 // CHECK-DAG: ![[#CACHECONTROL3]] = !{i32 6443, i32 1, i32 3, i32 1}
 // CHECK-DAG: ![[#CACHECONTROL4]] = !{i32 6443, i32 0, i32 0, i32 0}
 // CHECK-DAG: ![[#CACHECONTROL5]] = !{i32 6442, i32 0, i32 1, i32 1}
+
+// -----
+
+llvm.func @kernel0() attributes {triton_gen.opencl_kernels} {
+  llvm.return
+}
+
+llvm.func @kernel1() attributes {triton_gen.opencl_kernels} {
+  llvm.return
+}
+
+// CHECK: !opencl.kernels = !{![[#MDID0:]], ![[#MDID1:]]}
+
+// CHECK: ![[#MDID0]] = !{ptr @kernel0}
+// CHECK: ![[#MDID1]] = !{ptr @kernel1}
