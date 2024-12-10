@@ -25,6 +25,8 @@ const std::string getDeviceTypeString(DeviceType type) {
     return DeviceTraits<DeviceType::CUDA>::name;
   } else if (type == DeviceType::HIP) {
     return DeviceTraits<DeviceType::HIP>::name;
+  } else if (type == DeviceType::XPU) {
+    return DeviceTraits<DeviceType::XPU>::name;
   }
   throw std::runtime_error("DeviceType not supported");
 }

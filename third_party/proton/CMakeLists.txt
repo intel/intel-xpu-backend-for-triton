@@ -46,5 +46,7 @@ set_target_properties(proton PROPERTIES COMPILE_FLAGS -Wno-deprecated-declaratio
 target_link_libraries(proton PRIVATE Python3::Module pybind11::headers)
 target_link_libraries(proton PRIVATE /opt/intel/oneapi/compiler/latest/lib/libsycl.so)
 target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_intel_gpu.so.1)
+target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_tracing_layer.so.1)
+target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_loader.so.1)
 target_link_libraries(proton PRIVATE /opt/intel/oneapi/pti/latest/lib/libpti_view.so)
 target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})

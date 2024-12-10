@@ -6,6 +6,8 @@
 #include "Driver/GPU/XpuptiApi.h"
 #include "Utility/Map.h"
 
+#include <level_zero/layers/zel_tracing_api.h>
+#include <level_zero/zet_api.h>
 #include <pti/pti_view.h>
 #include <sycl/sycl.hpp>
 
@@ -76,12 +78,14 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
     auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
+    std::cout << "_start_timestamp " << kernel->_start_timestamp << "\n";
+    std::cout << "_end_timestamp " << kernel->_end_timestamp << "\n";
     if (kernel->_start_timestamp < kernel->_end_timestamp) {
       metric = std::make_shared<KernelMetric>(
           static_cast<uint64_t>(kernel->_start_timestamp),
           static_cast<uint64_t>(kernel->_end_timestamp), 1,
           static_cast<uint64_t>(getDeviceIdxFromUUID(kernel->_device_uuid)),
-          static_cast<uint64_t>(DeviceType::CUDA));
+          static_cast<uint64_t>(DeviceType::XPU));
     } // else: not a valid kernel activity
     break;
   }
@@ -97,11 +101,28 @@ processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
                       std::set<Data *> &dataSet,
                       xpupti::Pti_Activity *activity) {
   auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
+  // std::cout << "activity->_name: " << kernel->_name << "\n" << std::flush;
+  // std::cout << "activity->_sycl_queue_id: " << kernel->_sycl_queue_id << "\n"
+  // << std::flush;
   auto correlationId = kernel->_correlation_id;
-  if (/*Not a valid context*/ !corrIdToExternId.contain(correlationId))
+  std::cout << "kernel->_correlation_id " << kernel->_correlation_id << "\n"
+            << std::flush;
+  // here doesn't work
+  // uint64_t corr_id = 0;
+  // auto res =
+  // ptiViewPopExternalCorrelationId(pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1,
+  // &corr_id); std::cout << "ptiViewPopExternalCorrelationId res: " << res <<
+  // "\n" << std::flush; std::cout << "corr_id: " << corr_id << "\n" <<
+  // std::flush;
+  if (/*Not a valid context*/ !corrIdToExternId.contain(correlationId)) {
+    // if (false) {
+    std::cout << "MARK#3\n" << std::flush;
     return correlationId;
+  }
   auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
-  // Best guess for now: _sycl_queue_id ~ graphId CUDA
+  // unsigned long parentId = 123;
+  // unsigned long numInstances = 2;
+  //  Best guess for now: _sycl_queue_id ~ graphId CUDA
   if (kernel->_sycl_queue_id == 0) {
     // Non-qu kernels
     for (auto *data : dataSet) {
@@ -121,8 +142,10 @@ processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     // 2. graphExecId -> graphId
     // --- CUPTI thread ---
     // 3. corrId -> numKernels
+    std::cout << "MARK#1\n" << std::flush;
     for (auto *data : dataSet) {
       auto externId = data->addScope(parentId, kernel->_name);
+      std::cout << "MARK#2\n" << std::flush;
       data->addMetric(externId, convertActivityToMetric(activity));
     }
   }
@@ -165,6 +188,34 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
   void doFlush() override;
   void doStop() override;
 
+  static void OnEnterCommandListAppendLaunchKernel(
+      ze_command_list_append_launch_kernel_params_t *params, ze_result_t result,
+      void *global_user_data, void **instance_user_data) {
+    std::cout << "Function zeCommandListAppendLaunchKernel is called on enter"
+              << std::endl;
+    auto scopeId = threadState.record();
+    threadState.enterOp(scopeId);
+    // FIXME: 27 - debug value
+    threadState.profiler.correlation.correlate(27, 1);
+    threadState.exitOp();
+    // FIXME: 27 - debug value
+    threadState.profiler.correlation.submit(27);
+  }
+
+  static void OnExitCommandListAppendLaunchKernel(
+      ze_command_list_append_launch_kernel_params_t *params, ze_result_t result,
+      void *global_user_data, void **instance_user_data) {
+    std::cout << "Function zeCommandListAppendLaunchKernel is called on exit"
+              << std::endl;
+    // here works
+    // uint64_t corr_id = 0;
+    // auto res =
+    // ptiViewPopExternalCorrelationId(pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1,
+    // &corr_id); std::cout << "ptiViewPopExternalCorrelationId res: " << res <<
+    // "\n" << std::flush; std::cout << "ptiViewPopExternalCorrelationId
+    // corr_id: " << corr_id << "\n";
+  }
+
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize);
   static void completeBuffer(uint8_t *buffer, size_t size, size_t validSize);
   /*
@@ -202,21 +253,34 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
                                                          size_t validSize) {
   XpuptiProfiler &profiler = threadState.profiler;
   auto &dataSet = profiler.dataSet;
+  auto &correlation = profiler.correlation;
   uint32_t maxCorrelationId = 0;
   pti_result status;
   xpupti::Pti_Activity *activity = nullptr;
   do {
     status = ptiViewGetNextRecord(buffer, validSize, &activity);
     if (status == pti_result::PTI_SUCCESS) {
+      std::cout << "activity->_view_kind: " << activity->_view_kind << "\n"
+                << std::flush;
       auto correlationId =
           processActivity(profiler.correlation.corrIdToExternId,
                           profiler.correlation.apiExternIds, dataSet, activity);
-      maxCorrelationId = std::max(maxCorrelationId, correlationId);
+      // Log latest completed correlation id.  Used to ensure we have flushed
+      // all data on stop
+      maxCorrelationId = std::max<uint64_t>(maxCorrelationId, correlationId);
+      auto externId = correlation.corrIdToExternId.contain(correlationId)
+                          ? correlation.corrIdToExternId.at(correlationId).first
+                          : Scope::DummyScopeId;
+      std::cout << "\texternId: " << externId << "\n";
+      // Track correlation ids from the same stream and erase those <
+      // correlationId
+      correlation.corrIdToExternId.erase(correlationId);
+      correlation.apiExternIds.erase(externId);
     } else if (status == pti_result::PTI_STATUS_END_OF_BUFFER) {
       std::cout << "Reached End of buffer" << '\n';
       break;
     } else {
-      throw std::runtime_error("cupti::activityGetNextRecord failed");
+      throw std::runtime_error("xpupti::activityGetNextRecord failed");
     }
   } while (true);
 
@@ -225,10 +289,48 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
   profiler.correlation.complete(maxCorrelationId);
 }
 
+zel_tracer_handle_t tracer = nullptr;
+
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // xpupti::subscribe<true>(&subscriber, callbackFn, nullptr);
+  enumDeviceUUIDs();
+  auto res = ptiViewPushExternalCorrelationId(
+      pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1, 12345);
+  std::cout << "res: " << res << "\n" << std::flush;
+
+  ze_result_t status = ZE_RESULT_SUCCESS;
+  // status = zeInit(ZE_INIT_FLAG_GPU_ONLY);
+  // assert(status == ZE_RESULT_SUCCESS);
+
+  zel_tracer_desc_t tracer_desc = {ZEL_STRUCTURE_TYPE_TRACER_DESC, nullptr,
+                                   nullptr /* global user data */};
+
+  status = zelTracerCreate(&tracer_desc, &tracer);
+  assert(status == ZE_RESULT_SUCCESS);
+
+  zet_core_callbacks_t prologue_callbacks = {};
+  zet_core_callbacks_t epilogue_callbacks = {};
+  prologue_callbacks.CommandList.pfnAppendLaunchKernelCb =
+      OnEnterCommandListAppendLaunchKernel;
+  epilogue_callbacks.CommandList.pfnAppendLaunchKernelCb =
+      OnExitCommandListAppendLaunchKernel;
+
+  status = zelTracerSetPrologues(tracer, &prologue_callbacks);
+  assert(status == ZE_RESULT_SUCCESS);
+  status = zelTracerSetEpilogues(tracer, &epilogue_callbacks);
+  assert(status == ZE_RESULT_SUCCESS);
+
+  status = zelTracerSetEnabled(tracer, true);
+  assert(status == ZE_RESULT_SUCCESS);
+
   ptiViewSetCallbacks(allocBuffer, completeBuffer);
   xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
+  xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
+  xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
+  xpupti::viewEnable<true>(PTI_VIEW_SYCL_RUNTIME_CALLS);
+  xpupti::viewEnable<true>(PTI_VIEW_COLLECTION_OVERHEAD);
+  xpupti::viewEnable<true>(PTI_VIEW_EXTERNAL_CORRELATION);
+  // xpupti::viewEnable<true>(PTI_VIEW_LEVEL_ZERO_CALLS);
   // setGraphCallbacks(subscriber, /*enable=*/true);
   // setRuntimeCallbacks(subscriber, /*enable=*/true);
   // setDriverCallbacks(subscriber, /*enable=*/true);
@@ -236,19 +338,31 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
   // FIXME: device synchronization?
-
+  std::cout << "flush\n" << std::flush;
   profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepMs=*/10,
       /*flush=*/[]() { xpupti::viewFlushAll<true>(); });
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
+  ze_result_t status = ZE_RESULT_SUCCESS;
+  status = zelTracerSetEnabled(tracer, false);
+  assert(status == ZE_RESULT_SUCCESS);
+  status = zelTracerDestroy(tracer);
+  assert(status == ZE_RESULT_SUCCESS);
+
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
-  // setGraphCallbacks(subscriber, /*enable=*/false);
-  // setRuntimeCallbacks(subscriber, /*enable=*/false);
-  // setDriverCallbacks(subscriber, /*enable=*/false);
-  // cupti::unsubscribe<true>(subscriber);
-  // cupti::finalize<true>();
+  xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
+  xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
+  xpupti::viewDisable<true>(PTI_VIEW_SYCL_RUNTIME_CALLS);
+  xpupti::viewDisable<true>(PTI_VIEW_COLLECTION_OVERHEAD);
+  xpupti::viewDisable<true>(PTI_VIEW_EXTERNAL_CORRELATION);
+  // xpupti::viewDisable<true>(PTI_VIEW_LEVEL_ZERO_CALLS);
+  //  setGraphCallbacks(subscriber, /*enable=*/false);
+  //  setRuntimeCallbacks(subscriber, /*enable=*/false);
+  //  setDriverCallbacks(subscriber, /*enable=*/false);
+  //  cupti::unsubscribe<true>(subscriber);
+  //  cupti::finalize<true>();
 }
 
 XpuptiProfiler::XpuptiProfiler() {

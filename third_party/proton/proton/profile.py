@@ -78,7 +78,7 @@ def start(
 
     if backend is None:
         backend = _select_backend()
-
+    print(f"{backend=}")
     _check_env(backend)
 
     set_profiling_on()
