@@ -768,58 +768,6 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
   return ret;
 }
 
-inline SmallVector<Value>
-loadSharedToDistributed(RankedTensorType dstTy, triton::gpu::MemDescType srcTy,
-                        Type elemLlvmTy, const SharedMemoryObject &smemObj,
-                        Location loc, RewriterBase &rewriter,
-                        const TargetInfoBase &target) {
-  SmallVector<Value> ret;
-  bool success = emitTransferBetweenRegistersAndShared(
-      dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        auto vecVal = load(vecTy, vecAddr);
-        vecVal.setAlignment(vecTy.getNumElements() *
-                            elemLlvmTy.getIntOrFloatBitWidth() / 8);
-
-        for (int v = 0; v < vecTy.getNumElements(); v++) {
-          ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
-        }
-      });
-  if (!success)
-    llvm::report_fatal_error("Failed to emit transfer from shared to register");
-
-  return ret;
-}
-
-inline void
-storeDistributedToShared(triton::gpu::MemDescType dstTy, RankedTensorType srcTy,
-                         Type elemLlvmTy, ArrayRef<Value> srcVals,
-                         const SharedMemoryObject &smemObj, Location loc,
-                         RewriterBase &rewriter, const TargetInfoBase &target,
-                         std::pair<size_t, Type> *const llvmOpCount) {
-  bool success = emitTransferBetweenRegistersAndShared(
-      srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
-        srcVals = srcVals.drop_front(vecTy.getNumElements());
-
-        Value vec = undef(vecTy);
-        for (int i = 0; i < vals.size(); i++) {
-          vec = insert_element(vec, vals[i], i32_val(i));
-        }
-        store(vec, vecAddr)
-            .setAlignment(vecTy.getNumElements() *
-                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
-        if (llvmOpCount) {
-          ++(llvmOpCount->first);
-          llvmOpCount->second = vecTy;
-        }
-      });
-
-  if (!success)
-    llvm::report_fatal_error("Failed to emit transfer from register to shared");
-}
-
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,

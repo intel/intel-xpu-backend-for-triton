@@ -36,7 +36,7 @@ void lowerDistributedToShared(
   auto smemBase = smemObj.getBase();
   auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  mlir::triton::intel::storeDistributedToShared(dstTy, srcTy, elemTy, inVals,
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals,
                                                 smemObj, loc, rewriter,
                                                 targetInfo, llvmOpCount);
 }
@@ -216,7 +216,7 @@ private:
         typeConverter->convertType(srcTy.getElementType()), rewriter);
     auto elemLlvmTy = typeConverter->convertType(dstTy.getElementType());
 
-    SmallVector<Value> outVals = mlir::triton::intel::loadSharedToDistributed(
+    SmallVector<Value> outVals = loadSharedToDistributed(
         dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
