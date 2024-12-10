@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 23 * * *"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/pins/pytorch-upstream.txt
 
 permissions: read-all
 
