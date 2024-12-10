@@ -33,13 +33,38 @@ void lowerDistributedToShared(
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
-  auto smemBase = smemObj.getBase();
-  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals,
-                                                smemObj, loc, rewriter,
-                                                targetInfo, llvmOpCount);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
+                           targetInfo, llvmOpCount);
 }
+
+struct GlobalScratchAllocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
+  GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
+        "ttg.global_scratch_memory_offset");
+    assert(opOffsetAttr);
+    auto opOffset = opOffsetAttr.getValue().getZExtValue();
+
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!funcOp) {
+      return failure();
+    }
+    Value ptr =
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+
+    rewriter.replaceOp(op, ptr);
+    return success();
+  }
+};
 
 struct LocalAllocOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::LocalAllocOp> {
@@ -205,13 +230,11 @@ private:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
+    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
     assert(!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) &&
            "Unexpected rank of ConvertLayout(shared->blocked)");
-    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    auto inOrd = getOrder(srcSharedLayout);
 
-    auto smemObj = getSharedMemoryObjectFromStruct(
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
         typeConverter->convertType(srcTy.getElementType()), rewriter);
     auto elemLlvmTy = typeConverter->convertType(dstTy.getElementType());
@@ -277,6 +300,7 @@ void mlir::triton::intel::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks) {
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
