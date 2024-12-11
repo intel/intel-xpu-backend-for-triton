@@ -499,7 +499,9 @@ struct LoadOpConversion
     auto tensorType = cast<RankedTensorType>(resultType);
 
     // Only lower loadOp with dpas layout encoding.
-    if (!hasDotDpasEncoding(tensorType))
+    auto encoding = tensorType.getEncoding();
+    const bool hasDpasLayout = isa<DpasEncodingAttr>(encoding);
+    if (!hasDpasLayout && !hasDotDpasEncoding(tensorType))
       return failure();
 
     Attribute blockIOAttr =
@@ -514,8 +516,11 @@ struct LoadOpConversion
            "Only row_major or column_major is supported");
     const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
-    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
-    auto dotOrder = dotLayout.getThreadOrder();
+    auto dpasLayout = hasDpasLayout
+                          ? cast<DpasEncodingAttr>(encoding)
+                          : cast<DpasEncodingAttr>(
+                                getDotEncoding(tensorType).value().getParent());
+    auto dotOrder = dpasLayout.getThreadOrder();
     size_t rank = dotOrder.size();
     const bool valueRowMajor =
         (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
@@ -524,10 +529,19 @@ struct LoadOpConversion
            "Only row_major or column_major is allowed");
     const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
-    auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
+    auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
+      if (hasDpasLayout) {
+        return DpasEncodingAttr::OpIdx::OperandC;
+      } else {
+        auto dotLayout = getDotEncoding(tensorType).value();
+        return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+      }
+    };
 
-    auto opIdx = static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+    auto opIdx = getOpIdx();
     Type eltTy = tensorType.getElementType();
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
@@ -542,6 +556,123 @@ struct LoadOpConversion
 
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, dpasOrder);
+
+    if (hasDpasLayout) {
+      // A block load with the DPAS layout but without the DotDpasLayout is
+      // expected to follow the ordering of the DPAS output. For a 2D block
+      // load, the rows are distributed across work items/SIMD lanes and the
+      // column vectors are available for each work item to process. This layout
+      // aligns to the DPAS layout as the DPAS operation output layout
+      // distributes rows across work items.
+      if (isTransposeRequired) {
+        // TODO: this would likely require a shuffle to match the expected
+        // ordering coming out of the DPAS layout and requires more
+        // investigation
+        return failure();
+      }
+
+      MLIRContext *ctx = rewriter.getContext();
+
+      Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
+
+      SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
+      int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
+      Type load2DGenXType =
+          LLVM::getFixedVectorType(IntegerType::get(ctx, elemSizeInBits),
+                                   elemsPerLane); // make it opaque type.
+
+      auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
+            offsetBaseY] =
+          getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+      baseWidth = trunc(i32_ty, baseWidth);
+      baseHeight = trunc(i32_ty, baseHeight);
+
+      auto pitch = trunc(i32_ty, rowStride);
+
+      SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
+      unsigned outerDimWarpNum =
+          std::min<unsigned>(warpsPerCTA[rank - 2],
+                             mlir::ceil<unsigned>(tensorShape[rank - 2],
+                                                  repClusterShape[rank - 2]));
+      unsigned innerDimWarpNum =
+          std::min<unsigned>(warpsPerCTA[rank - 1],
+                             mlir::ceil<unsigned>(tensorShape[rank - 1],
+                                                  repClusterShape[rank - 1]));
+      Value outerDimWarpId =
+          urem(multiDimWarpId[rank - 2], i32_val(outerDimWarpNum));
+      Value innerDimWarpId =
+          urem(multiDimWarpId[rank - 1], i32_val(innerDimWarpNum));
+      int64_t numRepOuter = numReps[1];
+      int64_t numRepInner = numReps[2];
+
+      std::array<unsigned, 2> replicaStride = {
+          outerDimWarpNum * repClusterShape[rank - 2],
+          innerDimWarpNum * repClusterShape[rank - 1]};
+      std::array<unsigned, 2> warpStride = {repClusterShape[rank - 2],
+                                            repClusterShape[rank - 1]};
+
+      Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
+      Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
+      Value warpId0Offset = add(dimWarpId0, offsetBaseY);
+      Value warpId1Offset = add(dimWarpId1, offsetBaseX);
+
+      ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+      unsigned valOffset = 0;
+
+      SmallVector<Value> unpackedLoadedVals;
+
+      for (int m = 0; m < numRepOuter; ++m) {
+        for (int n = 0; n < numRepInner; ++n) {
+          for (int repM = 0; repM < repCluster[0]; ++repM) {
+
+            Value offsetY =
+                add(warpId0Offset,
+                    i32_val(m * replicaStride[0] + repM * elemsPerInstr[0]));
+            for (int repN = 0; repN < repCluster[1]; ++repN) {
+              Value offsetX =
+                  add(warpId1Offset,
+                      i32_val(n * replicaStride[1] + repN * elemsPerInstr[1]));
+
+              auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+                  loc, load2DGenXType,
+                  /*ptr*/ base,
+                  /*base_width*/ mul(baseWidth, elemSizeInBytes),
+                  /*base_height*/ baseHeight,
+                  /*base_pitch*/ mul(pitch, elemSizeInBytes),
+                  /*x*/ trunc(i32_ty, offsetX),
+                  /*y*/ trunc(i32_ty, offsetY),
+                  /*elem_size_in_bits*/ elemSizeInBits,
+                  /*tile_width*/ elemsPerInstr[1],
+                  /*tile_height*/ elemsPerInstr[0],
+                  /*v_blocks*/ 1,
+                  /*transpose*/ false,
+                  /*vnni_transform*/ false);
+              if (failed(load2dOp.verify())) {
+                // Explicitly invoke verifier because `triton_gen` ops are
+                // immediately lowered further to a builtin call.
+                return failure();
+              }
+
+              Value ret = bitcast(
+                  load2dOp, LLVM::getFixedVectorType(eltTy, elemsPerLane));
+
+              for (size_t i = 0; i < elemsPerLane; i++) {
+                Value loaded = extract_element(eltTy, ret, i32_val(i));
+                unpackedLoadedVals.push_back(loaded);
+              }
+            }
+          }
+        }
+      }
+
+      TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+      Type llvmResultStructTy = typeConverter->convertType(op.getType());
+      Value resultStruct = packLLElements(
+          loc, typeConverter, unpackedLoadedVals, rewriter, llvmResultStructTy);
+      rewriter.replaceOp(op, {resultStruct});
+
+      return success();
+    }
 
     bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
     SmallVector<unsigned> dpasInstShape = isOperandA
@@ -573,11 +704,11 @@ struct LoadOpConversion
     // input operands to DPAS.
     // TODO: add support for int4 and int2.
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
-    unsigned elemBits = eltTy.getIntOrFloatBitWidth();
-    if ((opsPerChannel == 4 && elemBits == 8) ||
-        (opsPerChannel == 2 && elemBits == 16) ||
-        (opsPerChannel == 1 && elemBits == 32)) {
-      loadResultElemType = (isOperandA && elemBits != 32) ? i16_ty : i32_ty;
+    if ((opsPerChannel == 4 && elemSizeInBits == 8) ||
+        (opsPerChannel == 2 && elemSizeInBits == 16) ||
+        (opsPerChannel == 1 && elemSizeInBits == 32)) {
+      loadResultElemType =
+          (isOperandA && elemSizeInBits != 32) ? i16_ty : i32_ty;
       packedElemsPerLanePerDPASInst =
           isOperandA ? elemsPerLanePerDPASInst / (opsPerChannel == 4 ? 2 : 1)
                      : elemsPerLanePerDPASInst / opsPerChannel;
@@ -651,7 +782,7 @@ struct LoadOpConversion
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
-    unsigned totalBytesPerRowPerDPASOp = tileWidth * elemBits / 8;
+    unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
     vBlocks = numOperandsPer2DloadN;
@@ -695,12 +826,12 @@ struct LoadOpConversion
     baseWidth = trunc(i32_ty, baseWidth);
     baseHeight = trunc(i32_ty, baseHeight);
 
-    unsigned originalElemBits = elemBits;
+    const unsigned originalElemBits = elemSizeInBits;
     if (isTransposeRequired) {
       // adjust the block io parameter to align HW's limitations on
       // transposing load.
       tileWidth = tileWidth / (32 / originalElemBits);
-      elemBits = 32;
+      elemSizeInBits = 32;
     }
     Value elemSizeInBytes = i32_val(originalElemBits / 8);
 
@@ -747,14 +878,14 @@ struct LoadOpConversion
               /*base_pitch*/ mul(pitch, elemSizeInBytes),
               /*x*/ trunc(i32_ty, offsetX),
               /*y*/ trunc(i32_ty, offsetY),
-              /*elem_size_in_bits*/ elemBits,
+              /*elem_size_in_bits*/ elemSizeInBits,
               /*tile_width*/ tileWidth,
               /*tile_height*/ tileHeight,
               /*v_blocks*/ vBlocks,
               /*transpose*/ isTransposeRequired,
               /*vnni_transform*/
               (usePackedType && !isOperandA && !isTransposeRequired &&
-               eltTy.getIntOrFloatBitWidth() != 32));
+               originalElemBits != 32));
           if (failed(load2dOp.verify())) {
             // Explicitly invoke verifier because `triton_gen` ops are
             // immediately lowered further to a builtin call.
