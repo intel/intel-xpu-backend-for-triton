@@ -4,6 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 23 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/nightly-wheels.yml
+      - .github/pins/pytorch-upstream.txt
 
 permissions: read-all
 
