@@ -1297,7 +1297,14 @@ struct AbsFOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    // FIXME: Remove bitcast to and from i16 once SPIRV-LLVM-Translator supports
+    // LLVM::FAbsOp with bf16.
     Value v = operands[0][0];
+    Type origTy = elemTy;
+    if (llvm::isa<BFloat16Type>(origTy)) {
+      v = bitcast(v, i16_ty);
+      elemTy = i16_ty;
+    }
     if (llvm::isa<IntegerType>(elemTy)) {
       // Mask out the sign bit
       auto num_bits =
@@ -1307,8 +1314,8 @@ struct AbsFOpConversion
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
       auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
       Value res = and_(v, maskConst);
-      if (llvm::isa<BFloat16Type>(elemTy))
-        res = bitcast(res, elemTy);
+      if (llvm::isa<BFloat16Type>(origTy))
+        res = bitcast(res, origTy);
       return {res};
     }
 
