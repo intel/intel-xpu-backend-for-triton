@@ -1,7 +1,5 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
-#include <numeric>
-
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
@@ -12,7 +10,9 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.cpp.inc"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -102,8 +102,8 @@ SmallVector<unsigned> DpasEncodingAttr::getDPASInstShapeC() const {
 };
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
-  auto instShapeA = getDPASInstShapeA();
-  auto repCluster = getRepCluster();
+  SmallVector<unsigned> instShapeA = getDPASInstShapeA();
+  ArrayRef<unsigned> repCluster = getRepCluster();
   size_t rank = repCluster.size();
   SmallVector<unsigned> resShape(rank, 1);
   resShape[rank - 2] = instShapeA[0] * repCluster[rank - 2];
@@ -112,8 +112,8 @@ SmallVector<unsigned> DpasEncodingAttr::getShapeA() const {
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeB() const {
-  auto instShapeB = getDPASInstShapeB();
-  auto repCluster = getRepCluster();
+  SmallVector<unsigned> instShapeB = getDPASInstShapeB();
+  ArrayRef<unsigned> repCluster = getRepCluster();
   size_t rank = repCluster.size();
   SmallVector<unsigned> resShape(rank, 1);
   resShape[rank - 2] = instShapeB[0];
@@ -122,8 +122,8 @@ SmallVector<unsigned> DpasEncodingAttr::getShapeB() const {
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
-  auto instShapeC = getDPASInstShapeC();
-  auto repCluster = getRepCluster();
+  SmallVector<unsigned> instShapeC = getDPASInstShapeC();
+  ArrayRef<unsigned> repCluster = getRepCluster();
   size_t rank = repCluster.size();
   SmallVector<unsigned> resShape(rank, 1);
   resShape[rank - 2] = instShapeC[0] * repCluster[rank - 2];
@@ -135,7 +135,7 @@ SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
   unsigned threadsPerWarp = getSubGroupSize();
-  auto shapeC = getDPASInstShapeC();
+  SmallVector<unsigned> shapeC = getDPASInstShapeC();
   unsigned elemsNum = product<unsigned>(shapeC);
   unsigned elemsPerThread = elemsNum / threadsPerWarp;
   auto repCluster = getRepCluster();
@@ -151,9 +151,10 @@ SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
   llvm::report_fatal_error("NYI. DpasEncodingAttr::getRepOrder");
 }
 
-SmallVector<unsigned> DpasEncodingAttr::getRepOrderForOperand(int opIdx) const {
-  auto rank = getWarpsPerCTA().size();
-  return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
+SmallVector<unsigned>
+DpasEncodingAttr::getRepOrderForOperand(OpIdx opIdx) const {
+  size_t rank = getWarpsPerCTA().size();
+  return getOrderForDotOperand(unsigned(opIdx), rank, /*kMajor*/ true);
 }
 
 SmallVector<unsigned>
@@ -162,8 +163,7 @@ DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   assert((rank == 2 || rank == 3) && "Unexpected rank of mma layout");
 
   SmallVector<unsigned> elemsPerThread(rank, 1);
-
-  auto shapeC = getShapeC();
+  SmallVector<unsigned> shapeC = getShapeC();
   SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
   SmallVector<unsigned> shapePerCTATile(rank);
   llvm::transform(
@@ -174,7 +174,7 @@ DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
       ceil<unsigned>(shape[rank - 2], shapePerCTATile[rank - 2]);
   unsigned tilesCol =
       ceil<unsigned>(shape[rank - 1], shapePerCTATile[rank - 1]);
-  auto sizePerThread = getSizePerThread();
+  SmallVector<unsigned> sizePerThread = getSizePerThread();
   if (rank == 3)
     elemsPerThread[0] =
         sizePerThread[0] * ceil<unsigned>(shape[0], shapePerCTATile[0]);
@@ -208,14 +208,16 @@ SmallVector<unsigned> DpasEncodingAttr::getCTAsPerCGA() const {
 }
 
 SmallVector<int64_t>
-DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
+DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
+                                     OpIdx opIdx) const {
   // Always return a 3D shape repetitions for the ease of value handling, same
   // to mma.
-  auto warpsPerCTA = getWarpsPerCTA();
-  int rank = shape.size();
+  SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
+  size_t rank = shape.size();
   SmallVector<int64_t> rep(3, 1);
-  if (opIdx == 0) {
-    auto shapePerWarp = getShapeA();
+  switch (opIdx) {
+  case OpIdx::Zero: {
+    SmallVector<unsigned> shapePerWarp = getShapeA();
     int64_t numRepBatch =
         rank == 3 ? std::max<int64_t>(1, shape[0] /
                                              (shapePerWarp[0] * warpsPerCTA[0]))
@@ -224,10 +226,9 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
             std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
                                                     warpsPerCTA[rank - 2])),
             std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
-  }
-
-  if (opIdx == 1) {
-    auto shapePerWarp = getShapeB();
+  } break;
+  case OpIdx::One: {
+    SmallVector<unsigned> shapePerWarp = getShapeB();
     int64_t numRepBatch =
         rank == 3 ? std::max<int64_t>(1, shape[0] /
                                              (shapePerWarp[0] * warpsPerCTA[0]))
@@ -236,9 +237,9 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
             std::max<int64_t>(1, shape[rank - 2] / shapePerWarp[rank - 2]),
             std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
                                                     warpsPerCTA[rank - 1]))};
+  } break;
   }
 
-  assert(opIdx == 2 && "Unexpected operand id (valid ids are 0, 1 or 2)");
   auto shapePerWarp = getShapeC();
   int64_t numRepBatch =
       rank == 3
@@ -252,24 +253,27 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const {
 }
 
 unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
-    ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, int opIdx) const {
-  auto shapePerCTA = getShapePerCTA(*this, shape);
-  auto rep = getDPASRepetitions(shapePerCTA, opIdx);
-  auto threadsPerWar = getSubGroupSize();
+    ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, OpIdx opIdx) const {
+  SmallVector<int64_t> shapePerCTA = getShapePerCTA(*this, shape);
+  SmallVector<int64_t> rep = getDPASRepetitions(shapePerCTA, opIdx);
+  unsigned threadsPerWar = getSubGroupSize();
   size_t rank = shape.size();
-  if (opIdx == 0) {
-    auto shapeA = getShapeA();
+
+  switch (opIdx) {
+  case OpIdx::Zero: {
+    SmallVector<unsigned> shapeA = getShapeA();
     auto totalElem = product<unsigned>(shapeA);
     // dpas operands scalar are evenly sharded to each work item.
     return (totalElem / threadsPerWar) * product<int64_t>(rep);
-  }
-  if (opIdx == 1) {
-    auto shapeB = getShapeB();
+  } break;
+  case OpIdx::One: {
+    SmallVector<unsigned> shapeB = getShapeB();
     auto totalElem = product<unsigned>(shapeB);
     // dpas operands scalar are evenly sharded to each work item.
     return (totalElem / threadsPerWar) * product<int64_t>(rep);
+  } break;
   }
-  llvm_unreachable("DpasEncodingAttr opIdx must be 0 or 1");
+  llvm_unreachable("unexpected opIdx");
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getWarpOrder() const {
@@ -290,8 +294,8 @@ SmallVector<unsigned> DpasEncodingAttr::getWarpsPerCTA() const {
 SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
-  auto executionSize = getExecutionSize();
-  auto subGroupSize = getSubGroupSize();
+  unsigned executionSize = getExecutionSize();
+  unsigned subGroupSize = getSubGroupSize();
   if (subGroupSize < executionSize) {
     llvm::report_fatal_error("DpasEncodingAttr sub-group size could not be "
                              "smaller than the execution size");
@@ -302,11 +306,13 @@ SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
 }
 
 SmallVector<unsigned>
-DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
+DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
   ArrayRef<unsigned> repCluster = getRepCluster();
   size_t rank = repCluster.size();
   assert((rank == 2 || rank == 3) && "unexpected rank number for Dpas layout");
-  if (opIdx == 0) {
+
+  switch (opIdx) {
+  case OpIdx::Zero: {
     SmallVector<unsigned> shapeA = getDPASInstShapeA();
     unsigned subGroupSize = getSubGroupSize();
     unsigned opsPerChannel = getOpsPerChannel();
@@ -323,12 +329,11 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
     }
     unsigned rowsPerWarp = mlir::ceil<unsigned>(subGroupSize, packedColNum);
     return {shapeA[0] / rowsPerWarp * repCluster[rank - 2], packedOpsPerLane};
-  }
-
-  if (opIdx == 1) {
-    auto shapeB = getShapeB();
-    auto subGroupSize = getSubGroupSize();
-    auto executionSize = getExecutionSize();
+  } break;
+  case OpIdx::One: {
+    SmallVector<unsigned> shapeB = getShapeB();
+    unsigned subGroupSize = getSubGroupSize();
+    unsigned executionSize = getExecutionSize();
     if (subGroupSize < executionSize) {
       llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
                                "be smaller than the execution size");
@@ -337,13 +342,14 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
                                                executionSize};
     return {shapeB[rank - 2] / threadsPerWarp[0],
             shapeB[rank - 1] / threadsPerWarp[1] * repCluster[rank - 1]};
+  } break;
   }
-
-  llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
+  llvm_unreachable("unexpected opIdx");
 }
 
-SmallVector<unsigned> DpasEncodingAttr::getElemsPerThreadForOperands(
-    ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+SmallVector<unsigned>
+DpasEncodingAttr::getElemsPerThreadForOperands(ArrayRef<int64_t> shape,
+                                               Type eltTy, OpIdx opIdx) const {
   SmallVector<unsigned> sizePerThread = getSizePerThreadForOperand(0, opIdx);
   SmallVector<int64_t> repetitions = getDPASRepetitions(shape, opIdx);
 
@@ -363,15 +369,15 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
   SmallVector<unsigned> contigPerThread(rank, 1);
 
   unsigned threadsPerWarp = getSubGroupSize();
-  auto instShapeC = getDPASInstShapeC();
-  // The software vectorization vectorized the value as C array: int a[N] -> int
-  // a[N][threadsPerWarp]
+  SmallVector<unsigned> instShapeC = getDPASInstShapeC();
+  // The software vectorization vectorized the value as C array: int a[N] ->
+  // int a[N][threadsPerWarp]
   if (threadsPerWarp > instShapeC[1]) {
     return contigPerThread;
   }
 
   if (threadsPerWarp == instShapeC[1]) {
-    auto repCluster = getRepCluster();
+    ArrayRef<unsigned> repCluster = getRepCluster();
     contigPerThread[rank - 2] = instShapeC[0] * repCluster[rank - 2];
     return contigPerThread;
   }
@@ -485,14 +491,14 @@ Attribute DpasEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void DpasEncodingAttr::print(AsmPrinter &printer) const {
-  auto shapeA = getShapeA();
-  llvm::ArrayRef<unsigned> rA = shapeA;
-  auto shapeB = getShapeB();
-  llvm::ArrayRef<unsigned> rB = shapeB;
-  auto shapeC = getShapeC();
-  llvm::ArrayRef<unsigned> rC = shapeC;
-  auto warpsPerCTA = getWarpsPerCTA();
-  auto repCluster = getRepCluster();
+  SmallVector<unsigned> shapeA = getShapeA();
+  ArrayRef<unsigned> rA = shapeA;
+  SmallVector<unsigned> shapeB = getShapeB();
+  ArrayRef<unsigned> rB = shapeB;
+  SmallVector<unsigned> shapeC = getShapeC();
+  ArrayRef<unsigned> rC = shapeC;
+  SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
+  ArrayRef<unsigned> repCluster = getRepCluster();
   printer << "<{" << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
@@ -515,8 +521,8 @@ DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 SmallVector<unsigned>
 WarpEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
-  auto sizePerThread = getSizePerThread();
-  auto threadsPerWarp = getThreadsPerWarp();
+  ArrayRef<unsigned> sizePerThread = getSizePerThread();
+  ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp();
   assert(rank == sizePerThread.size() &&
          "unexpected rank in WarpEncodingAttr::getElemsPerThread");
   SmallVector<unsigned> elemsPerThread(rank);
@@ -571,12 +577,11 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  auto threadsPerWarp = getThreadsPerWarp();
-  auto sizePerThread = getSizePerThread();
-  printer << "<{" << "sizePerThread = ["
-          << llvm::ArrayRef<unsigned>(sizePerThread) << "]"
-          << ", threadsPerWarp = [" << llvm::ArrayRef<unsigned>(threadsPerWarp)
-          << "]" << ", order = [" << getOrder() << "]" << "}>";
+  ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp();
+  ArrayRef<unsigned> sizePerThread = getSizePerThread();
+  printer << "<{" << "sizePerThread = [" << sizePerThread << "]"
+          << ", threadsPerWarp = [" << threadsPerWarp << "]" << ", order = ["
+          << getOrder() << "]" << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -676,7 +681,6 @@ struct TritonIntelGPUInferLayoutInterface
 //===----------------------------------------------------------------------===//
 
 void TritonIntelGPUDialect::initialize() {
-
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.cpp.inc"

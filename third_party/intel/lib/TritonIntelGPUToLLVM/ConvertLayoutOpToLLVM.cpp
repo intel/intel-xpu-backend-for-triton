@@ -374,7 +374,8 @@ private:
       RankedTensorType dstType) const {
     auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstType.getEncoding());
     auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
-    unsigned opIdx = dotLayout.getOpIdx();
+
+    auto opIdx = static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
@@ -383,16 +384,20 @@ private:
     unsigned repOuter = 0u;
     unsigned repInner = 0u;
     unsigned repClusterOuter = 0u;
-    if (opIdx == 0) {
+
+    switch (opIdx) {
+    case DpasEncodingAttr::OpIdx::Zero: {
       // operand A
       repOuter = repetitions[1];
       repInner = repetitions[2];
       repClusterOuter = repCluster[rank - 2];
-    } else {
+    } break;
+    case DpasEncodingAttr::OpIdx::One: {
       // operand B
       repOuter = repetitions[2];
       repInner = repetitions[1];
       repClusterOuter = repCluster[rank - 1];
+    } break;
     }
 
     // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].
@@ -405,7 +410,7 @@ private:
             unsigned offsetM = m * repClusterOuter + repOuterIdx;
             unsigned offsetN = k;
             Value matVal = vals.at({b, offsetM, offsetN});
-            VectorType vecType = cast<mlir::VectorType>(matVal.getType());
+            auto vecType = cast<VectorType>(matVal.getType());
             Type valTy = vecType.getElementType();
             for (int i = 0; i < vecType.getNumElements(); ++i) {
               Value val = extract_element(valTy, matVal, i32_val(i));
@@ -416,10 +421,9 @@ private:
       }
     }
 
-    Type elemTy =
-        this->getTypeConverter()->convertType(dstType.getElementType());
+    Type elemTy = getTypeConverter()->convertType(dstType.getElementType());
     Type structTy = LLVM::LLVMStructType::getLiteral(
-        this->getContext(), SmallVector<Type>(elems.size(), elemTy));
+        getContext(), SmallVector<Type>(elems.size(), elemTy));
     return packLLElements(loc, this->getTypeConverter(), elems, rewriter,
                           structTy);
   }
