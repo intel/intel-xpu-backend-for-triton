@@ -155,7 +155,7 @@ class XPUBackend(BaseBackend):
                 output = subprocess.check_output(ocloc_cmd, text=True, cwd=temp_dir)
         except subprocess.CalledProcessError:
             device_arch = ''
-        if device_arch != '':
+        if device_arch:
             try:
                 ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', device_arch]
                 with tempfile.TemporaryDirectory() as temp_dir:
