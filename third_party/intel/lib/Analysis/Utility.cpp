@@ -1,10 +1,7 @@
 #include "intel/include/Analysis/Utility.h"
-
-#include "llvm/ADT/TypeSwitch.h"
-
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::gpu::intel {
 namespace {
