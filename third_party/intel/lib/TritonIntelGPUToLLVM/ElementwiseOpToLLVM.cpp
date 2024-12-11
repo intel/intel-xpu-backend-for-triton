@@ -8,6 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 using mlir::triton::gpu::ElementwiseOpConversionBase;
+using mlir::triton::gpu::MultipleOperandsRange;
 
 namespace {
 
@@ -859,72 +860,9 @@ inline Type getElementType(Value value) {
   return type;
 }
 
-inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
-                                    Type srcTy,
-                                    ConversionPatternRewriter &rewriter,
-                                    Location loc,
-                                    TypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  SmallVector<Value> outValues;
-  for (auto v : inValues) {
-    // cast i32 to appropriate eltType vector and extract elements
-    auto eltType = typeConverter->convertType(tensorTy.getElementType());
-    auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
-    auto vec = bitcast(v, vecType);
-    for (int i = 0; i < 32 / eltType.getIntOrFloatBitWidth(); i++) {
-      outValues.push_back(extract_element(vec, i32_val(i)));
-    }
-  }
-  return outValues;
-}
-
-inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
-                                  Type srcTy,
-                                  ConversionPatternRewriter &rewriter,
-                                  Location loc, TypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  SmallVector<Value> outValues;
-  auto eltType = typeConverter->convertType(tensorTy.getElementType());
-  int vecWidth = 32 / eltType.getIntOrFloatBitWidth();
-  auto vecType = vec_ty(eltType, vecWidth);
-  for (int i = 0; i < inValues.size(); i += vecWidth) {
-    Value vec = undef(vecType);
-    for (int j = 0; j < vecWidth; j++) {
-      vec = insert_element(vec, inValues[i + j], i32_val(j));
-    }
-    outValues.push_back(bitcast(vec, i32_ty));
-  }
-  return outValues;
-}
-
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
     ConverterT;
-
-class MultipleOperandsRange
-    : public iterator_range<SmallVector<SmallVector<Value>>::iterator> {
-  using ContainerT = SmallVector<SmallVector<Value>>;
-
-public:
-  using iterator_range<ContainerT::iterator>::iterator_range;
-  ContainerT::reference operator[](ContainerT::size_type idx) {
-    return begin()[idx];
-  }
-  ContainerT::const_reference operator[](ContainerT::size_type idx) const {
-    return begin()[idx];
-  }
-  ContainerT::size_type size() const { return end() - begin(); }
-};
 
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
@@ -1051,7 +989,7 @@ struct FpToFpOpConversion
 
     if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FN()) {
       assert(roundingMode.has_value() &&
-             "Rounding mode must be specified for convertsions to fp8");
+             "Rounding mode must be specified for conversions to fp8");
 
       // For now only RTNE is supported for conversions from fp16 to fp8
       if (!srcElementType.isF32() &&
@@ -1117,8 +1055,7 @@ Value EmitDualBF16ElementwiseOp(Location loc,
   auto v0 = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
   auto v1 = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
   auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
-  auto undefRounding = static_cast<RoundingMode>(-1);
-  return intel::convertFp32ToBf16(loc, rewriter, result, undefRounding);
+  return intel::convertFp32ToBf16(loc, rewriter, result, RoundingMode::RTNE);
 }
 
 struct ExternElementwiseOpConversion
@@ -1245,11 +1182,9 @@ struct SIToFPOpConversion
     Type inElemTy = getElementType(op.getIn());
     Type outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
-      SmallVector<Value> outVals;
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
-      llvm_unreachable("");
     } else if (outElemTy.isBF16()) {
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
       return {
