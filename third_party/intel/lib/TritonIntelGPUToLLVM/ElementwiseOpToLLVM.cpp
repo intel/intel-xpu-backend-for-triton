@@ -1168,7 +1168,6 @@ struct FSubOpConversion
   }
 };
 
-// Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -1276,8 +1275,15 @@ struct ExpOpConversionApprox
     const double log2e = 1.4426950408889634;
     Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
 
-    return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
-                                          adaptor.getAttributes().getValue())};
+    // Here we use llvm.exp2.f32 instead of math::Exp2Op. The latter
+    // flushes denorms by default, but we want to preserve denorms by default
+    // for expOp.
+    StringRef funcName = "llvm.exp2.f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {LLVM::createLLVMCallOp(rewriter, loc, funcOp, prod).getResult()};
   }
 };
 
@@ -1294,8 +1300,8 @@ struct AbsFOpConversion
     // FIXME: Remove bitcast to and from i16 once SPIRV-LLVM-Translator supports
     // LLVM::FAbsOp with bf16.
     Value v = operands[0][0];
-    Type orig_type = elemTy;
-    if (llvm::isa<BFloat16Type>(orig_type)) {
+    Type origTy = elemTy;
+    if (llvm::isa<BFloat16Type>(origTy)) {
       v = bitcast(v, i16_ty);
       elemTy = i16_ty;
     }
@@ -1308,8 +1314,8 @@ struct AbsFOpConversion
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
       auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
       Value res = and_(v, maskConst);
-      if (llvm::isa<BFloat16Type>(orig_type))
-        res = bitcast(res, orig_type);
+      if (llvm::isa<BFloat16Type>(origTy))
+        res = bitcast(res, origTy);
       return {res};
     }
 
