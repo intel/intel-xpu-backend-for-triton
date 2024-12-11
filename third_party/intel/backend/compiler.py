@@ -150,10 +150,8 @@ class XPUBackend(BaseBackend):
         if device_arch != '':
             try:
                 ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', device_arch]
-                result = subprocess.run(ocloc_cmd, check=True, capture_output=True, text=True)
-                output = result.stdout
-                cleanup_cmd = ['rm', 'CL_DEVICE_EXTENSIONS']
-                result = subprocess.run(cleanup_cmd)
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output = subprocess.check_output(ocloc_cmd, text=True, cwd=temp_dir)
                 supported_extensions = set()
                 for extension in output.split(' '):
                     supported_extensions.add(extension)
