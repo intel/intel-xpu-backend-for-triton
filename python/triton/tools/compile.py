@@ -192,7 +192,7 @@ if __name__ == "__main__":
             "_placeholder": "",
         }
         for ext in ['h', 'cpp']:
-            template_path = Path(__file__).parents[3] / f"third_party/intel/compile_xpu.{ext}"
+            template_path = Path(__file__).parents[3] / f"third_party/intel/tools/compile_xpu.{ext}"
             print(template_path)
             with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
                 fp.write(Path(template_path).read_text().format(**params))
