@@ -360,8 +360,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   //  std::cout << "res: " << res << "\n" << std::flush;
 
   ze_result_t status = ZE_RESULT_SUCCESS;
-  // status = zeInit(ZE_INIT_FLAG_GPU_ONLY);
-  // assert(status == ZE_RESULT_SUCCESS);
+  status = zeInit(ZE_INIT_FLAG_GPU_ONLY);
+  assert(status == ZE_RESULT_SUCCESS);
 
   zel_tracer_desc_t tracer_desc = {ZEL_STRUCTURE_TYPE_TRACER_DESC, nullptr,
                                    nullptr /* global user data */};
