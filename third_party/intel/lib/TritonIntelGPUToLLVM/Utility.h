@@ -122,15 +122,6 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
 
 } // namespace mlir::LLVM::intel
 
-// -----------------------------------------------------------------------
-// Shared memory utilities
-// -----------------------------------------------------------------------
-// using ::mlir::triton::getMultiDimIndex;
-// using ::mlir::triton::gpu::BlockedEncodingAttr;
-// using ::mlir::triton::gpu::CTALayoutAttr;
-// using ::mlir::triton::gpu::DotOperandEncodingAttr;
-// using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-// using ::mlir::triton::gpu::SliceEncodingAttr;
 using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 static SmallVector<Value>
