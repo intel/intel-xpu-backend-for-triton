@@ -18,11 +18,23 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
 
   sycl::ext::oneapi::experimental::architecture sycl_arch =
       static_cast<sycl::ext::oneapi::experimental::architecture>(dev_arch);
-  // FIXME: Add support for other devices.
-  if (sycl_arch == sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc)
-    return Py_BuildValue("s", "pvc");
+  // FIXME: Add support for more architectures.
+  std::string arch = "";
+  switch (sycl_arch) {
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
+    arch = "pvc";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_bmg_g21:
+    arch = "bmg";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_lnl_m:
+    arch = "lnl";
+    break;
+  default:
+    printf("sycl_arch = %d", sycl_arch);
+  }
 
-  return Py_BuildValue("s", "");
+  return Py_BuildValue("s", arch.c_str());
 }
 
 static PyMethodDef ModuleMethods[] = {
