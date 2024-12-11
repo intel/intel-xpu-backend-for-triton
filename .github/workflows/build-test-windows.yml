@@ -54,7 +54,7 @@ jobs:
       - name: Setup Triton
         run: |
           cd ${{ env.NEW_WORKSPACE }}
-          Invoke-BatchFile '"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64'
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
 
           # setuptools>=69.5.1 to for #3690: Fixed logging errors: 'underlying buffer has been detached' (issue #1631).
           cd python
