@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, intel
+from triton.backends.intel.driver import compile_module_from_src
 
 from dataclasses import dataclass
 import functools
@@ -127,6 +128,9 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         if not isinstance(target.arch, dict):
             raise TypeError("target.arch is not a dict")
+        dirname = os.path.dirname(os.path.realpath(__file__))
+        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
+        self.parse_device_arch = mod.parse_device_arch
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -142,12 +146,14 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        if os.getenv("TRITON_INTEL_QUERY_DEVICE_EXTENSIONS", "0") == "1":
+        device_arch = self.parse_device_arch(tgt_prop.get('architecture', 0))
+        if device_arch != '':
             try:
-                # FIXME: Add support for other devices.
-                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', 'pvc']
+                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', device_arch]
                 result = subprocess.run(ocloc_cmd, check=True, capture_output=True, text=True)
                 output = result.stdout
+                cleanup_cmd = ['rm', 'CL_DEVICE_EXTENSIONS']
+                result = subprocess.run(cleanup_cmd)
                 supported_extensions = set()
                 for extension in output.split(' '):
                     supported_extensions.add(extension)
