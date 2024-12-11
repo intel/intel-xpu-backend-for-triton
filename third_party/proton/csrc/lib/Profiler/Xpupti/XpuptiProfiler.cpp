@@ -367,6 +367,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
                                    nullptr /* global user data */};
 
   status = zelTracerCreate(&tracer_desc, &tracer);
+  std::cout << "zelTracerCreate: " << status << "\n" << std::flush;
   assert(status == ZE_RESULT_SUCCESS);
 
   zet_core_callbacks_t prologue_callbacks = {};
