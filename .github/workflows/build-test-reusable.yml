@@ -148,6 +148,12 @@ jobs:
             echo TRITON_TEST_CMD="bash -v -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           } | tee -a $GITHUB_ENV
 
+      - name: Run Proton tests
+        run: |
+          cd third_party/proton/test
+          python3 -m pytest -s test_api.py test/test_lib.py test_profile.py test_viewer.py
+          cd ..
+
       - name: Run unit tests
         run: |
           ${{ env.TRITON_TEST_CMD }} --unit

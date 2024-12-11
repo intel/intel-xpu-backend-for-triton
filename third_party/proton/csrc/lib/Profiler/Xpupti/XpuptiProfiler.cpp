@@ -78,8 +78,6 @@ convertActivityToMetric(xpupti::Pti_Activity *activity) {
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
     auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
-    std::cout << "_start_timestamp " << kernel->_start_timestamp << "\n";
-    std::cout << "_end_timestamp " << kernel->_end_timestamp << "\n";
     if (kernel->_start_timestamp < kernel->_end_timestamp) {
       metric = std::make_shared<KernelMetric>(
           static_cast<uint64_t>(kernel->_start_timestamp),
@@ -159,6 +157,21 @@ processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
   return correlationId;
 }
 
+uint32_t processActivityExternalCorrelation(
+    XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+    xpupti::Pti_Activity *activity) {
+  auto *externalActivity =
+      reinterpret_cast<pti_view_record_external_correlation *>(activity);
+  std::cout << "processActivityExternalCorrelation: _correlation_id: "
+            << externalActivity->_correlation_id << "\n";
+  std::cout << "processActivityExternalCorrelation: _external_id: "
+            << externalActivity->_external_id << "\n";
+
+  // corrIdToExternId[externalActivity->_correlation_id] =
+  // {externalActivity->_external_id, 1};
+  return externalActivity->_correlation_id;
+}
+
 uint32_t processActivity(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
                          XpuptiProfiler::ApiExternIdSet &apiExternIds,
                          std::set<Data *> &dataSet,
@@ -170,6 +183,11 @@ uint32_t processActivity(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
                                           dataSet, activity);
     break;
   }
+  case PTI_VIEW_EXTERNAL_CORRELATION: {
+    // correlationId = processActivityExternalCorrelation(corrIdToExternId,
+    // activity);
+    break;
+  }
   default:
     break;
   }
@@ -177,6 +195,28 @@ uint32_t processActivity(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
 }
 
 } // namespace
+
+#include <cxxabi.h>
+
+static inline std::string Demangle(const char *name) {
+
+  int status = 0;
+  char *demangled = abi::__cxa_demangle(name, nullptr, 0, &status);
+  if (status != 0) {
+    return name;
+  }
+
+  constexpr const char *const prefix_to_skip = "typeinfo name for ";
+  const size_t prefix_to_skip_len = strlen(prefix_to_skip);
+  const size_t shift =
+      (std::strncmp(demangled, prefix_to_skip, prefix_to_skip_len) == 0)
+          ? prefix_to_skip_len
+          : 0;
+
+  std::string result(demangled + shift);
+  free(demangled);
+  return result;
+}
 
 struct XpuptiProfiler::XpuptiProfilerPimpl
     : public GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface {
@@ -188,18 +228,43 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
   void doFlush() override;
   void doStop() override;
 
+  static uint32_t get_correlation_id(xpupti::Pti_Activity *activity);
+
   static void OnEnterCommandListAppendLaunchKernel(
       ze_command_list_append_launch_kernel_params_t *params, ze_result_t result,
       void *global_user_data, void **instance_user_data) {
     std::cout << "Function zeCommandListAppendLaunchKernel is called on enter"
               << std::endl;
+    ze_kernel_handle_t kernel = *(params->phKernel);
+
+    size_t size = 0;
+    ze_result_t status = zeKernelGetName(kernel, &size, nullptr);
+    assert(status == ZE_RESULT_SUCCESS);
+
+    std::vector<char> name(size);
+    status = zeKernelGetName(kernel, &size, name.data());
+    assert(status == ZE_RESULT_SUCCESS);
+    std::string str(name.begin(), name.end());
+    std::cout << "OnEnterCommandListAppendLaunchKernel::kernel_name: " << str
+              << "\n";
+    std::cout << "OnEnterCommandListAppendLaunchKernel::demangled kernel_name: "
+              << Demangle(name.data()) << "\n";
+
     auto scopeId = threadState.record();
     threadState.enterOp(scopeId);
-    // FIXME: 27 - debug value
-    threadState.profiler.correlation.correlate(27, 1);
-    threadState.exitOp();
-    // FIXME: 27 - debug value
-    threadState.profiler.correlation.submit(27);
+    // FIXME: 4 - debug value
+    threadState.profiler.correlation.correlate(4, 1);
+  }
+
+  static void OnEnterCommandListAppendLaunchCooperativeKernel(
+      ze_command_list_append_launch_cooperative_kernel_params_t *params,
+      ze_result_t result, void *global_user_data, void **instance_user_data) {
+    std::cout << "Function zeCommandListAppendLaunchKernel is called on enter"
+              << std::endl;
+    auto scopeId = threadState.record();
+    threadState.enterOp(scopeId);
+    // FIXME: 4 - debug value
+    threadState.profiler.correlation.correlate(4, 1);
   }
 
   static void OnExitCommandListAppendLaunchKernel(
@@ -207,6 +272,10 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
       void *global_user_data, void **instance_user_data) {
     std::cout << "Function zeCommandListAppendLaunchKernel is called on exit"
               << std::endl;
+    threadState.exitOp();
+    // Track outstanding op for flush
+    // FIXME: 4 - debug value
+    threadState.profiler.correlation.submit(4);
     // here works
     // uint64_t corr_id = 0;
     // auto res =
@@ -268,14 +337,6 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
       // Log latest completed correlation id.  Used to ensure we have flushed
       // all data on stop
       maxCorrelationId = std::max<uint64_t>(maxCorrelationId, correlationId);
-      auto externId = correlation.corrIdToExternId.contain(correlationId)
-                          ? correlation.corrIdToExternId.at(correlationId).first
-                          : Scope::DummyScopeId;
-      std::cout << "\texternId: " << externId << "\n";
-      // Track correlation ids from the same stream and erase those <
-      // correlationId
-      correlation.corrIdToExternId.erase(correlationId);
-      correlation.apiExternIds.erase(externId);
     } else if (status == pti_result::PTI_STATUS_END_OF_BUFFER) {
       std::cout << "Reached End of buffer" << '\n';
       break;
@@ -294,9 +355,9 @@ zel_tracer_handle_t tracer = nullptr;
 void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // xpupti::subscribe<true>(&subscriber, callbackFn, nullptr);
   enumDeviceUUIDs();
-  auto res = ptiViewPushExternalCorrelationId(
-      pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1, 12345);
-  std::cout << "res: " << res << "\n" << std::flush;
+  // auto res = ptiViewPushExternalCorrelationId(
+  //     pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1, 42);
+  //  std::cout << "res: " << res << "\n" << std::flush;
 
   ze_result_t status = ZE_RESULT_SUCCESS;
   // status = zeInit(ZE_INIT_FLAG_GPU_ONLY);
@@ -312,6 +373,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   zet_core_callbacks_t epilogue_callbacks = {};
   prologue_callbacks.CommandList.pfnAppendLaunchKernelCb =
       OnEnterCommandListAppendLaunchKernel;
+  // prologue_callbacks.CommandList.pfnAppendLaunchCooperativeKernelCb =
+  // OnEnterCommandListAppendLaunchCooperativeKernel;
   epilogue_callbacks.CommandList.pfnAppendLaunchKernelCb =
       OnExitCommandListAppendLaunchKernel;
 
@@ -325,11 +388,11 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
 
   ptiViewSetCallbacks(allocBuffer, completeBuffer);
   xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
-  xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
-  xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
-  xpupti::viewEnable<true>(PTI_VIEW_SYCL_RUNTIME_CALLS);
-  xpupti::viewEnable<true>(PTI_VIEW_COLLECTION_OVERHEAD);
-  xpupti::viewEnable<true>(PTI_VIEW_EXTERNAL_CORRELATION);
+  // xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
+  // xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
+  // xpupti::viewEnable<true>(PTI_VIEW_SYCL_RUNTIME_CALLS);
+  // xpupti::viewEnable<true>(PTI_VIEW_COLLECTION_OVERHEAD);
+  // xpupti::viewEnable<true>(PTI_VIEW_EXTERNAL_CORRELATION);
   // xpupti::viewEnable<true>(PTI_VIEW_LEVEL_ZERO_CALLS);
   // setGraphCallbacks(subscriber, /*enable=*/true);
   // setRuntimeCallbacks(subscriber, /*enable=*/true);
@@ -352,17 +415,17 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
   assert(status == ZE_RESULT_SUCCESS);
 
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
-  xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
-  xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
-  xpupti::viewDisable<true>(PTI_VIEW_SYCL_RUNTIME_CALLS);
-  xpupti::viewDisable<true>(PTI_VIEW_COLLECTION_OVERHEAD);
-  xpupti::viewDisable<true>(PTI_VIEW_EXTERNAL_CORRELATION);
+  // xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
+  // xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
+  // xpupti::viewDisable<true>(PTI_VIEW_SYCL_RUNTIME_CALLS);
+  // xpupti::viewDisable<true>(PTI_VIEW_COLLECTION_OVERHEAD);
+  // xpupti::viewDisable<true>(PTI_VIEW_EXTERNAL_CORRELATION);
   // xpupti::viewDisable<true>(PTI_VIEW_LEVEL_ZERO_CALLS);
-  //  setGraphCallbacks(subscriber, /*enable=*/false);
-  //  setRuntimeCallbacks(subscriber, /*enable=*/false);
-  //  setDriverCallbacks(subscriber, /*enable=*/false);
-  //  cupti::unsubscribe<true>(subscriber);
-  //  cupti::finalize<true>();
+  // setGraphCallbacks(subscriber, /*enable=*/false);
+  // setRuntimeCallbacks(subscriber, /*enable=*/false);
+  // setDriverCallbacks(subscriber, /*enable=*/false);
+  // cupti::unsubscribe<true>(subscriber);
+  // cupti::finalize<true>();
 }
 
 XpuptiProfiler::XpuptiProfiler() {
