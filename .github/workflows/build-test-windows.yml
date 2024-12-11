@@ -46,6 +46,7 @@ jobs:
 
       - name: PyTorch version
         run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import torch;print(torch.__version__)'
 
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
@@ -54,8 +55,7 @@ jobs:
       - name: Setup Triton
         run: |
           cd ${{ env.NEW_WORKSPACE }}
-          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           # setuptools>=69.5.1 to for #3690: Fixed logging errors: 'underlying buffer has been detached' (issue #1631).
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
@@ -66,7 +66,7 @@ jobs:
       - name: Run tutorials
         run: |
           cd ${{ env.NEW_WORKSPACE }}
-
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --tutorial
 
       - name: Clean up workspace
