@@ -17,10 +17,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#define DEBUG_TYPE "ttgpu_to_llvm"
-
-using namespace mlir;
-
 namespace mlir::LLVM::intel {
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
@@ -77,9 +73,6 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
 
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred);
-
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
@@ -129,16 +122,7 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
 
 } // namespace mlir::LLVM::intel
 
-// -----------------------------------------------------------------------
-// Shared memory utilities
-// -----------------------------------------------------------------------
-using ::mlir::triton::getMultiDimIndex;
-using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::CTALayoutAttr;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::SliceEncodingAttr;
-using ::mlir::triton::gpu::intel::DpasEncodingAttr;
+using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 static SmallVector<Value>
 emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
@@ -457,48 +441,6 @@ namespace mlir::triton::intel {
 inline SmallVector<SmallVector<unsigned>>
 emitOffsetForLayout(Attribute layout, RankedTensorType type);
 
-inline SmallVector<SmallVector<unsigned>>
-emitOffsetForSliceLayout(const SliceEncodingAttr &sliceLayout,
-                         RankedTensorType type) {
-  auto parentEncoding = sliceLayout.getParent();
-  unsigned dim = sliceLayout.getDim();
-  auto parentShape = sliceLayout.paddedShape(type.getShape());
-  RankedTensorType parentTy =
-      RankedTensorType::get(parentShape, type.getElementType(), parentEncoding);
-  auto parentOffsets = ::intel::emitOffsetForLayout(parentEncoding, parentTy);
-  if (parentOffsets.empty())
-    return {};
-
-  SmallVector<SmallVector<unsigned>> resultOffsets;
-  std::set<SmallVector<unsigned>> uniqueOffsets;
-
-  for (unsigned i = 0; i < parentOffsets.size(); ++i) {
-    SmallVector<unsigned> offsets(parentOffsets[i].begin(),
-                                  parentOffsets[i].end());
-    offsets.erase(offsets.begin() + dim);
-    if (auto [it, inserted] = uniqueOffsets.insert(offsets); inserted) {
-      resultOffsets.push_back(offsets);
-    }
-  }
-
-  // It can happen that after deduplicating elements above, resultOffsets has
-  // fewer than getTotalElementsPerThread() elements.  In that case repeat the
-  // sequence.
-  int elemsPerThread = triton::gpu::getTotalElemsPerThread(type);
-  assert(resultOffsets.size() > 0);
-  assert(elemsPerThread % resultOffsets.size() == 0);
-  int numRepeats = elemsPerThread / resultOffsets.size();
-  SmallVector<SmallVector<unsigned>> ret;
-  for (int i = 0; i < numRepeats; ++i) {
-    for (unsigned j = 0; j < resultOffsets.size(); ++j) {
-      ret.push_back(SmallVector<unsigned>(resultOffsets[j]));
-    }
-  }
-  return ret;
-}
-
-//
-
 // -----------------------------------------------------------------------
 // Get offsets / indices for any layout
 // -----------------------------------------------------------------------
@@ -605,169 +547,6 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return multiDimIdx;
 }
 
-/* ---------------- */
-/* ---------------- */
-inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
-    Location loc, const TargetInfoBase &target, unsigned inVec,
-    RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
-    Type resElemTy, const SharedMemoryObject &shrMemObj, RewriterBase &rewriter,
-    SmallVectorImpl<Value> &offsetVals, SmallVectorImpl<Value> &srcStrides) {
-  // This utility computes the pointers for accessing the provided swizzled
-  // shared memory layout `resSharedLayout`. More specifically, it computes,
-  // for all indices (row, col) of `srcEncoding` such that idx % inVec = 0,
-  // the pointer: ptr[(row, col)] = base + (rowOff * strides[ord[1]] +
-  // colOff) where :
-  //   phase = (row // perPhase) % maxPhase
-  //   rowOff = row
-  //   colOff = colOffSwizzled + colOffOrdered
-  //     colOffSwizzled = ((col // outVec) ^ phase) * outVec
-  //     colOffOrdered = (col % outVec) // minVec * minVec
-  //
-  // Note 1:
-  // -------
-  // Because swizzling happens at a granularity of outVec, we need to
-  // decompose the offset into a swizzled factor and a non-swizzled
-  // (ordered) factor
-  //
-  // Note 2:
-  // -------
-  // If we have x, y, z of the form:
-  // x = 0b00000xxxx
-  // y = 0byyyyy0000
-  // z = 0b00000zzzz
-  // then (x + y) XOR z = 0byyyyxxxx XOR 0b00000zzzz = (x XOR z) + y
-  // This means that we can use some immediate offsets for shared memory
-  // operations.
-  auto dstPtrTy = shrMemObj.base.getType();
-  auto dstOffset = dot(rewriter, loc, offsetVals, shrMemObj.strides);
-  Value dstPtrBase = gep(dstPtrTy, resElemTy, shrMemObj.base, dstOffset);
-
-  auto srcEncoding = srcTy.getEncoding();
-  auto srcShape = srcTy.getShape();
-  auto srcShapePerCTA = triton::gpu::getShapePerCTA(srcTy);
-  unsigned numElems = triton::gpu::getTotalElemsPerThread(srcTy);
-  // swizzling params as described in TritonGPUAttrDefs.td
-  unsigned outVec = resSharedLayout.getVec();
-  unsigned perPhase = resSharedLayout.getPerPhase();
-  unsigned maxPhase = resSharedLayout.getMaxPhase();
-  // Order
-  auto inOrder = triton::gpu::getOrder(srcEncoding);
-  auto outOrder = triton::gpu::getOrder(resSharedLayout);
-  assert(maxPhase == 1 ||
-         outVec * maxPhase <= srcShape[outOrder[0]] &&
-             "Swizzling would generate out of bounds memory accesses");
-  // Tensor indices held by the current thread, as LLVM values
-  auto srcIndices = ::intel::emitIndices(loc, rewriter, target, srcEncoding,
-                                         srcTy, /*withCTAOffset=*/false);
-  // Swizzling with leading offsets (e.g. Hopper GMMA)
-  unsigned swizzlingByteWidth = 0;
-  if (resSharedLayout.getHasLeadingOffset()) {
-    if (perPhase == 4 && maxPhase == 2)
-      swizzlingByteWidth = 32;
-    else if (perPhase == 2 && maxPhase == 4)
-      swizzlingByteWidth = 64;
-    else if (perPhase == 1 && maxPhase == 8)
-      swizzlingByteWidth = 128;
-    else
-      llvm::report_fatal_error("Unsupported shared layout.");
-  }
-  unsigned numElemsPerSwizzlingRow =
-      swizzlingByteWidth * 8 / resElemTy.getIntOrFloatBitWidth();
-  Value numElemsPerSwizzlingRowVal = i32_val(numElemsPerSwizzlingRow);
-  unsigned leadingDimOffset;
-  if (outOrder.size() >= 2) {
-    leadingDimOffset = numElemsPerSwizzlingRow * srcShapePerCTA[outOrder[1]];
-  } else {
-    leadingDimOffset = numElemsPerSwizzlingRow;
-  }
-
-  Value leadingDimOffsetVal = i32_val(leadingDimOffset);
-  // Return values
-  DenseMap<unsigned, Value> ret;
-  // cache for non-immediate offsets
-  DenseMap<unsigned, Value> cacheCol, cacheRow;
-  unsigned minVec = std::min(outVec, inVec);
-  Value strideRow = outOrder.size() >= 2 ? srcStrides[outOrder[1]] : i32_val(0);
-  Value strideCol = srcStrides[outOrder[0]];
-  LDBG("getSwizzledSharedPtrs: perPhase = "
-       << perPhase << " maxPhase = " << maxPhase << " minVec = " << minVec
-       << " inVec = " << inVec << " outVec = " << outVec << " strideRow "
-       << strideRow << " strideCol " << strideCol);
-  for (unsigned elemIdx = 0; elemIdx < numElems; elemIdx += minVec) {
-    Value offset = i32_val(0);
-    // Extract multi dimensional index for current element
-    auto idx = srcIndices[elemIdx];
-    Value idxCol = idx[outOrder[0]]; // contiguous dimension
-    Value idxRow;
-    if (outOrder.size() >= 2) {
-      idxRow = idx[outOrder[1]]; // discontiguous dimension
-    } else {
-      idxRow = i32_val(0);
-    }
-    // compute phase = (row // perPhase) % maxPhase
-    Value phase = urem(udiv(idxRow, i32_val(perPhase)), i32_val(maxPhase));
-    // extract dynamic/static offset for immediate offsetting
-    unsigned immedateOffCol = 0;
-    unsigned immedateOffRow = 0;
-    if (leadingDimOffset) {
-      // hopper
-      offset =
-          mul(udiv(idxCol, numElemsPerSwizzlingRowVal), leadingDimOffsetVal);
-      // Shrink by swizzling blocks
-      idxCol = urem(idxCol, numElemsPerSwizzlingRowVal);
-      strideRow = numElemsPerSwizzlingRowVal;
-    }
-    if (auto add = idxCol.getDefiningOp<LLVM::AddOp>()) {
-      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
-        unsigned cst =
-            cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
-        unsigned key = cst % (outVec * maxPhase);
-        cacheCol.insert({key, idxCol});
-        idxCol = cacheCol[key];
-        immedateOffCol = cst / (outVec * maxPhase) * (outVec * maxPhase);
-      }
-    }
-    if (auto add = idxRow.getDefiningOp<LLVM::AddOp>()) {
-      if (auto _cst = add.getRhs().getDefiningOp<LLVM::ConstantOp>()) {
-        unsigned cst =
-            cast<IntegerAttr>(_cst.getValue()).getValue().getSExtValue();
-        unsigned key = cst % (perPhase * maxPhase);
-        cacheRow.insert({key, idxRow});
-        idxRow = cacheRow[key];
-        immedateOffRow = cst / (perPhase * maxPhase) * (perPhase * maxPhase);
-      }
-    }
-    // row offset is simply row index
-    Value rowOff = mul(idxRow, strideRow);
-    // because swizzling happens at a granularity of outVec, we need to
-    // decompose the offset into a swizzled factor and a non-swizzled
-    // (ordered) factor: colOffSwizzled = ((col // outVec) ^ phase) * outVec
-    // colOffOrdered = (col % outVec) // minVec * minVec
-    Value colOffSwizzled = xor_(udiv(idxCol, i32_val(outVec)), phase);
-    colOffSwizzled = mul(colOffSwizzled, i32_val(outVec));
-    Value colOffOrdered = urem(idxCol, i32_val(outVec));
-    colOffOrdered = udiv(colOffOrdered, i32_val(minVec));
-    colOffOrdered = mul(colOffOrdered, i32_val(minVec));
-    Value colOff = add(colOffSwizzled, colOffOrdered);
-    // compute non-immediate offset
-    if (outOrder.size() == 3)
-      offset = add(offset, mul(idx[outOrder[2]], srcStrides[outOrder[2]]));
-    offset = add(offset, add(rowOff, mul(colOff, strideCol)));
-    Value currPtr = gep(dstPtrTy, resElemTy, dstPtrBase, offset);
-    // compute immediate offset
-    Value immediateOff;
-    if (outOrder.size() >= 2) {
-      immediateOff =
-          add(mul(i32_val(immedateOffRow), strideRow), i32_val(immedateOffCol));
-    } else {
-      immediateOff = i32_val(immedateOffCol);
-    }
-
-    ret[elemIdx] = gep(dstPtrTy, resElemTy, currPtr, immediateOff);
-  }
-  return ret;
-}
-
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
@@ -775,4 +554,4 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
 
 } // namespace mlir::triton::intel
 
-#endif
+#endif // TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
