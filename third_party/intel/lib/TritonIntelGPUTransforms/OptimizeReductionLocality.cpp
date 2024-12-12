@@ -477,7 +477,7 @@ private:
     auto parentEncoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
 
-    type.setEncoding(parentEncoding.squeeze(0));
+    type.setEncoding(SliceEncodingAttr::get(getContext(), 0, parentEncoding));
 
     return rewriter.create<ReshapeOp>(op.getLoc(),
                                       static_cast<RankedTensorType>(type), val,
