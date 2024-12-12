@@ -171,11 +171,6 @@ class XPUBackend(BaseBackend):
                 dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
             except subprocess.CalledProcessError as e:
                 raise RuntimeError(f'`ocloc` failed with error code {e.returncode}')
-            # Temporary checks
-            assert(dev_prop['has_subgroup_matrix_multiply_accumulate'] == tgt_prop.get('has_subgroup_matrix_multiply_accumulate', False))
-            assert(dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] == tgt_prop.get('has_subgroup_matrix_multiply_accumulate_tensor_float32', False))
-            assert(dev_prop['has_subgroup_2d_block_io'] == tgt_prop.get('has_subgroup_2d_block_io', False))
-            assert(dev_prop['has_bfloat16_conversions'] == tgt_prop.get('has_bfloat16_conversions', True))
         else:
             dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get(
                 'has_subgroup_matrix_multiply_accumulate', False)
