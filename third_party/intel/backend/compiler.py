@@ -97,6 +97,7 @@ def min_dot_size(device_props: dict):
 
 
 class XPUBackend(BaseBackend):
+    device_props: dict = {}
 
     # AdvancedPath pass pipeline for kernels using block pointers.
     class AdvancedPath:
@@ -155,6 +156,9 @@ class XPUBackend(BaseBackend):
 
         device_arch = self.parse_device_arch(tgt_prop.get('architecture', 0))
         if device_arch:
+            if device_arch in self.device_props:
+                dev_prop.update(self.device_props[device_arch])
+                return dev_prop
             try:
                 ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', device_arch]
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -162,12 +166,15 @@ class XPUBackend(BaseBackend):
                 supported_extensions = set()
                 for extension in output.split(' '):
                     supported_extensions.add(extension)
-                dev_prop[
+                ocloc_dev_prop = {}
+                ocloc_dev_prop[
                     'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extensions
-                dev_prop[
+                ocloc_dev_prop[
                     'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
-                dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
-                dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
+                ocloc_dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
+                ocloc_dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
+                self.device_props[device_arch] = ocloc_dev_prop
+                dev_prop.update(ocloc_dev_prop)
             except subprocess.CalledProcessError:
                 # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.
                 pass
