@@ -74,7 +74,7 @@ along the row (resp. col) dimension.
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    enum class OpIdx : unsigned { 
+    enum class OpIdx : unsigned {
       Zero = 0u, // operand A
       One = 1u,  // operand B
       Two = 2u   // operand C
