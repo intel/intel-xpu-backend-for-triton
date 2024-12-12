@@ -105,6 +105,7 @@ processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
   auto correlationId = kernel->_correlation_id;
   std::cout << "kernel->_correlation_id " << kernel->_correlation_id << "\n"
             << std::flush;
+  std::cout << "kernel->_kernel_id " << kernel->_kernel_id << "\n";
   // here doesn't work
   // uint64_t corr_id = 0;
   // auto res =
@@ -245,15 +246,16 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
     status = zeKernelGetName(kernel, &size, name.data());
     assert(status == ZE_RESULT_SUCCESS);
     std::string str(name.begin(), name.end());
-    std::cout << "OnEnterCommandListAppendLaunchKernel::kernel_name: " << str
-              << "\n";
     std::cout << "OnEnterCommandListAppendLaunchKernel::demangled kernel_name: "
               << Demangle(name.data()) << "\n";
 
     auto scopeId = threadState.record();
     threadState.enterOp(scopeId);
+
+    size_t numInstances = 1;
     // FIXME: 4 - debug value
-    threadState.profiler.correlation.correlate(4, 1);
+    uint32_t correlationId = 4;
+    threadState.profiler.correlation.correlate(correlationId, numInstances);
   }
 
   static void OnEnterCommandListAppendLaunchCooperativeKernel(
@@ -275,7 +277,8 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
     threadState.exitOp();
     // Track outstanding op for flush
     // FIXME: 4 - debug value
-    threadState.profiler.correlation.submit(4);
+    uint32_t correlationId = 4;
+    threadState.profiler.correlation.submit(correlationId);
     // here works
     // uint64_t corr_id = 0;
     // auto res =

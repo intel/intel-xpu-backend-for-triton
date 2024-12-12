@@ -24,6 +24,7 @@ def test_torch(context, tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
     temp = torch.ones((2, 2), device="xpu")
+    # FIXME: provide synchronization in XPUPTI profiler
     torch.xpu.synchronize()
     proton.exit_scope()
     proton.finalize()
@@ -59,6 +60,8 @@ def test_triton(tmp_path: pathlib.Path):
             foo[(1, )](x, y)
     with proton.scope("test2"):
         foo[(1, )](x, y)
+    # FIXME: provide synchronization in XPUPTI profiler
+    torch.xpu.synchronize()
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
