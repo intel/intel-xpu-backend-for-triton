@@ -146,15 +146,14 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
+        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
+                                                                           False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
+        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
 
         device_arch = self.parse_device_arch(tgt_prop.get('architecture', 0))
-        # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.
-        try:
-            ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS']
-            with tempfile.TemporaryDirectory() as temp_dir:
-                output = subprocess.check_output(ocloc_cmd, text=True, cwd=temp_dir)
-        except subprocess.CalledProcessError:
-            device_arch = ''
         if device_arch:
             try:
                 ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', device_arch]
@@ -169,15 +168,9 @@ class XPUBackend(BaseBackend):
                     'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
                 dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
                 dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f'`ocloc` failed with error code {e.returncode}')
-        else:
-            dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get(
-                'has_subgroup_matrix_multiply_accumulate', False)
-            dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
-                'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
-            dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-            dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+            except subprocess.CalledProcessError:
+                # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.
+                pass
         return dev_prop
 
     def parse_options(self, opts) -> Any:
