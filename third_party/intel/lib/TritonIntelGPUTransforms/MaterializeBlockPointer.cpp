@@ -110,10 +110,12 @@ public:
           // so, skip the block ptr attribute as performance is worse than if we
           // remove the tensor pointer.
           LDBG("dotLayout: " << *dotLayout);
-          const unsigned opIdx = dotLayout->getOpIdx();
+          auto opIdx =
+              static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
           auto dotOrder = dotLayout->getThreadOrder();
           const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-          if (opIdx == 0 && valueRowMajor ^ isRowMajor) {
+          if (opIdx == ttgi::DpasEncodingAttr::OpIdx::Zero &&
+              valueRowMajor ^ isRowMajor) {
             LDBG("Skipping block pointer attribute for transposed A matrix in "
                  "dot operation");
             return;

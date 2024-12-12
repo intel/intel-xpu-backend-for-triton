@@ -68,12 +68,13 @@ public:
       }
       if (auto srcDpasEncoding =
               dyn_cast<triton::gpu::intel::DpasEncodingAttr>(srcEncoding)) {
-        unsigned opIdx = dstDotOp.getOpIdx();
-        if ((opIdx == 0 /* Operand A */ &&
+        auto opIdx =
+            static_cast<intel::DpasEncodingAttr::OpIdx>(dstDotOp.getOpIdx());
+        if ((opIdx == intel::DpasEncodingAttr::OpIdx::Zero /* Operand A */ &&
              dstDotOp.getParent() == srcDpasEncoding &&
              srcDpasEncoding.getWarpsPerCTA()[rank - 1] ==
                  1 /* No parallel on N dim */) ||
-            (opIdx == 1 /* Operand B */ &&
+            (opIdx == intel::DpasEncodingAttr::OpIdx::One /* Operand B */ &&
              dstDotOp.getParent() == srcDpasEncoding &&
              srcDpasEncoding.getWarpsPerCTA()[rank - 2] ==
                  1 /* No parallel on M dim */))

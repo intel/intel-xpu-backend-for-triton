@@ -74,7 +74,11 @@ along the row (resp. col) dimension.
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    enum class OpIdx : unsigned { Zero = 0u, One = 1u };
+    enum class OpIdx : unsigned { 
+      Zero = 0u, // operand A
+      One = 1u,  // operand B
+      Two = 2u   // operand C
+    };
 
     SmallVector<unsigned> getDPASInstShapeA() const;
     SmallVector<unsigned> getDPASInstShapeB() const;
@@ -93,7 +97,7 @@ along the row (resp. col) dimension.
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, unsigned opIdx) const {
       return getDPASRepetitions(shape, static_cast<OpIdx>(opIdx));
     }
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {    
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
       return getSizePerThreadForOperand(kWidth, static_cast<OpIdx>(opIdx));
     }
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {

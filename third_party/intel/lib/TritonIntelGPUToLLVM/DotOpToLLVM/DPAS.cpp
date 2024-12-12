@@ -1,5 +1,6 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
+#include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 #include "intel/include/Analysis/DPAS.h"
@@ -148,13 +149,16 @@ public:
         getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repBatch, repM, repK,
-        typeConverter->convertType(ATensorTy.getElementType()), 0);
+        typeConverter->convertType(ATensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::Zero);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repBatch, repN, repK,
-        typeConverter->convertType(BTensorTy.getElementType()), 1);
+        typeConverter->convertType(BTensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::One);
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
         loadedC, repBatch, repM, repN,
-        typeConverter->convertType(CTensorTy.getElementType()), 2);
+        typeConverter->convertType(CTensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::Two);
 
     Type resElemTy = DTensorTy.getElementType();
 
@@ -296,33 +300,30 @@ private:
     return packLLElements(loc, typeConverter, elems, rewriter, structTy);
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
-                                                 int64_t outer, int64_t inner,
-                                                 Type elemTy,
-                                                 uint32_t opIdx) const {
+  ValueTable
+  getValuesFromDotOperandLayoutStruct(Value val, int64_t batch, int64_t outer,
+                                      int64_t inner, Type elemTy,
+                                      DpasEncodingAttr::OpIdx opIdx) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
     unsigned repClusterInner = 0u;
     switch (opIdx) {
-    case 0:
+    case DpasEncodingAttr::OpIdx::Zero:
       // operand A
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = 1;
       break;
-    case 1:
+    case DpasEncodingAttr::OpIdx::One:
       // operand B
       repClusterInner = 1;
       repClusterOuter = repCluster[rank - 1];
       break;
-    case 2:
+    case DpasEncodingAttr::OpIdx::Two:
       // operand C
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = repCluster[rank - 1];
-      break;
-    default:
-      assert(false && "invalid operand type in lowering");
       break;
     }
 
