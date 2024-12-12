@@ -220,7 +220,7 @@ def make_launcher(constants, signature, ids, warp_size):
             "int8_t": "b",
             "int16_t": "h",
             "int32_t": "i",
-            "int64_t": "l",
+            "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
             "uint32_t": "I",
@@ -501,6 +501,11 @@ class HIPDriver(GPUDriver):
         arch = device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
+
+    def get_active_torch_device(self):
+        import torch
+        # when using hip devices, the device string in pytorch is "cuda"
+        return torch.device("cuda", self.get_current_device())
 
     def get_benchmarker(self):
         from triton.testing import do_bench

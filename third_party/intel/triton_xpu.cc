@@ -16,8 +16,9 @@
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
+#include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
-#include "triton/Target/SPIRV/SPIRVTranslation.h"
+#include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include <pybind11/pybind11.h>
@@ -101,9 +102,6 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
-  ADD_PASS_WRAPPER_0(
-      "add_optimize_elementwise_parallelism",
-      gpu::intel::createTritonIntelGPUOptimizeElementwiseParallelism);
 }
 
 void init_triton_intel(py::module &&m) {
@@ -207,6 +205,21 @@ void init_triton_intel(py::module &&m) {
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
         });
+    pb.registerPeepholeEPCallback(
+        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
+          // The Triton masked load pattern can generate instances where the
+          // mask value causes undefined behavior in sdiv/srem instructions. The
+          // language allows this UB as the result of those arithmetic
+          // instructions is never used, and control flow to avoid computation
+          // of these instructions would negatively affect performance. But,
+          // LLVM SimplifyCFG aggressively marks code paths with undefined
+          // behavior as dead. This can result in removal of the mask path and
+          // incorrect results from legal Triton kernels due to masked elements
+          // being used in computation. Run a pass to add a freeze instruction
+          // between masked loads and sdiv/srem to signal to LLVM we consider
+          // the sdiv/srem operands to be well defined.
+          fpm.addPass(FreezeMaskedDivRemPass());
+        });
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
   });
@@ -219,6 +232,11 @@ void init_triton_intel(py::module &&m) {
     mlir::registerTritonGENDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
+  });
+
+  m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
+    auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    return py::int_(ret);
   });
 
   // May do this after llvm ir according to user fmath flag.

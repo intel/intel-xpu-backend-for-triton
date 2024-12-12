@@ -29,56 +29,6 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
   Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
-// Synchronization
-//===----------------------------------------------------------------------===//
-
-def TritonGEN_SubGroupReduceOp : TritonGEN_Op<"sub_group_reduce", [
-      AllTypesMatch<["res", "value"]>]>,
-  Results<(outs SignlessIntegerOrFloatLike:$res)>,
-  Arguments<(ins SignlessIntegerOrFloatLike:$value,
-                 TritonGEN_ReduceKindAttr:$kind,
-                 I32Attr:$size)> {
-  let summary = "Subgroup reduce";
-
-  let description = [{
-    The `triton_gen.sub_group_reduce` operation is invoked by all work items in
-    a subgroup, each of them providing a $value. The $size argument is used to
-    form groups of $size consecutive work items called clusters. Each cluster
-    performs the reduction operation identified by $kind. The result of the
-    cluster reduction is propagated to the work items belonging to that cluster.
-  }];
-
-  let assemblyFormat = [{
-    $kind $value ` ` `{` `size` `=` $size `}` attr-dict `:` type($value)
-  }];
-
-  let hasVerifier = 1;
-}
-
-def TritonGEN_SubGroupScanOp : TritonGEN_Op<"sub_group_scan", [
-      AllTypesMatch<["res", "value"]>]>,
-  Results<(outs SignlessIntegerOrFloatLike:$res)>,
-  Arguments<(ins SignlessIntegerOrFloatLike:$value,
-                 TritonGEN_ReduceKindAttr:$reduce_kind,
-                 TritonGEN_ScanKindAttr:$scan_kind)> {
-  let summary = "Subgroup scan";
-
-  let description = [{
-    The `triton_gen.sub_group_scan` operation is invoked by all work items in
-    a subgroup, each of them providing a $value. Each work item performs the
-    reduction operation identified by $reduce_kind. The $scan_kind attribute
-    indicates whether to perform an inclusive or exclusive scan. The result
-    of the scan operation is returned for each work item.
-    Note: The scan order is defined by increasing sub-group local ID within
-    the sub-group.
-  }];
-
-  let assemblyFormat = [{
-    $reduce_kind $value ` ` `{` `kind` `=` $scan_kind `}` attr-dict `:` type($value)
-  }];
-}
-
-//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 

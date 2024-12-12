@@ -15,7 +15,7 @@ import triton.runtime as tr
 import triton.language as tl
 from triton._internal_testing import is_hip_mi300, is_cuda, is_hip
 
-input_dtypes = ["float16", "float32", "float64"]
+input_dtypes = ["bfloat16", "float16", "float32", "float64"]
 if is_cuda():
     input_dtypes += ["int8", "float8_e5m2"]
     cc = torch.cuda.get_device_capability(0)

@@ -374,9 +374,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
     // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
     // completed before we can remove the layoutIsOK check:
-    // 1. Support for AMD's WMMA
+    // 1. Support for AMD's WMMA dot operand
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
-      if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(layout)) {
+      if (isa<MmaEncodingTrait>(layout)) {
         return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
@@ -399,6 +399,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
     // FIXME [Dot LL] Remove this once we implement this trick in LLs
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
+      return failure();
+    }
+
+    // The following check can be removed when generalized warp shuffle
+    // conversions are ready:
+    if (matchMFMAAndDotOperandShuffleCase(srcTy, dstTy)) {
       return failure();
     }
 

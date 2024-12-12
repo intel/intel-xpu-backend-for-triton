@@ -12,8 +12,6 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from packaging.version import Version
-from packaging.specifiers import SpecifierSet
 
 
 def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
@@ -51,7 +49,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
     except importlib.metadata.PackageNotFoundError:
         raise AssertionError(assertion_message)
 
-    if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
+    if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
     sycl_dir = None
@@ -161,16 +159,17 @@ class XPUUtils(object):
         self.context = mod.init_context(self.get_sycl_queue())
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
+        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
 
     def get_current_device(self):
         return self.current_device
 
-    def get_event_pool(self):
-        return self.event_pool
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
+
+    def wait(self):
+        self.wait_on_sycl_queue(self.get_sycl_queue())
 
 
 # ------------------------
@@ -558,6 +557,10 @@ class XPUDriver(DriverBase):
         dev_property = torch.xpu.get_device_capability(device)
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
+
+    def get_active_torch_device(self):
+        import torch
+        return torch.device("xpu", self.get_current_device())
 
     def get_device_interface(self):
         import torch

@@ -103,56 +103,6 @@ class BackendInstaller:
         ]
 
 
-def find_vswhere():
-    program_files = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
-    vswhere_path = Path(program_files) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
-    if vswhere_path.exists():
-        return vswhere_path
-    return None
-
-
-def find_visual_studio(version_ranges):
-    vswhere = find_vswhere()
-    if not vswhere:
-        raise FileNotFoundError("vswhere.exe not found.")
-
-    for version_range in version_ranges:
-        command = [
-            str(vswhere), "-version", version_range, "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-products", "*", "-property", "installationPath", "-prerelease"
-        ]
-
-        try:
-            output = subprocess.check_output(command, text=True).strip()
-            if output:
-                return output.split("\n")[0]
-        except subprocess.CalledProcessError:
-            continue
-
-    return None
-
-
-def set_env_vars(vs_path, arch="x64"):
-    vcvarsall_path = Path(vs_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
-    if not vcvarsall_path.exists():
-        raise FileNotFoundError(f"vcvarsall.bat not found in expected path: {vcvarsall_path}")
-
-    command = ["call", vcvarsall_path, arch, "&&", "set"]
-    output = subprocess.check_output(command, shell=True, text=True)
-
-    for line in output.splitlines():
-        if '=' in line:
-            var, value = line.split('=', 1)
-            os.environ[var] = value
-
-
-def initialize_visual_studio_env(version_ranges, arch="x64"):
-    vs_path = find_visual_studio(version_ranges)
-    if not vs_path:
-        raise EnvironmentError("Visual Studio not found in specified version ranges.")
-    set_env_vars(vs_path, arch)
-
-
 # Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
 def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
@@ -475,8 +425,6 @@ class CMakeBuild(build_ext):
     def build_extension(self, ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
-        if platform.system() == "Windows":
-            initialize_visual_studio_env(["[17.0,18.0)", "[16.0,17.0)"])
         # lit is used by the test suite
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
@@ -493,7 +441,7 @@ class CMakeBuild(build_ext):
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLLVM_ENABLE_WERROR=ON",
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_TUTORIALS=OFF",
             "-DTRITON_BUILD_PYTHON_MODULE=ON", "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable,
-            "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON", "-DPython3_INCLUDE_DIR=" + python_include_dir,
+            "-DPython3_INCLUDE_DIR=" + python_include_dir,
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
             "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
         ]
@@ -758,13 +706,6 @@ def get_git_commit_hash(length=8):
         return ""
 
 
-def get_install_requires():
-    install_requires = [
-        "packaging",  # used by third_party/intel/backend/driver.py
-    ]  # yapf: disable
-    return install_requires
-
-
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
     version="3.2.0" + get_git_commit_hash() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
@@ -772,9 +713,9 @@ setup(
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
+    install_requires=["setuptools>=40.8.0"],
     packages=get_packages(),
     entry_points=get_entry_points(),
-    install_requires=get_install_requires(),
     package_data=package_data,
     include_package_data=True,
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
@@ -814,6 +755,8 @@ setup(
             "isort",
             "numpy",
             "pytest",
+            "pytest-forked",
+            "pytest-xdist",
             "scipy>=1.7.1",
             "llnl-hatchet",
         ],

@@ -828,10 +828,6 @@ def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tenso
 def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
          fp_downcast_rounding: Optional[str] = None) -> tl.tensor:
     src_ty = input.type
-    if isinstance(dst_ty, tl.constexpr):
-        dst_ty = dst_ty.value
-    if isinstance(fp_downcast_rounding, tl.constexpr):
-        fp_downcast_rounding = fp_downcast_rounding.value
     if src_ty.is_block():
         dst_ty = tl.block_type(dst_ty.scalar, input.type.get_block_shapes())
     if src_ty == dst_ty:
@@ -1473,6 +1469,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
 
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+        # We upcast because there's no fp8e4b15 type in MLIR
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
 
@@ -1680,6 +1677,30 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
     scan_op.verify()
 
     return tuple(wrap_tensor(scan_op.get_result(i), inputs[i].type.scalar, shape) for i in range(len(inputs)))
+
+
+# ===----------------------------------------------------------------------===
+#                               Gather
+# ===----------------------------------------------------------------------===
+
+
+def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    assert index.dtype.is_int(), "index must be an integer tensor"
+
+    rank = len(src.type.shape)
+    assert len(index.type.shape) == rank, "source and index tensors must have the same rank"
+
+    assert -rank <= axis < rank, f"gather axis {axis} must be < source rank ({rank})"
+    if axis < 0:
+        axis += rank
+
+    for d in range(rank):
+        if d == axis:
+            continue
+        assert index.type.shape[d] == src.type.shape[d], f"index dim {axis} must match the corresponding source dim"
+
+    gather = builder.create_gather(src.handle, index.handle, axis)
+    return wrap_tensor(gather, src.type.scalar, index.type.shape)
 
 
 # ===----------------------------------------------------------------------===

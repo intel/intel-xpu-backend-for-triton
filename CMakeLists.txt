@@ -70,7 +70,6 @@ else()
   set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
-  set(CMAKE_STATIC_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
 endif()
 
 # Default build type
@@ -153,7 +152,7 @@ endfunction()
 if(NOT MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX- /wd4244 /wd4624 /wd4715 /wd4530")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
 endif()
 
 include_directories(".")
@@ -185,7 +184,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   include_directories(${PYTHON_SRC_PATH})
 
   # Python Interpreter is used to run lit tests
-  find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
   find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
   if (DEFINED TRITON_PLUGIN_DIRS)
@@ -221,7 +220,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(TRITON_LIBRARIES
     ${triton_libs}
     ${triton_plugins}
-    TritonSPIRV
 
     # mlir
     MLIRAMDGPUDialect

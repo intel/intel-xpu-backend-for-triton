@@ -236,7 +236,7 @@ jobs:
       - name: Install pip dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-forked pytest-xdist lit
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit
       - name: Install Triton
         env:
           CUDA_HOME: "/usr/local/cuda"
@@ -408,10 +408,6 @@ jobs:
           cd python
           ccache --zero-stats
           pip install -v -e '.[tests]'
-      - name: Clean up after an unsuccessful build
-        if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
-        run: |
-          rm -rf ~/.triton
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -477,8 +473,11 @@ jobs:
             ~/.ccache
           key: triton-artifacts-${{ runner.os }}-${{ runner.arch }}-${{ env.RUNNER_TYPE }}-llvm-${{ steps.cache-key.outputs.llvm }}-${{ steps.cache-key.outputs.datetime }}
       - name: Clean up caches
+        # Always cleanup the worker, even if builds or tests failed
+        if: always()
         run: |
-          rm -rf ~/.triton/cache
+          rm -rf ~/.triton
+          rm -rf ~/.ccache
   Build-Tests:
     needs: Runner-Preparation
     if: needs.Runner-Preparation.outputs.matrix-MACOS != ''
@@ -569,7 +568,7 @@ jobs:
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja pytest-xdist lit pybind11
+          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit pybind11
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_O1: "true"

@@ -22,7 +22,7 @@ include_directories(/opt/intel/oneapi/pti/latest/include)
 include_directories(/opt/intel/oneapi/compiler/latest/include)
 include_directories(/opt/intel/oneapi/compiler/latest/include/sycl)
 
-find_package(Python3 REQUIRED Interpreter Development)
+find_package(Python3 REQUIRED Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
 # Check if the platform is MacOS
