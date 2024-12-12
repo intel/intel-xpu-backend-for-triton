@@ -15,6 +15,7 @@ from ..runtime import JITFunction
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 from types import ModuleType
 from triton._utils import list_list_flatten, list_list_unflatten
+from .._utils import find_paths_if, get_iterable_path, set_iterable_path
 
 
 def mangle_ty(ty):
@@ -187,6 +188,54 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> bool:
         return self.visit(node.func)
+
+
+class ASTFunction:
+
+    def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
+        self.ret_types = ret_types
+        self.arg_types = arg_types
+        self.constexprs = constexprs
+        self.constants = constants
+        self.attrs = attrs
+
+    def serialize(self, builder: ir.builder):
+        # fill up IR values in template
+        # > build function
+        is_val = lambda path, _: path not in self.constexprs and _ is not None
+        val_paths = list(find_paths_if(self.arg_types, is_val))
+        arg_types = [get_iterable_path(self.arg_types, path).to_ir(builder) for path in val_paths]
+        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
+        return builder.get_function_ty(arg_types, ret_types)
+
+    def deserialize(self, fn):
+        # create "template"
+        def make_template(val):
+            if isinstance(val, (list, tuple, language.tuple_type)):
+                return language.tuple([make_template(x) for x in val])
+            return language.constexpr(None)
+
+        vals = make_template(self.arg_types)
+        is_val = lambda path, _: path not in self.constexprs and _ is not None
+        val_paths = list(find_paths_if(self.arg_types, is_val))
+        # > set attributes
+        for attr_path, attr_specs in self.attrs.items():
+            for attr_name, attr_val in attr_specs:
+                if attr_path in val_paths:
+                    fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
+        for i, path in enumerate(val_paths):
+            ty = get_iterable_path(self.arg_types, path)
+            if isinstance(ty, nv_tma_desc_type):
+                fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
+        # > add IR values to the template
+        for i, path in enumerate(val_paths):
+            ty = get_iterable_path(self.arg_types, path)
+            set_iterable_path(vals, path, language.tensor(fn.args(i), ty))
+        # > add constexpr values to the template
+        constants = self.constants | self.constexprs
+        for path, val in constants.items():
+            set_iterable_path(vals, path, language.constexpr(val))
+        return vals
 
 
 class CodeGenerator(ast.NodeVisitor):
@@ -1083,16 +1132,15 @@ class CodeGenerator(ast.NodeVisitor):
     def call_JitFunction(self, fn: JITFunction, args, kwargs):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
-        args = [arg if _is_triton_value(arg) else constexpr(arg) for arg in args]
-        # generate function def
-        attributes = {}
-        constexprs = [i for i, arg in enumerate(args) if _is_constexpr(arg)]
-        constants = {i: args[i] for i in constexprs}
-        # generate call
-        args = [None if i in constexprs else arg for i, arg in enumerate(args)]
-        arg_vals = [arg.handle for arg in args if arg is not None]
-        arg_types = [arg.type for arg in args if arg is not None]
-        fn_name = mangle_fn(fn.__name__, arg_types, constants)
+        for i, arg in enumerate(args):
+            if isinstance(arg, (language.dtype, float, int, bool)):
+                args[i] = language.core.constexpr(arg)
+        args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
+        args_cst = {path: get_iterable_path(args, path) for path in args_cst}
+        args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
+        args_val = [get_iterable_path(args, path) for path in args_path]
+        # mangle
+        fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
         if not self.module.has_function(fn_name):
             prototype = language.function_type([], arg_types)
