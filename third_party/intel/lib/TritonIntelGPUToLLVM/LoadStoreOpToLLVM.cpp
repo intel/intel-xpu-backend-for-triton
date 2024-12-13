@@ -471,6 +471,20 @@ struct PrefetchOpConversion
   }
 };
 
+struct BlockLoadTile {
+  BlockLoadTile(Value baseHeight, Value baseWidth, Value pitch,
+                unsigned tileHeight, unsigned tileWidth)
+      : baseHeight(baseHeight), baseWidth(baseWidth), pitch(pitch),
+        tileHeight(tileHeight), tileWidth(tileWidth) {}
+
+  Value baseHeight;
+  Value baseWidth;
+  Value pitch;
+
+  unsigned tileHeight;
+  unsigned tileWidth;
+};
+
 struct LoadOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
       public LoadStoreConversionBase {
@@ -592,10 +606,9 @@ struct LoadOpConversion
       auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
             offsetBaseY] =
           getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
-      baseWidth = trunc(i32_ty, baseWidth);
-      baseHeight = trunc(i32_ty, baseHeight);
-
-      auto pitch = trunc(i32_ty, rowStride);
+      BlockLoadTile tile(trunc(i32_ty, baseHeight), trunc(i32_ty, baseWidth),
+                         trunc(i32_ty, rowStride), elemsPerInstr[0],
+                         elemsPerInstr[1]);
 
       SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
       unsigned outerDimWarpNum =
@@ -644,14 +657,14 @@ struct LoadOpConversion
               auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
                   loc, load2DGenXType,
                   /*ptr*/ base,
-                  /*base_width*/ mul(baseWidth, elemSizeInBytes),
-                  /*base_height*/ baseHeight,
-                  /*base_pitch*/ mul(pitch, elemSizeInBytes),
+                  /*base_width*/ mul(tile.baseWidth, elemSizeInBytes),
+                  /*base_height*/ tile.baseHeight,
+                  /*base_pitch*/ mul(tile.pitch, elemSizeInBytes),
                   /*x*/ trunc(i32_ty, offsetX),
                   /*y*/ trunc(i32_ty, offsetY),
                   /*elem_size_in_bits*/ elemSizeInBits,
-                  /*tile_width*/ elemsPerInstr[1],
-                  /*tile_height*/ elemsPerInstr[0],
+                  /*tile_width*/ tile.tileWidth,
+                  /*tile_height*/ tile.tileHeight,
                   /*v_blocks*/ 1,
                   /*transpose*/ false,
                   /*vnni_transform*/ false);
