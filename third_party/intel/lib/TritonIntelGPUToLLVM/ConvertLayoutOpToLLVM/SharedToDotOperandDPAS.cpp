@@ -89,7 +89,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   Value laneRowIndex, laneColIndex;
   unsigned rowsPerInst = 0u, rowsPerWarp = 0u, packedOpsPerLane = 0u;
   switch (opIdx) {
-  case DpasEncodingAttr::OpIdx::Zero: {
+  case DpasEncodingAttr::OpIdx::OperandA: {
     assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
@@ -105,7 +105,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     laneColIndex = urem(laneId, i32_val(packedColNum));
     laneColIndex = mul(laneColIndex, i32_val(packedOpsPerLane));
   } break;
-  case DpasEncodingAttr::OpIdx::One: {
+  case DpasEncodingAttr::OpIdx::OperandB: {
     assert(threadsPerWarp >= executionSize &&
            "DpasEncodingAttr sub-group size could not "
            "be smaller than the execution size for B operand.");
@@ -133,7 +133,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   Value perPhaseVal = i32_val(perPhase);
   Value maxPhaseVal = i32_val(maxPhase);
   Value vecVal = i32_val(vec);
-  SmallVector<unsigned> instShape = (opIdx == DpasEncodingAttr::OpIdx::Zero)
+  SmallVector<unsigned> instShape = (opIdx == DpasEncodingAttr::OpIdx::OperandA)
                                         ? dpasLayout.getDPASInstShapeA()
                                         : dpasLayout.getDPASInstShapeB();
   ArrayRef<int64_t> shareMemoryShape = descTy.getShape();
@@ -153,11 +153,11 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
         // outer index base
         Value iBase = add(rowIndex, laneRowIndex);
         switch (opIdx) {
-        case DpasEncodingAttr::OpIdx::Zero:
+        case DpasEncodingAttr::OpIdx::OperandA:
           iBase = add(iBase, i32_val(repIndex));
           jBase = add(jBase, i32_val(opsIdx));
           break;
-        case DpasEncodingAttr::OpIdx::One:
+        case DpasEncodingAttr::OpIdx::OperandB:
           iBase = add(iBase, i32_val(opsIdx));
           jBase = add(jBase, i32_val(repIndex));
           break;
@@ -333,7 +333,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
 
   SmallVector<unsigned> shape;
-  if constexpr (opIdx == DpasEncodingAttr::OpIdx::Zero)
+  if constexpr (opIdx == DpasEncodingAttr::OpIdx::OperandA)
     shape = dpasLayout.getShapeA();
   else
     shape = dpasLayout.getShapeB();
@@ -389,10 +389,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   switch (opIdx) {
   case 0:
-    return loadOperand<DpasEncodingAttr::OpIdx::Zero>(
+    return loadOperand<DpasEncodingAttr::OpIdx::OperandA>(
         rewriter, loc, descTy, encoding, smemObj, typeConverter, threadId);
   case 1:
-    return loadOperand<DpasEncodingAttr::OpIdx::One>(
+    return loadOperand<DpasEncodingAttr::OpIdx::OperandB>(
         rewriter, loc, descTy, encoding, smemObj, typeConverter, threadId);
   default:
     llvm_unreachable("unexpected operand idx");

@@ -114,7 +114,7 @@ public:
               static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
           auto dotOrder = dotLayout->getThreadOrder();
           const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-          if (opIdx == ttgi::DpasEncodingAttr::OpIdx::Zero &&
+          if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
               valueRowMajor ^ isRowMajor) {
             LDBG("Skipping block pointer attribute for transposed A matrix in "
                  "dot operation");

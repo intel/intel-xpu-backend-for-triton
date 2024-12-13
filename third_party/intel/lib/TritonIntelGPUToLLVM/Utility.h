@@ -196,10 +196,10 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   auto opIdx = static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
   SmallVector<int64_t> numReps =
       dpasLayout.getDPASRepetitions(shapePerCTA, opIdx);
-  SmallVector<unsigned> warpShape = (opIdx == DpasEncodingAttr::OpIdx::Zero)
+  SmallVector<unsigned> warpShape = (opIdx == DpasEncodingAttr::OpIdx::OperandA)
                                         ? dpasLayout.getShapeA()
                                         : dpasLayout.getShapeB();
-  SmallVector<unsigned> instShape = (opIdx == DpasEncodingAttr::OpIdx::Zero)
+  SmallVector<unsigned> instShape = (opIdx == DpasEncodingAttr::OpIdx::OperandA)
                                         ? dpasLayout.getDPASInstShapeA()
                                         : dpasLayout.getDPASInstShapeB();
 
@@ -213,7 +213,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   unsigned numRowsPerPackedValue = 0u, numColsPerPackedValue = 0u;
   unsigned numColsPerLaneForPackedValue = 0u, numOpsPerPackedValue = 0u;
   switch (opIdx) {
-  case DpasEncodingAttr::OpIdx::Zero: {
+  case DpasEncodingAttr::OpIdx::OperandA: {
     assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
@@ -225,7 +225,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     numColsPerPackedValue = std::min(warpSize, packedColNum);
     numColsPerLaneForPackedValue = mlir::ceil(packedColNum, warpSize);
   } break;
-  case DpasEncodingAttr::OpIdx::One: {
+  case DpasEncodingAttr::OpIdx::OperandB: {
     numOpsPerPackedValue = opsPerChannel;
     // Each value name represent multiple rows if warpSize > executionSize
     numRowsPerPackedValue = mlir::ceil(warpSize, executionSize) * opsPerChannel;
@@ -249,7 +249,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     for (unsigned k = 0; k < numRepK; ++k)
       for (unsigned rep = 0; rep < repClusterSize; ++rep) {
         for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
-          bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::Zero);
+          bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
           unsigned opsRowIndex = isOperandA ? 0 : elemId % numOpsPerPackedValue;
           unsigned opsColIndex = isOperandA ? elemId % numOpsPerPackedValue : 0;
           unsigned packedElemId = elemId / numOpsPerPackedValue;

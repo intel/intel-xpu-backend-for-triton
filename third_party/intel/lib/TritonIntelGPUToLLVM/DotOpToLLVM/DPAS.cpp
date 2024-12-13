@@ -150,15 +150,15 @@ public:
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repBatch, repM, repK,
         typeConverter->convertType(ATensorTy.getElementType()),
-        DpasEncodingAttr::OpIdx::Zero);
+        DpasEncodingAttr::OpIdx::OperandA);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repBatch, repN, repK,
         typeConverter->convertType(BTensorTy.getElementType()),
-        DpasEncodingAttr::OpIdx::One);
+        DpasEncodingAttr::OpIdx::OperandB);
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
         loadedC, repBatch, repM, repN,
         typeConverter->convertType(CTensorTy.getElementType()),
-        DpasEncodingAttr::OpIdx::Two);
+        DpasEncodingAttr::OpIdx::OperandC);
 
     Type resElemTy = DTensorTy.getElementType();
 
@@ -310,17 +310,17 @@ private:
     unsigned repClusterOuter = 0u;
     unsigned repClusterInner = 0u;
     switch (opIdx) {
-    case DpasEncodingAttr::OpIdx::Zero:
+    case DpasEncodingAttr::OpIdx::OperandA:
       // operand A
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = 1;
       break;
-    case DpasEncodingAttr::OpIdx::One:
+    case DpasEncodingAttr::OpIdx::OperandB:
       // operand B
       repClusterInner = 1;
       repClusterOuter = repCluster[rank - 1];
       break;
-    case DpasEncodingAttr::OpIdx::Two:
+    case DpasEncodingAttr::OpIdx::OperandC:
       // operand C
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = repCluster[rank - 1];

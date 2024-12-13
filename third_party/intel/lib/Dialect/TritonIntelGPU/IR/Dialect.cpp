@@ -216,7 +216,7 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
   size_t rank = shape.size();
   SmallVector<int64_t> rep(3, 1);
   switch (opIdx) {
-  case OpIdx::Zero: {
+  case OpIdx::OperandA: {
     SmallVector<unsigned> shapePerWarp = getShapeA();
     int64_t numRepBatch =
         rank == 3 ? std::max<int64_t>(1, shape[0] /
@@ -227,7 +227,7 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
                                                     warpsPerCTA[rank - 2])),
             std::max<int64_t>(1, shape[rank - 1] / shapePerWarp[rank - 1])};
   } break;
-  case OpIdx::One: {
+  case OpIdx::OperandB: {
     SmallVector<unsigned> shapePerWarp = getShapeB();
     int64_t numRepBatch =
         rank == 3 ? std::max<int64_t>(1, shape[0] /
@@ -260,13 +260,13 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
   size_t rank = shape.size();
 
   switch (opIdx) {
-  case OpIdx::Zero: {
+  case OpIdx::OperandA: {
     SmallVector<unsigned> shapeA = getShapeA();
     auto totalElem = product<unsigned>(shapeA);
     // dpas operands scalar are evenly sharded to each work item.
     return (totalElem / threadsPerWar) * product<int64_t>(rep);
   } break;
-  case OpIdx::One: {
+  case OpIdx::OperandB: {
     SmallVector<unsigned> shapeB = getShapeB();
     auto totalElem = product<unsigned>(shapeB);
     // dpas operands scalar are evenly sharded to each work item.
@@ -312,7 +312,7 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
   assert((rank == 2 || rank == 3) && "unexpected rank number for Dpas layout");
 
   switch (opIdx) {
-  case OpIdx::Zero: {
+  case OpIdx::OperandA: {
     SmallVector<unsigned> shapeA = getDPASInstShapeA();
     unsigned subGroupSize = getSubGroupSize();
     unsigned opsPerChannel = getOpsPerChannel();
@@ -330,7 +330,7 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
     unsigned rowsPerWarp = mlir::ceil<unsigned>(subGroupSize, packedColNum);
     return {shapeA[0] / rowsPerWarp * repCluster[rank - 2], packedOpsPerLane};
   } break;
-  case OpIdx::One: {
+  case OpIdx::OperandB: {
     SmallVector<unsigned> shapeB = getShapeB();
     unsigned subGroupSize = getSubGroupSize();
     unsigned executionSize = getExecutionSize();

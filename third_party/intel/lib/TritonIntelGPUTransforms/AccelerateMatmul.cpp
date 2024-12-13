@@ -267,18 +267,19 @@ private:
 
     if (aDesc.scale) {
       TensorValue newA =
-          convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::Zero>(
+          convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
               aDesc, dpasEnc, newRetType, mod, rewriter);
       TensorValue newB =
-          convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::One>(
+          convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
               bDesc, dpasEnc, newRetType, rewriter);
       return {newA, newB};
     }
 
-    TensorValue newB = convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::One>(
-        bDesc, dpasEnc, newRetType, mod, rewriter);
+    TensorValue newB =
+        convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
+            bDesc, dpasEnc, newRetType, mod, rewriter);
     TensorValue newA =
-        convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::Zero>(
+        convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
             aDesc, dpasEnc, newRetType, rewriter);
     return {newA, newB};
   }

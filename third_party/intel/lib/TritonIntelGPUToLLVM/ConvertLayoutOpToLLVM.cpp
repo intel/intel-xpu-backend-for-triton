@@ -386,13 +386,13 @@ private:
     unsigned repClusterOuter = 0u;
 
     switch (opIdx) {
-    case DpasEncodingAttr::OpIdx::Zero: {
+    case DpasEncodingAttr::OpIdx::OperandA: {
       // operand A
       repOuter = repetitions[1];
       repInner = repetitions[2];
       repClusterOuter = repCluster[rank - 2];
     } break;
-    case DpasEncodingAttr::OpIdx::One: {
+    case DpasEncodingAttr::OpIdx::OperandB: {
       // operand B
       repOuter = repetitions[2];
       repInner = repetitions[1];

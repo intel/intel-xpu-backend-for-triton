@@ -75,9 +75,9 @@ along the row (resp. col) dimension.
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     enum class OpIdx : unsigned {
-      Zero = 0u, // operand A
-      One = 1u,  // operand B
-      Two = 2u   // operand C
+      OperandA = 0u,
+      OperandB = 1u,
+      OperandC = 2u
     };
 
     SmallVector<unsigned> getDPASInstShapeA() const;

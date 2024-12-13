@@ -543,7 +543,7 @@ struct LoadOpConversion
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, dpasOrder);
 
-    bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::Zero);
+    bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
     SmallVector<unsigned> dpasInstShape = isOperandA
                                               ? dpasLayout.getDPASInstShapeA()
                                               : dpasLayout.getDPASInstShapeB();
@@ -710,13 +710,13 @@ struct LoadOpConversion
         for (int k = 0; k < numRepInner; k += numOperandsInnerDimPerLoad) {
           Value offsetX, offsetY;
           switch (opIdx) {
-          case DpasEncodingAttr::OpIdx::Zero: {
+          case DpasEncodingAttr::OpIdx::OperandA: {
             // A
             offsetY = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
                           i32_val(outer * repOuterStride + rep * repStride));
             offsetX = i32_val(k * repKStride);
           } break;
-          case DpasEncodingAttr::OpIdx::One: {
+          case DpasEncodingAttr::OpIdx::OperandB: {
             // B
             offsetX = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
                           i32_val(outer * repOuterStride + rep * repStride));
@@ -761,10 +761,10 @@ struct LoadOpConversion
             return failure();
           }
 
-          unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::Zero
+          unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsOuterDimPerLoad
                                       : numOperandsInnerDimPerLoad;
-          unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::Zero
+          unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsInnerDimPerLoad
                                       : numOperandsOuterDimPerLoad;
 
@@ -790,13 +790,13 @@ struct LoadOpConversion
 
                 // Save the decomposed vals to the map;
                 switch (opIdx) {
-                case DpasEncodingAttr::OpIdx::Zero: {
+                case DpasEncodingAttr::OpIdx::OperandA: {
                   loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
                                 rep * packedRowNum + row,
                             k + vblk * packedColNumPerVBlock + col}] =
                       bitcast(loadVal, unpackedDPASOperandType);
                 } break;
-                case DpasEncodingAttr::OpIdx::One: {
+                case DpasEncodingAttr::OpIdx::OperandB: {
                   loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
                                 rep * packedColNum +
                                 vblk * packedColNumPerVBlock + col,
