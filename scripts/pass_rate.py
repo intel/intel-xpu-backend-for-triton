@@ -103,9 +103,7 @@ def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> Repor
             pass
         stats.fixme += len(testsuite_fixme_tests)
 
-    test_unskip = os.getenv('TEST_UNSKIP')
-    if test_unskip not in ('true', 'false'):
-        raise ValueError('Error: please set TEST_UNSKIP true or false')
+    test_unskip = os.getenv('TEST_UNSKIP', 'false')
     if test_unskip == 'false':
         deselected = get_deselected(report_path, skiplist_dir)
         stats.skipped += deselected
