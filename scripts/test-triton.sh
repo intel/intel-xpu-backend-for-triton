@@ -96,7 +96,8 @@ while [ -v 1 ]; do
       ;;
     --reports-dir)
       TRITON_TEST_REPORTS=true
-      TRITON_TEST_REPORTS_DIR="$2"
+      # Must be absolute
+      TRITON_TEST_REPORTS_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
     --warning-reports)
@@ -108,7 +109,8 @@ while [ -v 1 ]; do
       shift
       ;;
     --skip-list)
-      TRITON_TEST_SKIPLIST_DIR="$2"
+      # # Must be absolute
+      TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
     --help)
