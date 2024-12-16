@@ -193,12 +193,13 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   SmallVector<SmallVector<unsigned>> offsets;
   SmallVector<int64_t> shapePerCTA = triton::gpu::getShapePerCTA(type);
 
-  unsigned opIdx = dotLayout.getOpIdx();
+  auto opIdx = static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
   SmallVector<int64_t> numReps =
       dpasLayout.getDPASRepetitions(shapePerCTA, opIdx);
-  SmallVector<unsigned> warpShape =
-      (opIdx == 0) ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
-  SmallVector<unsigned> instShape = (opIdx == 0)
+  SmallVector<unsigned> warpShape = (opIdx == DpasEncodingAttr::OpIdx::OperandA)
+                                        ? dpasLayout.getShapeA()
+                                        : dpasLayout.getShapeB();
+  SmallVector<unsigned> instShape = (opIdx == DpasEncodingAttr::OpIdx::OperandA)
                                         ? dpasLayout.getDPASInstShapeA()
                                         : dpasLayout.getDPASInstShapeB();
 
@@ -212,7 +213,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
   unsigned numRowsPerPackedValue = 0u, numColsPerPackedValue = 0u;
   unsigned numColsPerLaneForPackedValue = 0u, numOpsPerPackedValue = 0u;
   switch (opIdx) {
-  case 0: {
+  case DpasEncodingAttr::OpIdx::OperandA: {
     assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
@@ -224,7 +225,7 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
     numColsPerPackedValue = std::min(warpSize, packedColNum);
     numColsPerLaneForPackedValue = mlir::ceil(packedColNum, warpSize);
   } break;
-  case 1: {
+  case DpasEncodingAttr::OpIdx::OperandB: {
     numOpsPerPackedValue = opsPerChannel;
     // Each value name represent multiple rows if warpSize > executionSize
     numRowsPerPackedValue = mlir::ceil(warpSize, executionSize) * opsPerChannel;
@@ -238,27 +239,26 @@ emitOffsetForDotOpLayout(const DotOperandEncodingAttr &dotLayout,
          "numElemPerInstPerRowPerThread should not be zero");
 
   SmallVector<unsigned> shapePerCTATile = getShapePerCTATile(dotLayout);
-  int64_t numRepOuter = numReps[opIdx ? 2 : 1];
-  int64_t numRepK = numReps[opIdx ? 1 : 2];
+  int64_t numRepOuter = numReps[unsigned(opIdx) ? 2 : 1];
+  int64_t numRepK = numReps[unsigned(opIdx) ? 1 : 2];
 
   ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
-  unsigned repClusterSize = repCluster[opIdx ? rank - 1 : rank - 2];
+  unsigned repClusterSize = repCluster[bool(opIdx) ? rank - 1 : rank - 2];
 
   for (unsigned repOuter = 0; repOuter < numRepOuter; ++repOuter)
     for (unsigned k = 0; k < numRepK; ++k)
       for (unsigned rep = 0; rep < repClusterSize; ++rep) {
         for (unsigned elemId = 0; elemId < numElemPerInstPerThread; ++elemId) {
-          unsigned opsRowIndex =
-              (opIdx == 0) ? 0 : elemId % numOpsPerPackedValue;
-          unsigned opsColIndex =
-              (opIdx == 0) ? elemId % numOpsPerPackedValue : 0;
+          bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
+          unsigned opsRowIndex = isOperandA ? 0 : elemId % numOpsPerPackedValue;
+          unsigned opsColIndex = isOperandA ? elemId % numOpsPerPackedValue : 0;
           unsigned packedElemId = elemId / numOpsPerPackedValue;
           unsigned repRowIndex =
-              shapePerCTATile[rank - 2] * (opIdx == 0 ? repOuter : k);
+              shapePerCTATile[rank - 2] * (isOperandA ? repOuter : k);
           unsigned repColIndex =
-              shapePerCTATile[rank - 1] * (opIdx == 0 ? k : repOuter);
-          unsigned repClusterRowIndex = opIdx == 0 ? rep * instShape[0] : 0;
-          unsigned repClusterColIndex = opIdx == 0 ? 0 : rep * instShape[1];
+              shapePerCTATile[rank - 1] * (isOperandA ? k : repOuter);
+          unsigned repClusterRowIndex = isOperandA ? rep * instShape[0] : 0;
+          unsigned repClusterColIndex = isOperandA ? 0 : rep * instShape[1];
           unsigned packedElemRowIndex =
               (packedElemId / numColsPerLaneForPackedValue) *
               numRowsPerPackedValue;

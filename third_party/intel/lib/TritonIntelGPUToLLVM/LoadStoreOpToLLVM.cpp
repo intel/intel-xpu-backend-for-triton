@@ -526,7 +526,7 @@ struct LoadOpConversion
 
     auto dpasLayout = cast<DpasEncodingAttr>(dotLayout.getParent());
 
-    const unsigned opIdx = dotLayout.getOpIdx();
+    auto opIdx = static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
     Type eltTy = tensorType.getElementType();
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -543,7 +543,7 @@ struct LoadOpConversion
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, dpasOrder);
 
-    bool isOperandA = (opIdx == 0);
+    bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
     SmallVector<unsigned> dpasInstShape = isOperandA
                                               ? dpasLayout.getDPASInstShapeA()
                                               : dpasLayout.getDPASInstShapeB();
@@ -593,8 +593,8 @@ struct LoadOpConversion
     SmallVector<unsigned> warpShape =
         isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
 
-    unsigned dimOuter = opIdx ? rank - 1 : rank - 2;
-    unsigned dimInner = opIdx ? rank - 2 : rank - 1;
+    unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
+    unsigned dimInner = bool(opIdx) ? rank - 2 : rank - 1;
     unsigned outerDimRequiredWarpNum =
         mlir::ceil<unsigned>(tensorShape[dimOuter], warpShape[dimOuter]);
     unsigned outerDimWarpNum =
@@ -615,9 +615,9 @@ struct LoadOpConversion
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
     if (!isTransposeRequired) {
       numOperandsPer2DLoadM =
-          isOperandA ? repCluster[dimOuter] : numReps[opIdx ? 1 : 2];
+          isOperandA ? repCluster[dimOuter] : numReps[unsigned(opIdx) ? 1 : 2];
       numOperandsPer2DloadN =
-          isOperandA ? numReps[opIdx ? 1 : 2] : repCluster[dimOuter];
+          isOperandA ? numReps[unsigned(opIdx) ? 1 : 2] : repCluster[dimOuter];
     } else {
       if (isOperandA)
         return failure();
@@ -680,8 +680,8 @@ struct LoadOpConversion
     unsigned warpOuterStride = warpShape[dimOuter];
     unsigned repKStride = elemsPerDPASInst[dimInner];
 
-    unsigned numRepOuter = numReps[opIdx ? 2 : 1];
-    unsigned numRepInner = numReps[opIdx ? 1 : 2];
+    unsigned numRepOuter = numReps[bool(opIdx) ? 2 : 1];
+    unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
 
     Value pitch;
     if (memoryRowMajor) {
@@ -709,16 +709,19 @@ struct LoadOpConversion
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
         for (int k = 0; k < numRepInner; k += numOperandsInnerDimPerLoad) {
           Value offsetX, offsetY;
-          if (opIdx == 0) {
+          switch (opIdx) {
+          case DpasEncodingAttr::OpIdx::OperandA: {
             // A
             offsetY = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
                           i32_val(outer * repOuterStride + rep * repStride));
             offsetX = i32_val(k * repKStride);
-          } else {
+          } break;
+          case DpasEncodingAttr::OpIdx::OperandB: {
             // B
             offsetX = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
                           i32_val(outer * repOuterStride + rep * repStride));
             offsetY = i32_val(k * repKStride);
+          } break;
           }
 
           offsetX = add(offsetX, offsetBaseX);
@@ -758,10 +761,12 @@ struct LoadOpConversion
             return failure();
           }
 
-          unsigned packedRowNum = opIdx == 0 ? numOperandsOuterDimPerLoad
-                                             : numOperandsInnerDimPerLoad;
-          unsigned packedColNum = opIdx == 0 ? numOperandsInnerDimPerLoad
-                                             : numOperandsOuterDimPerLoad;
+          unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
+                                      ? numOperandsOuterDimPerLoad
+                                      : numOperandsInnerDimPerLoad;
+          unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
+                                      ? numOperandsInnerDimPerLoad
+                                      : numOperandsOuterDimPerLoad;
 
           // Decompose the return value to multiple operands.
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
@@ -784,17 +789,20 @@ struct LoadOpConversion
                     loc, packedDPASOperandType, load2dOp, load2dOp, attr);
 
                 // Save the decomposed vals to the map;
-                if (opIdx == 0) {
+                switch (opIdx) {
+                case DpasEncodingAttr::OpIdx::OperandA: {
                   loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
                                 rep * packedRowNum + row,
                             k + vblk * packedColNumPerVBlock + col}] =
                       bitcast(loadVal, unpackedDPASOperandType);
-                } else {
+                } break;
+                case DpasEncodingAttr::OpIdx::OperandB: {
                   loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
                                 rep * packedColNum +
                                 vblk * packedColNumPerVBlock + col,
                             k + row}] =
                       bitcast(loadVal, unpackedDPASOperandType);
+                } break;
                 }
               }
         }
@@ -806,8 +814,9 @@ struct LoadOpConversion
     SmallVector<Value> unpackedLoadedVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int k = 0; k < numRepInner; ++k) {
-        for (int rep = 0; rep < repCluster[opIdx]; ++rep) {
-          Value loadVal = loadVals.at({outer * repCluster[opIdx] + rep, k});
+        for (int rep = 0; rep < repCluster[unsigned(opIdx)]; ++rep) {
+          Value loadVal =
+              loadVals.at({outer * repCluster[unsigned(opIdx)] + rep, k});
           VectorType loadTy = cast<VectorType>(loadVal.getType());
           for (int i = 0; i < loadTy.getNumElements(); ++i) {
             auto val = extract_element(loadVal, i32_val(i));
@@ -1034,7 +1043,8 @@ struct StoreOpConversion
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
-        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
+                                                 /*upperBound=*/nullptr));
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
@@ -1563,8 +1573,8 @@ struct AtomicRMWOpConversion
 
     rmwVal = bitcast(rmwVal, valueElemTy);
 
-    // Align pointer by 4 bytes by zeroing lower address bits. Atomically read a
-    // vector of two fp16 values as a single i32. The second lowest bit is
+    // Align pointer by 4 bytes by zeroing lower address bits. Atomically read
+    // a vector of two fp16 values as a single i32. The second lowest bit is
     // extracted to later be used as an index to extract the required vector
     // element.
     assert(isa<LLVM::LLVMPointerType>(rmwPtr.getType()));

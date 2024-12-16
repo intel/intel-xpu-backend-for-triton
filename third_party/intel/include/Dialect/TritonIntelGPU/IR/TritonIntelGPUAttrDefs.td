@@ -74,17 +74,41 @@ along the row (resp. col) dimension.
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    enum class OpIdx : unsigned {
+      OperandA = 0u,
+      OperandB = 1u,
+      OperandC = 2u
+    };
+
     SmallVector<unsigned> getDPASInstShapeA() const;
     SmallVector<unsigned> getDPASInstShapeB() const;
     SmallVector<unsigned> getDPASInstShapeC() const;
     SmallVector<unsigned> getShapeA() const;
     SmallVector<unsigned> getShapeB() const;
     SmallVector<unsigned> getShapeC() const;
-    SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const;
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth,unsigned opIdx) const;
-    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const;
-    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+
+    SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, OpIdx opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const;
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;
+    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, OpIdx opIdx) const;
+
+    // Forwarder functions for casting unsigned to OpIdx.
+    SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, unsigned opIdx) const {
+      return getDPASRepetitions(shape, static_cast<OpIdx>(opIdx));
+    }
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
+      return getSizePerThreadForOperand(kWidth, static_cast<OpIdx>(opIdx));
+    }
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
+      return getElemsPerThreadForOperands(shape, eltTy, static_cast<OpIdx>(opIdx));
+    }
+    SmallVector<unsigned> getRepOrderForOperand(unsigned opIdx) const {
+      return getRepOrderForOperand(static_cast<OpIdx>(opIdx));
+    }
+    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, unsigned opIdx) const {
+      return getTotalElemsPerThreadForOperand(shape, eltTy, kWidth, static_cast<OpIdx>(opIdx));
+    }
 
     bool supportReduction() const {
       return true;
