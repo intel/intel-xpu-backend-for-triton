@@ -15,7 +15,7 @@ def device(request):
 @pytest.fixture
 def fresh_triton_cache():
     try:
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        with tempfile.TemporaryDirectory() as tmpdir:
             try:
                 os.environ["TRITON_CACHE_DIR"] = tmpdir
                 yield tmpdir
