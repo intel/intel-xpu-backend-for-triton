@@ -118,6 +118,7 @@ class IRSource:
             ir.load_dialects(context)
             backend.load_dialects(context)
             self.module = ir.parse_mlir_module(self.path, context)
+            self.module.context = context
             fn_name = self.module.get_entry_func_name()
             self.name = "@" + fn_name
             funcOp = self.module.get_function(fn_name)
@@ -130,7 +131,7 @@ class IRSource:
     def make_ir(self, options, codegen_fns, module_map, context):
         if self.ext == "llir":
             return self.module
-        self.module.context = context
+        # self.module.context = context
         return self.module
 
     def parse_options(self):
