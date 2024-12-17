@@ -15,6 +15,7 @@ set(TRITON_TEST_DEPENDS
   triton-opt
   triton-tensor-layout
   triton-translate
+  triton-llvm-opt
 )
 
 set(FILECHECK_PATH "${LLVM_LIBRARY_DIR}/../bin/FileCheck")
