@@ -100,9 +100,6 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
       return getSizePerThreadForOperand(kWidth, static_cast<OpIdx>(opIdx));
     }
-    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
-      return getElemsPerThreadForOperands(shape, eltTy, static_cast<OpIdx>(opIdx));
-    }
     SmallVector<unsigned> getRepOrderForOperand(unsigned opIdx) const {
       return getRepOrderForOperand(static_cast<OpIdx>(opIdx));
     }
