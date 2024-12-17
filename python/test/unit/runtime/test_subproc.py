@@ -92,7 +92,7 @@ def test_compile_in_forked_subproc_with_forced_gc(fresh_triton_cache) -> None:
     compile_empty_kernel_with_gc(config)
 
     # stage 2.p
-    shutil.rmtree(fresh_triton_cache)
+    shutil.rmtree(fresh_triton_cache, ignore_errors=True)
     mp_ctx = multiprocessing.get_context(start_method)
     proc = mp_ctx.Process(target=compile_empty_kernel_with_gc, args=(config, ))
 
