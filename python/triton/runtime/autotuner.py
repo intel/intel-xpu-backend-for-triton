@@ -117,8 +117,8 @@ class Autotuner(KernelInterface):
             import triton.testing
             self.do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
                 kernel_call,
-                warmup=warmup if warmup is not None else 25,
-                rep=rep if rep is not None else 100,
+                warmup=warmup if warmup is not None else 10,
+                rep=rep if rep is not None else 10,
                 quantiles=quantiles,
             )
             return

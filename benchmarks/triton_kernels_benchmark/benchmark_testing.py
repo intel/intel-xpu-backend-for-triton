@@ -2,6 +2,7 @@ import argparse
 import itertools
 import os
 from typing import Any, Dict, List
+import triton
 
 USE_IPEX_OPTION = os.getenv("USE_IPEX", "1") == "1"
 if USE_IPEX_OPTION:
@@ -235,6 +236,8 @@ elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     do_bench = do_bench_upstream_pytorch_profiler
 else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
+
+triton.testing.do_bench = do_bench
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=""):
