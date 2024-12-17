@@ -13187,7 +13187,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E, bool PostponedPHIs) {
     SmallVector<Value *> OpVecs;
     SmallVector<Type *, 2> TysForDecl;
     // Add return type if intrinsic is overloaded on it.
-    if (UseIntrinsic && isVectorIntrinsicWithOverloadTypeAtArg(ID, -1))
+    if (UseIntrinsic && isVectorIntrinsicWithOverloadTypeAtArg(ID, -1, TTI))
       TysForDecl.push_back(VecTy);
     auto *CEI = cast<CallInst>(VL0);
     for (unsigned I : seq<unsigned>(0, CI->arg_size())) {
@@ -13202,7 +13202,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E, bool PostponedPHIs) {
             It->second.first < DL->getTypeSizeInBits(CEI->getType()))
           ScalarArg = Builder.getFalse();
         OpVecs.push_back(ScalarArg);
-        if (isVectorIntrinsicWithOverloadTypeAtArg(ID, I))
+        if (isVectorIntrinsicWithOverloadTypeAtArg(ID, I, TTI))
           TysForDecl.push_back(ScalarArg->getType());
         continue;
       }
@@ -13224,7 +13224,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E, bool PostponedPHIs) {
       }
       LLVM_DEBUG(dbgs() << "SLP: OpVec[" << I << "]: " << *OpVec << "\n");
       OpVecs.push_back(OpVec);
-      if (UseIntrinsic && isVectorIntrinsicWithOverloadTypeAtArg(ID, I))
+      if (UseIntrinsic && isVectorIntrinsicWithOverloadTypeAtArg(ID, I, TTI))
         TysForDecl.push_back(OpVec->getType());
     }
 
@@ -13236,7 +13236,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E, bool PostponedPHIs) {
                                    false /*HasGlobalPred*/);
       CF = VFDatabase(*CI).getVectorizedFunction(Shape);
     } else {
-      CF = Intrinsic::getDeclaration(F->getParent(), ID, TysForDecl);
+      CF = Intrinsic::getOrInsertDeclaration(F->getParent(), ID, TysForDecl);
     }
 
     SmallVector<OperandBundleDef, 1> OpBundles;

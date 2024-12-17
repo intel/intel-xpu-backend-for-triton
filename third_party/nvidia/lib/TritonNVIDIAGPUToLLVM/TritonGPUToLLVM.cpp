@@ -7,7 +7,6 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -45,7 +44,6 @@ class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
-    addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -79,13 +77,16 @@ struct ConvertTritonGPUToLLVM
   ConvertTritonGPUToLLVM(int32_t computeCapability)
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
 
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
+      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
-    TargetInfo targetInfo(computeCapability);
+    TargetInfo targetInfo(computeCapability, ptxVersion);
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -142,6 +143,8 @@ struct ConvertTritonGPUToLLVM
                                                  targetInfo, benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
                                                targetInfo, benefit);
+    mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
+                                                 targetInfo, benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
@@ -226,6 +229,12 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGPUToLLVMPass() {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
+}
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertTritonGPUToLLVMPass(int32_t computeCapability,
+                                 int32_t ptxVersion) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
+                                                  ptxVersion);
 }
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {

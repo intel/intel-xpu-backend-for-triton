@@ -23,17 +23,40 @@ void lowerDistributedToShared(
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
-  assert(srcTy.getShape().size() <= 2 ||
-         (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
-             "Unexpected rank of ConvertLayout(blocked->shared)");
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
-  auto smemBase = smemObj.getBase();
-  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo, llvmOpCount);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
+                           targetInfo, llvmOpCount);
 }
+
+struct GlobalScratchAllocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
+  GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
+        "ttg.global_scratch_memory_offset");
+    assert(opOffsetAttr);
+    auto opOffset = opOffsetAttr.getValue().getZExtValue();
+
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!funcOp) {
+      return failure();
+    }
+    Value ptr =
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+
+    rewriter.replaceOp(op, ptr);
+    return success();
+  }
+};
 
 struct LocalAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
@@ -108,16 +131,49 @@ public:
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
+  // FIXME [Dot LL]
+  // Do for all DotOperandEncodingAttr once we have LLs for all of them
+  static bool isSupportedDotOpLayout(MemDescType srcTy,
+                                     RankedTensorType dstTy) {
+    auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
+    auto dstLayout = dstTy.getEncoding();
+    auto bitwidth = dstTy.getElementTypeBitWidth();
+    auto rank = dstTy.getRank();
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
+      auto vecWidth = 32 / bitwidth;
+      auto kWidth = dot.getKWidth();
+      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
+      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
+        auto needTrans = kOrder != srcLayout.getOrder()[0];
+        auto canUseLdmatrix =
+            (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
+        if (mma.isHopper()) {
+          // I think we should be able to remove this condition, but it's here
+          // as the legacy ldmatrix path does not support it
+          canUseLdmatrix &= srcTy.getElementTypeBitWidth() * kWidth == 32;
+        }
+        // If we remove this one, ldmatrix will IMA. It can probably be relaxed
+        // though
+        canUseLdmatrix &=
+            srcTy.getShape()[0] >= 8 &&
+            srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
+        return !canUseLdmatrix;
+      }
+      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
+        return true;
+    }
+    return false;
+  };
+
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<SharedEncodingAttr>(srcLayout) &&
-        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            dstLayout)) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+            LinearEncodingAttr>(dstLayout) ||
+        isSupportedDotOpLayout(srcTy, dstTy)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -155,11 +211,10 @@ private:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
-    assert(dstShape.size() <= 2 &&
-           "Unexpected rank of ConvertLayout(shared->blocked)");
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    auto inOrd = getOrder(srcSharedLayout);
+    assert((!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) ||
+            isSupportedDotOpLayout(srcTy, dstTy)) &&
+           "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
@@ -226,6 +281,7 @@ void mlir::triton::populateMemoryOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks) {
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);

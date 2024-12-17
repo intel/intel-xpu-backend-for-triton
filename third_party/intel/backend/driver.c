@@ -166,6 +166,26 @@ struct BuildFlags {
   }
 };
 
+sycl::context get_default_context(const sycl::device &sycl_device) {
+  const auto &platform = sycl_device.get_platform();
+#ifdef WIN32
+  sycl::context ctx;
+  try {
+    ctx = platform.ext_oneapi_get_default_context();
+  } catch (const std::runtime_error &ex) {
+    // This exception is thrown on Windows because
+    // ext_oneapi_get_default_context is not implemented. But it can be safely
+    // ignored it seems.
+#if _DEBUG
+    std::cout << "ERROR: " << ex.what() << std::endl;
+#endif
+  }
+  return ctx;
+#else
+  return platform.ext_oneapi_get_default_context();
+#endif
+}
+
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
@@ -194,8 +214,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     const size_t binary_size = PyBytes_Size(py_bytes);
 
     uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
-    const auto ctx =
-        sycl_device.get_platform().ext_oneapi_get_default_context();
+    const auto &ctx = get_default_context(sycl_device);
     const auto l0_device =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
     const auto l0_context =
@@ -225,13 +244,21 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
         build_flags.addLargeGRFSizeFlag();
 
-        auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
-            binary_ptr, binary_size, kernel_name, l0_device, l0_context,
-            build_flags(), is_spv);
+        try {
+          auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
+              binary_ptr, binary_size, kernel_name, l0_device, l0_context,
+              build_flags(), is_spv);
 
-        if (debugEnabled)
-          std::cout << "(I): Kernel has now " << n_spills << " spills"
-                    << std::endl;
+          if (debugEnabled)
+            std::cout << "(I): Kernel has now " << n_spills << " spills"
+                      << std::endl;
+        } catch (const std::exception &e) {
+          std::cerr << "[Ignoring] Error during Intel loadBinary with large "
+                       "registers: "
+                    << e.what() << std::endl;
+          // construct previous working version
+          build_flags = BuildFlags(build_flags_ptr);
+        }
       }
     }
 
@@ -319,6 +346,19 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
+static PyObject *waitOnSYCLQueue(PyObject *self, PyObject *args) {
+  PyObject *cap;
+  void *queue = NULL;
+  if (!PyArg_ParseTuple(args, "O", &cap))
+    return NULL;
+  if (!(queue = PyLong_AsVoidPtr(cap)))
+    return NULL;
+  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
+  sycl_queue->wait();
+
+  return Py_None;
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided SPV into ZE driver"},
@@ -328,6 +368,8 @@ static PyMethodDef ModuleMethods[] = {
      "Initialize the ZE GPU context"},
     {"init_devices", initDevices, METH_VARARGS,
      "Initialize the ZE GPU devices and return device count"},
+    {"wait_on_sycl_queue", waitOnSYCLQueue, METH_VARARGS,
+     "call wait on a specific sycl::queue"},
     {NULL, NULL, 0, NULL} // sentinel
 };
 

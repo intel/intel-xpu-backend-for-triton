@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-import xetla_kernel
+from triton_kernels_benchmark import xetla_kernel
 
 if benchmark_suit.USE_IPEX_OPTION:
     import intel_extension_for_pytorch  # type: ignore # noqa: F401
@@ -79,6 +79,10 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     off_z = tl.program_id(0)
     off_h = tl.program_id(1)
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
+    if N_CTX <= 512:
+        start_m = tl.program_id(0)
+        off_z = tl.program_id(2)
+        qvk_offset = off_z.to(tl.int64) * stride_qh
 
     # block pointers
     Q_block_ptr = tl.make_block_ptr(
@@ -153,7 +157,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 
 
 configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
     for BN in [32, 64] \
     for s in [3, 4] \
@@ -171,11 +175,14 @@ def forward(q, k, v, causal, sm_scale):
     assert Lk in {16, 32, 64, 128}
     o = torch.empty_like(q, dtype=torch.float32)
     BLOCK_M = 128
-    BLOCK_N = 64 if Lk <= 64 else 32
+    BLOCK_N = 64
     num_stages = 3
     num_warps = 8 if Lq == 64 else 16
     stage = 3 if causal else 1
     grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
+    n_ctx = q.shape[2]
+    if n_ctx <= 512:
+        grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0] * q.shape[1])
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
     if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
@@ -205,7 +212,9 @@ def forward(q, k, v, causal, sm_scale):
             BLOCK_DMODEL=Lk,  #
             STAGE=stage,  #
             num_warps=num_warps,  #
-            num_stages=num_stages  #
+            num_stages=num_stages,  #
+            grf_mode='large',  #
+            advanced_path=True,  #
         )
     return o
 

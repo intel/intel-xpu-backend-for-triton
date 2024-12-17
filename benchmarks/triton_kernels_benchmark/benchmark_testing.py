@@ -153,8 +153,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     warmup_time = n_warmup * estimate_ms
     rep_time = n_repeat * estimate_ms
 
-    times = triton_do_bench(fn, warmup=warmup_time, rep=rep_time, grad_to_none=grad_to_none, return_mode="all",
-                            device_type=device)
+    times = triton_do_bench(fn, warmup=warmup_time, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
     times = torch.tensor(times, dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 

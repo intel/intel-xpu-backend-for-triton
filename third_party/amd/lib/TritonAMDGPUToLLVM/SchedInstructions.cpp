@@ -1,9 +1,11 @@
+#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONSCHEDHINTS
@@ -11,42 +13,66 @@ namespace mlir::triton {
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
 } // namespace mlir::triton
 
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "lower-insert-instruction-sched-hints"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 using namespace mlir;
+
+// TODO: The following passes/algorithms are applicable only for a single
+// `tt.dot` op in a `scf.for` block -i.e., a single schedule hint op per block.
+// Note, we need to relax this assumption in the future and extend the current
+// implementation.
 
 namespace mlir::triton {
 void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
                          unsigned k, Type elementType) {
   auto *ctx = op->getContext();
   auto mmaType = RankedTensorType::get({m, n, k}, elementType);
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, mmaCount, mmaType);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, mmaCount, mmaType);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
     schedHint.setNumMMAsAttr(counterAttr);
   });
 }
 
-void setNumGeneratedGlobalLoads(triton::LoadOp op, size_t globalLoadsCount,
+template <typename LoadOpType>
+void setNumGeneratedGlobalLoads(LoadOpType op, size_t globalLoadsCount,
                                 Type type) {
   MLIRContext *ctx = op->getContext();
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, globalLoadsCount, type);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, globalLoadsCount, type);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
-    auto opIdxAttr =
-        cast<amdgpu::OpIdxAttr>(op->getAttr(amdgpu::OpIdxAttr::getMnemonic()));
-    assert(opIdxAttr.getValue() < 2);
-    if (opIdxAttr.getValue() == 0)
-      schedHint.setNumGlobalLoadsAAttr(counterAttr);
-    else
-      schedHint.setNumGlobalLoadsBAttr(counterAttr);
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
+    if (auto opIdxAttr = op->template getAttrOfType<triton::amdgpu::OpIdxAttr>(
+            triton::amdgpu::OpIdxAttr::getMnemonic())) {
+      assert(opIdxAttr.getValue() < 2);
+      const bool isBufferLoadOp =
+          std::is_same_v<LoadOpType, triton::amdgpu::BufferLoadOp>;
+      if (opIdxAttr.getValue() == 0) {
+        schedHint.setNumGlobalLoadsAAttr(counterAttr);
+        schedHint.setIsBufferLoadsAEnabled(isBufferLoadOp);
+      } else {
+        schedHint.setNumGlobalLoadsBAttr(counterAttr);
+        schedHint.setIsBufferLoadsBEnabled(isBufferLoadOp);
+      }
+    }
   });
 }
+template void setNumGeneratedGlobalLoads(triton::amdgpu::BufferLoadOp op,
+                                         size_t globalLoadsCount, Type type);
+template void setNumGeneratedGlobalLoads(triton::LoadOp op,
+                                         size_t globalLoadsCount, Type type);
 
 void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
                             Type type) {
   auto *ctx = op->getContext();
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, dsReadsCount, type);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, dsReadsCount, type);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
     Value dst = op.getResult();
     auto dstTensorTy = cast<RankedTensorType>(dst.getType());
     auto dotOperandLayout =
@@ -63,115 +89,171 @@ void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
 void storeOpConversionCallback(triton::gpu::LocalStoreOp op,
                                size_t localStoreOpCount, Type type) {
   MLIRContext *ctx = op->getContext();
-  auto counterAttr = amdgpu::InstCounterAttr::get(ctx, localStoreOpCount, type);
+  auto counterAttr =
+      triton::amdgpu::InstCounterAttr::get(ctx, localStoreOpCount, type);
 
-  op->getBlock()->walk([&](amdgpu::InstructionSchedHint schedHint) {
-    auto opIdxAttr =
-        op->getAttrOfType<amdgpu::OpIdxAttr>(amdgpu::OpIdxAttr::getMnemonic());
-    assert(opIdxAttr.getValue() < 2);
-    if (opIdxAttr.getValue() == 0)
-      schedHint.setNumDsWritesAAttr(counterAttr);
-    else
-      schedHint.setNumDsWritesBAttr(counterAttr);
+  op->getBlock()->walk([&](triton::amdgpu::InstructionSchedHint schedHint) {
+    if (auto opIdxAttr = op->getAttrOfType<triton::amdgpu::OpIdxAttr>(
+            triton::amdgpu::OpIdxAttr::getMnemonic())) {
+      assert(opIdxAttr.getValue() < 2);
+      if (opIdxAttr.getValue() == 0)
+        schedHint.setNumDsWritesAAttr(counterAttr);
+      else
+        schedHint.setNumDsWritesBAttr(counterAttr);
+    }
   });
+}
+
+triton::DotOp getSingleDotOpIfExists(scf::ForOp forOp) {
+  triton::DotOp dotOp = nullptr;
+  size_t dotCounter = 0;
+  forOp->walk(
+      [&dotOp, &dotCounter](triton::DotOp op) { dotOp = op, ++dotCounter; });
+
+  return (dotCounter == 1) ? dotOp : nullptr;
 }
 } // namespace mlir::triton
 
 namespace {
 
-// The bitmask that encodes kinds of the instructions from AMD ISA.
-// The bitmask is used for providing instruction scheduling hints.
-enum InstructionKindMask {
-  NONE = 0x0000000,
-  ALL_ALU = 0x00000001,
-  VALU = 0x00000002,
-  SALU = 0x00000004,
-  MFMA = 0x00000008,
-  ALL_VMEM = 0x00000010,
-  VMEM_READ = 0x00000020,
-  VMEM_WRITE = 0x00000040,
-  ALL_DS = 0x00000080,
-  DS_READ = 0x00000100,
-  DS_WRITE = 0x00000200
-};
-
 // Create an intrinsic to control how different instruction kinds should
 // interleave for better ILP.
 void createSchedGroupBarrier(PatternRewriter &rewriter, Location loc,
-                             InstructionKindMask maskValue, int sizeValue,
-                             int groupIdValue) {
-  MLIRContext *ctx = rewriter.getContext();
-  const char *intrinsicName = "llvm.amdgcn.sched.group.barrier";
-
-  Value mask =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(maskValue));
-  Value size =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(sizeValue));
-  Value groupId = LLVM::createConstantI32(loc, rewriter,
-                                          static_cast<int32_t>(groupIdValue));
-
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, TypeRange{},
-                                  ValueRange{mask, size, groupId});
+                             mlir::amdgpu::sched_barrier_opt_enum maskValue,
+                             int sizeValue, int groupIdValue) {
+  IntegerAttr mask =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
+  IntegerAttr size =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(sizeValue));
+  IntegerAttr groupId =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(groupIdValue));
+  rewriter.create<ROCDL::SchedGroupBarrier>(loc, mask, size, groupId);
 }
 
 // Insert intrinsic that controls the types of instructions that may be
 // allowed to cross the intrinsic during instruction scheduling.
 Operation *createSchedBarrier(PatternRewriter &rewriter, Location loc,
-                              int64_t maskValue) {
-  MLIRContext *ctx = rewriter.getContext();
-  const char *intrinsicName = "llvm.amdgcn.sched.barrier";
-  LLVM::FastmathFlagsAttr defaultFlags{};
-
-  Value mask =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(maskValue));
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName,
-                                         TypeRange{}, ValueRange{mask});
+                              mlir::amdgpu::sched_barrier_opt_enum maskValue) {
+  IntegerAttr mask =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
+  return rewriter.create<ROCDL::SchedBarrier>(loc, mask);
 }
 
 // Insert an experimental intrinsic for instruction group level parallelism.
 // The intrinsic takes a value that specifies the strategy.
 Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
-  MLIRContext *ctx = rewriter.getContext();
-  const char *intrinsicName = "llvm.amdgcn.iglp.opt";
-  LLVM::FastmathFlagsAttr defaultFlags{};
-  Value iglpValue =
-      LLVM::createConstantI32(loc, rewriter, static_cast<int32_t>(value));
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName,
-                                         TypeRange{}, ValueRange{iglpValue});
+  IntegerAttr iglpValue =
+      rewriter.getI32IntegerAttr(static_cast<int32_t>(value));
+  return rewriter.create<ROCDL::IglpOpt>(loc, iglpValue);
+}
+
+// The following structs represent in-source database regarding a target
+// machine. It provides instructions execution and issue cycles needed for
+// scheduling.
+struct MachineDescr {
+  virtual ~MachineDescr() = default;
+  virtual uint32_t getDsReadIssueCycle(uint32_t instrWidth) = 0;
+  virtual FailureOr<uint32_t> getMmaExecCycle(llvm::ArrayRef<int64_t> dims) = 0;
+  virtual uint32_t getMmaIssueCycle() = 0;
+  virtual uint32_t getNumLdsDataPaths() = 0;
+  static std::unique_ptr<MachineDescr> get(StringRef arch);
+};
+
+template <typename Derived> struct MachineDescrImpl : MachineDescr {
+  uint32_t getDsReadIssueCycle(uint32_t instrWidth) final {
+    return instrWidth == 16 ? 8 : 4;
+  }
+
+  FailureOr<uint32_t> getMmaExecCycle(llvm::ArrayRef<int64_t> dims) final {
+    if (dims.size() != 3)
+      return failure();
+    auto it =
+        Derived::mmaTable.find(std::make_tuple(dims[0], dims[1], dims[2]));
+    if (it != Derived::mmaTable.end())
+      return it->second;
+    return failure();
+  }
+
+  uint32_t getMmaIssueCycle() final { return Derived::mmaIssueCycle; };
+  uint32_t getNumLdsDataPaths() final { return Derived::numLdsDataPaths; }
+
+  using MmaTable =
+      llvm::DenseMap<std::tuple<int64_t, int64_t, int64_t>, uint32_t>;
+};
+
+struct CDNA2Kind : public MachineDescrImpl<CDNA2Kind> {
+  static const inline MmaTable mmaTable{{{32, 32, 8}, 64}, {{16, 16, 16}, 32}};
+  static const inline uint32_t mmaIssueCycle{4};
+  static const inline uint32_t numLdsDataPaths{2};
+};
+
+struct CDNA3Kind : public MachineDescrImpl<CDNA3Kind> {
+  static const inline MmaTable mmaTable{{{32, 32, 8}, 32}, {{16, 16, 16}, 16}};
+  static const inline uint32_t mmaIssueCycle{4};
+  static const inline uint32_t numLdsDataPaths{2};
+};
+
+std::unique_ptr<MachineDescr> MachineDescr::get(StringRef arch) {
+  AMD::ISAFamily family = AMD::deduceISAFamily(arch);
+  switch (family) {
+  case AMD::ISAFamily::CDNA3: {
+    return std::make_unique<MachineDescrImpl<CDNA3Kind>>();
+  }
+  case AMD::ISAFamily::CDNA2: {
+    return std::make_unique<MachineDescrImpl<CDNA2Kind>>();
+  }
+  default: {
+    return nullptr;
+  }
+  }
+  return nullptr;
 }
 
 struct InstructionSchedHintsRewriter
-    : public OpRewritePattern<amdgpu::InstructionSchedHint> {
+    : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(mlir::MLIRContext *ctx, std::string variant)
-      : OpRewritePattern(ctx) {
+  InstructionSchedHintsRewriter(MLIRContext *ctx, StringRef arch,
+                                int32_t numStages, std::string variant)
+      : OpRewritePattern(ctx), numStages(numStages) {
+
+    this->machineDescr = MachineDescr::get(arch);
+
+    this->schedHint = mlir::triton::amdgpu::SchedHint::none;
+    if (this->numStages < 2) {
+      LDBG("ignoring instruction scheduling due to a very low num. "
+           "stages value. Must be >= 2");
+      return;
+    }
+
     std::transform(variant.begin(), variant.end(), variant.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-
-    this->schedulingType = llvm::StringSwitch<SchedulingType>(variant)
-                               .Case("default", SchedulingType::NONE)
-                               .Case("iglp0", SchedulingType::IGLP0)
-                               .Case("iglp1", SchedulingType::IGLP1)
-                               .Case("ck_v3", SchedulingType::CK_V3)
-                               .Default(SchedulingType::UNKNOWN);
+    if (auto maybeSchedHint = triton::amdgpu::symbolizeSchedHint(variant))
+      this->schedHint = maybeSchedHint.value();
+    else
+      LDBG("ignoring instruction scheduling because "
+           "unknown instruction scheduling variant has been provided");
   }
 
-  enum class SchedulingType : uint32_t {
-    NONE = 0,
-    IGLP0,
-    IGLP1,
-    CK_V3,
-    UNKNOWN
-  };
-
-  // This is the implementation of the CK's V3 pipelining (see
-  // see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
+  // The following is inspired by ROCm Composable Kernel library's V3 pipelining
+  // (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
   // This scheduling requires 1x register and 1x LDS buffers combined with the
-  // local (LDS to registers) and global (HBN to registers) data prefetching.
-  // see:
-  // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
-  void createCKV3Schedule(PatternRewriter &rewriter, Location loc,
-                          amdgpu::InstructionSchedHint schedHint) const {
+  // local (LDS to registers) and global (HBM to registers) data prefetching.
+  void createLocalPrefetchSchedule(
+      PatternRewriter &rewriter, Location loc,
+      triton::amdgpu::InstructionSchedHint schedHint) const {
+
+    if (!(schedHint.getIsBufferLoadsAEnabled() &&
+          schedHint.getIsBufferLoadsBEnabled())) {
+      LDBG("skipping `local-prefetch` scheduling given it needs `buffer_load` "
+           "instructions");
+      return;
+    }
+
+    if (!machineDescr) {
+      schedHint.emitError("unknown target architecture detected");
+      return;
+    }
+
     const uint32_t numDsReadInstA = schedHint.getNumDsReadsA().getValue();
     const uint32_t numDsReadInstB = schedHint.getNumDsReadsB().getValue();
 
@@ -183,95 +265,151 @@ struct InstructionSchedHintsRewriter
     const uint32_t numBufferLoadInstB =
         schedHint.getNumGlobalLoadsB().getValue();
 
-    const uint32_t numMfmaInst = schedHint.getNumMMAs().getValue();
+    if (numBufferLoadInstA == 0) {
+      schedHint.emitError("buffer load count for tile A must be initialized");
+      return;
+    }
 
-    auto mfmaType = cast<RankedTensorType>(schedHint.getNumMMAs().getType());
-    const uint32_t nPerXDL = mfmaType.getShape()[1];
-    const uint32_t mfmaCycle = nPerXDL == 16 ? 16 : 32;
+    if (numBufferLoadInstB == 0) {
+      schedHint.emitError("buffer load count for tile B must be initialized");
+      return;
+    }
+
+    const uint32_t numMmaInst = schedHint.getNumMMAs().getValue();
+
+    auto mmaType = cast<RankedTensorType>(schedHint.getNumMMAs().getType());
+    auto maybeMmaExecCycle = machineDescr->getMmaExecCycle(mmaType.getShape());
+    if (llvm::failed(maybeMmaExecCycle)) {
+      schedHint.emitError("unknown mma instruction type");
+      return;
+    }
+    const uint32_t mmaExecCycle = maybeMmaExecCycle.value();
 
     auto dsReadsAType = cast<VectorType>(schedHint.getNumDsReadsA().getType());
     auto dsReadsBType = cast<VectorType>(schedHint.getNumDsReadsB().getType());
 
-    const uint32_t dsReadAIssueCycle = dsReadsAType.getShape()[0] == 16 ? 8 : 4;
-    const uint32_t dsReadBIssueCycle = dsReadsBType.getShape()[0] == 16 ? 8 : 4;
+    const uint32_t dsReadAIssueCycle =
+        machineDescr->getDsReadIssueCycle(dsReadsAType.getShape()[0]);
+    const uint32_t dsReadBIssueCycle =
+        machineDescr->getDsReadIssueCycle(dsReadsBType.getShape()[0]);
 
-    const auto dsReadAMfmaRate =
-        (mfmaCycle - 4 + 2 * dsReadAIssueCycle - 1) / (2 * dsReadAIssueCycle);
-    const auto dsReadBMfmaRate =
-        (mfmaCycle - 4 + 2 * dsReadBIssueCycle - 1) / (2 * dsReadBIssueCycle);
+    const uint32_t mmaIssueCycle = this->machineDescr->getMmaIssueCycle();
+    const uint32_t numLdsDataPaths = this->machineDescr->getNumLdsDataPaths();
 
-    const auto numDsreadAMfma =
-        (numDsReadInstA + dsReadAMfmaRate - 1) / dsReadAMfmaRate;
-    const auto numDsreadBMfma =
-        (numDsReadInstB + dsReadBMfmaRate - 1) / dsReadBMfmaRate;
+    const auto dsReadAMmaRate = (mmaExecCycle - mmaIssueCycle +
+                                 numLdsDataPaths * dsReadAIssueCycle - 1) /
+                                (numLdsDataPaths * dsReadAIssueCycle);
+    const auto dsReadBMmaRate = (mmaExecCycle - mmaIssueCycle +
+                                 numLdsDataPaths * dsReadBIssueCycle - 1) /
+                                (numLdsDataPaths * dsReadBIssueCycle);
+
+    const auto numDsreadAMma =
+        (numDsReadInstA + dsReadAMmaRate - 1) / dsReadAMmaRate;
+    const auto numDsreadBMma =
+        (numDsReadInstB + dsReadBMmaRate - 1) / dsReadBMmaRate;
 
     // stage 1
-    const auto numMfmaStage1 = numMfmaInst - (numDsreadAMfma + numDsreadBMfma);
-    const auto num_mfma_per_issue =
-        numMfmaStage1 / (numBufferLoadInstA + numBufferLoadInstB);
+    const auto numMmaStage1 = numMmaInst - (numDsreadAMma + numDsreadBMma);
+    const auto numMmaPerIssue =
+        numMmaStage1 / (numBufferLoadInstA + numBufferLoadInstB);
 
     const auto numDswritePerIssueA = numDsWriteInstA / numBufferLoadInstA;
     const auto numDswritePerIssueB = numDsWriteInstB / numBufferLoadInstB;
 
     for (size_t i = 0; i < numBufferLoadInstA; ++i) {
       for (size_t idswrite = 0; idswrite < numDswritePerIssueA; ++idswrite) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_WRITE, 1,
-                                0);
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_write,
+                                1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
+                                1, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::VMEM_READ, 1,
-                              0);
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA,
-                              num_mfma_per_issue - numDswritePerIssueA, 0);
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
+      createSchedGroupBarrier(rewriter, loc,
+                              mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
+                              numMmaPerIssue - numDswritePerIssueA, 0);
     }
 
     for (size_t i = 0; i < numBufferLoadInstB; ++i) {
       for (size_t idswrite = 0; idswrite < numDswritePerIssueB; ++idswrite) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_WRITE, 1,
-                                0);
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_write,
+                                1, 0);
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
+                                1, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::VMEM_READ, 1,
-                              0);
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA,
-                              num_mfma_per_issue - numDswritePerIssueB, 0);
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
+      createSchedGroupBarrier(rewriter, loc,
+                              mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
+                              numMmaPerIssue - numDswritePerIssueB, 0);
     }
 
     // stage 2
-    for (size_t i = 0; i < numDsreadAMfma; ++i) {
-      if ((numDsReadInstA - (i + 1) * dsReadAMfmaRate) >= dsReadAMfmaRate) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_READ,
-                                dsReadAMfmaRate, 0);
+    for (size_t i = 0; i < numDsreadAMma; ++i) {
+      if ((numDsReadInstA - (i + 1) * dsReadAMmaRate) >= dsReadAMmaRate) {
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_read,
+                                dsReadAMmaRate, 0);
       } else {
         createSchedGroupBarrier(
-            rewriter, loc, InstructionKindMask::DS_READ,
-            numDsReadInstA - (numDsreadAMfma - 1) * dsReadAMfmaRate, 0);
+            rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::ds_read,
+            numDsReadInstA - (numDsreadAMma - 1) * dsReadAMmaRate, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
     }
 
-    for (size_t i = 0; i < numDsreadBMfma; ++i) {
-      if ((numDsReadInstB - (i + 1) * dsReadBMfmaRate) >= dsReadBMfmaRate) {
-        createSchedGroupBarrier(rewriter, loc, InstructionKindMask::DS_READ,
-                                dsReadBMfmaRate, 0);
+    for (size_t i = 0; i < numDsreadBMma; ++i) {
+      if ((numDsReadInstB - (i + 1) * dsReadBMmaRate) >= dsReadBMmaRate) {
+        createSchedGroupBarrier(rewriter, loc,
+                                mlir::amdgpu::sched_barrier_opt_enum::ds_read,
+                                dsReadBMmaRate, 0);
       } else {
         createSchedGroupBarrier(
-            rewriter, loc, InstructionKindMask::DS_READ,
-            numDsReadInstB - (numDsreadBMfma - 1) * dsReadBMfmaRate, 0);
+            rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::ds_read,
+            numDsReadInstB - (numDsreadBMma - 1) * dsReadBMmaRate, 0);
       }
-      createSchedGroupBarrier(rewriter, loc, InstructionKindMask::MFMA, 1, 0);
+      createSchedGroupBarrier(
+          rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
     }
+
+    // The AMDGPU compiler backend can fold consecutive `ds_read/ds_write`
+    // instructions into wider variants as a part of its load/store optimization
+    // during the instruction selection pass. If it happens, then it means that
+    // we are overestimated these types of instructions at the current level of
+    // the IR. In this scenario, the inserted `sched.group.barriers` will result
+    // in "fooling" the scheduling solver which can mess up the final assembly.
+    // To avoid this, we switch off the backend load/store folding optimization
+    // which is going to prevent instructions folding. In this case, the
+    // instruction widths of `ds_read/ds_write` instructions are going to match
+    // their LLVM representations. This is implemented as follows.
+
+    // TODO: The current implementation disables `ds_read/ds_write` folding for
+    // all basic blocks in the currently processed function. We should try to
+    // avoid it. The compiler backend team proposed to play we the load/store
+    // alignment values within the currently processed basic block as an
+    // alternative solution.
+    auto funcOp = schedHint->getParentOfType<LLVM::LLVMFuncOp>();
+    MLIRContext *ctx = schedHint->getContext();
+    llvm::SmallVector<StringAttr> targetFeatures;
+    if (auto attr = funcOp.getTargetFeatures()) {
+      llvm::copy(attr->getFeatures(), std::back_inserter(targetFeatures));
+    }
+    targetFeatures.push_back(str_attr("-load-store-opt"));
+    funcOp.setTargetFeaturesAttr(
+        ::mlir::LLVM::TargetFeaturesAttr::get(ctx, targetFeatures));
   }
 
   LogicalResult
-  matchAndRewrite(amdgpu::InstructionSchedHint instructionSchedHint,
+  matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
                   PatternRewriter &rewriter) const override {
-
-    if (this->schedulingType == SchedulingType::UNKNOWN) {
-      llvm::dbgs()
-          << "[" << getDebugName() << "]: "
-          << "unknown instruction scheduling variant has been provided\n";
-      return mlir::failure();
+    if (this->schedHint == mlir::triton::amdgpu::SchedHint::none) {
+      rewriter.eraseOp(instructionSchedHint);
+      return success();
     }
 
     // The switch controls whether instructions are allowed to cross the basic
@@ -279,53 +417,55 @@ struct InstructionSchedHintsRewriter
     // not supposed to be used together with IGLP OPT according to the AMDGPU
     // backend documentation.
     const bool limitSchedulingRange =
-        !(schedulingType == SchedulingType::NONE ||
-          schedulingType == SchedulingType::IGLP0 ||
-          schedulingType == SchedulingType::IGLP1);
+        this->schedHint == mlir::triton::amdgpu::SchedHint::local_prefetch;
+    ;
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
     if (limitSchedulingRange) {
       rewriter.setInsertionPointToStart(block);
-      createSchedBarrier(rewriter, loc, InstructionKindMask::NONE);
+      createSchedBarrier(rewriter, loc,
+                         mlir::amdgpu::sched_barrier_opt_enum::none);
     }
 
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
-    switch (schedulingType) {
-    case SchedulingType::IGLP0:
-      [[fallthrough]];
-    case SchedulingType::IGLP1: {
-      createIglpOpt(rewriter, loc, static_cast<int>(schedulingType) - 1);
+    switch (this->schedHint) {
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_0:
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_1:
+      createIglpOpt(rewriter, loc, static_cast<int>(this->schedHint) - 1);
       break;
-    }
-    case SchedulingType::CK_V3: {
-      createCKV3Schedule(rewriter, loc, instructionSchedHint);
+    case mlir::triton::amdgpu::SchedHint::local_prefetch:
+      createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
       break;
-    }
-    case SchedulingType::NONE:
-      [[fallthrough]];
-    default: {
+    case mlir::triton::amdgpu::SchedHint::none:
+    default:
       break;
-    }
     }
 
     if (limitSchedulingRange)
-      createSchedBarrier(rewriter, loc, InstructionKindMask::NONE);
+      createSchedBarrier(rewriter, loc,
+                         mlir::amdgpu::sched_barrier_opt_enum::none);
 
     rewriter.eraseOp(instructionSchedHint);
-    return mlir::success();
+    return success();
   }
 
 private:
-  SchedulingType schedulingType;
+  int32_t numStages;
+  mlir::triton::amdgpu::SchedHint schedHint;
+  std::unique_ptr<MachineDescr> machineDescr;
 };
 
 struct TritonAMDGPULowerInstructionSchedHints
     : public triton::impl::TritonAMDGPULowerInstructionSchedHintsBase<
           TritonAMDGPULowerInstructionSchedHints> {
 
-  explicit TritonAMDGPULowerInstructionSchedHints(std::string variant) {
-    this->variant = variant;
+  explicit TritonAMDGPULowerInstructionSchedHints(StringRef arch,
+                                                  int32_t numStages,
+                                                  StringRef variant) {
+    this->arch = std::move(arch.str());
+    this->numStages = numStages;
+    this->variant = std::move(variant.str());
   }
 
   void runOnOperation() override {
@@ -334,13 +474,19 @@ struct TritonAMDGPULowerInstructionSchedHints
 
     ConversionTarget target(*ctx);
     target.addLegalDialect<LLVM::LLVMDialect>();
-    target.addIllegalOp<amdgpu::InstructionSchedHint>();
+    target.addIllegalOp<triton::amdgpu::InstructionSchedHint>();
+    target.addLegalOp<ROCDL::SchedBarrier>();
+    target.addLegalOp<ROCDL::IglpOpt>();
+    target.addLegalOp<ROCDL::SchedGroupBarrier>();
 
     RewritePatternSet patterns(ctx);
-    patterns.add<InstructionSchedHintsRewriter>(ctx, this->variant);
+
+    patterns.add<InstructionSchedHintsRewriter>(ctx, this->arch,
+                                                this->numStages, this->variant);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {
+
       signalPassFailure();
     }
   }
@@ -349,193 +495,32 @@ struct TritonAMDGPULowerInstructionSchedHints
 struct TritonAMDGPUInsertInstructionSchedHints
     : public triton::impl::TritonAMDGPUInsertInstructionSchedHintsBase<
           TritonAMDGPUInsertInstructionSchedHints> {
+
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
     ModuleOp mod = getOperation();
 
     mod.walk([this, ctx](scf::ForOp forOp) {
-      triton::DotOp dot = nullptr;
-      size_t dotCounter = 0;
-      forOp->walk([&dot, &dotCounter](triton::DotOp op) {
-        dot = op;
-        ++dotCounter;
-      });
       // Note, instruction schedule barriers are inserted only in the case of
       // a single `tt.dot` op in a `scf::ForOp` scope in the current
       // implementation.
-      if (dotCounter == 1) {
-        mlir::OpBuilder rewriter(ctx);
-        rewriter.setInsertionPointAfter(dot);
-        rewriter.create<amdgpu::InstructionSchedHint>(dot->getLoc());
-        annotateDotUsageOnLoadStore(forOp);
+      if (auto dotOp = getSingleDotOpIfExists(forOp)) {
+        OpBuilder rewriter(ctx);
+        rewriter.setInsertionPointAfter(dotOp);
+        rewriter.create<triton::amdgpu::InstructionSchedHint>(dotOp->getLoc());
       }
     });
-  }
-
-  template <typename Type> bool isOf(Operation *op) const {
-    return llvm::isa<Type>(op);
-  }
-
-  template <typename... Types>
-  llvm::SmallVector<Operation *> getUsersOfTypes(Value value) const {
-    llvm::SmallVector<Operation *> concreteUsers;
-    for (auto user : value.getUsers()) {
-      std::vector<bool> values = {(isOf<Types>(user), ...)};
-      if (llvm::any_of(values, [](bool value) { return value; }))
-        concreteUsers.push_back(user);
-    }
-    return concreteUsers;
-  }
-
-  template <typename Type>
-  llvm::SmallVector<Type> getUsersOfType(Value value) const {
-    auto users = getUsersOfTypes<Type>(value);
-    llvm::SmallVector<Type> concreteUsers;
-    for (auto user : getUsersOfTypes<Type>(value)) {
-      concreteUsers.push_back(cast<Type>(user));
-    }
-    return concreteUsers;
-  }
-
-  // Go through a single use chain of `convert_layout` and/or `fp_to_fp` Ops to
-  // get the final value after all conversions
-  Value rewindUnaryOps(Value value) const {
-    auto unaryOps =
-        getUsersOfTypes<triton::gpu::ConvertLayoutOp, triton::FpToFpOp>(value);
-    while (!unaryOps.empty()) {
-      assert(unaryOps.size() == 1);
-      value = unaryOps[0]->getResult(0);
-      unaryOps =
-          getUsersOfTypes<triton::gpu::ConvertLayoutOp, triton::FpToFpOp>(
-              value);
-    }
-    return value;
-  }
-
-  // Given a `scf::ForOp`, the method finds and annotates all Ops which produce
-  // input values for the `tt.dot` operation. The algorithm handles software
-  // pipelining. Therefore, we start by tracking `tt.load` ops and unwind the
-  // data flow by looking up to the yielded values and iteration arguments of a
-  // given `scf::ForOp` till we find `ttg.local_store` Op. Once a
-  // `ttg.local_store` Op is found, we need a single yielded-arguments lookup to
-  // find the corresponding `ttg.local_load` Op from which we have a direct data
-  // flow path to the target `tt.dot` op. At this point, we can annotate all
-  // found Ops (i.e., `tt.load`, `ttg.local_store`) with the input argument
-  // index of the data to `tt.dot` Op. Here is an example of the resulting
-  // annotated TTGIR:
-  //
-  //  %13:8 = scf.for %arg11 = %c0_i32 to %0 step %c1_i32 iter_args(
-  //    %arg0 = %cst_1, %arg1 = %in_0, %arg2 = %in_1, %arg3 = %c0_i32,
-  //    %arg4 = %in_2, %arg5 = %in_3, %arg6 = %in_4, %arg7 = %in_5)
-  //    -> (...)  : i32 {
-  //    %1 = triton_gpu.local_load %arg4 : {OpIdx = 0}
-  //    %2 = triton_gpu.local_load %arg5 : {OpIdx = 1}
-  //    %3 = tt.dot %1, %2, %arg0
-  //    %4 = tt.addptr %arg1, %cst
-  //    %5 = tt.addptr %arg2, %cst_0
-  //    %6 = tt.load %4 : {OpIdx = 0}
-  //    %7 = tt.load %5 : {OpIdx = 1}
-  //    %8 = arith.addi %arg3, %c1_i32
-  //    %9 = arith.cmpi slt, %8, %c2_i32
-  //    %10 = arith.select %9, %8, %c0_i32
-  //    %11 = triton_gpu.memdesc_subview %56[%10, %c0_i32, %c0_i32]
-  //    triton_gpu.local_store %arg6, %11 : {OpIdx = 0}
-  //    %12 = triton_gpu.memdesc_subview %57[%10, %c0_i32, %c0_i32]
-  //    triton_gpu.local_store %arg7, %12 : {OpIdx = 1}
-  //    scf.yield %3, %4, %5, %10, %11, %12, %6, %7 : (...)
-  //  }
-  //
-  // Note, this is required for counting issued `llvm` instructions during
-  // lowering from TTGIR to LLVM dialects to perform advanced instruction
-  // scheduling.
-  void annotateDotUsageOnLoadStore(scf::ForOp forOp) const {
-    llvm::SmallVector<triton::LoadOp> loadOps;
-    forOp.walk(
-        [&loadOps](triton::LoadOp loadOp) { loadOps.push_back(loadOp); });
-
-    ValueRange yieldedValues = forOp.getYieldedValues();
-    auto initArgs = forOp.getRegionIterArgs();
-
-    MLIRContext *ctx = forOp->getContext();
-    mlir::OpBuilder rewriter(ctx);
-
-    for (auto loadOp : loadOps) {
-      Value loadResult = loadOp.getResult();
-
-      // Unwind till the first carried loop iteration regarding `tt.load`.
-      Value loopCarriedLoadValue = loadResult;
-      bool foundFirstCarriedLoopIteration = false;
-      while (!foundFirstCarriedLoopIteration) {
-        auto it = llvm::find(yieldedValues, loopCarriedLoadValue);
-        if (it != yieldedValues.end()) {
-          size_t idx = std::distance(yieldedValues.begin(), it);
-          loopCarriedLoadValue = initArgs[idx];
-        } else {
-          foundFirstCarriedLoopIteration = true;
-        }
-      }
-
-      loopCarriedLoadValue = rewindUnaryOps(loopCarriedLoadValue);
-      assert(loopCarriedLoadValue.hasOneUse());
-
-      // Handle pipelining - i.e., `local_store`, `memdesc_subview`,
-      // `local_load` ops.
-      triton::gpu::LocalLoadOp localLoadOp = nullptr;
-      auto loadOpUser = *(loopCarriedLoadValue.user_begin());
-      auto localStoreOp = llvm::dyn_cast<triton::gpu::LocalStoreOp>(loadOpUser);
-      if (localStoreOp) {
-        auto subviewOp = localStoreOp.getDst()
-                             .getDefiningOp<triton::gpu::MemDescSubviewOp>();
-        Value subviewResult = subviewOp.getResult();
-        auto it = llvm::find(yieldedValues, subviewResult);
-        if (it != yieldedValues.end()) {
-          size_t idx = std::distance(yieldedValues.begin(), it);
-          Value loopCarriedSubviewValue = initArgs[idx];
-
-          auto subviewLoadOps =
-              getUsersOfType<triton::gpu::LocalLoadOp>(loopCarriedSubviewValue);
-          assert(subviewLoadOps.size() == 1);
-          localLoadOp = *subviewLoadOps.begin();
-
-          loopCarriedLoadValue = localLoadOp.getResult();
-        } else {
-          auto localLoadOps =
-              getUsersOfType<triton::gpu::LocalLoadOp>(subviewResult);
-          assert(localLoadOps.size() == 1);
-          localLoadOp = *localLoadOps.begin();
-          auto it = llvm::find(yieldedValues, localLoadOp.getResult());
-          assert(it != yieldedValues.end());
-          size_t idx = std::distance(yieldedValues.begin(), it);
-          loopCarriedLoadValue = initArgs[idx];
-        }
-        loopCarriedLoadValue = rewindUnaryOps(loopCarriedLoadValue);
-      }
-
-      // Find the corresponding `DotOp`.
-      auto dots = getUsersOfType<triton::DotOp>(loopCarriedLoadValue);
-      assert(dots.size() == 1);
-
-      // Find which `DotOp` argument the current `loadOp` belongs to.
-      auto dotOperands = dots.begin()->getOperands();
-      auto it = llvm::find(dotOperands, loopCarriedLoadValue);
-      assert(it != dotOperands.end());
-      size_t opIdx = std::distance(dotOperands.begin(), it);
-
-      // Set `OpIdx` attributes.
-      auto opIdxAttr = amdgpu::OpIdxAttr::get(ctx, opIdx);
-
-      loadOp->setAttr(amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
-      if (localStoreOp)
-        localStoreOp->setAttr(amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
-    }
   }
 };
 } // namespace
 
 namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPULowerInstructionSchedHintsPass(std::string variant) {
-  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(variant);
+createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
+                                                 int32_t numStages,
+                                                 StringRef variant) {
+  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(
+      arch, numStages, variant);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>

@@ -7,7 +7,8 @@ namespace mlir::triton::NVIDIA {
 
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo(int computeCapability) : computeCapability(computeCapability) {}
+  TargetInfo(int computeCapability, int ptxVersion)
+      : computeCapability(computeCapability), ptxVersion(ptxVersion) {}
 
   bool supportMaximumMinimum() const override;
 
@@ -22,6 +23,12 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+
+  bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+                      ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> order,
+                      int swizzleByteSize) const override;
+
   void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
                          Value val) const override;
 
@@ -53,8 +60,13 @@ public:
                   StringRef file, StringRef func, int line) const override;
   int getSharedAddressSpace() const override;
 
+  bool supportVectorizedAtomics() const override;
+
+  int getPtxVersion() const { return ptxVersion; }
+
 private:
   int computeCapability;
+  int ptxVersion;
 };
 
 } // namespace mlir::triton::NVIDIA

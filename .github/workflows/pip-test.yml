@@ -1,0 +1,76 @@
+name: Test with pip
+
+on:
+  workflow_dispatch:
+
+  # run workflow on changes to the driver, which handles the libraries logic
+  pull_request:
+    branches:
+      - main
+    paths:
+      - third_party/intel/backend/driver.py
+  push:
+    branches:
+      - main
+    paths:
+      - third_party/intel/backend/driver.py
+
+  # run workflow after building nightly wheels
+  workflow_run:
+    workflows:
+      - nightly-wheels.yml
+    types:
+      - completed
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: '3.9'
+  TRITON_TEST_CMD: "scripts/test-triton.sh --skip-pytorch-install"
+
+jobs:
+  tests:
+    name: Tests
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on:
+      - rolling
+      - runner-0.0.20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          python_version: ${{ env.PYTHON_VERSION }}
+          # transformers package is required for the inductor (e2e) test
+          wheels_pattern: '{torch,transformers}-*.whl'
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+
+      - name: Install Triton runtime dependencies
+        run: |
+          pip install intel-sycl-rt intel-pti
+
+      - name: Run core tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run interpreter tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --interpreter --skip-pip-install
+
+      - name: Run Tutorials
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial --skip-pip-install
+
+      - name: Run inductor test
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install

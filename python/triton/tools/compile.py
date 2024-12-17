@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 import triton
+import triton.backends
 from triton.compiler.code_generator import kernel_suffix
 from triton.backends.nvidia.driver import ty_to_cpp
 
@@ -106,14 +107,15 @@ if __name__ == "__main__":
     # compile ast into cubin
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
-    divisible_by_16 = [i for i, h in hints.items() if h == 16]
-    equal_to_1 = [i for i, h in hints.items() if h == 1]
-    attrs = triton.compiler.AttrsDescriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
-    for i in equal_to_1:
-        constants.update({kernel.arg_names[i]: 1})
+    attrs = triton.backends.compiler.AttrsDescriptor.from_hints(hints)
+    for p, v in attrs.get_constants().items():
+        constants.update({kernel.arg_names[p]: v})
     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)
+    if ccinfo.metadata.global_scratch_size > 0:
+        raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
+
     arg_names = []
     arg_types = []
     arg_names_not_1 = []
@@ -124,7 +126,7 @@ if __name__ == "__main__":
             arg_types.append(signature[arg_name])
             arg_names_not_1.append(arg_name)
             arg_types_not_1.append(signature[arg_name])
-        elif i in equal_to_1:
+        elif i in attrs.equal_to_1:
             arg_names.append(arg_name)
             arg_types.append(signature[arg_name])
 
@@ -139,8 +141,8 @@ if __name__ == "__main__":
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1]),
-        "num_args": len(arg_names_not_1),
+        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
+        "num_args": len(arg_names_not_1) + 1,
         "kernel_docstring": doc_string,
         "shared": ccinfo.metadata.shared,
         "num_warps": args.num_warps,

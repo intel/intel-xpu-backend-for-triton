@@ -44,10 +44,6 @@ std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth = std::nullopt);
 
-// Given a linear layout with input dims and output dims containing a "block"
-// dimension, determines if the layout moves data across block boundaries.
-bool isCrossCTAConversion(const LinearLayout &layout);
-
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
 // output dimensions.
@@ -245,11 +241,11 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // TODO(Keren): We should replace tensorTy with a LinearLayout and the element
 // bit width of the tensor in the future to support more flexible tensor
 // encodings
-std::optional<LinearLayout>
-chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
-                     ArrayRef<unsigned> repShape,
-                     ArrayRef<unsigned> paddedRepShape,
-                     ArrayRef<unsigned> order, int swizzleByteSize);
+LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
+                                  ArrayRef<unsigned> repShape,
+                                  ArrayRef<unsigned> paddedRepShape,
+                                  ArrayRef<unsigned> order,
+                                  int swizzleByteSize);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

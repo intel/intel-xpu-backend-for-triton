@@ -213,6 +213,34 @@ def rcp_ru(arg0, _builder=None):
 
 
 @core.extern
+def sqrt_rn(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__imf_sqrt_rn", core.dtype("fp64")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def sqrt_rz(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__imf_sqrt_rz", core.dtype("fp64")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def sqrt_rd(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__imf_sqrt_rd", core.dtype("fp64")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
+def sqrt_ru(arg0, _builder=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp64"), ): ("__imf_sqrt_ru", core.dtype("fp64")),
+    }, is_pure=True, _builder=_builder)
+
+
+@core.extern
 def sqrt(arg0, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0], {
