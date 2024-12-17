@@ -609,10 +609,10 @@ void MatchTargetSizePass::initNativeOperationSizes(Workload workload) {
   nativeSizes.setDotShape(32, {8, 16, 8});
 
   nativeSizes.setBlockMemShape(8, {16, 64, 32, 32});
-  if (workload == Workload::Attention)
-    nativeSizes.setBlockMemShape(16, {32, 32, 32, 16});
-  else
-    nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
+  //if (workload == Workload::Attention)
+  //  nativeSizes.setBlockMemShape(16, {32, 32, 32, 16});
+  //else
+  nativeSizes.setBlockMemShape(16, {32, 32, 32, 32});
 
   nativeSizes.setBlockMemShape(32, {8, 8, 8, 16});
 
