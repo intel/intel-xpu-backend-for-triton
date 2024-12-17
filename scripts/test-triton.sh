@@ -109,7 +109,7 @@ while [ -v 1 ]; do
       shift
       ;;
     --skip-list)
-      # # Must be absolute
+      # Must be absolute
       TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
