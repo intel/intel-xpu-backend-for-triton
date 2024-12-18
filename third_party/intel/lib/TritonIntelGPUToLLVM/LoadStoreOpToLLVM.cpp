@@ -516,21 +516,6 @@ struct LoadOpConversion
            "Only row_major or column_major is supported");
     const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
-    auto getDotOrder = [&]() {
-      return hasDpasLayout
-                 ? cast<DpasEncodingAttr>(encoding).getThreadOrder()
-                 : getDotEncoding(tensorType).value().getThreadOrder();
-    };
-    auto dotOrder = getDotOrder();
-
-    size_t rank = dotOrder.size();
-    const bool valueRowMajor =
-        (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
-    assert((valueRowMajor ||
-            (dotOrder[rank - 2] == 0 && dotOrder[rank - 1] == 1)) &&
-           "Only row_major or column_major is allowed");
-    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
-
     auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
       if (hasDpasLayout) {
         return DpasEncodingAttr::OpIdx::OperandC;
@@ -571,6 +556,15 @@ struct LoadOpConversion
       // column vectors are available for each work item to process. This layout
       // aligns to the DPAS layout as the DPAS operation output layout
       // distributes rows across work items.
+
+      size_t rank = dpasOrder.size();
+      const bool valueRowMajor =
+          (dpasOrder[rank - 2] == 1 && dpasOrder[rank - 1] == 0);
+      assert((valueRowMajor ||
+              (dpasOrder[rank - 2] == 0 && dpasOrder[rank - 1] == 1)) &&
+             "Only row_major or column_major is allowed");
+      const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+
       if (isTransposeRequired) {
         // TODO: this would likely require a shuffle to match the expected
         // ordering coming out of the DPAS layout and requires more
@@ -680,6 +674,17 @@ struct LoadOpConversion
 
       return success();
     }
+
+    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
+    auto dotOrder = dotLayout.getThreadOrder();
+
+    size_t rank = dotOrder.size();
+    const bool valueRowMajor =
+        (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
+    assert((valueRowMajor ||
+            (dotOrder[rank - 2] == 0 && dotOrder[rank - 1] == 1)) &&
+           "Only row_major or column_major is allowed");
+    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
     bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
     SmallVector<unsigned> dpasInstShape = isOperandA
