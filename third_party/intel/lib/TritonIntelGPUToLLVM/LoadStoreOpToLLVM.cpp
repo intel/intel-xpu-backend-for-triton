@@ -516,11 +516,13 @@ struct LoadOpConversion
            "Only row_major or column_major is supported");
     const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
-    auto dpasLayout = hasDpasLayout
-                          ? cast<DpasEncodingAttr>(encoding)
-                          : cast<DpasEncodingAttr>(
-                                getDotEncoding(tensorType).value().getParent());
-    auto dotOrder = dpasLayout.getThreadOrder();
+    auto getDotOrder = [&]() {
+      return hasDpasLayout
+                 ? cast<DpasEncodingAttr>(encoding).getThreadOrder()
+                 : getDotEncoding(tensorType).value().getThreadOrder();
+    };
+    auto dotOrder = getDotOrder();
+
     size_t rank = dotOrder.size();
     const bool valueRowMajor =
         (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
@@ -537,10 +539,15 @@ struct LoadOpConversion
         return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
       }
     };
-
     auto opIdx = getOpIdx();
+
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+    auto dpasLayout = hasDpasLayout
+                          ? cast<DpasEncodingAttr>(encoding)
+                          : cast<DpasEncodingAttr>(
+                                getDotEncoding(tensorType).value().getParent());
 
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
