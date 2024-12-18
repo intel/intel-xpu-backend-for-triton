@@ -237,14 +237,6 @@ else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
 
-def make_do_bench_for_autotune():
-
-    def autotuner_do_bench(*args, **kwargs):
-        return do_bench(*args, n_warmup=10, n_repeat=10, **kwargs)
-
-    return autotuner_do_bench
-
-
 def assert_close(x, y, atol=None, rtol=None, err_msg=""):
     import numpy as np
     import torch

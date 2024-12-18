@@ -107,7 +107,6 @@ def mac_loop(
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
-    do_bench=benchmark_suit.make_do_bench_for_autotune(),
 )
 @triton.jit
 def first_wave(
@@ -144,7 +143,6 @@ def first_wave(
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
-    do_bench=benchmark_suit.make_do_bench_for_autotune(),
 )
 @triton.jit
 def full_tiles(
