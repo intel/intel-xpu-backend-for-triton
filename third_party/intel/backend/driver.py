@@ -178,7 +178,7 @@ class XPUUtils(object):
 
 
 def ty_to_cpp(ty):
-    if ty[0] == '*':
+    if ty[0] == '*' or ty == "none":
         return "void*"
     return {
         "i1": "int32_t",
@@ -200,12 +200,9 @@ def ty_to_cpp(ty):
 
 
 def make_launcher(constants, signature, ids):
-    # Record the end of regular arguments;
-    # subsequent arguments are architecture-specific descriptors.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
-        if ty[0] == '*':
+        if ty[0] == '*' or ty == "none":
             return "PyObject*"
         return ty_to_cpp(ty)
 
@@ -225,9 +222,17 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
+    signature = {k: v for k, v in signature.items() if v != 'constexpr'}
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiOOOOOO" + args_format
+    signature = ','.join(signature.values()).replace('[', '').replace(']', '')
+    signature = list(filter(bool, signature.split(',')))
+    signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+
+    # Record the end of regular arguments;
+    # subsequent arguments are architecture-specific descriptors.
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     # generate glue code
     src = f"""
@@ -329,7 +334,7 @@ def make_launcher(constants, signature, ids):
   static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
     std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-    void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
+    void *params[] = {{ {', '.join(f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none")} }};
     uint32_t num_params = sizeof(params)/sizeof(params[0]);
     uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
     size_t global_range_x = gridX*threads_per_warp*num_warps;
@@ -410,7 +415,7 @@ def make_launcher(constants, signature, ids):
       if(kernel_ptr == nullptr) return NULL;
       sycl::kernel kernel = *kernel_ptr;
 
-      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
       sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
 
       if(launch_exit_hook != Py_None){{
@@ -515,9 +520,8 @@ class XPULauncher(object):
     def __init__(self, src, metadata):
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
-        cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
-        self.constants = {cst_key(key): value for key, value in constants.items()}
-        self.signature = {cst_key(key): value for key, value in src.signature.items()}
+        self.constants = {idx: value for idx, value in constants.items()}
+        self.signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(self.constants, self.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
