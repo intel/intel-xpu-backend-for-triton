@@ -513,7 +513,7 @@ def test_preload(device, fresh_triton_cache) -> None:
     assert specialization_data is not None
 
     # clear the cache
-    shutil.rmtree(fresh_triton_cache)
+    shutil.rmtree(fresh_triton_cache, ignore_errors=True)
     kernel_add.device_caches[device][0].clear()
 
     # preload the kernel
