@@ -317,14 +317,16 @@ def benchmark(B, M, N, K, provider):
             name = 'gemm_streamk_shape_3072_4096_3072'
         func = getattr(xetla_kernel, name)
 
-        def test_acc_matrix_allocation_influence():
+        def xetla_func_with_acc_allocation():
+            # allocating `acc` matrix on every function call, to be as similar as
+            # possible to the triton kernel, which also does this on every call.
             if B == 1:
                 acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
             else:
                 acc = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
             return func(a, b, c, acc, cnt)
 
-        xetla_fn = lambda: test_acc_matrix_allocation_influence()
+        xetla_fn = xetla_func_with_acc_allocation
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
         kernels_name = {
