@@ -2,7 +2,6 @@ import argparse
 import itertools
 import os
 from typing import Any, Dict, List
-import triton
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 
@@ -160,7 +159,13 @@ elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
 else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
-triton.testing.do_bench = do_bench
+
+def make_do_bench_for_autotune(kernel_name: str):
+
+    def autotuner_do_bench(*args, **kwargs):
+        return do_bench(*args, n_warmup=10, n_repeat=10, kernel_name=kernel_name, **kwargs)
+
+    return autotuner_do_bench
 
 
 def assert_close(x, y, atol=None, rtol=None, err_msg=""):

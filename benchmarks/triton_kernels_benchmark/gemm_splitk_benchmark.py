@@ -12,6 +12,7 @@ from triton_kernels_benchmark import xetla_kernel
                       num_stages=4, num_warps=32),
     ],
     key=['M', 'N', 'K'],
+    do_bench=benchmark_suit.make_do_bench_for_autotune(kernel_name='_kernel'),
 )
 @triton.jit
 def _kernel(A, B, C,  #

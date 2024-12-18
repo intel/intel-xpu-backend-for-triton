@@ -161,7 +161,8 @@ configs = [
     for w in [8, 16, 32] \
     ]
 
-tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
+tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'],
+                        do_bench=benchmark_suit.make_do_bench_for_autotune('_attn_fwd'))
 tune_attn_fwd = tuner(_attn_fwd)
 
 

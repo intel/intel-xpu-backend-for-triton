@@ -33,6 +33,7 @@ import triton_kernels_benchmark as benchmark_suit
             num_stages=2, num_warps=32),
     ],
     key=['M', 'N', 'K'],
+    do_bench=benchmark_suit.make_do_bench_for_autotune(kernel_name='matmul_kernel_with_block_pointers'),
 )
 @triton.jit
 def matmul_kernel_with_block_pointers(
@@ -104,6 +105,7 @@ def matmul_kernel_with_block_pointers(
             num_stages=2, num_warps=4),
     ],
     key=['M', 'N', 'K'],
+    do_bench=benchmark_suit.make_do_bench_for_autotune(kernel_name='matmul_kernel_with_block_pointers'),
 )
 @triton.jit
 def matmul_kernel_with_block_pointers_batched(
