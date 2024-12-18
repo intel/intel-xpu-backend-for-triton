@@ -74,7 +74,7 @@ jobs:
           EOF
 
       - name: Use DLE
-        if: ${{ (github.event_name || 'DLE') == 'DLE' }}
+        if: ${{ (github.oneapi_bundle || 'DLE') == 'DLE' }}
         shell: bash
         run: |
           if [[ -e /opt/intel/dle ]]; then
