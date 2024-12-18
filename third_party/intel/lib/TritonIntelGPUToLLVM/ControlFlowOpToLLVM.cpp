@@ -90,7 +90,7 @@ private:
       promotedOperands.push_back(base);
       return promotedOperands;
     }
-    promotedOperands.push_back(LLVM::intel::getSharedMemoryBase(
+    promotedOperands.push_back(LLVM::getSharedMemoryBase(
         callOp->getLoc(), rewriter, targetInfo, callOp));
     return promotedOperands;
   }

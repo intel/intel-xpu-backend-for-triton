@@ -1357,8 +1357,8 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::intel::getSharedMemoryBase(
-            loc, rewriter, targetInfo, op.getOperation());
+        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                  op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, mask);
         createBarrier(rewriter, loc, numCTAs);
@@ -1538,8 +1538,8 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::intel::getSharedMemoryBase(
-            loc, rewriter, targetInfo, op.getOperation());
+        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                  op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, rmwMask);

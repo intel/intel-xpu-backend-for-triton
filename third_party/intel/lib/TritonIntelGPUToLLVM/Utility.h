@@ -83,24 +83,6 @@ Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
 
 LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter);
 
-static Value getSharedMemoryBase(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const TargetInfoBase &target, Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
-                                          target.getSharedAddressSpace());
-  FunctionOpInterface func = op->getParentOfType<FunctionOpInterface>();
-  if (!op->hasAttr("allocation.offset")) {
-    auto mod = op->getParentOfType<ModuleOp>();
-  }
-  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
-                      .getValue()
-                      .getZExtValue();
-  Value offVal = i32_val(offset);
-  Value base =
-      gep(ptrTy, i8_ty, target.getStackPointer(rewriter, func), offVal);
-  return base;
-}
-
 static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
