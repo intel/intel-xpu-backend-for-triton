@@ -7,7 +7,12 @@ namespace roctracer {
 
 struct ExternLibRoctracer : public ExternLibBase {
   using RetType = roctracer_status_t;
+#ifdef WIN32
+  // Looks like there is no support for Windows yet
+  static constexpr const char *name = "roctracer64.dll";
+#else
   static constexpr const char *name = "libroctracer64.so";
+#endif
   static constexpr const char *defaultDir = "";
   static constexpr RetType success = ROCTRACER_STATUS_SUCCESS;
   static void *lib;
@@ -27,8 +32,13 @@ void start() {
   Dispatch<ExternLibRoctracer>::init(ExternLibRoctracer::name,
                                      &ExternLibRoctracer::lib);
   if (func == nullptr)
+#ifdef WIN32
+    func = reinterpret_cast<roctracer_start_t>(
+        GetProcAddress((HMODULE)ExternLibRoctracer::lib, "roctracer_start"));
+#else
     func = reinterpret_cast<roctracer_start_t>(
         dlsym(ExternLibRoctracer::lib, "roctracer_start"));
+#endif
   if (func)
     func();
 }
@@ -39,8 +49,13 @@ void stop() {
   Dispatch<ExternLibRoctracer>::init(ExternLibRoctracer::name,
                                      &ExternLibRoctracer::lib);
   if (func == nullptr)
+#ifdef WIN32
+    func = reinterpret_cast<roctracer_stop_t>(
+        GetProcAddress((HMODULE)ExternLibRoctracer::lib, "roctracer_stop"));
+#else
     func = reinterpret_cast<roctracer_stop_t>(
         dlsym(ExternLibRoctracer::lib, "roctracer_stop"));
+#endif
   if (func)
     func();
 }
@@ -51,8 +66,13 @@ char *getOpString(uint32_t domain, uint32_t op, uint32_t kind) {
   Dispatch<ExternLibRoctracer>::init(ExternLibRoctracer::name,
                                      &ExternLibRoctracer::lib);
   if (func == nullptr)
+#ifdef WIN32
+    func = reinterpret_cast<roctracer_op_string_t>(GetProcAddress(
+        (HMODULE)ExternLibRoctracer::lib, "roctracer_op_string"));
+#else
     func = reinterpret_cast<roctracer_op_string_t>(
         dlsym(ExternLibRoctracer::lib, "roctracer_op_string"));
+#endif
   return (func ? func(domain, op, kind) : NULL);
 }
 
