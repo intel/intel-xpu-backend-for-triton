@@ -6,6 +6,7 @@ repos:
       - id: check-symlinks
       - id: destroyed-symlinks
       - id: trailing-whitespace
+        exclude: .*.patch
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml
