@@ -58,3 +58,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %res : tensor<16x16xf16>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @triton_intel_gpu.simd_reduce(%arg0: tensor<16x16xf32, #blocked>) -> tensor<16xf32, #blocked1> {
+    // CHECK-LABEL: @triton_intel_gpu.simd_reduce
+    // CHECK:         triton_intel_gpu.simd_reduce add %{{.*}} axis = 0 : tensor<16x16xf32, #blocked> -> tensor<16xf32, #blocked1>
+    %0 = triton_intel_gpu.simd_reduce add %arg0 axis = 0 : tensor<16x16xf32, #blocked> -> tensor<16xf32, #blocked1>
+    tt.return %0 : tensor<16xf32, #blocked1>
+  }
+}
