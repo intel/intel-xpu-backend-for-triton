@@ -287,12 +287,12 @@ run_benchmark_attention() {
   python setup.py install
 
   echo "Default path:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
     IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
 
 run_benchmarks() {
