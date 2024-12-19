@@ -22,7 +22,6 @@ struct DecomposeUnsupportedConversions
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
     triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
                                                           isDpasToDotShortcut);
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);

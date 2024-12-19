@@ -526,6 +526,21 @@ struct LoadOpConversion
     };
     auto opIdx = getOpIdx();
 
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorType.getShape());
+    assert(llEncoding.has_value() && "invalid dot layout to linear layout");
+    LinearEncodingAttr llAttr =
+        LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
+    SmallVector<unsigned> threadOrder = llAttr.getThreadOrder();
+    size_t rank = threadOrder.size();
+    const bool valueRowMajor =
+        (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
+    assert((valueRowMajor ||
+            (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
+           "Only row_major or column_major is allowed");
+    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
@@ -539,7 +554,7 @@ struct LoadOpConversion
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
-    SmallVector<unsigned> dpasOrder = triton::gpu::getOrder(dpasLayout);
+    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(dpasLayout);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
@@ -547,7 +562,7 @@ struct LoadOpConversion
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
 
     SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, dpasOrder);
+        delinearize(rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
 
     if (hasDpasLayout) {
       // A block load with the DPAS layout but without the DotDpasLayout is
@@ -556,14 +571,6 @@ struct LoadOpConversion
       // column vectors are available for each work item to process. This layout
       // aligns to the DPAS layout as the DPAS operation output layout
       // distributes rows across work items.
-
-      size_t rank = dpasOrder.size();
-      const bool valueRowMajor =
-          (dpasOrder[rank - 2] == 1 && dpasOrder[rank - 1] == 0);
-      assert((valueRowMajor ||
-              (dpasOrder[rank - 2] == 0 && dpasOrder[rank - 1] == 1)) &&
-             "Only row_major or column_major is allowed");
-      const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
       if (isTransposeRequired) {
         // TODO: this would likely require a shuffle to match the expected
@@ -675,17 +682,6 @@ struct LoadOpConversion
       return success();
     }
 
-    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
-    auto dotOrder = dotLayout.getThreadOrder();
-
-    size_t rank = dotOrder.size();
-    const bool valueRowMajor =
-        (dotOrder[rank - 2] == 1 && dotOrder[rank - 1] == 0);
-    assert((valueRowMajor ||
-            (dotOrder[rank - 2] == 0 && dotOrder[rank - 1] == 1)) &&
-           "Only row_major or column_major is allowed");
-    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
-
     bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
     SmallVector<unsigned> dpasInstShape = isOperandA
                                               ? dpasLayout.getDPASInstShapeA()
@@ -749,8 +745,8 @@ struct LoadOpConversion
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
-    unsigned tileWidth = elemsPerDPASInst[dotOrder[rank - 2]];
-    unsigned tileHeight = elemsPerDPASInst[dotOrder[rank - 1]];
+    unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
+    unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
     unsigned vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
@@ -1500,8 +1496,8 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::intel::getSharedMemoryBase(
-            loc, rewriter, targetInfo, op.getOperation());
+        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                  op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, mask);
         createBarrier(rewriter, loc, numCTAs);
@@ -1681,8 +1677,8 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::intel::getSharedMemoryBase(
-            loc, rewriter, targetInfo, op.getOperation());
+        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                  op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, rmwMask);

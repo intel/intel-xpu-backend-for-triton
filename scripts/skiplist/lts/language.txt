@@ -1570,3 +1570,4 @@ test/unit/language/test_core.py::test_scaled_dot[128-128-128-False-False-True-e5
 test/unit/language/test_core.py::test_scaled_dot[128-128-128-False-False-True-e5m2-e5m2-4-16-1]
 test/unit/language/test_core.py::test_scaled_dot[128-128-128-False-False-True-e5m2-e4m3-4-16-1]
 test/unit/language/test_core.py::test_scaled_dot[128-128-128-False-False-True-e4m3-bf16-4-16-1]
+test/unit/language/test_core.py::test_trans_reshape

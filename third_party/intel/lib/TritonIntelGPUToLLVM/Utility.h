@@ -83,38 +83,6 @@ Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
 
 LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter);
 
-static Value getStackPointer(PatternRewriter &rewriter,
-                             FunctionOpInterface funcOp) {
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  LLVM::LLVMPointerType ptrTy = ptr_ty(
-      rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
-  if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0)
-    return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
-  return funcOp.getArgument(funcOp.getNumArguments() - 1);
-}
-
-static Value getSharedMemoryBase(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const TargetInfoBase &target, Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
-                                          target.getSharedAddressSpace());
-  FunctionOpInterface func = op->getParentOfType<FunctionOpInterface>();
-  // CI debugging usage here
-  if (!op->hasAttr("allocation.offset")) {
-    auto mod = op->getParentOfType<ModuleOp>();
-    llvm::errs() << "op: " << *op << "\n";
-    llvm::errs() << "mod:" << mod << "\n";
-    llvm_unreachable("missing allocation.offset");
-  }
-  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
-                      .getValue()
-                      .getZExtValue();
-  Value offVal = i32_val(offset);
-  Value base =
-      gep(ptrTy, i8_ty, LLVM::intel::getStackPointer(rewriter, func), offVal);
-  return base;
-}
-
 static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
