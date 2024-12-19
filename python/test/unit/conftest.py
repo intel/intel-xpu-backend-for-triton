@@ -24,3 +24,10 @@ def fresh_triton_cache():
     except OSError:
         # Ignore errors, such as PermissionError, on Windows
         pass
+
+
+def pytest_configure(config):
+    worker_id = os.getenv("PYTEST_XDIST_WORKER")
+    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
+    if os.name == "nt" and worker_id:
+        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
