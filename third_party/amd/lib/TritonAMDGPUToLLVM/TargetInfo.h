@@ -65,6 +65,9 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  Value getStackPointer(RewriterBase &rewriter,
+                        FunctionOpInterface funcOp) const override;
+
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   RewriterBase &rewriter, bool useStdErr) const;
