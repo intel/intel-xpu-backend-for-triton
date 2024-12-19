@@ -248,10 +248,10 @@ def make_launcher(constants, signature, ids):
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
-    print(f"signature: {signature}")
-    print(f"arg_decls: {arg_decls}")
-    print(f"args_list: {args_list}")
-    print(f"constants: {constants}")
+    # print(f"signature: {signature}")
+    # print(f"arg_decls: {arg_decls}")
+    # print(f"args_list: {args_list}")
+    # print(f"constants: {constants}")
 
     # generate glue code
     src = f"""
@@ -368,7 +368,7 @@ def make_launcher(constants, signature, ids):
     if (shared_memory) {{
       expected_num_params -= 1;
     }}
-    std::cout << "num_params: " << num_params << "  expected_num_params: " << expected_num_params << std::endl << std::flush;
+    // std::cout << "num_params: " << num_params << "  expected_num_params: " << expected_num_params << std::endl << std::flush;
     assert(num_params == expected_num_params && "number of kernel param not matched");
     // Submit the imported kernel.
     auto cgf = [&](sycl::handler &cgh) {{
