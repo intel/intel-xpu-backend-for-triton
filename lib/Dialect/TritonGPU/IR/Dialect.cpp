@@ -304,16 +304,6 @@ SmallVector<unsigned> getOrder(Attribute layout) {
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
     auto rank = dotLayout.getWarpsPerCTA().size();
-    // FIXME: delete if branch for `DpasEncodingAttr` and provide more
-    // general solution to make `getOrderForDotOperand` function compatible
-    // with Intel layouts.
-    // More details:
-    // https://github.com/intel/intel-xpu-backend-for-triton/pull/2517
-    if (dyn_cast<intel::DpasEncodingAttr>(dotLayout.getParent())) {
-      SmallVector<unsigned> order(rank);
-      std::iota(order.rbegin(), order.rend(), 0);
-      return order;
-    }
     return getOrderForDotOperand(dotLayout.getOpIdx(), rank, /*kMajor*/ true);
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
@@ -1093,10 +1083,6 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
       return amdWmmaParent.getTotalElemsPerThreadForOperand(
           shape, eltTy, getKWidth(), getOpIdx());
     }
-    if (auto dpasParent = mlir::dyn_cast<intel::DpasEncodingAttr>(mmaParent)) {
-      return dpasParent.getTotalElemsPerThreadForOperand(
-          shape, eltTy, getKWidth(), getOpIdx());
-    }
   }
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
     auto shapePerCTA = getShapePerCTA(*this, shape);
@@ -1159,17 +1145,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   return {};
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadOrder() const {
-  // FIXME: delete if branch for `DpasEncodingAttr` and provide more
-  // general solution to make `getOrderForDotOperand` function compatible
-  // with Intel layouts.
-  // More details:
-  // https://github.com/intel/intel-xpu-backend-for-triton/pull/2517
-  if (mlir::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
-    return ::getOrder(*this);
-  } else {
-    return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
-                                 /*kMajor*/ true);
-  }
+  return getOrderForDotOperand(getOpIdx(), getWarpsPerCTA().size(),
+                               /*kMajor*/ true);
 }
 
 LogicalResult DotOperandEncodingAttr::verify(
