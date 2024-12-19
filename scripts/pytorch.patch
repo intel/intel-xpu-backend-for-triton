@@ -1,0 +1,165 @@
+diff --git a/torch/_inductor/codegen/triton.py b/torch/_inductor/codegen/triton.py
+index 00031a56b8..1cdfe218eb 100644
+--- a/torch/_inductor/codegen/triton.py
++++ b/torch/_inductor/codegen/triton.py
+@@ -2980,6 +2980,7 @@ class TritonKernel(SIMDKernel):
+                 code.splice(self.imports_for_benchmark_kernel())
+ 
+         argdefs, _, signature, _ = self.args.python_argdefs()
++        # breakpoint()
+         # maps actual expression to SizeArg if it is in sizevars replacements
+         for i, arg in enumerate(signature):
+             if isinstance(arg, SizeArg):
+@@ -3030,7 +3031,7 @@ class TritonKernel(SIMDKernel):
+         triton_meta = {
+             "signature": triton_meta_signature,
+             "device": DeviceProperties.create(V.graph.get_current_device_or_throw()),
+-            "constants": {},
++            "constexprs": {},
+         }
+ 
+         # Skip memory optimization for forward of the training loop where we expect
+@@ -3065,7 +3066,7 @@ class TritonKernel(SIMDKernel):
+             argdefs.append(f"{tree.prefix}numel")
+             # constexpr version causes issues, see
+             # https://github.com/pytorch/torchdynamo/pull/1362
+-            # triton_meta["constants"][len(argdefs)] = V.graph.sizevars.size_hint(
++            # triton_meta["constexprs"][len(argdefs)] = V.graph.sizevars.size_hint(
+             #     tree.numel
+             # )
+             # argdefs.append(f"{tree.prefix}numel: tl.constexpr")
+@@ -3076,8 +3077,10 @@ class TritonKernel(SIMDKernel):
+         # during launching the Inductor-compiled Triton kernel.
+         # https://github.com/pytorch/pytorch/issues/120478#issuecomment-1962822307
+         # https://github.com/openai/triton/blob/231efe9ed2d200be0f69a07c298e4342b08efe3d/python/triton/runtime/jit.py#L384
+-        for arg_num in triton_meta["configs"][0].equal_to_1:  # type: ignore[index]
+-            triton_meta["constants"][signature[arg_num].name] = 1  # type: ignore[index]
++        #if triton_meta["configs"][0].equal_to_1 != []:
++        #    breakpoint()
++        #for arg_num in triton_meta["configs"][0].equal_to_1:  # type: ignore[index]
++        #    triton_meta["constexprs"][signature[arg_num[0]].name] = 1  # type: ignore[index]
+ 
+         self.triton_meta = triton_meta
+ 
+@@ -3087,9 +3090,14 @@ class TritonKernel(SIMDKernel):
+                 continue
+             if tree.tensor_dim is None:
+                 continue
+-            argdefs.append(f"{tree.prefix.upper()}BLOCK : tl.constexpr")
++            const_name = f"{tree.prefix.upper()}BLOCK"
++            triton_meta['signature'][const_name] = 'constexpr'
++            triton_meta['constexprs'][const_name] = tree.numel
++            argdefs.append(f"{const_name} : tl.constexpr")
+ 
+         if self.cooperative_reduction:
++            triton_meta['signature']['RSPLIT'] = 'constexpr'
++            triton_meta['constexprs']['RSPLIT'] = tree.numel
+             argdefs.append("RSPLIT : tl.constexpr")
+ 
+         self.codegen_body()
+diff --git a/torch/_inductor/codegen/triton_utils.py b/torch/_inductor/codegen/triton_utils.py
+index 8b8c29bbb1..3b7a78158d 100644
+--- a/torch/_inductor/codegen/triton_utils.py
++++ b/torch/_inductor/codegen/triton_utils.py
+@@ -156,14 +156,15 @@ def config_of(
+             return False
+         raise NotImplementedError(f"unhandled {type(x)}: {x}")
+ 
++    # breakpoint()
+     if config.triton.divisible_by_16:
+-        divisible_by_16 = tuple(
++        divisible_by_16 = [tuple(
+             i
+             for i, arg in zip(indices, args)
+             if is_aligned(arg, alignment=16, include_tensor=True)
+-        )
++        )]
+     else:
+-        divisible_by_16 = ()
++        divisible_by_16 = []
+ 
+     equal_to_1 = tuple(
+         i
+@@ -172,5 +173,7 @@ def config_of(
+         and isinstance(arg.expr, (int, sympy.Integer))
+         and V.graph.sizevars.statically_known_equals(arg.expr, 1)  # type: ignore[arg-type]
+     )
++    if equal_to_1 != tuple():
++        equal_to_1 = [equal_to_1]
+ 
+     return AttrsDescriptorWrapper(divisible_by_16, equal_to_1)
+diff --git a/torch/_inductor/runtime/hints.py b/torch/_inductor/runtime/hints.py
+index 276c01f3f4..4e6e1ab9ce 100644
+--- a/torch/_inductor/runtime/hints.py
++++ b/torch/_inductor/runtime/hints.py
+@@ -53,6 +53,7 @@ if _is_triton_available():
+             }
+ 
+             # Instantiate AttrsDescriptor with the prepared arguments
++            # breakpoint()
+             res = AttrsDescriptor.from_dict(
+                 {"arg_properties": kwargs, "cls": AttrsDescriptor.__name__}
+             )
+diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
+index af8530e94d..6f4c7a93f1 100644
+--- a/torch/_inductor/runtime/triton_heuristics.py
++++ b/torch/_inductor/runtime/triton_heuristics.py
+@@ -419,7 +419,7 @@ class CachingAutotuner(KernelInterface):
+                 if k == "kpack":
+                     compile_meta["kpack"] = v
+                     continue
+-            compile_meta["constants"][k] = v
++            compile_meta["constexprs"][k] = v
+         compile_meta["num_warps"] = cfg.num_warps
+         compile_meta["num_stages"] = cfg.num_stages
+         compile_meta["debug"] = self.inductor_meta.get(
+@@ -435,12 +435,15 @@ class CachingAutotuner(KernelInterface):
+         else:
+             triton_helpers.set_driver_to_gpu()
+ 
++        print(compile_meta["signature"])
++        print(compile_meta["constexprs"])
++        print(compile_meta["configs"][0])
+         if ASTSource:
+             compile_args = (
+                 ASTSource(
+                     self.fn,
+                     compile_meta["signature"],
+-                    compile_meta["constants"],
++                    compile_meta["constexprs"],
+                     compile_meta["configs"][0],
+                 ),
+             )
+@@ -527,7 +530,7 @@ class CachingAutotuner(KernelInterface):
+         We also don't want to modify self.fn.
+ 
+         We know that we removed something from the signature if:
+-            1. It's in compile_meta["constants"]
++            1. It's in compile_meta["constexprs"]
+             2. It isn't a constant we already know about
+                 Note: The value of interest has already been added to compile_meta['constants'],
+                     so we use self.fn.constexprs instead.
+@@ -538,7 +541,7 @@ class CachingAutotuner(KernelInterface):
+         }
+         none_args = {
+             k
+-            for k, v in compile_meta["constants"].items()
++            for k, v in compile_meta["constexprs"].items()
+             if v is None and k not in known_constants
+         }
+         none_args = none_args.difference(set(compile_meta["signature"].keys()))
+@@ -548,12 +551,14 @@ class CachingAutotuner(KernelInterface):
+             for i, arg in enumerate(self.fn.arg_names)
+             if i not in self.fn.constexprs and arg not in none_args
+         ]
++        print(f"call_args: {call_args}")
+ 
+         def_args = [
+             name
+             for name in self.fn.arg_names
+             if name not in cfg.kwargs and name not in none_args
+         ]
++        print(f"def_args: {def_args}\n")
+         binary_shared = (
+             binary.shared if hasattr(binary, "shared") else binary.metadata.shared
+         )
