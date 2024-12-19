@@ -37,7 +37,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_ipex(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
-                  sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
+                  sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -108,7 +108,7 @@ def do_bench_ipex(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=No
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu", kernel_name=None):  # pylint: disable=unused-argument
+                          device="xpu"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -159,7 +159,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True, kernel_name=None):
+                                       return_mode="mean", device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -178,7 +178,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
 
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
-    from torch.profiler import profile, ProfilerActivity
+    from torch.profiler import profile, ProfilerActivity, record_function
 
     fn()
     synchronize()
@@ -206,24 +206,24 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
             if sync_submitting:
                 synchronize()
             # record time of `fn`
-            fn()
+            with record_function("__profile_kernel_of_func"):
+                fn()
         # Record clocks
         synchronize()
 
-    function_events = prof.events()
+    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.events())
+    functions = list(profiling_func_filter)
 
-    all_functions = []
-    if isinstance(kernel_name, str):
-        kernel_name = [kernel_name]
-    for ker_name in kernel_name:
-        functions = list(filter(lambda x: x.name.startswith(ker_name), function_events))  # pylint: disable=cell-var-from-loop
-        assert len(functions) == n_repeat, f"the profiling number for kernel: '{ker_name}' not match, {len(functions)}"
-        all_functions.append(functions)
-    # profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
+    def extract_kernels(funcs):
+        kernels = []
+        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
+        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
+        return kernels
 
+    kernels = [extract_kernels(func.cpu_children) for func in functions]
+    assert len(kernels) == n_repeat, "the profiling number not match"
     # Make the time to the milliseconds.
-    times = torch.tensor([sum(map(lambda elem: elem.self_device_time_total, f)) * 1e-3 for f in zip(*all_functions)],
-                         dtype=torch.float)
+    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
