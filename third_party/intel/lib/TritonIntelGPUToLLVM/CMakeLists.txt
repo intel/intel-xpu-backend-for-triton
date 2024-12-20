@@ -7,7 +7,6 @@ add_triton_library(TritonIntelGPUToLLVM
     ConvertLayoutOpToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
     DotOpToLLVM/DPAS.cpp
-    DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     HistogramOpToLLVM.cpp
