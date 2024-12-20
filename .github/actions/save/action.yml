@@ -17,11 +17,9 @@ runs:
   using: "composite"
   steps:
     - name: Save ${{ inputs.path }} to cache
+      if: ${{ inputs.enabled != 'true' }}
       shell: bash
       run: |
-        if [[ ${{ inputs.enabled != 'true' }} ]]; then
-          exit 0
-        fi
         TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
         cp -rT ${{ inputs.path }} $TEMP_ITEM
         # ignore error if other job created a cache with the same key already
