@@ -422,12 +422,16 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
         // new DPAS layout.
         if (auto dpasEncoding =
                 dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
+          unsigned opsPerChannel =
+              intel::DpasEncodingAttr::getOpsPerChannel(elemType);
+          // e2m1 is packed 2 elements per int8
+          if (xTy.getElementType() == IntegerType::get(ctx, 8))
+            opsPerChannel *= 2;
           auto newDpasEncoding = intel::DpasEncodingAttr::get(
               ctx, dpasEncoding.getRepeatCount(),
               dpasEncoding.getSystolicDepth(), dpasEncoding.getExecutionSize(),
-              intel::DpasEncodingAttr::getOpsPerChannel(elemType),
-              dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
-              dpasEncoding.getSubGroupSize());
+              opsPerChannel, dpasEncoding.getWarpsPerCTA(),
+              dpasEncoding.getRepCluster(), dpasEncoding.getSubGroupSize());
           newVEncoding = DotOperandEncodingAttr::get(
               ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
         } else {

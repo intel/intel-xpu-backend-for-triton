@@ -3536,9 +3536,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
             pytest.skip(f"scaled_dot({normal_type}, {mxfp_type}) only implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
-    if is_xpu():
-        if 'e2m1' in (normal_type, mxfp_type):
-            pytest.skip("e2m1 dot-layout not supported on XPU")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
