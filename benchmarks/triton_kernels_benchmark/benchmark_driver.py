@@ -6,13 +6,15 @@ from triton.backends.driver import DriverBase
 from triton.runtime.cache import get_cache_manager
 from triton.runtime.build import _build, quiet
 from triton._utils import parse_list_string
-from triton.backends.intel.driver import compile_module_from_src
+from triton.backends.intel.driver import compile_module_from_src, COMPILATION_HELPER
 
 import torch
 
 # ------------------------
 # Utils
 # ------------------------
+
+COMPILATION_HELPER.inject_pytorch_dep()
 
 
 class XPUUtils:
