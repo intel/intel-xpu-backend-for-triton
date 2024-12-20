@@ -113,8 +113,6 @@ jobs:
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
-        with:
-          repository: pytorch/pytorch
 
       - name: Build Triton wheels
         uses: ./.github/actions/setup-triton

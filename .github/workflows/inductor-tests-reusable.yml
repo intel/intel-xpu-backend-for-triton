@@ -65,7 +65,6 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
-          repository: ${{ env.PYTORCH_REPO}}
           ref: ${{ inputs.pytorch_ref }}
 
       - name: Setup Triton
