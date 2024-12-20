@@ -11,8 +11,6 @@ from triton.runtime.build import _build, quiet
 
 import torch
 
-from .benchmark_testing import USE_IPEX_OPTION
-
 _dirname = os.getenv("ZE_PATH", default="/usr/local")
 
 include_dir = [
@@ -30,13 +28,6 @@ if oneapi_root:
 
 library_dir = [os.path.join(_dirname, "lib"), os.path.join(torch.utils.cmake_prefix_path, "../../lib")]
 libraries = ["ze_loader", "sycl", "torch"]
-
-if USE_IPEX_OPTION:
-    import intel_extension_for_pytorch
-
-    include_dir.append(os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../include"))
-    library_dir.append(os.path.join(intel_extension_for_pytorch.cmake_prefix_path, "../../lib"))
-    libraries.append("intel-ext-pt-gpu")
 
 
 def compile_module_from_src(src, name):
@@ -144,14 +135,6 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     fmt = "iiiOOOOOO" + args_format
     args_list = ", " + ", ".join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ""
 
-    record_function_header = "#include <ATen/record_function.h>"
-    ipex_header = ""
-    xpu_profiler_record = ""
-    if USE_IPEX_OPTION:
-        record_function_header = "#include <torch/extension.h>"
-        ipex_header = "#include <ipex.h>"
-        xpu_profiler_record = "xpu::profiler_record(kernel_name, event);"
-
     # generate glue code
     src = f"""
     #include <cstddef>
@@ -160,8 +143,7 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     #include <iomanip>
     #include <level_zero/ze_api.h>
     #include <sycl/sycl.hpp>
-    {record_function_header}
-    {ipex_header}
+    #include <ATen/record_function.h>
 
     #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
     #include <Python.h>
@@ -302,7 +284,6 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
       }}
       }};
     auto event = stream.submit(cgf);
-    {xpu_profiler_record}
   }}
 // end sycl
     static PyObject* launch(PyObject* self, PyObject* args) {{
