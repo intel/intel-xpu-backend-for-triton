@@ -17,7 +17,7 @@ runs:
   using: "composite"
   steps:
     - name: Save ${{ inputs.path }} to cache
-      if: ${{ inputs.enabled != 'true' }}
+      if: ${{ inputs.enabled == 'true' }}
       shell: bash
       run: |
         TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
