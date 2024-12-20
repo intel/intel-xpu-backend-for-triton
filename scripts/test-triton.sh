@@ -326,7 +326,7 @@ run_instrumentation_tests() {
 run_inductor_tests() {
   test -d pytorch || (
     git clone https://github.com/pytorch/pytorch
-    rev=$(cat .github/pins/pytorch-upstream.txt)
+    rev=$(cat .github/pins/pytorch.txt)
     cd pytorch
     git checkout $rev
   )

@@ -51,7 +51,7 @@ ROOT=$(cd $(dirname "$0")/.. && pwd)
 # Check installed torch
 
 if [ "$BUILD_LATEST" = false ]; then
-  PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch-upstream.txt)"
+  PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch.txt)"
   echo "***** Using pinned PyTorch commit $PYTORCH_PINNED_COMMIT by default. *****"
 fi
 

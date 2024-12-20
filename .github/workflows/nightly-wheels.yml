@@ -9,7 +9,7 @@ on:
       - main
     paths:
       - .github/workflows/nightly-wheels.yml
-      - .github/pins/pytorch-upstream.txt
+      - .github/pins/pytorch.txt
 
 permissions: read-all
 
@@ -56,8 +56,6 @@ jobs:
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
-        with:
-          repository: pytorch/pytorch
 
       - name: Identify pinned versions
         run: |
