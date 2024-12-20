@@ -1571,3 +1571,5 @@ test/unit/language/test_core.py::test_scaled_dot[128-128-128-False-False-True-e5
 test/unit/language/test_core.py::test_scaled_dot[128-128-128-False-False-True-e5m2-e4m3-4-16-1]
 test/unit/language/test_core.py::test_scaled_dot[128-128-128-False-False-True-e4m3-bf16-4-16-1]
 test/unit/language/test_core.py::test_trans_reshape
+test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-float32-float32-1_0]
+test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-True-none-tf32-float32-float32-1_1]
