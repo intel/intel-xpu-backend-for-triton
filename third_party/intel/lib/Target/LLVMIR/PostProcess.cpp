@@ -1,6 +1,4 @@
 #include "third_party/intel/include/Target/LLVMIR/PostProcess.h"
-#include "third_party/intel/include/Target/LLVMIR/DSE.h"
-#include "third_party/intel/include/Target/LLVMIR/LICM.h"
 #include "third_party/intel/include/Target/LLVMIR/SLPVectorizer.h"
 
 #include "llvm/IR/Module.h"
@@ -38,14 +36,6 @@ void postProcessLLVMIR(llvm::Module &mod) {
   print("PostProcessing: Before SLPVectorizer", mod);
   SLPVectorizer(mod, trace);
   print("PostProcessing: After SLPVectorizer", mod);
-
-  print("PostProcessing: Before LICM", mod);
-  LICM(mod, trace);
-  print("PostProcessing: After LICM", mod);
-
-  print("PostProcessing: Before DSE", mod);
-  DSE(mod, trace);
-  print("PostProcessing: After DSE", mod);
 }
 
 } // namespace mlir::triton::intel

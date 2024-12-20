@@ -7,26 +7,7 @@ import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
-
-
-def is_interpreter():
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
-def is_cuda():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
-def is_xpu():
-    return not is_interpreter() and triton.runtime.driver.active.get_current_target().backend == "xpu"
-
-
-def is_on_mi300():
-    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942')
+from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300, is_hip_mi200, is_xpu
 
 
 def test_err_undefined_variable():
@@ -154,7 +135,8 @@ def test_err_in_builtin():
     try:
         inner = e.value.__cause__
         outer = e.value
-        assert "/core.py" in '\n'.join(traceback.format_tb(inner.__traceback__)), "error should point inside core.py"
+        assert f"{os.sep}core.py" in '\n'.join(traceback.format_tb(
+            inner.__traceback__)), "error should point inside core.py"
 
         assert "at 2:4:" in str(outer), "error should point to expand_dims call"
         assert "<source unavailable>" not in str(outer)
@@ -345,7 +327,7 @@ def test_defaults_assign_no_err():
     triton.compile(triton.compiler.ASTSource(fn=kernel, signature={'a': 'i32'}, constants={'B': ""}))
 
 
-def test_where_warning():
+def test_where_warning(fresh_triton_cache):
 
     @triton.jit
     def kernel():
@@ -370,8 +352,8 @@ def test_fp8_support(dtype):
         if cc >= (8, 9):
             supported_dtypes.append(tl.float8e4nv)
     elif is_hip():
-        if is_on_mi300():
-            supported_dtypes += [tl.float8e4b8, tl.float8e5b16]
+        if is_hip_mi300():
+            supported_dtypes += [tl.float8e4nv, tl.float8e4b8, tl.float8e5b16]
     elif is_xpu():
         supported_dtypes += [tl.float8e4b15, tl.float8e4nv]
     elif is_interpreter():
@@ -396,6 +378,42 @@ def test_fp8_support(dtype):
             assert ("not supported in this architecture" in str(e.value.__cause__))
         except AssertionError as assertion_err:
             raise assertion_err from e.value
+
+
+@pytest.mark.parametrize("dtype", [tl.float8e5, tl.int8, tl.float16])
+def test_min_dot_size(dtype):
+    error_msg = "Input shapes should have "
+    if is_cuda():
+        if dtype.primitive_bitwidth == 8:
+            error_msg += "M >= 16, N >= 16 and K >= 32"
+        else:
+            error_msg = "M >= 16, N >= 16 and K >= 16"
+    elif is_hip_mi300():
+        if dtype.is_int8():
+            error_msg += "M >= 16, N >= 16 and K >= 16"
+        else:
+            error_msg += "M >= 16, N >= 16 and K >= 8"
+    elif is_hip_mi200():
+        error_msg += "M >= 16, N >= 16 and K >= 8"
+    elif is_hip():
+        error_msg = "M >= 16, N >= 16 and K >= 16"
+    else:
+        pytest.skip("Test only supported on CUDA and HIP")
+
+    @triton.jit
+    def dot_kernel(dtype: tl.constexpr):
+        SIZE: tl.constexpr = 8
+        a = tl.full((SIZE, SIZE), 0.0, dtype)
+        b = tl.full((SIZE, SIZE), 0.0, dtype)
+        tl.dot(a, b)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(
+            triton.compiler.ASTSource(fn=dot_kernel, signature={"dtype": "constexpr"}, constexprs={"dtype": dtype}))
+    try:
+        assert (error_msg in str(e.value.__cause__))
+    except AssertionError as assertion_err:
+        raise assertion_err from e.value
 
 
 def test_max_num_imprecise_acc_limit():

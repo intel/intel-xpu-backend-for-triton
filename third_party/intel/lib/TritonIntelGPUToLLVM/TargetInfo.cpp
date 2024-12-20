@@ -7,18 +7,30 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
+#include "SPIRVSubgroupOps.h"
 #include "Utility.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 
 namespace mlir::triton::intel {
 
-bool TargetInfo::supportMaximumMinimum() const { return true; }
+bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  assert("TODO: implement ballot on XPU");
-  return Value();
+  // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
+  // TODO: check for more efficient solution.
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  Value threadId = getThreadId(rewriter, loc);
+  int numThreadPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
+  Value reduced_val = shl(select(cmp, i32_val(1), i32_val(0)), laneId);
+  for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
+    Value other_val = LLVM::intel::shuffleXor(loc, rewriter, reduced_val, offs);
+    reduced_val = or_(reduced_val, other_val);
+  }
+  return reduced_val;
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -33,6 +45,14 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
     store(val, ptr);
     return ArrayRef<Value>();
   });
+}
+
+bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
+                                ArrayRef<unsigned> repShape,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> order,
+                                int swizzleByteSize) const {
+  return false;
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
@@ -89,6 +109,53 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
+namespace {
+
+template <typename GroupOp>
+Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
+                         Value acc, unsigned numLanesToReduce,
+                         unsigned warpSize) {
+  auto spvGroupOp = spirv::GroupOperation::Reduce;
+  Value clusterSize;
+  if (numLanesToReduce != warpSize) {
+    spvGroupOp = spirv::GroupOperation::ClusteredReduce;
+    clusterSize = rewriter.create<arith::ConstantOp>(
+        loc, rewriter.getI32Type(),
+        rewriter.getI32IntegerAttr(numLanesToReduce));
+  }
+
+  Value result = rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
+                                          spvGroupOp, acc, clusterSize);
+  return result;
+}
+
+Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
+                       Operation *reduceOp, unsigned numLanesToReduce,
+                       unsigned warpSize) {
+  auto resultType = reduceOp->getResult(0).getType();
+  Value warpReduce =
+      TypeSwitch<mlir::Operation *, Value>(reduceOp)
+          .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+                arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+                arith::MaxNumFOp, arith::MinNumFOp>([&](auto groupOp) {
+            return createSPIRVGroupOp<
+                SPIRVArithmeticGroupOpTy<decltype(groupOp)>>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          })
+          .Case<arith::AndIOp, arith::OrIOp, arith::XOrIOp>([&](auto groupOp) {
+            if (resultType.isInteger(1)) {
+              return createSPIRVGroupOp<
+                  SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
+                  rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+            }
+            return createSPIRVGroupOp<SPIRVBitwiseGroupOpTy<decltype(groupOp)>>(
+                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+          });
+  return warpReduce;
+}
+
+} // namespace
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
@@ -116,40 +183,24 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       reduceOp->getOperand(1) != block.getArgument(1))
     return false;
 
-  auto reduceKind =
-      llvm::TypeSwitch<mlir::Operation *, std::optional<TritonGEN::ReduceKind>>(
-          reduceOp)
-          .Case<arith::AddFOp, arith::AddIOp>(
-              [&](auto) { return TritonGEN::ReduceKind::ADD; })
-          .Case<arith::MulFOp, arith::MulIOp>(
-              [&](auto) { return TritonGEN::ReduceKind::MUL; })
-          .Case<arith::MaxNumFOp>(
-              [&](auto) { return TritonGEN::ReduceKind::MAX; })
-          .Case<arith::MinNumFOp>(
-              [&](auto) { return TritonGEN::ReduceKind::MIN; })
-          .Case<arith::AndIOp>([&](auto) { return TritonGEN::ReduceKind::AND; })
-          .Case<arith::OrIOp>([&](auto) { return TritonGEN::ReduceKind::OR; })
-          .Case<arith::XOrIOp>([&](auto) { return TritonGEN::ReduceKind::XOR; })
-          .Default([](auto) { return std::nullopt; });
-  if (reduceKind == std::nullopt)
+  auto supportedOp =
+      isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+          arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+          arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+          arith::XOrIOp>(reduceOp);
+
+  if (!supportedOp)
     return false;
 
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
   for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = rewriter.create<TritonGEN::SubGroupReduceOp>(
-        loc, reduceOp->getResult(0).getType(), acc[i], *reduceKind,
-        numLaneToReduce);
+    acc[i] = warpReduceHelper(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+                              warpSize);
   }
 
   return true;
-}
-
-bool TargetInfo::processReplicaUsingStMatrix(
-    RewriterBase &rewriter, Location loc, Value smemBase,
-    SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-    ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-    int swizzleByteWidth) const {
-  return false;
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
@@ -241,6 +292,26 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
   auto ret = call(funcOp, operands);
   ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+}
+
+int TargetInfo::getSharedAddressSpace() const {
+  return TritonGEN::TritonGENMemorySpace::kWorkgroup;
+}
+
+bool TargetInfo::supportVectorizedAtomics() const {
+  // Note: not currently tested or used, but AMD generally supports vectorized
+  // atomics.
+  return true;
+}
+
+Value TargetInfo::getStackPointer(RewriterBase &rewriter,
+                                  FunctionOpInterface funcOp) const {
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  LLVM::LLVMPointerType ptrTy = ptr_ty(
+      rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
+  if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0)
+    return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
+  return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
 } // namespace mlir::triton::intel

@@ -18,6 +18,10 @@ namespace mlir::triton::gpu {
 LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                                 unsigned opIdx = 2);
 
+std::optional<LinearLayout>
+dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
+                             ArrayRef<int64_t> shape);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONINTELGPU_IR_LINEARLAYOUTCONVERSIONS_H

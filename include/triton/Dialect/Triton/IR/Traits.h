@@ -69,9 +69,9 @@ public:
   static LogicalResult verifyTrait(Operation *op) {
     if (op->getNumOperands() < 3)
       return op->emitOpError("expected at least 3 operands");
-    auto aTy = cast<TensorOrMemDesc>(op->getOperand(0).getType());
-    auto bTy = cast<TensorOrMemDesc>(op->getOperand(1).getType());
-    auto cTy = cast<TensorOrMemDesc>(op->getOperand(2).getType());
+    auto aTy = cast<ShapedType>(op->getOperand(0).getType());
+    auto bTy = cast<ShapedType>(op->getOperand(1).getType());
+    auto cTy = cast<ShapedType>(op->getOperand(2).getType());
     auto aShape = aTy.getShape();
     auto bShape = bTy.getShape();
     auto cShape = cTy.getShape();
@@ -81,10 +81,12 @@ public:
     if (aShape.size() != bShape.size() || aShape.size() != cShape.size())
       return op->emitOpError("expected all operands to have the same rank");
     // Check if the first two operands share a common dimension
-    if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-      return op->emitOpError("expected the last dimension of the first operand "
-                             "to be equal to the second-to-last dimension of "
-                             "the second operand");
+    // TODO: enable back with an interface to support scaled dot.
+    // if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+    //   return op->emitOpError("expected the last dimension of the first
+    //   operand "
+    //                          "to be equal to the second-to-last dimension of
+    //                          " "the second operand");
     // Check the batch dimension
     if (aShape.size() == 3 &&
         (aShape[0] != cShape[0] || bShape[0] != cShape[0]))

@@ -342,7 +342,7 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     return serialized_obj
 
 
-def create_function_from_signature(sig, kparams):
+def create_function_from_signature(sig, kparams, backend):
     """
     Equivalent to sig.bind followed by apply_defaults. This generates a
     native Python function (using exec) which can be memoized on a per-kernel
@@ -401,7 +401,7 @@ def create_function_from_signature(sig, kparams):
     }
 
     func_namespace['mangle_type'] = mangle_type
-    func_namespace['compute_spec_key'] = compute_spec_key
+    func_namespace['compute_spec_key'] = backend.compute_spec_key
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -445,7 +445,6 @@ class JITFunction(KernelInterface[T]):
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # cache_hook will always be called before compilation and compiled_hook after.
     compiled_hook = None
-    divisibility = 16
 
     @staticmethod
     def _key_of(arg):
@@ -466,42 +465,6 @@ class JITFunction(KernelInterface[T]):
             return None
         else:
             raise TypeError(f"Unsupported type {type(arg)} for {arg}")
-
-    @staticmethod
-    def _spec_of(arg):
-        if hasattr(arg, "data_ptr"):
-            return arg.data_ptr() % JITFunction.divisibility == 0
-        elif isinstance(arg, int):
-            return (arg % 16 == 0, arg == 1)
-        return (arg is None, )
-
-    def _get_config(self, *args):
-        from ..compiler import AttrsDescriptor
-
-        def is_divisible_by_16(x):
-            if hasattr(x, "data_ptr"):
-                return x.data_ptr() % JITFunction.divisibility == 0
-            elif isinstance(x, int):
-                return x % JITFunction.divisibility == 0
-            if x is None:
-                return True
-            return False
-
-        divisible_by_16 = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if is_divisible_by_16(arg) and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        }
-        equal_to_1 = {
-            param.num
-            for param, arg in zip(self.params, args)
-            if isinstance(arg, int) and not isinstance(arg, bool) and arg == 1 and not param.do_not_specialize
-        }
-        # folded equal_to_1 and None
-        # TODO: method to collect all folded args
-        return AttrsDescriptor(tuple(divisible_by_16), tuple(equal_to_1))
-        # return _triton.code_gen.instance_descriptor(divisible_by_16,
-        # equal_to_1)
 
     @staticmethod
     def _type_of(key, is_const=False):
@@ -538,7 +501,7 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}]({arg_reprs})"
+        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
 
         class JitFunctionInfo:
 
@@ -558,6 +521,7 @@ class JITFunction(KernelInterface[T]):
             'num_ctas': options.num_ctas,
             'num_stages': options.num_stages,
             'enable_fp_fusion': options.enable_fp_fusion,
+            'launch_cooperative_grid': options.launch_cooperative_grid,
             'extern_libs': options.extern_libs,
             'configs': configs,
             'specialization_data': specialization_data,
@@ -586,40 +550,39 @@ class JITFunction(KernelInterface[T]):
         Precompute as much as possible.
         """
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
+        target = driver.active.get_current_target()
+        backend = make_backend(target)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
-        self.make_backend = make_backend
-        self.binder = create_function_from_signature(self.signature, self.params)
+        binder = create_function_from_signature(self.signature, self.params, backend)
         self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
         self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
         self.specialised_indices = [
             i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
         ]
+        return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
+        kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
+
         # parse options
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
-        kwargs["debug"] = self.debug
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        if self.binder is None:
-            self.create_binder()
-
-        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
+        kernel_cache, target, backend, binder = self.device_caches[device]
+        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = binder(*args, **kwargs)
 
         # compute cache key
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
-        kernel = self.cache[device].get(key, None)
+        kernel = kernel_cache.get(key, None)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
-            target = driver.active.get_current_target()
-            backend = self.make_backend(target)
             options = backend.parse_options(kwargs)
 
             # deprecated arguments
@@ -640,11 +603,12 @@ class JITFunction(KernelInterface[T]):
             sigvals = sig_and_spec[:len(sigkeys)]
             signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
-            configs = (self._get_config(*bound_vals), )
+            configs = (backend.get_attrs_descriptor(self.params, bound_vals), )
+            constant_params = configs[0].get_constants()
             constants = {
                 p.name: v
                 for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr or p.num in configs[0].equal_to_1 or v is None
+                if p.is_constexpr or (p.num in constant_params) or v is None
             }
             for i, arg in constants.items():
                 if callable(arg):
@@ -659,7 +623,7 @@ class JITFunction(KernelInterface[T]):
                 target=target,
                 options=options.__dict__,
             )
-            self.cache[device][key] = kernel
+            kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constants, options, configs, warmup, before=False)
 
         # Check that used global values have not changed.
@@ -703,8 +667,6 @@ class JITFunction(KernelInterface[T]):
         self.repr = lambda _: fn.__name__ if repr is None else repr(_)
         self.launch_metadata = launch_metadata
 
-        self.binder = None
-
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
             dns = i in do_not_specialize or param.name in do_not_specialize
@@ -715,7 +677,7 @@ class JITFunction(KernelInterface[T]):
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
         # cache of just-in-time compiled kernels
-        self.cache = defaultdict(dict)
+        self.device_caches = defaultdict(lambda: self.create_binder())
         self.hash = None
 
         # Map of global variables used by the function and any functions it
@@ -732,7 +694,7 @@ class JITFunction(KernelInterface[T]):
         # JITFunction can be instantiated as kernel
         # when called with a grid using __getitem__
         self.kernel = None
-        self.debug = True if os.environ.get("TRITON_DEBUG", "0") == "1" else debug
+        self.debug = debug
         self.noinline = noinline
 
         # TODO(jlebar): Remove uses of these fields outside this file, then
@@ -763,7 +725,8 @@ class JITFunction(KernelInterface[T]):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     def preload(self, specialization_data):
-        from ..compiler import AttrsDescriptor, compile, ASTSource
+        from ..compiler import compile, ASTSource
+        from triton.backends.compiler import AttrsDescriptor
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
@@ -783,7 +746,7 @@ class JITFunction(KernelInterface[T]):
         }
         key = deserialized_obj['key']
         kernel = compile(src, None, options)
-        self.cache[device][key] = kernel
+        self.device_caches[device][0][key] = kernel
         return kernel
 
     # we do not parse `src` in the constructor because
@@ -913,6 +876,10 @@ class MockTensor:
     def data_ptr():
         return 0  # optimistically assumes multiple of 16
 
+    @staticmethod
+    def ptr_range():
+        return 0  # optimistically assumes 32 bit pointer range
+
 
 class TensorWrapper:
 
@@ -946,6 +913,9 @@ class TensorWrapper:
 
     def to(self, device):
         return TensorWrapper(self.base.to(device), self.dtype)
+
+    def new_empty(self, sizes):
+        return TensorWrapper(self.base.new_empty(sizes), self.dtype)
 
 
 def reinterpret(tensor, dtype):

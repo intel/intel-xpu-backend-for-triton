@@ -50,7 +50,7 @@ public:
                                          blockEncoding);
     Value load =
         rewriter.create<LocalLoadOp>(op.getLoc(), tmpType, op.getSrc());
-    auto newSharedDescTy = triton::MemDescType::get(
+    auto newSharedDescTy = MemDescType::get(
         type.getShape(), type.getElementType(),
         triton::gpu::SharedEncodingAttr::get(
             op.getContext(), dstDotOp, type.getShape(),
@@ -70,10 +70,14 @@ struct DecomposeUnsupportedConversions
     : public mlir::triton::impl::DecomposeUnsupportedNVIDIAConversionsBase<
           DecomposeUnsupportedConversions> {
   void runOnOperation() override {
+    // FIXME [Dot LL]
+    // Remove the decomposeTensorCoreToDotLayoutConversion class entirely after
+    // we have enabled the new layout conversion for all the cases.
+    auto nvidiaShortCutFn = [&](RankedTensorType srcTy,
+                                RankedTensorType dstTy) { return true; };
     ModuleOp mod = getOperation();
-    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
     triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
-                                                          isMmaToDotShortcut);
+                                                          nvidiaShortCutFn);
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
 
     mlir::RewritePatternSet patterns(&getContext());

@@ -18,11 +18,16 @@ class ConversionPatternRewriter;
 
 namespace mlir::triton::gpu::intel {
 
+// If the given type is a pointer of tensors, return the pointee type.
+// Otherwise, attempt to cast the given type to a ranked tensor and return the
+// dynamic cast result.
+RankedTensorType getRankedTensorType(Type type);
+
 // Check if given value is divisible by the divisor.
 bool isDivisible(Value value, unsigned divisor);
 
 // Infers the encoding of the source of op given the result encoding.
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
+Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);

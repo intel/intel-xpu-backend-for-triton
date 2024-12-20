@@ -15,26 +15,48 @@ using namespace mlir::triton::gpu;
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
-void lowerDistributedToShared(Location loc, Value src, Value dst,
-                              Value adaptorSrc,
-                              const SharedMemoryObject &smemObj,
-                              const LLVMTypeConverter *typeConverter,
-                              ConversionPatternRewriter &rewriter,
-                              const TargetInfoBase &targetInfo) {
+void lowerDistributedToShared(
+    Location loc, Value src, Value dst, Value adaptorSrc,
+    const SharedMemoryObject &smemObj, const LLVMTypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
+    std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
-  assert(srcTy.getShape().size() <= 2 ||
-         (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
-             "Unexpected rank of ConvertLayout(blocked->shared)");
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
-  auto smemBase = smemObj.getBase();
-  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
+                           targetInfo, llvmOpCount);
 }
+
+struct GlobalScratchAllocOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
+  GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
+        "ttg.global_scratch_memory_offset");
+    assert(opOffsetAttr);
+    auto opOffset = opOffsetAttr.getValue().getZExtValue();
+
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!funcOp) {
+      return failure();
+    }
+    Value ptr =
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+
+    rewriter.replaceOp(op, ptr);
+    return success();
+  }
+};
 
 struct LocalAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
@@ -51,28 +73,16 @@ struct LocalAllocOpConversion
       return failure();
     Location loc = op->getLoc();
     Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, op.getOperation());
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
         cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
-    auto order = sharedLayout.getOrder();
-    // Workaround for 3D tensors
-    // TODO: we need to modify the pipeline pass to give a proper shared
-    // encoding to 3D tensors
-    SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() != order.size()) {
-      for (auto i = 0; i < order.size(); ++i)
-        newOrder.push_back(order[i] + 1);
-      newOrder.push_back(0);
-    } else {
-      newOrder = SmallVector<unsigned>(order.begin(), order.end());
-    }
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      newOrder, loc, rewriter);
+                                      sharedLayout, loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
@@ -109,17 +119,25 @@ public:
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
+  // FIXME [Dot LL]
+  // Do for all DotOperandEncodingAttr once we have LLs for all of them
+  static bool isSupportedLayout(Attribute dstLayout) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+            LinearEncodingAttr>(dstLayout))
+      return true;
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
+      if (isa<MmaEncodingTrait>(dot.getParent()))
+        return true;
+    }
+    return false;
+  };
+
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    // TODO: do we need to check if src is shared ?
-    if (isa<SharedEncodingAttr>(srcLayout) &&
-        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            dstLayout)) {
+    if (isSupportedLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -156,12 +174,6 @@ private:
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto dstShape = dstTy.getShape();
-    assert(dstShape.size() <= 2 &&
-           "Unexpected rank of ConvertLayout(shared->blocked)");
-    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    auto inOrd = getOrder(srcSharedLayout);
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
@@ -186,12 +198,15 @@ struct LocalStoreOpConversion
 public:
   using ConvertOpToLLVMPattern<
       triton::gpu::LocalStoreOp>::ConvertOpToLLVMPattern;
+  using BackendCallbackType =
+      decltype(BackendCallbacks::localStoreOpConversion);
 
   LocalStoreOpConversion(const LLVMTypeConverter &converter,
                          const TargetInfoBase &targetInfo,
+                         BackendCallbackType backendCallback,
                          PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter, benefit),
-        targetInfo(targetInfo) {}
+        targetInfo(targetInfo), backendCallback(backendCallback) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
@@ -201,24 +216,37 @@ public:
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+
+    std::pair<size_t, Type> llvmOpCount;
     lowerDistributedToShared(op.getLoc(), op.getSrc(), op.getDst(),
                              adaptor.getSrc(), smemObj, getTypeConverter(),
-                             rewriter, targetInfo);
+                             rewriter, targetInfo, &llvmOpCount);
+
+    if (backendCallback)
+      (backendCallback)(op, llvmOpCount.first, llvmOpCount.second);
+
     rewriter.eraseOp(op);
     return success();
   }
 
 private:
   const TargetInfoBase &targetInfo;
+  BackendCallbackType backendCallback;
 };
 
 } // namespace
 
-void mlir::triton::populateMemoryOpToLLVMPattern(
+void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    RewritePatternSet &patterns, PatternBenefit benefit,
+    std::optional<BackendCallbacks> backendCallbacks) {
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
+
+  auto backendCall =
+      backendCallbacks ? backendCallbacks->localStoreOpConversion : nullptr;
+  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, backendCall,
+                                       benefit);
 }

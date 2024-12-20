@@ -10,39 +10,71 @@ find .venv -name TorchConfig.cmake
 ```
 in the top level Triton directory.
 
+`SPIRVRunner` depends on LLVM support libarary for argument parsing in order to use this run following in the top level Triton directory.
+```
+scripts/compile-triton.sh --llvm
+```
+
+SPIR-V Runner build steps:
+
 ```
 mkdir build
 cd build
-CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/FromAbove/ cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/FromAbove/ LLVM_DIR=/abs/path/to/packages/llvm cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
 make -j
 ```
 
-## Configuring
+## Configuration
 
-`SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `x.py` and `y.py`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
+### Generate Data
 
-Kernels of different shapes require modifying parameters manually in the `SPIRVRunner`. Two places require modification:
+In order to utilize this utility, Triton application must be run with following environment variables enabled
+Provide the path to the directory where the serialized JSON, tensors and SPRI-V binary stored. It is recommended to clear triton cache.
 
-1. `launchKernel`: Add input Tensors to the function signature, add arguments as variables within the function. Arguments can be pulled from the `args` variable to `XPULauncher.__call__` method in `driver.py`. Arguments should be passed to the `sycl_kernel_launch` function. Note that we currently rely on `sycl::memcpy` to move the PyTorch Tensor to XPU. In later versions of PyTorch we should be able to delegate this responsibility to `PyTorch`, and pass the raw XPU `data_ptr()` from `PyTorch` to the kernel.
-2. `sycl_kernel_launch`: Place all `arg*` parameters into the `params` array and add an appropriate call to `set_scalar_arg` for each param, which tells `SYCL` what the arguments are for the kernel we are going to launch.
+```
+export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=< Absolute path to SPV Dumps >
+```
+
+Following input data is generated,
+
+1. args_data.json - (Kernel Arguments / Grid Configuration)
+2. tensors  (Tensors used by the kernel (.pt))
+3. SPIR-V binary (.spv)
+
 
 ## Running
 
-Once the `SPIRVRunner` has been appropriately configured for the kernel and inputs, run the binary with no arguments:
+Help:
 
-`./build/SPIRVRunner`
+```
+USAGE: SPIRVRunner [options]
+
+General options:
+
+  -o <string> - <Specify Output Tensor Name>
+
+  -p          - Enable kernel time profiling
+ ```
+
+
+Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copied back to the CPU and written to disk. Additionally, the name must match the tensor's name (tensor_) and number as specified in the JSON file. Please refer args_data.json file.
+
+### Demo (01-vector-add.py)
+
+`SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `tensor_0.pt` and `tensor_1.pt` and output `tensor_2.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
+
+SPIRVRunner Usage:
+`./build/SPIRVRunner -o tensor_2 -p`
 
 Expected output follows:
 
 ```
 Running on device: Intel(R) Data Center GPU Max 1100
-Tensor a: [98432], Float (393728 bytes)
-Tensor b: [98432], Float (393728 bytes)
 Read 3772 byte kernel.
 Loaded kernel with 0 registers and 0 register spills.
 Tensor output: [98432], Float (393728 bytes)
-Kernel return output: 1.37129
-[ CPUFloatType{} ]
+Kernel execution time: 0.0096 ms
+Output Tensor Path: /abs/path/utils/SPIRVRunner/cpp_outs.pt
 ```
 
 The GPU hardware, shape and data type of each Tensor (along with number of bytes), and kernel information are printed. The shape and data type of the output Tensor is currently printed, along with the the first cell in the output. Ensuring the value of the first cell is non-zero allows for a quick sanity check. The output Tensor is written to a file `cpp_outs.pt` which is a Tensor in PyTorch format. Typically, we will create a quick Python script to read the input Tensor, run the same computations in PyTorch, and then compare the PyTorch result with the loaded `cpp_outs.pt` Tensor using the PyTorch testing API.

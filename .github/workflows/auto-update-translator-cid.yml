@@ -5,6 +5,8 @@ on:
   schedule:
     - cron: '5 23 * * *'
 
+permissions: read-all
+
 env:
   PR_BRANCH: bot/update_translator_cid
 
@@ -13,15 +15,16 @@ jobs:
     runs-on:
       - max1100
       - rolling
-      - runner-0.0.19
+      - runner-0.0.20
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN }}
 
       # search the opened PR that has branch "bot/update_translator_cid", no new PR as long as the target PR is open
       - name: Search the opened PR that has branch ${{ env.PR_BRANCH }}
@@ -55,11 +58,6 @@ jobs:
         with:
           repository: pytorch/pytorch
 
-      # TODO: remove this step once ipex is deprecated for benchmarks
-      - name: Setup NO-OP-IPEX
-        if: ${{ env.TARGET_PRID == null }}
-        uses: ./.github/actions/setup-no-op-ipex
-
       - name: Install test dependencies
         if: ${{ env.TARGET_PRID == null }}
         run: |
@@ -68,7 +66,7 @@ jobs:
 
       - name: Get commit ID from Triton's spirv-llvm-translator.conf
         if: ${{ env.TARGET_PRID == null }}
-        run: echo "CID_CURRENT=$(cat ./lib/Target/SPIRV/spirv-llvm-translator.conf)" >> $GITHUB_ENV
+        run: echo "CID_CURRENT=$(<third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf)" >> $GITHUB_ENV
 
       - name: Checkout SPIRV-LLVM-Translator
         if: ${{ env.TARGET_PRID == null }}
@@ -84,13 +82,12 @@ jobs:
         run: |
           echo "CID_LATEST=$(git -C external/SPIRV-LLVM-Translator rev-parse HEAD)" >> $GITHUB_ENV
 
-      # the latest valid cid has been weitten to spirv-llvm-translator.conf
+      # the latest valid cid has been written to spirv-llvm-translator.conf
       - name: Search the latest valid Translator cid
         if: ${{ env.TARGET_PRID == null }}
         run: |
-          env
           ./scripts/check-update-translator-cid.sh $CID_LATEST $CID_CURRENT
-          if git status --porcelain ./lib/Target/SPIRV/spirv-llvm-translator.conf | grep '^ M'; then
+          if git status --porcelain third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf | grep '^ M'; then
             echo "MODIFIED=true" >> $GITHUB_ENV
             echo "spirv-llvm-translator.conf has been modified"
           fi
@@ -101,8 +98,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git config --global user.name 'glados-intel'
+          git config --global user.email 'glados@intel.com'
 
           if git show-ref --verify --quiet "refs/remotes/origin/${PR_BRANCH}"; then
             echo "${PR_BRANCH} already exist, deleting..."
@@ -115,7 +112,7 @@ jobs:
           git checkout -b ${PR_BRANCH}
           git branch --show-current # bot/update_translator_cid
           git status
-          git add ./lib/Target/SPIRV/spirv-llvm-translator.conf
+          git add third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf
           git commit -m "Update spirv-llvm-translator.conf"
           git push origin ${PR_BRANCH}
-          pr_url=$(gh pr create --title "[github-bot] Update spirv-llvm-translator.conf" --body "Automated PR to update translator commit id." --reviewer whitneywhtsang --head ${PR_BRANCH} --base main)
+          gh pr create --title "[github-bot] Update spirv-llvm-translator.conf" --body "Automated PR to update translator commit id." --reviewer whitneywhtsang --head ${PR_BRANCH} --base main

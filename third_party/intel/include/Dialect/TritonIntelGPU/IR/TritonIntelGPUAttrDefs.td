@@ -74,6 +74,11 @@ along the row (resp. col) dimension.
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    enum class OpIdx : unsigned {
+      OperandA = 0u,
+      OperandB = 1u,
+      OperandC = 2u
+    };
 
     SmallVector<unsigned> getDPASInstShapeA() const;
     SmallVector<unsigned> getDPASInstShapeB() const;
@@ -81,17 +86,55 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getShapeA() const;
     SmallVector<unsigned> getShapeB() const;
     SmallVector<unsigned> getShapeC() const;
-    SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, int opIdx) const;
-    SmallVector<unsigned> getSizePerThreadForOperands(unsigned opIdx) const;
-    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
+
+    SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, OpIdx opIdx) const;
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const;
+    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;
+    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, OpIdx opIdx) const;
+
+    // Forwarder functions for casting unsigned to OpIdx.
+    SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, unsigned opIdx) const {
+      return getDPASRepetitions(shape, static_cast<OpIdx>(opIdx));
+    }
+    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
+      return getSizePerThreadForOperand(kWidth, static_cast<OpIdx>(opIdx));
+    }
+    SmallVector<unsigned> getRepOrderForOperand(unsigned opIdx) const {
+      return getRepOrderForOperand(static_cast<OpIdx>(opIdx));
+    }
+    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, unsigned opIdx) const {
+      return getTotalElemsPerThreadForOperand(shape, eltTy, kWidth, static_cast<OpIdx>(opIdx));
+    }
 
     bool supportReduction() const {
       return true;
     }
 
-    SmallVector<unsigned> getContigPerThread();
+    SmallVector<unsigned> getContigPerThread() const;
+
+    struct DPASCapability {
+      explicit DPASCapability(unsigned minSGSize) : executionSize(minSGSize) {}
+      DPASCapability() = default;
+
+      bool isPVC() const {
+        return executionSize == 16;
+      }
+      bool isFalconShore() const {
+        return executionSize == 16;
+      }
+      bool isATSM() const {
+        return executionSize == 8;
+      }
+
+      static constexpr unsigned systolicDepth = 8u;
+      static constexpr unsigned repeatCount = 8u;
+      static constexpr unsigned opsChanBitWidths = 32u;
+      unsigned executionSize = 0u;
+    };
+
+    static DPASCapability getDPASCapability(mlir::ModuleOp mod);
+    static unsigned getOpsPerChannel(Type elemType);
   }];
 
   let hasCustomAssemblyFormat = 1;

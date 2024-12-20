@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -40,9 +41,18 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz));
         });
-  m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(createConvertBuiltinFuncToLLVMPass());
+  m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm, bool ftz) {
+    pm.addPass(createConvertBuiltinFuncToLLVMPass(ftz));
   });
+  m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm) {
+    pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass());
+  });
+  m.def("lower_instruction_sched_hints",
+        [](mlir::PassManager &pm, const std::string &arch, int32_t numStages,
+           const std::string &variant) {
+          pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
+              arch, numStages, variant));
+        });
   m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
                                                     const std::string &arch) {
     pm.addPass(
@@ -58,12 +68,14 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
   ADD_PASS_WRAPPER_0("add_canonicalize_pointers",
                      mlir::createTritonAMDGPUCanonicalizePointersPass);
+  ADD_PASS_WRAPPER_0("add_convert_to_buffer_ops",
+                     mlir::createTritonAMDGPUConvertToBufferOpsPass);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
-  ADD_PASS_WRAPPER_0("add_stream_pipeline",
-                     mlir::createTritonAMDGPUStreamPipelinePass);
-  ADD_PASS_WRAPPER_1("add_stream_pipelinev2",
-                     mlir::createTritonAMDGPUStreamPipelineV2Pass, int);
+  ADD_PASS_WRAPPER_0("add_block_pingpong",
+                     mlir::createTritonAMDGPUBlockPingpongPass);
+  ADD_PASS_WRAPPER_2("add_stream_pipeline",
+                     mlir::createTritonAMDGPUStreamPipelinePass, int, int);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
@@ -96,6 +108,7 @@ void init_triton_amd(py::module &&m) {
 
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
+    registry.insert<mlir::triton::amdgpu::TritonAMDGPUDialect>();
     // registry.insert<mlir::ROCDL::ROCDLDialect>();
     mlir::registerROCDLDialectTranslation(registry);
     context.appendDialectRegistry(registry);
@@ -148,6 +161,24 @@ void init_triton_amd(py::module &&m) {
     // Also various OpenCL version details.
     if (auto *openclVersion = module->getNamedMetadata("opencl.ocl.version"))
       module->eraseNamedMetadata(openclVersion);
+  });
+
+  m.def("disable_print_inline", [](llvm::Module *module) {
+    // List of functions name prefixes we want to forbid inline.
+    std::array<const char *, 2> prefixes = {"__ockl_fprintf", "__ockl_printf"};
+
+    for (llvm::Function &f : module->functions()) {
+      if (!f.hasName())
+        continue;
+      llvm::StringRef name = f.getName();
+
+      auto isNamePrefixed = [&name](const char *prefix) {
+        return name.starts_with(prefix);
+      };
+
+      if (llvm::any_of(prefixes, isNamePrefixed))
+        f.addFnAttr(llvm::Attribute::NoInline);
+    }
   });
 
   m.def(
@@ -246,6 +277,15 @@ void init_triton_amd(py::module &&m) {
       return true;
     default:
       return false;
+    }
+  });
+
+  m.def("set_all_fn_arg_inreg", [](llvm::Function *fn) {
+    for (llvm::Argument &arg : fn->args()) {
+      // Check for incompatible attributes.
+      if (arg.hasByRefAttr() || arg.hasNestAttr())
+        continue;
+      arg.addAttr(llvm::Attribute::InReg);
     }
   });
 }

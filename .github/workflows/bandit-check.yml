@@ -4,12 +4,14 @@ on:
   schedule:
     - cron: '5 23 * * *'
 
+permissions: read-all
+
 jobs:
   bandit-check:
     runs-on:
       - max1100
       - rolling
-      - runner-0.0.19
+      - runner-0.0.20
     defaults:
       run:
         shell: bash

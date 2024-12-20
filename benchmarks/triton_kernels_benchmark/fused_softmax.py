@@ -13,7 +13,7 @@ import triton.language as tl
 from triton.runtime import driver
 
 import triton_kernels_benchmark as benchmark_suit
-import xetla_kernel
+from triton_kernels_benchmark import xetla_kernel
 
 
 @torch.jit.script
@@ -125,17 +125,17 @@ def benchmark(M, N, provider):
     quantiles = [0.5, 0.0, 1.0]
     if provider == "torch-native":
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: torch.softmax(x, axis=-1), quantiles=quantiles,
-                                                              warmup=10, rep=10)
+                                                              n_warmup=10, n_repeat=10)
     if provider == "triton":
         out = torch.empty_like(x, device="xpu")
         triton_fn = lambda: softmax(x, out)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         benchmark_suit.assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, warmup=10, rep=10)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, n_warmup=10, n_repeat=10)
 
     elif provider == "torch-jit":
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: naive_softmax(x), quantiles=quantiles, warmup=10,
-                                                              rep=10)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(lambda: naive_softmax(x), quantiles=quantiles,
+                                                              n_warmup=10, n_repeat=10)
 
     elif provider == "xetla":
         name = f"softmax_shape_{M}_{N}"
@@ -144,7 +144,7 @@ def benchmark(M, N, provider):
         xetla_fn = lambda: func(x, out, 0)
         torch_fn = lambda: torch.softmax(x, axis=-1)
         # benchmark_suit.assert_close(xetla_fn(), torch_fn(), err_msg="xetla to torch")
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, warmup=10, rep=10)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, n_warmup=10, n_repeat=10)
 
     else:
         raise NotImplementedError(f"Unsupported provider {provider}")

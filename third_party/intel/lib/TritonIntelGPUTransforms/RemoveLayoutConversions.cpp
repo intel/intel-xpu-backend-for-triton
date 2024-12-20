@@ -13,6 +13,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace mlir::triton::gpu::intel {
@@ -252,6 +253,19 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
           }
         }
       }
+
+      // HACK: we want to propagate mma layout to the atomic_rmw op, so we do
+      // not need an extra ConvertLayout Op to convert layout from mma to other
+      // layouts, which may consume excessive shared local memory.
+      // TODO: we need to investigate the performance impact of atomic_rmw op
+      // with mma layout, compared with ConvertLayout Op + atomic_rmw op with
+      // blocked layout.
+      if (auto atomicOp = dyn_cast<AtomicRMWOp>(op)) {
+        auto tensorType =
+            dyn_cast<RankedTensorType>(atomicOp.getResult().getType());
+        if (tensorType && isa<MmaEncodingTrait>(tensorType.getEncoding()))
+          return true;
+      }
       bool isMMAV3 =
           isa<NvidiaMmaEncodingAttr>(encoding) &&
           cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
@@ -272,6 +286,11 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
       auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
       if (!forOp)
         continue;
+      for (OpOperand &operand : forOp.getResult(0).getUses()) {
+        Operation *def = operand.get().getDefiningOp();
+        if (def && (seen.insert(operand.get()).second == true))
+          queue.push_back(operand.get());
+      }
       for (OpOperand &operand : yield->getOpOperands()) {
         Operation *def = operand.get().getDefiningOp();
         if (def && (forwardSlice.count(def) || operand.get() == currentValue) &&
@@ -288,8 +307,14 @@ bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
-  if (isa<DotOp, AtomicRMWOp, AtomicCASOp>(op))
+  // TODO: we should estimate the cost of the not propagating layout for
+  // AtomicCAS and UpcastMXFP ops for further performance consideration.
+  if (isa<DotOp, AtomicCASOp, UpcastMXFPOp>(op))
     return true;
+  if (isa<AtomicRMWOp>(op))
+    if (auto tensorType =
+            dyn_cast<RankedTensorType>(op->getResult(0).getType()))
+      return isa<MmaEncodingTrait>(tensorType.getEncoding());
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
@@ -343,7 +368,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
-      std::optional<Attribute> dstEncoding;
+      Attribute dstEncoding;
       if (isa<ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
@@ -352,7 +377,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
         dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
-        hasChanged |= layouts[value].encodings.insert(*dstEncoding);
+        hasChanged |= layouts[value].encodings.insert(dstEncoding);
     }
     if (hasChanged)
       changed.push_back(value);
@@ -400,6 +425,15 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       Value afterArg = whileOp.getAfterArguments()[argIndex];
       Value result = whileOp->getResult(argIndex);
       setEncoding({afterArg, result}, info, changed, user);
+      continue;
+    }
+    if (auto atomicRMWOp = dyn_cast<AtomicRMWOp>(user)) {
+      bool isBlockedOrMma = std::all_of(
+          info.encodings.begin(), info.encodings.end(), [](Attribute encoding) {
+            return isa<BlockedEncodingAttr, MmaEncodingTrait>(encoding);
+          });
+      if (isBlockedOrMma)
+        setEncoding(user->getResults(), info, changed, user);
       continue;
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
@@ -582,15 +616,15 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
                                                Attribute encoding) {
   Operation *newOp = rewriter.clone(*op);
 
-  std::optional<Attribute> operandEnc;
+  Attribute operandEnc;
   if (op->getNumOperands() > 0) {
     operandEnc = ttgi::inferSrcEncoding(op, encoding);
-    assert(operandEnc.has_value());
+    assert(operandEnc);
   }
 
   for (OpOperand &operand : op->getOpOperands()) {
     newOp->setOperand(operand.getOperandNumber(),
-                      getValueAs(operand.get(), *operandEnc));
+                      getValueAs(operand.get(), operandEnc));
   }
 
   for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
@@ -1269,12 +1303,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
-      std::optional<Attribute> srcEncoding =
-          ttgi::inferSrcEncoding(op, layout[v]);
+      Attribute srcEncoding = ttgi::inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), *srcEncoding, tempSlice, tempLayout);
+          op->getOperand(0), srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -1293,8 +1326,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (extOrBroadcatOp == nullptr)
     return;
   Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
-  std::optional<Attribute> srcEncoding =
-      ttgi::inferSrcEncoding(extOrBroadcatOp, dstEncoding);
+  Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcatOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
@@ -1302,7 +1334,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   auto tensorType =
       cast<RankedTensorType>(extOrBroadcatOp->getOperand(0).getType());
   auto newType = RankedTensorType::get(
-      tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
+      tensorType.getShape(), tensorType.getElementType(), srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);

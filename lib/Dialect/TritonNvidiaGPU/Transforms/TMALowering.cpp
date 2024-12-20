@@ -2,11 +2,13 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 #include <memory>
 
@@ -58,8 +60,10 @@ public:
     Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
     rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
                                                          sizeInBytes, pred);
+    Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+        loc, op.getDesc());
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-        loc, op.getDescPtr(), op.getIndices(), barrierAlloc, alloc, pred);
+        loc, tmaPtr, op.getIndices(), barrierAlloc, alloc, pred);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
@@ -93,10 +97,34 @@ public:
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
     Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
     rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
+    Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+        loc, op.getDesc());
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
-        loc, op.getDescPtr(), op.getIndices(), alloc);
+        loc, tmaPtr, op.getIndices(), alloc);
     rewriter.create<triton::nvidia_gpu::TMAStoreWait>(loc, 0);
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+class TMACreateDescLowering : public OpRewritePattern<MakeTensorDescOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(MakeTensorDescOp op,
+                                PatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
+        loc, getPointerType(rewriter.getI8Type()), TMA_SIZE_BYTES, TMA_ALIGN);
+    if (failed(createTMADesc(alloc, op, rewriter))) {
+      return failure();
+    }
+    rewriter.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(
+        loc, alloc.getResult());
+    auto newDesc = rewriter.create<triton::ReinterpretTensorDescOp>(
+        loc, op.getType(), alloc.getResult());
+    rewriter.replaceOp(op, newDesc);
     return success();
   }
 };
@@ -110,7 +138,8 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<TMALoadLowering, TMAStoreLowering>(context);
+    patterns.add<TMALoadLowering, TMAStoreLowering, TMACreateDescLowering>(
+        context);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

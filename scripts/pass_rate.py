@@ -103,7 +103,7 @@ def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> Repor
             pass
         stats.fixme += len(testsuite_fixme_tests)
 
-    test_unskip = os.getenv('TEST_UNSKIP')
+    test_unskip = os.getenv('TEST_UNSKIP', 'false')
     if test_unskip not in ('true', 'false'):
         raise ValueError('Error: please set TEST_UNSKIP true or false')
     if test_unskip == 'false':
@@ -135,13 +135,13 @@ def find_stats(stats: List[ReportStats], name: str) -> ReportStats:
     raise ValueError(f'{name} not found')
 
 
-def parse_junit_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
+def parse_junit_reports(args: argparse.Namespace) -> List[ReportStats]:
     """Parses junit report in the specified directory."""
     reports_path = pathlib.Path(args.reports)
     return [parse_report(report, args.skiplist_dir) for report in reports_path.glob('*.xml')]
 
 
-def parse_tutorials_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
+def parse_tutorials_reports(args: argparse.Namespace) -> List[ReportStats]:
     """Parses tutorials reports in the specified directory."""
     reports_path = pathlib.Path(args.reports)
     stats = ReportStats(name='tutorials')
@@ -157,7 +157,7 @@ def parse_tutorials_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
     return [stats]
 
 
-def parse_reports(args: argparse.ArgumentParser) -> List[ReportStats]:
+def parse_reports(args: argparse.Namespace) -> List[ReportStats]:
     """Parses all report in the specified directory."""
     return parse_junit_reports(args) + parse_tutorials_reports(args)
 

@@ -1,0 +1,4 @@
+resnet50
+hf_T5
+densenet121
+mobilenet_v2

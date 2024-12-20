@@ -4,6 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "5 23 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/nightly-wheels.yml
+      - .github/pins/pytorch-upstream.txt
 
 permissions: read-all
 
@@ -16,7 +22,7 @@ jobs:
     runs-on:
       - max1100
       - rolling
-      - runner-0.0.19
+      - runner-0.0.20
     strategy:
       matrix:
         python:
@@ -28,7 +34,7 @@ jobs:
       max-parallel: 2
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /home/runner/intel/oneapi/setvars.sh > /dev/null; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -42,6 +48,11 @@ jobs:
         run: |
           # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
           pip install wheel cmake
+
+      # https://github.com/pytorch/data/blob/e316c5ca1ab2a4f69dd6d48e8fc9c6f8d0c7c468/README.md?plain=1#L6-L15
+      - name: Install pinned torchdata
+        run: |
+          pip install torchdata==0.9.0
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -80,7 +91,6 @@ jobs:
         with:
           command: >
             DEBUG=1
-            TRITON_WHEEL_VERSION_SUFFIX="+git$(git rev-parse --short HEAD)"
             python setup.py bdist_wheel && pip install dist/*.whl
 
       - name: Save Triton wheels to a cache

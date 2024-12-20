@@ -10,9 +10,10 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 TritonIntelGPUToLLVMTypeConverter::TritonIntelGPUToLLVMTypeConverter(
-    MLIRContext *ctx, LowerToLLVMOptions &option, bool isAdvancedPathEnabled,
+    MLIRContext *ctx, LowerToLLVMOptions &option,
+    const TargetInfoBase &targetInfo, bool isAdvancedPathEnabled,
     const DataLayoutAnalysis *analysis)
-    : TritonGPUToLLVMTypeConverter(ctx, option, analysis) {
+    : TritonGPUToLLVMTypeConverter(ctx, option, targetInfo, analysis) {
   // Augment/overwrite type conversions required for the Intel conversion
   // passes.
   if (isAdvancedPathEnabled) {

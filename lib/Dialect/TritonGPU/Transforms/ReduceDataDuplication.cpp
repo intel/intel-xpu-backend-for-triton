@@ -42,22 +42,8 @@ public:
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding =
-              dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMmaEncoding.getVersionMajor() != 2 ||
-            (srcMmaEncoding.getWarpsPerCTA()[1] == 1 &&
-             dstDotOp.getParent() == srcMmaEncoding))
-          return;
-      }
-      if (auto srcMfmaEncoding =
-              dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMfmaEncoding.getWarpsPerCTA()[1] == 1 &&
-            srcMfmaEncoding.getIsTransposed() &&
-            dstDotOp.getParent() == srcMfmaEncoding)
-          return;
-      }
+      if (!cvtNeedsSharedMemory(srcType, dstType))
+        return;
       auto srcOrder = triton::gpu::getOrder(srcEncoding);
       auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;
@@ -72,7 +58,7 @@ public:
       }
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
-      auto tmpType = triton::MemDescType::get(
+      auto tmpType = triton::gpu::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,

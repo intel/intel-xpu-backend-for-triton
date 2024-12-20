@@ -1,8 +1,8 @@
 
+#include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "triton/Analysis/Allocation.h"
 
 using namespace mlir;
 
@@ -22,7 +22,8 @@ struct AllocateSharedMemory
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
-    ModuleAllocation allocation(mod);
+    ModuleAllocation allocation(
+        mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
 
     mod.walk([&](FunctionOpInterface funcOp) {
       if (allocation.isRoot(funcOp) && allocation.getSharedMemorySize()) {
@@ -50,10 +51,9 @@ struct AllocateSharedMemory
       });
     });
     int32_t initialSharedMemorySize = 0;
-    if (IntegerAttr sharedAttr =
-            mod->getAttrOfType<IntegerAttr>("triton_gpu.shared"))
+    if (IntegerAttr sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared"))
       initialSharedMemorySize = sharedAttr.getInt();
-    mod->setAttr("triton_gpu.shared",
+    mod->setAttr("ttg.shared",
                  IntegerAttr::get(IntegerType::get(ctx, 32),
                                   initialSharedMemorySize +
                                       allocation.getSharedMemorySize()));

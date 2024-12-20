@@ -18,32 +18,6 @@ static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
 
 namespace mlir::triton::gpu {
 
-void decomposeSplatOpToSharedLayoutConversion(ModuleOp module) {
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
-  int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
-  module.walk([&](triton::SplatOp splatOp) -> void {
-    auto dstType = cast<RankedTensorType>(splatOp.getType());
-    auto shared = dyn_cast_or_null<triton::gpu::SharedEncodingAttr>(
-        dstType.getEncoding());
-    if (shared) {
-      OpBuilder builder(splatOp);
-      SmallVector<unsigned, 4> sizePerThread(dstType.getRank(), 1);
-      auto newType = RankedTensorType::get(
-          dstType.getShape(), dstType.getElementType(),
-          triton::gpu::BlockedEncodingAttr::get(
-              module.getContext(), dstType.getShape(), sizePerThread,
-              getOrder(shared), numWarps, threadsPerWarp, numCTAs));
-      auto newSplat = builder.create<triton::SplatOp>(splatOp.getLoc(), newType,
-                                                      splatOp.getSrc());
-      auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-          splatOp.getLoc(), dstType, newSplat.getResult());
-      splatOp.replaceAllUsesWith(newConvert.getResult());
-      splatOp.erase();
-    }
-  });
-}
-
 void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
                                               ShortcutFn shortcutFn) {
   int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
@@ -83,11 +57,17 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
     OpBuilder builder(cvtOp);
     auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
     auto dstType = cast<RankedTensorType>(cvtOp.getType());
+    if (!cvtNeedsSharedMemory(srcType, dstType))
+      return;
     auto srcBlocked =
         dyn_cast<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding());
     auto dstDotOp =
         dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
     if (srcBlocked && dstDotOp) {
+      auto dotParent = dyn_cast<NvidiaMmaEncodingAttr>(dstDotOp.getParent());
+      if (dotParent) {
+        return;
+      }
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
       auto tmpType = MemDescType::get(

@@ -14,7 +14,11 @@ def parse_args():
         "target",
         help="Path to result csv file with benchmark results including host info and dates",
     )
-    parser.add_argument("--param_cols", help="Names of parameter columns, separated by commas.", required=True)
+    parser.add_argument(
+        "--param_cols",
+        help="Names of parameter columns, separated by commas.",
+        required=True,
+    )
     parser.add_argument("--benchmark", help="Name of the benchmark.", required=True)
     parser.add_argument("--compiler", help="Name of the compiler, like `triton`.", required=True)
     parser.add_argument("--tflops_col", help="Column name with tflops.", required=True)
@@ -47,10 +51,18 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
 
     host_info = {
         n: os.getenv(n.upper(), default="")
-        for n in ["libigc1_version", "level_zero_version", "gpu_device", "agama_version"]
+        for n in [
+            "libigc1_version",
+            "level_zero_version",
+            "gpu_device",
+            "agama_version",
+            "torch_version",
+            "compiler_version",
+            "benchmarking_method",
+        ]
     }
     if not host_info["gpu_device"]:
-        raise RuntimeError("Could not find GPU device description, was capture_device.sh called?")
+        raise RuntimeError("Could not find GPU device description, was `capture-hw-details.sh` called?")
     for name, val in host_info.items():
         df_results[name] = val
 
@@ -61,8 +73,15 @@ def main():
     args = parse_args()
     param_cols = args.param_cols.split(",")
     df = pd.read_csv(args.source)
-    result_df = transform_df(df, param_cols=param_cols, tflops_col=args.tflops_col, hbm_col=args.hbm_col,
-                             benchmark=args.benchmark, compiler=args.compiler, tag=args.tag)
+    result_df = transform_df(
+        df,
+        param_cols=param_cols,
+        tflops_col=args.tflops_col,
+        hbm_col=args.hbm_col,
+        benchmark=args.benchmark,
+        compiler=args.compiler,
+        tag=args.tag,
+    )
     result_df.to_csv(args.target, index=False)
 
 

@@ -18,6 +18,8 @@
 #include "mlir/Conversion/GPUToLLVMSPV/GPUToLLVMSPVPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -114,12 +116,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setLinkage(LLVM::Linkage::External);
     }
 
-    NamedAttrList attrs;
-    attrs.append(TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
-    attrs.append(TritonGEN::TritonGENDialect::getReqdSubGroupSizeAttrName(),
-                 rewriter.getI32ArrayAttr({threadsPerWarp}));
-    newFuncOp->setDialectAttrs(attrs);
+    newFuncOp->setAttr(
+        TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
+        rewriter.getDenseI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
+    newFuncOp.setIntelReqdSubGroupSize(threadsPerWarp);
 
     if (!LLVM::isKernel(funcOp)) {
       newFuncOp.setPassthroughAttr(
@@ -179,14 +179,10 @@ struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
-  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx)
-      : mod(mod), ctx(ctx),
-        isAdvancedPathEnabled(
-            mod->hasAttr(gpu::intel::TritonIntelGPUDialect::
-                             getSupportSG2DBlockAttrName()) &&
-            mod->hasAttr(
-                gpu::intel::TritonIntelGPUDialect::getSupportDPASAttrName()) &&
-            mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH")) {}
+  TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
+                                 bool oneMatrixPerLoadForBT)
+      : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
+        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
@@ -221,7 +217,7 @@ public:
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
@@ -229,12 +225,15 @@ public:
       intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateElementwiseOpToLLVMPatterns(
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-      intel::populateLoadStoreOpToLLVMPatterns(
-          typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
+      intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
+                                               patterns, axisInfoAnalysis,
+                                               benefit, oneMatrixPerLoadForBT);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                           benefit);
+      mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
+                                                   targetInfo, benefit);
       intel::populateViewOpToLLVMPatterns(typeConverter, patterns, benefit);
 
       intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
@@ -243,18 +242,23 @@ public:
                                                targetInfo, benefit);
       intel::populatePrintOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                           benefit);
+      mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
       populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                     benefit);
       intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
                                            benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                benefit);
+                                                targetInfo, benefit);
       intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                               patterns, benefit);
+      intel::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
+                                              targetInfo, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                        benefit);
+    mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
+                                              targetInfo, benefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
@@ -264,6 +268,8 @@ public:
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
+    populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
+                                          spirv::ClientAPI::OpenCL);
   }
 
 private:
@@ -274,6 +280,7 @@ private:
   /// FIXME: this is temporary and should be removed once we have an analysis to
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
+  bool oneMatrixPerLoadForBT = false;
 };
 
 } // namespace mlir::triton::intel

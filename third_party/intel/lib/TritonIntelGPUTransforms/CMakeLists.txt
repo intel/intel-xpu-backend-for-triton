@@ -1,8 +1,10 @@
 add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
+  Coalesce.cpp
   DistributeToWarps.cpp
   MatchTargetSize.cpp
   MaterializeBlockPointer.cpp
+  OptimizeReductionLocality.cpp
   Pipeliner/MatmulLoopPipeline.cpp
   Pipeliner/SoftwarePipeliner.cpp
   PrefetchBlock.cpp
@@ -17,6 +19,7 @@ add_triton_library(TritonIntelGPUTransforms
 
   LINK_LIBS PUBLIC
   MLIRSCFTransforms
+  MLIRSPIRVDialect
   MLIRTransforms
   MLIRTransformUtils
   TritonIntelAnalysis

@@ -1,9 +1,10 @@
+import os
 import torch
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-import xetla_kernel
+from triton_kernels_benchmark import xetla_kernel
 
 
 # pylint: disable=unused-argument
@@ -75,6 +76,10 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     off_z = tl.program_id(0)
     off_h = tl.program_id(1)
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
+    if N_CTX <= 512:
+        start_m = tl.program_id(0)
+        off_z = tl.program_id(2)
+        qvk_offset = off_z.to(tl.int64) * stride_qh
 
     # block pointers
     Q_block_ptr = tl.make_block_ptr(
@@ -148,6 +153,18 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
 
 
+configs = [
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
+    for BM in [128, 256] \
+    for BN in [32, 64] \
+    for s in [3, 4] \
+    for w in [8, 16, 32] \
+    ]
+
+tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
+tune_attn_fwd = tuner(_attn_fwd)
+
+
 def forward(q, k, v, causal, sm_scale):
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
@@ -155,44 +172,59 @@ def forward(q, k, v, causal, sm_scale):
     assert Lk in {16, 32, 64, 128}
     o = torch.empty_like(q, dtype=torch.float32)
     BLOCK_M = 128
-    BLOCK_N = 64 if Lk <= 64 else 32
-    num_stages = 4 if Lk <= 64 else 3
+    BLOCK_N = 64
+    num_stages = 3
     num_warps = 8 if Lq == 64 else 16
-    causal = False
     stage = 3 if causal else 1
-    grid = (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], BLOCK_M))
+    grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
+    n_ctx = q.shape[2]
+    if n_ctx <= 512:
+        grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0] * q.shape[1])
     M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
-    _attn_fwd[grid](
-        q, k, v, sm_scale, M, o,  #
-        q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-        k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-        v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-        o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-        q.shape[0], q.shape[1],  #
-        N_CTX=q.shape[2],  #
-        BLOCK_M=BLOCK_M,  #
-        BLOCK_N=BLOCK_N,  #
-        BLOCK_DMODEL=Lk,  #
-        STAGE=stage,  #
-        num_warps=num_warps,  #
-        num_stages=num_stages  #
-    )
+
+    if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
+        # default pipeline
+        tune_attn_fwd[grid](
+            q, k, v, sm_scale, M, o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1],  #
+            N_CTX=q.shape[2],  #
+            BLOCK_DMODEL=Lk,  #
+            STAGE=stage,  #
+        )
+    else:
+        _attn_fwd[grid](
+            q, k, v, sm_scale, M, o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1],  #
+            N_CTX=q.shape[2],  #
+            BLOCK_M=BLOCK_M,  #
+            BLOCK_N=BLOCK_N,  #
+            BLOCK_DMODEL=Lk,  #
+            STAGE=stage,  #
+            num_warps=num_warps,  #
+            num_stages=num_stages,  #
+            grf_mode='large',  #
+            advanced_path=True,  #
+        )
     return o
 
 
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['Z', 'H', 'N_CTX', 'D_HEAD'],
-        x_vals=[  #
-            [1, 32, 16384, 64],  #
-            [2, 32, 8192, 64],  #
-            [4, 32, 4096, 64],  #
-            [4, 48, 1024, 64],  #
-            [8, 32, 2048, 64],  #
-            [16, 32, 1024, 64],  #
-            [32, 32, 512, 64]  #
-        ],
+        x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL'],
+        x_vals=[[z, h, 16384 // z, dhead, causal]
+                for z in [1, 2, 4, 8, 16, 32]
+                for (h, dhead) in [(16, 128), (32, 64)]
+                for causal in [False, True]]  #
+        + [[4, 48, 1024, 64, causal] for causal in [False, True]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -206,8 +238,7 @@ def forward(q, k, v, causal, sm_scale):
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(Z, H, N_CTX, D_HEAD, provider):
-    causal = False
+def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
     dtype = torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype)
@@ -217,21 +248,21 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
-                                                                     False, scale=sm_scale), warmup=10, rep=10,
-            quantiles=quantiles, fast_flush=False)
+                                                                     CAUSAL, scale=sm_scale), m_warmup=10, n_repeat=10,
+            quantiles=quantiles)
 
     elif provider == 'triton':
-        triton_fn = lambda: forward(q, k, v, causal, sm_scale)
+        triton_fn = lambda: forward(q, k, v, CAUSAL, sm_scale)
         # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False, scale=sm_scale).to(torch.float32)
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
+        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'xetla':
-        func = getattr(xetla_kernel, 'flash_attn')
+        module_name = f'flash_attn_causal_{CAUSAL}'.lower()
+        func = getattr(xetla_kernel, module_name)
         out = torch.empty_like(q, device='xpu', dtype=dtype)
         size_score = Z * H * N_CTX * N_CTX
         size_attn_mask = Z * N_CTX * N_CTX
@@ -241,9 +272,8 @@ def benchmark(Z, H, N_CTX, D_HEAD, provider):
         m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
-        xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, warmup=10, rep=10, quantiles=quantiles,
-                                                              fast_flush=False)
+        xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

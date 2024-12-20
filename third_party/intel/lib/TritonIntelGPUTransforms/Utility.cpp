@@ -11,6 +11,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -25,9 +26,16 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 
+RankedTensorType getRankedTensorType(Type ptrTy) {
+  return tt::isTensorPointerType(ptrTy)
+             ? cast<RankedTensorType>(
+                   cast<tt::PointerType>(ptrTy).getPointeeType())
+             : dyn_cast<RankedTensorType>(ptrTy);
+}
+
 static bool isSingleValue(Value value) {
   // Don't consider load as expensive if it is loading a scalar.
-  if (auto tensorTy = dyn_cast<RankedTensorType>(value.getType()))
+  if (auto tensorTy = getRankedTensorType(value.getType()))
     return tensorTy.getNumElements() == 1;
   // TODO: Handle other cases.
   // For example, when ptr is a tensor of single value.
@@ -64,7 +72,7 @@ bool isDivisible(Value value, unsigned divisor) {
   return false;
 }
 
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
     return encoding;
   if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
@@ -78,14 +86,22 @@ bool isExpensiveLoadOrStore(Operation *op) {
          "Expecting Triton LoadOp or StoreOp");
   Value base = op->getOperand(0);
 
-  // Case 1: A size 1 tensor is not expensive since all threads will load the
-  // same
+  // A size 1 tensor is not expensive since all threads will load the same
+  // value.
   if (isSingleValue(base))
     return false;
 
-  // Case 2: Tensor of pointers has more threads than elements
-  // we can presume a high hit-rate that makes it cheap to load
-  if (auto ptrType = dyn_cast<RankedTensorType>(base.getType())) {
+  // Loads that use a block pointer are expensive if they cannot be lowered to
+  // 2D block read operations. Temporarily leverage the
+  // "triton_intel_gpu.block_io" attribute to filter out inexpensive loads.
+  Attribute blockIOAttr =
+      op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+  if (blockIOAttr)
+    return false;
+
+  // Loads that use more threads than elements can be presumed to have a high
+  // hit-rate that makes them cheap to load.
+  if (auto ptrType = getRankedTensorType(base.getType())) {
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -196,7 +212,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        enqueue(operand, *srcEncoding);
+        enqueue(operand, srcEncoding);
       }
       continue;
     }

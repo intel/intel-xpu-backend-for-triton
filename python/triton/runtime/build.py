@@ -23,7 +23,30 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
-def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
+def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
+    if cc in ["cl", "clang-cl"]:
+        cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
+        cc_cmd += [f"/I{dir}" for dir in include_dirs]
+        cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
+        cc_cmd += ["/link"]
+        cc_cmd += [f"/OUT:{out}"]
+        cc_cmd += [f"/IMPLIB:{os.path.join(os.path.dirname(out), 'main.lib')}"]
+        cc_cmd += [f"/PDB:{os.path.join(os.path.dirname(out), 'main.pdb')}"]
+        cc_cmd += [f"/LIBPATH:{dir}" for dir in library_dirs]
+        cc_cmd += [f'{lib}.lib' for lib in libraries]
+    else:
+        cc_cmd = [cc, src, "-O3", "-shared", "-Wno-psabi"]
+        if os.name != "nt":
+            cc_cmd += ["-fPIC"]
+        cc_cmd += [f'-l{lib}' for lib in libraries]
+        cc_cmd += [f"-L{dir}" for dir in library_dirs]
+        cc_cmd += [f"-I{dir}" for dir in include_dirs]
+        cc_cmd += ["-o", out]
+
+    return cc_cmd
+
+
+def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compile_args=[]):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
@@ -33,6 +56,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
+        if os.name == "nt":
+            cc = shutil.which("cl")
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10
@@ -55,25 +80,25 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
-            cxx = icpx or clangpp or gxx
+            cxx = icpx if os.name == "nt" else icpx or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
+        cc = cxx
         import numpy as np
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
-        cc_cmd = [cxx]
         if icpx is not None:
-            cc_cmd += ["-fsycl"]
+            extra_compile_args += ["-fsycl"]
         else:
-            cc_cmd += ["--std=c++17"]
+            extra_compile_args += ["--std=c++17"]
+        if os.name == "nt":
+            library_dirs += [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
     else:
         cc_cmd = [cc]
 
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
-    cc_cmd += [src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
-    cc_cmd += [f'-l{lib}' for lib in libraries]
-    cc_cmd += [f"-L{dir}" for dir in library_dirs]
-    cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
+    cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
+    cc_cmd += extra_compile_args
 
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
@@ -81,8 +106,6 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
-    # fallback on setuptools
-    extra_compile_args = []
     # extra arguments
     extra_link_args = []
     # create extension module
@@ -91,7 +114,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         language='c',
         sources=[src],
         include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3'],
+        extra_compile_args=extra_compile_args + ['-O3' if os.name != "nt" else "/O2"],
         extra_link_args=extra_link_args,
         library_dirs=library_dirs,
         libraries=libraries,

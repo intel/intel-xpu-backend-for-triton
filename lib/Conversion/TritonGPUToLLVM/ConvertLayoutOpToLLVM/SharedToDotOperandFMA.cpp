@@ -4,7 +4,6 @@
 using ValueTable = std::map<std::pair<int, int>, Value>;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
@@ -12,6 +11,7 @@ using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 SmallVector<Value>
@@ -131,7 +131,7 @@ Value loadAFMA(Value A, Value llA, BlockedEncodingAttr dLayout, Value thread,
   }
   auto elemTy = typeConverter->convertType(aTensorTy.getElementType());
 
-  Type ptrTy = ptr_ty(rewriter.getContext(), 3);
+  Type ptrTy = aSmem.base.getType();
   SmallVector<Value> aPtrs(aNumPtr);
   for (int i = 0; i < aNumPtr; ++i)
     aPtrs[i] = gep(ptrTy, elemTy, aSmem.base, aOff[i]);
@@ -197,7 +197,7 @@ Value loadBFMA(Value B, Value llB, BlockedEncodingAttr dLayout, Value thread,
   }
   auto elemTy = typeConverter->convertType(bTensorTy.getElementType());
 
-  Type ptrTy = ptr_ty(rewriter.getContext(), 3);
+  Type ptrTy = bSmem.base.getType();
   SmallVector<Value> bPtrs(bNumPtr);
   for (int i = 0; i < bNumPtr; ++i)
     bPtrs[i] = gep(ptrTy, elemTy, bSmem.base, bOff[i]);

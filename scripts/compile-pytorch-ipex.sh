@@ -66,7 +66,7 @@ if pip show torch &>/dev/null; then
     echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
     if [ "$FORCE_REINSTALL" = false ]; then
       echo "**** Exiting without action. ****"
-      echo "**** INFO: Run the install-pytorch script with the --force-reinstall flag to force reinstallation of PyTorch,
+      echo "**** INFO: Run the compile-pytorch-ipex script with the --force-reinstall flag to force reinstallation of PyTorch,
         or uninstall the current version of PyTorch manually. ****"
       exit 1
     fi
@@ -100,14 +100,13 @@ fi
 # Configure, build and install PyTorch from source.
 
 if [[ $BUILD_PYTORCH = true ]]; then
-  PYTORCH_PROJ=$BASE/pytorch
+  PYTORCH_PROJ=$BASE/pytorch-stonepia
 
   echo "**** Cleaning $PYTORCH_PROJ before build ****"
   rm -rf $PYTORCH_PROJ
 
   echo "**** Cloning $PYTORCH_PROJ ****"
-  cd $BASE
-  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git
+  git clone --single-branch -b dev/triton-test-3.0 --recurse-submodules --jobs 8 https://github.com/Stonepia/pytorch.git $PYTORCH_PROJ
 
   cd $PYTORCH_PROJ
 
@@ -117,8 +116,8 @@ if [[ $BUILD_PYTORCH = true ]]; then
 
   echo "****** Building $PYTORCH_PROJ ******"
   pip install -r requirements.txt
-  pip install cmake ninja mkl-static mkl-include "numpy<2.0"
-  python setup.py bdist_wheel
+  pip install cmake ninja "numpy<2.0"
+  USE_STATIC_MKL=1 python setup.py bdist_wheel
 
   echo "****** Installing PyTorch ******"
   pip install dist/*.whl

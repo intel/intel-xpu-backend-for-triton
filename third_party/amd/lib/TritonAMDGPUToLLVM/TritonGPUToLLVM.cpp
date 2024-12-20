@@ -1,6 +1,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SchedInstructions.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -8,11 +9,12 @@
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
@@ -22,12 +24,10 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 using namespace mlir;
 
@@ -37,7 +37,6 @@ class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
-    addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<ROCDL::ROCDLDialect>();
     addLegalDialect<mlir::scf::SCFDialect>();
@@ -57,6 +56,7 @@ public:
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+    addLegalOp<triton::amdgpu::InstructionSchedHint>();
   }
 };
 
@@ -69,8 +69,9 @@ struct ConvertTritonAMDGPUToLLVM
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect, NVVM::NVVMDialect,
-                    mlir::ROCDL::ROCDLDialect>();
+    registry
+        .insert<LLVM::LLVMDialect, NVVM::NVVMDialect, mlir::ROCDL::ROCDLDialect,
+                mlir::triton::amdgpu::TritonAMDGPUDialect>();
   }
 
   void runOnOperation() override {
@@ -86,7 +87,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
-    TritonGPUToLLVMTypeConverter typeConverter(context, option);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
@@ -94,9 +95,9 @@ struct ConvertTritonAMDGPUToLLVM
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Hack: WSMaterialization may have changed the effective number of warps,
-    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
+    // in a way that isn't reflected in ttg.num-warps.  If so, we have to
     // respect that here.
-    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
+    if (Attribute attr = mod->getAttr("ttg.num-warp-groups-per-cta")) {
       numWarps *= cast<IntegerAttr>(attr).getInt();
     }
 
@@ -108,11 +109,12 @@ struct ConvertTritonAMDGPUToLLVM
     // Lower functions
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      mlir::triton::populateFuncOpConversionPattern(
-          typeConverter, funcPatterns, numWarps, patternBenefitDefault);
+      mlir::triton::populateFuncOpConversionPattern(typeConverter, funcPatterns,
+                                                    numWarps, targetInfo,
+                                                    patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -128,7 +130,7 @@ struct ConvertTritonAMDGPUToLLVM
     // Convert call and ret ops
     {
       mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option);
+      TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       if (failed(
@@ -169,8 +171,7 @@ struct ConvertTritonAMDGPUToLLVM
     };
 
     AMD::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
-                                               patterns, numWarps,
-                                               axisInfoAnalysis, AMDBenefit);
+                                               patterns, AMDBenefit);
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit);
     AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
@@ -189,17 +190,30 @@ struct ConvertTritonAMDGPUToLLVM
                       commonBenefit);
     populatePatterns7(mlir::triton::populateHistogramOpToLLVMPatterns,
                       commonBenefit);
-    mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, targetInfo,
-                                                patterns, commonBenefit);
+    populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,
+                      commonBenefit);
+
+    mlir::triton::BackendCallbacks callbacks;
+    callbacks.localStoreOpConversion = storeOpConversionCallback;
+
+    AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, commonBenefit, callbacks);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, commonBenefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
                                                 targetInfo, commonBenefit);
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                     commonBenefit);
+                                                     targetInfo, commonBenefit);
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, commonBenefit);
     AMD::populateSPMDOpToLLVMPattern(typeConverter, patterns, AMDBenefit);
+
+    mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,
+                                                          patterns, AMDBenefit);
+    mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
+                                                        targetInfo, AMDBenefit);
+
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
@@ -214,6 +228,8 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
+    mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
+
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
@@ -240,15 +256,13 @@ private:
   }
 };
 
-} // anonymous namespace
+} // namespace
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonAMDGPUToLLVMPass(StringRef targetArch, bool ftz) {
   return std::make_unique<ConvertTritonAMDGPUToLLVM>(targetArch, ftz);
 }
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton

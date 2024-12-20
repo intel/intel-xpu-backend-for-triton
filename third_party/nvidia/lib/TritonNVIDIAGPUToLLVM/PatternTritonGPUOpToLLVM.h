@@ -23,6 +23,11 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
 
+void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    const TargetInfo &targetInfo,
+                                    RewritePatternSet &patterns,
+                                    PatternBenefit benefit);
+
 void populateConvertLayoutOpToLLVMOptimizedPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit);
@@ -35,6 +40,11 @@ void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, int computeCapability,
     const TargetInfo &targetInfo, PatternBenefit benefit);
+
+void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                      RewritePatternSet &patterns,
+                                      const TargetInfo &targetInfo,
+                                      PatternBenefit benefit);
 
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,

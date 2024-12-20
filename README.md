@@ -1,98 +1,56 @@
-[![Build and test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml/badge.svg?branch=main)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/build-test.yml)
-[![Triton wheels](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml/badge.svg?branch=main)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml)
-[![Conda test](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml/badge.svg?branch=main)](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/conda-build-test.yml)
+<div align="center">
+  <img src="https://lh5.googleusercontent.com/wzQKEsTFkrgNQO9JjhGH5wFvslJr1saLtLaJ_a6Fp_gNENpvt3VG7BmztwngU9hFJaU4CPwGiw1opQtDvTkLrxWRbO_a12Q-pdESWHgtmheIHcPbOL5ZMC4TSiJVe5ty1w=w3517" alt="Triton logo">
+</div>
 
-# Intel® XPU Backend for Triton\*
+| **`Documentation`** | **`Nightly Wheels`** |
+|-------------------- | -------------------- |
+| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
-This is the development repository of Intel® XPU Backend for Triton\*, a new [Triton](https://github.com/triton-lang/triton/) backend for Intel GPUs. Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) used to provide best-in-class performance and productivity on any Intel GPUs for [PyTorch](https://github.com/triton-lang/triton/blob/main/CONTRIBUTING.md) and standalone usage.
+# Triton
 
-# Compatibility
+This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
 
-* Operating systems:
-  * [Ubuntu 22.04](http://releases.ubuntu.com/22.04)
-* GPU Cards:
-  * [Intel® Data Center GPU Max Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/max-series.html)
-  * [Intel® Data Center Flex Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html)
-  * [Intel Arc A770](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)
-* GPU Drivers:
-  * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation.html)
-  * Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html)
-* Toolchain:
-  * Latest [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
+The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
 
-Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
+The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
 
 # Quick Installation
 
-## Prerequisites
-
-1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
-2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
-3. Latest release of [Profiling Tools Interfaces for Intel GPU (PTI for GPU)](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
-
-## Install PyTorch and Triton from nightly wheels
-
-Currently, Intel® XPU Backend for Triton\* requires a special version of PyTorch and both can be installed from nightly wheels.
-Navigate to the [nightly wheels workflow](https://github.com/intel/intel-xpu-backend-for-triton/actions/workflows/nightly-wheels.yml),
-select the most recent successful run on the top of the page and download an artifact for the corresponding Python version.
-Extract the archive and in the extracted directory execute:
+You can install the latest stable release of Triton from pip:
 
 ```shell
-pip install torch-*.whl triton-*.whl
+pip install triton
 ```
 
-Before using Intel® XPU Backend for Triton\* you need to initialize the toolchain.
-The default location is `/opt/intel/oneapi` (if installed as a `root` user) or `~/intel/oneapi` (if installed as a regular user).
+Binary wheels are available for CPython 3.8-3.12 and PyPy 3.8-3.9.
+
+And the latest nightly release:
 
 ```shell
-# replace /opt/intel/oneapi with the actual location of PyTorch Prerequisites for Intel GPUs
-source /opt/intel/oneapi/setvars.sh
+pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
 ```
 
 # Install from source
 
-## Prerequisites
-
-1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation.html) of GPU driver
-2. Latest release of [PyTorch Prerequisites for Intel GPUs](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
-3. Latest release of [Profiling Tools Interfaces for Intel GPU (PTI for GPU)](https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpus.html)
-
-## Compile PyTorch and Triton from source
-
-Currently, Intel® XPU Backend for Triton\* requires a special version of PyTorch and both need to be compiled at the same time.
-
-Before compiling PyTorch and Intel® XPU Backend for Triton\* you need to initialize the toolchain.
-The default location is `/opt/intel/oneapi` (if installed as a `root` user) or `~/intel/oneapi` (if installed as a regular user).
-
 ```shell
-# replace /opt/intel/oneapi with the actual location of PyTorch Prerequisites for Intel GPUs
-source /opt/intel/oneapi/setvars.sh
+git clone https://github.com/triton-lang/triton.git;
+cd triton;
+
+pip install ninja cmake wheel pybind11; # build-time dependencies
+pip install -e python
 ```
 
-Clone this repository:
+Or with a virtualenv:
 
 ```shell
-git clone https://github.com/intel/intel-xpu-backend-for-triton.git
-cd intel-xpu-backend-for-triton
-```
+git clone https://github.com/triton-lang/triton.git;
+cd triton;
 
-To avoid potential conflicts with installed packages it is recommended to create and activate a new Python virtual environment:
+python -m venv .venv --prompt triton;
+source .venv/bin/activate;
 
-```shell
-python -m venv .venv --prompt triton
-source .venv/bin/activate
-```
-
-Compile and install PyTorch:
-
-```shell
-scripts/install-pytorch.sh --source
-```
-
-Compile and install Intel® XPU Backend for Triton\*:
-
-```shell
-scripts/compile-triton.sh
+pip install ninja cmake wheel pybind11; # build-time dependencies
+pip install -e python
 ```
 
 # Building with a custom LLVM
@@ -121,7 +79,9 @@ arbitrary LLVM version.
        $ cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON ../llvm -DLLVM_ENABLE_PROJECTS="mlir;llvm" -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
        $ ninja
 
-4. Build Triton as above, but set the following environment variables.
+4. Grab a snack, this will take a while.
+
+5. Build Triton as above, but set the following environment variables.
 
        # Modify as appropriate to point to your LLVM build.
        $ export LLVM_BUILD_DIR=$HOME/llvm-project/build
@@ -148,7 +108,7 @@ arbitrary LLVM version.
   Without this, every invocation of `pip install` uses a different symlink to
   cmake, and this forces ninja to rebuild most of the `.a` files.
 
-- VSCcode IntelliSense has some difficulty figuring out how to build Triton's C++
+- vscode intellisense has some difficulty figuring out how to build Triton's C++
   (probably because, in our build, users don't invoke cmake directly, but
   instead use setup.py).  Teach vscode how to compile Triton as follows.
 
@@ -170,7 +130,36 @@ There currently isn't a turnkey way to run all the Triton tests, but you can
 follow the following recipe.
 
 ```shell
-scripts/test-triton.sh
+# One-time setup.  Note we have to reinstall local Triton because torch
+# overwrites it with the public version.
+$ pip install scipy numpy torch pytest lit pandas matplotlib && pip install -e python
+
+# Run Python tests using your local GPU.
+$ python3 -m pytest python/test/unit
+
+# Move to builddir.  Fill in <...> with the full path, e.g.
+# `cmake.linux-x86_64-cpython-3.11`.
+$ cd python/build/cmake<...>
+
+# Run C++ unit tests.
+$ ctest -j32
+
+# Run lit tests.
+$ lit test
+```
+
+You may find it helpful to make a symlink to the builddir and tell your local
+git to ignore it.
+
+```shell
+$ ln -s python/build/cmake<...> build
+$ echo build >> .git/info/exclude
+```
+
+Then you can e.g. rebuild and run lit with the following command.
+
+```shell
+$ ninja -C build && ( cd build ; lit test )
 ```
 
 # Tips for hacking
@@ -183,6 +172,9 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
+- `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
+  at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
+  `<reproducer_path>` will be a local MLIR reproducer captured right before the failing pass.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
@@ -219,149 +211,47 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
 - `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
+- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx/amdgcn.
+- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx/amdgcn when `TRITON_KERNEL_DUMP` is set to 1.
+- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx/amdgcn at the beginning of each compilation stage.
+- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx/amdgcn files when `TRITON_KERNEL_OVERRIDE` is set to 1.
 
-# Usage Guide
+**Kernel Override Steps**
 
-## Code Modifications
-Intel® XPU Backend for Triton\* doesn't require any modifications and will work with PyTorch 2.4 release out of the box.
-
-1. Add `import torch` for xpu support.
-2. Put the tensor and models to XPU by calling `to('xpu')`.
-
-The following examples show modifications for the user code.
-
-### Example 1 : Triton Kernel
-
-This example is a modified version of [Vector Add](https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html#vector-addition) triton kernel. Please refer to [Vector Add](https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html#vector-addition) for detailed comments and illustration about the code semantics.
-
-Comparing to the original code, the following code modifies:
-
-```Python
-import torch
-import triton
-import triton.language as tl
-
-
-@triton.jit
-def add_kernel(
-    x_ptr,
-    y_ptr,
-    output_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    output = x + y
-    tl.store(output_ptr + offsets, output, mask=mask)
-
-def add(x: torch.Tensor, y: torch.Tensor):
-    # Put the tensor to xpu
-    output = torch.empty_like(x).xpu()
-    assert x.is_xpu and y.is_xpu and output.is_xpu
-    n_elements = output.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
-
-    return output
-
-# For manual_seed, needs to use API for XPU
-torch.xpu.manual_seed(0)
-size = 512
-# For tensors, needs to be put on XPU
-x = torch.rand(size, device='xpu')
-y = torch.rand(size, device='xpu')
-output_torch = x + y
-output_triton = add(x, y)
-print(output_torch)
-print(output_triton)
-print(
-    f'The maximum difference between torch and triton is '
-    f'{torch.max(torch.abs(output_torch - output_triton))}'
-)
+```bash
+export TRITON_ALWAYS_COMPILE=1
+export TRITON_KERNEL_DUMP=1
+export TRITON_DUMP_DIR=<dump_dir>
+export TRITON_KERNEL_OVERRIDE=1
+export TRITON_OVERRIDE_DIR=<override_dir>
+# Step 1: Run the kernel once to dump kernel's IRs and ptx/amdgcn in $TRITON_DUMP_DIR
+# Step 2: Copy $TRITON_DUMP_DIR/<kernel_hash> to $TRITON_OVERRIDE_DIR
+# Step 3: Delete the stages that you do not want to override and modify the stage you do want to override
+# Step 4: Run the kernel again to see the overridden result
 ```
 
-
-### Example 2 : End-to-End Model
-Triton is transparent for end-to-end models. One could easily use `torch.compile` with `inductor` as backend by default. It will automatically generates triton kernel and gets benefit from it.
-
-
-```Python
-import torch
-from torch._dynamo.testing import rand_strided
-
-from torch.nn import *
-class simpleModel(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        # tensors inside model should be on xpu
-        self.y = rand_strided((32, 8), (8, 1), device='xpu:0', dtype=torch.float32)
-
-    def forward(self, x):
-        z = x + self.y
-        return z
-
-# tensors passed to the model should be on xpu
-x = rand_strided((32, 8), (8, 1), device='xpu:0', dtype=torch.float32)
-xpu_model = simpleModel()
-# Call torch.compile for optimization
-optimized_mod = torch.compile(xpu_model)
-
-graph_result = optimized_mod(x)
-```
-
-## More Examples on Tests
-If you wish to take a look at more examples, please refer to the [Unit Tests](docs/test_docs/unit_tests.md) and [End-to-End Benchmark Tests](docs/test_docs/end_to_end_tests.md).
-
-
-## Performance Analysis Guide
-
-There are several ways of doing performance analysis. We recommend using `torch.profiler` for end-to-end performance analysis and using Intel® VTune™ Profiler for more detailed kernel analysis. We provide a comprehensive guide for those two:
-1. [end_to_end_tests#profiling settings](docs/test_docs/end_to_end_tests.md#profiling-settings) section for using `torch.profiler`.
-2. [VTune Profiling Guide](docs/VTune_Profiling.md) for kernel analysis.
-
-Note that the user needs to explicitly set `TRITON_XPU_PROFILE=1` when the user needs to enable kernel profiling.
-
-```Bash
-export TRITON_XPU_PROFILE=1
-```
 
 # Changelog
 
-Version 2.2 is out! New features include:
+Version 2.0 is out! New features include:
+
 - Many, many bug fixes
-- Performance improvements for Intel GPU Max series
+- Performance improvements
+- Backend rewritten to use MLIR
 - Support for kernels that contain back-to-back matmuls (e.g., flash attention)
 
 # Contributing
 
-Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/intel/intel-xpu-backend-for-triton). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
-
+Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/triton-lang/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
 # Compatibility
 
 Supported Platforms:
-  * Linux
-  * WSL2
+
+- Linux
 
 Supported Hardware:
-  * NVIDIA GPUs (Compute Capability 7.0+)
-  * AMD GPUs (ROCm 5.2+)
-  * Intel GPU Max 1100/1550, Intel Flex, Intel Arc A770
-  * Under development: CPUs
 
-## License
-
-_MIT License_. As found in [LICENSE](https://github.com/intel/intel-xpu-backend-for-triton/blob/main/LICENSE) file.
-
-
-## Security
-
-See Intel's [Security Center](https://www.intel.com/content/www/us/en/security-center/default.html)
-for information on how to report a potential security issue or vulnerability.
-
-See also: [Security Policy](security.md)
+- NVIDIA GPUs (Compute Capability 8.0+)
+- AMD GPUs (ROCm 6.2+)
+- Under development: CPUs

@@ -2,19 +2,19 @@ import importlib.metadata
 import os
 import hashlib
 import shutil
+import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
+from typing import Optional
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from packaging.version import Version
-from packaging.specifiers import SpecifierSet
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
     """
     Looks for the sycl library in known places.
 
@@ -22,20 +22,19 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
       include_dir: list of include directories to pass to compiler.
 
     Returns:
-      enriched include_dir and library_dir.
+      enriched include_dir and libsycl.so location.
 
     Raises:
       AssertionError: if library was not found.
     """
-    library_dir = []
     include_dir = include_dir.copy()
     assertion_message = ("sycl headers not found, please install `icpx` compiler, "
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
 
-    if shutil.which("icpx"):
+    if shutil.which("icpx") and os.name != "nt":
         # only `icpx` compiler knows where sycl runtime binaries and header files are
-        return include_dir, library_dir
+        return include_dir, None
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
@@ -43,25 +42,26 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
-        return include_dir, library_dir
+        return include_dir, None
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
     except importlib.metadata.PackageNotFoundError:
         raise AssertionError(assertion_message)
 
-    if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
+    if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
+    sycl_dir = None
     for f in importlib.metadata.files("intel-sycl-rt"):
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
             include_dir += [f.locate().parent.parent.resolve().as_posix()]
         if f.name == "libsycl.so":
-            library_dir += [f.locate().parent.resolve().as_posix()]
+            sycl_dir = f.locate().parent.resolve().as_posix()
 
-    return include_dir, library_dir
+    return include_dir, sycl_dir
 
 
 class CompilationHelper:
@@ -71,17 +71,26 @@ class CompilationHelper:
     def __init__(self):
         self._library_dir = None
         self._include_dir = None
-        self.libraries = ['ze_loader', 'sycl']
+        self._libsycl_dir = None
+        self.libraries = ['ze_loader']
+        if os.name != "nt":
+            self.libraries += ["sycl"]
 
     @cached_property
     def _compute_compilation_options_lazy(self):
         ze_root = os.getenv("ZE_PATH", default="/usr/local")
         include_dir = [os.path.join(ze_root, "include")]
 
-        include_dir, library_dir = find_sycl(include_dir)
+        library_dir = []
+        include_dir, self._libsycl_dir = find_sycl(include_dir)
+        if self._libsycl_dir:
+            library_dir += [self._libsycl_dir]
+        if os.name == "nt":
+            library_dir += [os.path.join(ze_root, "lib")]
 
         dirname = os.path.dirname(os.path.realpath(__file__))
         include_dir += [os.path.join(dirname, "include")]
+        # TODO: do we need this?
         library_dir += [os.path.join(dirname, "lib")]
 
         self._library_dir = library_dir
@@ -97,6 +106,11 @@ class CompilationHelper:
         self._compute_compilation_options_lazy
         return self._include_dir
 
+    @cached_property
+    def libsycl_dir(self) -> Optional[str]:
+        self._compute_compilation_options_lazy
+        return self._libsycl_dir
+
 
 compilation_helper = CompilationHelper()
 
@@ -104,16 +118,20 @@ compilation_helper = CompilationHelper()
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
+    file_name = f"{name}.{sysconfig.get_config_var('EXT_SUFFIX').split('.')[-1]}"
+    cache_path = cache.get_file(file_name)
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
             with open(src_path, "w") as f:
                 f.write(src)
+            extra_compiler_args = []
+            if compilation_helper.libsycl_dir:
+                extra_compiler_args += ['-Wl,-rpath,' + compilation_helper.libsycl_dir]
             so = _build(name, src_path, tmpdir, compilation_helper.library_dir, compilation_helper.include_dir,
-                        compilation_helper.libraries)
+                        compilation_helper.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
+                cache_path = cache.put(f.read(), file_name, binary=True)
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
@@ -141,16 +159,17 @@ class XPUUtils(object):
         self.context = mod.init_context(self.get_sycl_queue())
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
+        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
 
     def get_current_device(self):
         return self.current_device
 
-    def get_event_pool(self):
-        return self.event_pool
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
+
+    def wait(self):
+        self.wait_on_sycl_queue(self.get_sycl_queue())
 
 
 # ------------------------
@@ -199,7 +218,7 @@ def make_launcher(constants, signature, ids):
             "int8_t": "b",
             "int16_t": "h",
             "int32_t": "i",
-            "int64_t": "l",
+            "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
             "uint32_t": "I",
@@ -435,19 +454,79 @@ def make_launcher(constants, signature, ids):
     return src
 
 
+def serialize_kernel_metadata(arg, args_dict):
+    args_dict['num_warps'] = arg.num_warps
+    args_dict['threads_per_warp'] = arg.threads_per_warp
+    args_dict['shared_memory'] = arg.shared
+    args_dict['kernel_name'] = arg.name
+    args_dict['spv_name'] = f"{arg.name}.spv"
+    args_dict['build_flags'] = arg.build_flags
+
+
+def serialize_args(args, constants, signature):
+    import torch
+    import numbers
+    dir_path = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS')
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+        print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
+
+    cnt = 0
+    args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    args_dict['argument_list'] = []
+    counts = {"tensors": 0, "scalars": 0, "karg_cnt": 0}
+    cnt = 4
+    for arg in args[cnt:]:
+        if type(arg).__name__ == "KernelMetadata":
+            serialize_kernel_metadata(arg, args_dict)
+
+        if isinstance(arg, torch.Tensor):
+            cpu_tensor = arg.cpu()
+            tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
+            with open(tensor_path, 'wb') as f:
+                torch.save(cpu_tensor, f)
+            new_arg = {
+                "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
+                signature[counts['karg_cnt']]
+            }
+            args_dict['argument_list'].append(new_arg)
+            counts['karg_cnt'] += 1
+            counts['tensors'] += 1
+
+        if isinstance(arg, numbers.Number):
+            if counts['karg_cnt'] not in constants:
+                new_arg = {
+                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": args[cnt], "ctype":
+                    signature[counts['karg_cnt']]
+                }
+                args_dict['argument_list'].append(new_arg)
+            counts['karg_cnt'] += 1
+            counts['scalars'] += 1
+        cnt += 1
+    # Dump argument info as a JSON file
+    json_path = os.path.join(dir_path, 'args_data.json')
+    with open(json_path, 'w') as json_file:
+        import json
+        json.dump(args_dict, json_file, indent=4)
+
+
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
         cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
-        constants = {cst_key(key): value for key, value in constants.items()}
-        signature = {cst_key(key): value for key, value in src.signature.items()}
-        src = make_launcher(constants, signature, ids)
+        self.constants = {cst_key(key): value for key, value in constants.items()}
+        self.signature = {cst_key(key): value for key, value in src.signature.items()}
+        src = make_launcher(self.constants, self.signature, ids)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 
     def __call__(self, *args, **kwargs):
+        # Serialize KernelArguments for SPIR-V Runner
+        serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
+        if serialize_kernel_args:
+            serialize_args(args, self.constants, self.signature)
         self.launch(*args, **kwargs)
 
 
@@ -479,7 +558,28 @@ class XPUDriver(DriverBase):
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
 
+    def get_active_torch_device(self):
+        import torch
+        return torch.device("xpu", self.get_current_device())
+
+    def get_device_interface(self):
+        import torch
+        return torch.xpu
+
     @staticmethod
     def is_active():
         import torch
         return torch.xpu.is_available()
+
+    def get_benchmarker(self):
+        from triton.testing import do_bench
+        return do_bench
+
+    def get_empty_cache_for_benchmark(self):
+        import torch
+
+        # We maintain a buffer of 256 MB that we clear
+        # before each kernel call to make sure that the L2 cache
+        # doesn't contain any input data before the run
+        cache_size = 256 * 1024 * 1024
+        return torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')

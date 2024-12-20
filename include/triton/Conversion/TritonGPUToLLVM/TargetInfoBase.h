@@ -4,6 +4,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {
+
 class TargetInfoBase {
 public:
   virtual bool supportMaximumMinimum() const = 0;
@@ -37,6 +38,12 @@ public:
                        pred);
   }
 
+  virtual bool canUseStMatrix(RankedTensorType tensorTy,
+                              ArrayRef<unsigned> repShape,
+                              ArrayRef<unsigned> paddedRepShape,
+                              ArrayRef<unsigned> order,
+                              int swizzleByteSize) const = 0;
+
   virtual void storeMatrixShared(RewriterBase &rewriter, Location loc,
                                  Value ptr, Value val) const = 0;
 
@@ -56,15 +63,6 @@ public:
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned numLaneToReduce,
                           unsigned interleave) const = 0;
-
-  // TODO (Keren): Remove this function once layout conversion using stmatrix is
-  // handled by Linear Layout.
-  virtual bool processReplicaUsingStMatrix(
-      RewriterBase &rewriter, Location loc, Value smemBase,
-      SmallVector<Value> &vals, RankedTensorType srcTy, Type elemTy,
-      ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> origRepShape,
-      ArrayRef<unsigned> outOrd, unsigned accumNumReplicates,
-      int swizzleByteWidth = 0) const = 0;
 
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given
@@ -88,6 +86,13 @@ public:
   virtual void assertFail(RewriterBase &rewriter, Location loc,
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
+
+  virtual int getSharedAddressSpace() const = 0;
+
+  virtual bool supportVectorizedAtomics() const = 0;
+
+  virtual Value getStackPointer(RewriterBase &rewriter,
+                                FunctionOpInterface funcOp) const = 0;
 
   virtual ~TargetInfoBase() {}
 };

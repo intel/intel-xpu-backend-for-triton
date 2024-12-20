@@ -28,8 +28,7 @@ class SharedEncodingAttr;
 // Version = 3: <m, n, k>
 SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
                                                 const ArrayRef<int64_t> &shape,
-                                                RankedTensorType type,
-                                                int numWarps);
+                                                Type type, int numWarps);
 
 // Return true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
@@ -117,10 +116,10 @@ protected:
 };
 
 // Infers the encoding of the result of op given the source encoding.
-std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding);
+Attribute inferDstEncoding(Operation *op, Attribute encoding);
 
 // Infers the encoding of the source of op given the result encoding.
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
+Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 bool isExpensiveLoadOrStore(Operation *op);
 
@@ -162,9 +161,11 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 // Get backward slice of tensor values starting from the root node along with
 // encoding propagation.
 LogicalResult getConvertBackwardSlice(
-    Value root, SetVector<Value> &slice, Attribute rootEncoding,
+    OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr);
+    std::function<bool(Operation *)> stopPropagation = nullptr,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion =
+        nullptr);
 
 // Populate pattern to remove dead cycles in ForOp.
 void populateForOpDeadArgumentElimination(RewritePatternSet &patterns);
@@ -193,6 +194,21 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
+std::optional<mlir::triton::gpu::SharedEncodingAttr>
+getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
+
+enum class MMALoadType {
+  SharedV3,
+  Registers,     // may be v2 or v3
+  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip
+                 // pipelining
+};
+MMALoadType getMMALoadType(Operation *loadOp);
+
+// Returns composed LinearLayout for register to shared copy
+std::optional<triton::LinearLayout>
+getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

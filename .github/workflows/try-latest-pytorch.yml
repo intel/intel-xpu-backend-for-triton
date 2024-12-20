@@ -63,7 +63,7 @@ jobs:
         uses: ./.github/actions/get-commit-id
         with:
           repository: "pytorch/pytorch"
-          branch: ${{ inputs.pytorch_ref }}
+          branch: ${{ inputs.pytorch_ref || 'main' }}
 
       - name: Matrix
         id: matrix

@@ -1,7 +1,7 @@
 // RUN: env TRITON_INTEL_ADVANCED_PATH=1 \
 // RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
-module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 4 : i32} {
+module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @test_scalar(
 // CHECK-SAME:                                         %[[VAL_0:.*]]: f32, %[[VAL_1:.*]]: f32, %[[VAL_2:.*]]: f32, %[[VAL_3:.*]]: f32) -> vector<4xf32>
 // CHECK:           %[[VAL_8:.*]] = llvm.mlir.poison : vector<4xf32>

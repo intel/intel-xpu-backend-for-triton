@@ -31,6 +31,12 @@ import torch
 import triton
 import triton.language as tl
 
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+def is_cuda():
+    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
 
 @triton.autotune(
     configs=[
@@ -141,7 +147,6 @@ def grouped_matmul_kernel(
 
 
 def group_gemm_fn(group_A, group_B):
-    device = torch.device('xpu')
     assert len(group_A) == len(group_B)
     group_size = len(group_A)
 
@@ -157,7 +162,7 @@ def group_gemm_fn(group_A, group_B):
         assert A.shape[1] == B.shape[0]
         M, K = A.shape
         K, N = B.shape
-        C = torch.empty((M, N), device=device, dtype=A.dtype)
+        C = torch.empty((M, N), device=DEVICE, dtype=A.dtype)
         group_C.append(C)
         A_addrs.append(A.data_ptr())
         B_addrs.append(B.data_ptr())
@@ -166,11 +171,11 @@ def group_gemm_fn(group_A, group_B):
         g_lds += [A.stride(0), B.stride(0), C.stride(0)]
 
     # note these are device tensors
-    d_a_ptrs = torch.tensor(A_addrs, device=device)
-    d_b_ptrs = torch.tensor(B_addrs, device=device)
-    d_c_ptrs = torch.tensor(C_addrs, device=device)
-    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=device)
-    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=device)
+    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE, dtype=torch.uint64)
+    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE, dtype=torch.uint64)
+    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE, dtype=torch.uint64)
+    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
     # we use a fixed number of CTA, and it's auto-tunable
     grid = lambda META: (META['NUM_SM'], )
     grouped_matmul_kernel[grid](
@@ -197,8 +202,8 @@ for i in range(group_size):
     M = group_m[i]
     N = group_n[i]
     K = group_k[i]
-    A = torch.rand((M, K), device="xpu", dtype=torch.float16)
-    B = torch.rand((K, N), device="xpu", dtype=torch.float16)
+    A = torch.rand((M, K), device=DEVICE, dtype=torch.float16)
+    B = torch.rand((K, N), device=DEVICE, dtype=torch.float16)
     group_A.append(A)
     group_B.append(B)
 
@@ -228,6 +233,9 @@ def torch_perf_fn(group_A, group_B):
         torch.matmul(a, b)
 
 
+ref_lib = 'cuBLAS' if is_cuda() else 'oneDNN'
+
+
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
@@ -236,9 +244,9 @@ def torch_perf_fn(group_A, group_B):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['cublas', 'triton'],
+        line_vals=[ref_lib.lower(), 'triton'],
         # label name for the lines
-        line_names=["cuBLAS", "Triton"],
+        line_names=[ref_lib, "Triton"],
         # line styles
         styles=[('green', '-'), ('blue', '-')],
         ylabel="runtime(ms)",  # label name for the y-axis
@@ -257,9 +265,9 @@ def benchmark(N, provider):
     g_lds = []
     group_C = []
     for i in range(group_size):
-        A = torch.rand((N, N), device="xpu", dtype=torch.float16)
-        B = torch.rand((N, N), device="xpu", dtype=torch.float16)
-        C = torch.empty((N, N), device="xpu", dtype=torch.float16)
+        A = torch.rand((N, N), device=DEVICE, dtype=torch.float16)
+        B = torch.rand((N, N), device=DEVICE, dtype=torch.float16)
+        C = torch.empty((N, N), device=DEVICE, dtype=torch.float16)
         group_A.append(A)
         group_B.append(B)
         group_C.append(C)
@@ -269,14 +277,14 @@ def benchmark(N, provider):
         g_sizes += [N, N, N]
         g_lds += [N, N, N]
 
-    d_a_ptrs = torch.tensor(A_addrs, device="xpu")
-    d_b_ptrs = torch.tensor(B_addrs, device="xpu")
-    d_c_ptrs = torch.tensor(C_addrs, device="xpu")
-    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device="xpu")
-    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device="xpu")
+    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE, dtype=torch.uint64)
+    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE, dtype=torch.uint64)
+    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE, dtype=torch.uint64)
+    d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
+    d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
 
     quantiles = [0.5, 0.2, 0.8]
-    if provider == 'cublas':
+    if provider == ref_lib.lower():
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch_perf_fn(group_A, group_B), quantiles=quantiles)
     if provider == 'triton':
         ms, min_ms, max_ms = triton.testing.do_bench(
