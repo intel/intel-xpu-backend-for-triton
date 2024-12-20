@@ -298,8 +298,8 @@ private:
     unsigned rank = retType.getRank();
 
     if (upcastMXFPUseDotOpEnc) {
-      if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
-        opsPerChannel *= 2;
+      // if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
+      //   opsPerChannel *= 2;
 
       auto opEncoding = ttg::intel::DpasEncodingAttr::get(
           ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
@@ -312,9 +312,18 @@ private:
           createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
 
       unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-      unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
-      SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
-                                              warpSize / instrShapeM};
+      unsigned repeatCount = dpasEnc.getRepeatCount();
+      unsigned instrShapeOuter;
+      if (opIdx == 0)
+        instrShapeOuter = dpasEnc.getDPASInstShapeA()[opIdx];
+      else
+        instrShapeOuter = dpasEnc.getDPASInstShapeB()[opIdx];
+      SmallVector<unsigned, 2> threadsPerWarp{instrShapeOuter,
+                                              warpSize / instrShapeOuter};
+      // auto scaleTy = cast<RankedTensorType>(opDesc.scale.getType());
+      // unsigned scalingBlocks = scaleTy.getShape()[1];
+      // SmallVector<unsigned, 2> threadsPerWarp = {repeatCount, warpSize /
+      // repeatCount};
       SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
       warpsPerCTA[0] = numWarps;
       auto CTALayout = ttg::getCTALayout(retType.getEncoding());
