@@ -2,7 +2,7 @@ name: save
 description: Save a directory to a cache based on a shared directory
 inputs:
   root:
-    description:
+    description: Directory for cache
     default: /cache
   path:
     description: Directory to save to a cache
@@ -10,12 +10,18 @@ inputs:
   dest:
     description: Directory in cache
     required: true
+  enabled:
+    description: Enable cache
+    default: "true"
 runs:
   using: "composite"
   steps:
     - name: Save ${{ inputs.path }} to cache
       shell: bash
       run: |
+        if [[ ${{ inputs.enabled != 'true' }} ]]; then
+          exit 0
+        fi
         TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
         cp -rT ${{ inputs.path }} $TEMP_ITEM
         # ignore error if other job created a cache with the same key already

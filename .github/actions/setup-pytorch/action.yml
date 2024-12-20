@@ -19,6 +19,9 @@ inputs:
   mode:
     description: Source or wheels
     default: source
+  cache:
+    description: Cache enabled or disabled
+    default: enabled
 runs:
   using: "composite"
   steps:
@@ -83,6 +86,7 @@ runs:
       with:
         path: pytorch
         key: pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER
+        enabled: ${{ inputs.cache == 'enabled' }}
 
     - name: Clone PyTorch repository
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
@@ -138,3 +142,4 @@ runs:
       with:
         path: ${{ steps.pytorch-cache.outputs.path }}
         dest: ${{ steps.pytorch-cache.outputs.dest }}
+        enabled: ${{ inputs.cache == 'enabled' }}
