@@ -49,14 +49,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        with:
-          path: $HOME/.cache/pip
-          # pip cache per commit id just to minimize network traffic
-          key: pip-$PYTHON_VERSION-$GITHUB_SHA
-
       - name: Install Python
         uses: actions/setup-python@v5
         with:
@@ -66,6 +58,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
+          cache: disabled
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
@@ -126,10 +119,3 @@ jobs:
           name: logs-${{ env.PYTHON_VERSION }}
           path: pytorch/test/test-reports
           include-hidden-files: true
-
-      - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pip-cache.outputs.path }}
-          dest: ${{ steps.pip-cache.outputs.dest }}

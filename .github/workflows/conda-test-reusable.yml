@@ -78,15 +78,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Load conda cache
-        id: conda-cache
-        uses: ./.github/actions/load
-        env:
-          CACHE_NUMBER: 7
-        with:
-          path: $HOME/miniforge3/envs/triton
-          key: conda-${{ inputs.env_manager }}-py${{ matrix.python }}-${{ hashFiles('scripts/triton.yml', 'python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
-
       - name: Install Manager Environment
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
@@ -142,13 +133,6 @@ jobs:
       - name: Run inductor test
         run: |
           ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install
-
-      - name: Save conda cache
-        if: steps.conda-cache.outputs.status == 'miss'
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.conda-cache.outputs.path }}
-          dest: ${{ steps.conda-cache.outputs.dest }}
 
       - name: Pass rate
         run: |
