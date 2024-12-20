@@ -13,9 +13,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_METHOD
 from triton_kernels_benchmark import xetla_kernel
-
 
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
@@ -281,8 +279,8 @@ def benchmark(B, M, N, K, provider):
         torch_b = torch.transpose(torch_b, -2, -1)
 
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10,
+                                                                 n_repeat=10, quantiles=quantiles)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:

@@ -159,11 +159,7 @@ install_deps() {
     echo "**** Skipping installation of pytorch ****"
   else
     echo "**** Installing pytorch ****"
-    if ([ ! -v USE_IPEX ] || [ "$USE_IPEX" = 1 ]) && ([ "$TEST_BENCHMARKS" = true ] || [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]); then
-      $SCRIPTS_DIR/compile-pytorch-ipex.sh $([ $VENV = true ] && echo "--venv")
-    else
-      $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
-    fi
+    $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
   fi
 }
 

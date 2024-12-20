@@ -13,7 +13,6 @@
 #include <ATen/record_function.h>
 #include <c10/xpu/XPUStream.h>
 
-
 sycl::queue get_current_sycl_queue() {
   // submit kernel
   c10::impl::VirtualGuardImpl impl(at::DeviceType::XPU);

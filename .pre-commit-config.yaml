@@ -67,8 +67,6 @@ repos:
       - id: pylint
         name: pylint for scripts
         files: '^scripts/.*\.py$'
-        # FIXME: will be deleted soon
-        exclude: '^scripts/create-noop-ipex\.py$'
         args:
           - --check-quote-consistency=true
           # Max line length 120 is consistent with ruff's one in upstream

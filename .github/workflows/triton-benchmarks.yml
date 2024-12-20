@@ -16,7 +16,6 @@ on:
         description: The method used to obtain performance numbers
         type: choice
         options:
-          - PYTORCH_LEGACY_PROFILER_USING_IPEX
           - ELAPSED_TIME
           - UPSTREAM_PYTORCH_PROFILER
         default: UPSTREAM_PYTORCH_PROFILER
@@ -54,7 +53,6 @@ permissions: read-all
 env:
   PYTHON_VERSION: "3.10"
   BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
-  USE_IPEX: ${{ (inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER') == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
@@ -113,21 +111,10 @@ jobs:
         run: |
           pip install wheel cmake
 
-      - name: Setup PyTorch with IPEX
-        if: ${{ env.USE_IPEX == '1' }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: Stonepia/pytorch
-
-      - name: Setup PyTorch without IPEX
-        if: ${{ env.USE_IPEX == '0' }}
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           repository: pytorch/pytorch
-
-      - name: Setup IPEX
-        if: ${{ env.USE_IPEX == '1' }}
-        uses: ./.github/actions/setup-ipex
 
       - name: Build Triton wheels
         uses: ./.github/actions/setup-triton
