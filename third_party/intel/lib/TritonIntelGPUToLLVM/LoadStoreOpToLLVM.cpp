@@ -472,18 +472,23 @@ struct PrefetchOpConversion
 };
 
 struct BlockLoadTile {
-  BlockLoadTile(Value baseHeight, Value baseWidth, Value pitch,
-                unsigned tileHeight, unsigned tileWidth)
-      : baseHeight(baseHeight), baseWidth(baseWidth), pitch(pitch),
-        tileHeight(tileHeight), tileWidth(tileWidth) {}
-
   Value baseHeight;
   Value baseWidth;
   Value pitch;
 
   unsigned tileHeight;
   unsigned tileWidth;
+
+  void transposeSize() { std::swap(tileHeight, tileWidth); }
 };
+
+static BlockLoadTile
+getBlockLoadTile(Value baseHeight, Value baseWidth, Value rowStride,
+                 const unsigned tileHeight, const unsigned tileWidth,
+                 ConversionPatternRewriter &rewriter, Location loc) {
+  return BlockLoadTile{trunc(i32_ty, baseHeight), trunc(i32_ty, baseWidth),
+                       trunc(i32_ty, rowStride), tileHeight, tileWidth};
+}
 
 struct LoadOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
@@ -606,9 +611,9 @@ struct LoadOpConversion
       auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
             offsetBaseY] =
           getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
-      BlockLoadTile tile(trunc(i32_ty, baseHeight), trunc(i32_ty, baseWidth),
-                         trunc(i32_ty, rowStride), elemsPerInstr[0],
-                         elemsPerInstr[1]);
+      auto tile =
+          getBlockLoadTile(baseHeight, baseWidth, rowStride, elemsPerInstr[0],
+                           elemsPerInstr[1], rewriter, loc);
 
       SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
       unsigned outerDimWarpNum =
@@ -646,13 +651,12 @@ struct LoadOpConversion
         for (int n = 0; n < numRepInner; ++n) {
           for (int repM = 0; repM < repCluster[0]; ++repM) {
 
-            Value offsetY =
-                add(warpId0Offset,
-                    i32_val(m * replicaStride[0] + repM * elemsPerInstr[0]));
+            Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0] +
+                                                       repM * tile.tileHeight));
             for (int repN = 0; repN < repCluster[1]; ++repN) {
               Value offsetX =
                   add(warpId1Offset,
-                      i32_val(n * replicaStride[1] + repN * elemsPerInstr[1]));
+                      i32_val(n * replicaStride[1] + repN * tile.tileWidth));
 
               auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
                   loc, load2DGenXType,
@@ -758,8 +762,19 @@ struct LoadOpConversion
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
-    unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
-    unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
+    Value pitch;
+    if (memoryRowMajor) {
+      pitch = rowStride;
+    } else {
+      pitch = colStride;
+      // Column major memory. We need to swap the width and height because HW
+      // only support row major memory layout.
+      std::swap(baseHeight, baseWidth);
+    }
+    auto tile = getBlockLoadTile(
+        baseHeight, baseWidth, pitch, elemsPerDPASInst[threadOrder[rank - 1]],
+        elemsPerDPASInst[threadOrder[rank - 2]], rewriter, loc);
+
     unsigned vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
@@ -777,7 +792,7 @@ struct LoadOpConversion
       if (!usePackedType)
         return failure();
 
-      std::swap(tileHeight, tileWidth);
+      tile.transposeSize();
 
       if (oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
@@ -789,7 +804,7 @@ struct LoadOpConversion
         // Note: the tileHeight and numOperandsPer2DLoadM are the column size
         // now.
         numOperandsPer2DLoadM =
-            (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+            (threadsPerWarp <= tile.tileHeight) ? repCluster[rank - 1] : 1;
       }
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
@@ -798,12 +813,13 @@ struct LoadOpConversion
 
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
-    numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
-    tileHeight = tileHeight * numOperandsPer2DLoadM;
+    numOperandsPer2DLoadM =
+        std::min(numOperandsPer2DLoadM, 32 / tile.tileHeight);
+    tile.tileHeight = tile.tileHeight * numOperandsPer2DLoadM;
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
-    unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
+    unsigned totalBytesPerRowPerDPASOp = tile.tileWidth * elemSizeInBits / 8;
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
     vBlocks = numOperandsPer2DloadN;
@@ -835,23 +851,11 @@ struct LoadOpConversion
     unsigned numRepOuter = numReps[bool(opIdx) ? 2 : 1];
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
 
-    Value pitch;
-    if (memoryRowMajor) {
-      pitch = trunc(i32_ty, rowStride);
-    } else {
-      // Column major memory. We need to swap the width and height because HW
-      // only support row major memory layout.
-      pitch = trunc(i32_ty, colStride);
-      std::swap(baseWidth, baseHeight);
-    }
-    baseWidth = trunc(i32_ty, baseWidth);
-    baseHeight = trunc(i32_ty, baseHeight);
-
     const unsigned originalElemBits = elemSizeInBits;
     if (isTransposeRequired) {
       // adjust the block io parameter to align HW's limitations on
       // transposing load.
-      tileWidth = tileWidth / (32 / originalElemBits);
+      tile.tileWidth = tile.tileWidth / (32 / originalElemBits);
       elemSizeInBits = 32;
     }
     Value elemSizeInBytes = i32_val(originalElemBits / 8);
@@ -894,14 +898,14 @@ struct LoadOpConversion
           auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
               loc, load2DGenXType,
               /*ptr*/ base,
-              /*base_width*/ mul(baseWidth, elemSizeInBytes),
-              /*base_height*/ baseHeight,
-              /*base_pitch*/ mul(pitch, elemSizeInBytes),
+              /*base_width*/ mul(tile.baseWidth, elemSizeInBytes),
+              /*base_height*/ tile.baseHeight,
+              /*base_pitch*/ mul(tile.pitch, elemSizeInBytes),
               /*x*/ trunc(i32_ty, offsetX),
               /*y*/ trunc(i32_ty, offsetY),
               /*elem_size_in_bits*/ elemSizeInBits,
-              /*tile_width*/ tileWidth,
-              /*tile_height*/ tileHeight,
+              /*tile_width*/ tile.tileWidth,
+              /*tile_height*/ tile.tileHeight,
               /*v_blocks*/ vBlocks,
               /*transpose*/ isTransposeRequired,
               /*vnni_transform*/
