@@ -31,7 +31,7 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
     arch = "lnl";
     break;
   default:
-    printf("sycl_arch = %d", sycl_arch);
+    printf("sycl_arch = %d\n", sycl_arch);
   }
 
   return Py_BuildValue("s", arch.c_str());

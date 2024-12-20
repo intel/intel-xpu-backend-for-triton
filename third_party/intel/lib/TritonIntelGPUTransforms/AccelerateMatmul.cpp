@@ -314,10 +314,10 @@ private:
       unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
       unsigned repeatCount = dpasEnc.getRepeatCount();
       unsigned instrShapeOuter;
-      if (opIdx == 0)
-        instrShapeOuter = dpasEnc.getDPASInstShapeA()[opIdx];
+      if (!bool(opIdx))
+        instrShapeOuter = dpasEnc.getDPASInstShapeA()[unsigned(opIdx)];
       else
-        instrShapeOuter = dpasEnc.getDPASInstShapeB()[opIdx];
+        instrShapeOuter = dpasEnc.getDPASInstShapeB()[unsigned(opIdx)];
       SmallVector<unsigned, 2> threadsPerWarp{instrShapeOuter,
                                               warpSize / instrShapeOuter};
       // auto scaleTy = cast<RankedTensorType>(opDesc.scale.getType());
@@ -540,6 +540,149 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
+static void updateValueType(Value v, Attribute encoding,
+                            ArrayRef<int64_t> shape) {
+  auto tensorType = cast<RankedTensorType>(v.getType());
+  auto newType =
+      RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+  v.setType(newType);
+}
+
+static tt::TransOp updateUsers(Value result,
+                               const SetVector<Operation *> &slice) {
+  tt::TransOp transOp;
+  if (llvm::any_of(result.getUsers(),
+                   [&](Operation *user) { return slice.count(user) == 0; })) {
+    OpBuilder builder(result.getContext());
+    builder.setInsertionPointAfterValue(result);
+    transOp =
+        builder.create<tt::TransOp>(result.getLoc(), result, ArrayRef({1, 0}));
+    result.replaceUsesWithIf(transOp.getResult(), [&](OpOperand &operand) {
+      return operand.getOwner() != transOp.getOperation() &&
+             slice.count(operand.getOwner()) == 0;
+    });
+  }
+  return transOp;
+}
+
+// Sync the transpose in the IR, this is done to avoid generating convert layout
+// when we have a transpose right after a dot as mma layout cannot be propagated
+// through transpose op. Once we have layouts that can represent transposed MMA
+// we can remove this transformation.
+static void sinkTransposeOp(tt::TransOp input) {
+  SmallVector<tt::TransOp> queue = {input};
+  while (!queue.empty()) {
+    tt::TransOp transOp = queue.back();
+    Value currentValue = transOp.getResult();
+    queue.pop_back();
+    mlir::ForwardSliceOptions options;
+    options.filter = [](Operation *op) {
+      if (op->hasTrait<OpTrait::Elementwise>() && op->getNumOperands() == 1)
+        return true;
+      if (isa<scf::YieldOp>(op))
+        return isa<scf::ForOp>(op->getParentOp());
+      if (isa<ttg::ConvertLayoutOp>(op))
+        return true;
+      return false;
+    };
+    SetVector<Operation *> slice;
+    mlir::getForwardSlice(currentValue, &slice, options);
+    for (Operation *op : slice) {
+      if (op->hasTrait<OpTrait::Elementwise>()) {
+        // Update users of transpose op.
+        if (op->getOperand(0) == transOp.getResult())
+          op->setOperand(0, transOp.getOperand());
+        // Update the type of the result.
+        for (Value result : op->getResults()) {
+          auto srcType = cast<RankedTensorType>(op->getOperand(0).getType());
+          updateValueType(result, srcType.getEncoding(), srcType.getShape());
+          updateUsers(result, slice);
+        }
+        continue;
+      }
+      if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+        // Update users of transpose op.
+        if (op->getOperand(0) == transOp.getResult())
+          op->setOperand(0, transOp.getOperand());
+        auto resultEncoding = cvtOp.getType().getEncoding();
+        auto newDstEncoding = ttgi::inferSrcEncoding(transOp, resultEncoding);
+        assert(newDstEncoding);
+        auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
+        updateValueType(cvtOp.getResult(), newDstEncoding, srcType.getShape());
+        updateUsers(cvtOp.getResult(), slice);
+        continue;
+      }
+      assert(isa<scf::YieldOp>(op));
+      auto forOp = dyn_cast<scf::ForOp>(op->getParentOp());
+      assert(forOp);
+      for (OpOperand &operand : op->getOpOperands()) {
+        Operation *def = operand.get().getDefiningOp();
+        if (def && (slice.count(def)) || def == transOp.getOperation()) {
+          if (def == transOp.getOperation())
+            operand.set(transOp.getOperand());
+          Type newType = operand.get().getType();
+          forOp.getResult(operand.getOperandNumber()).setType(newType);
+          tt::TransOp retTrans =
+              updateUsers(forOp.getResult(operand.getOperandNumber()), slice);
+          // Recursively try to propagate the new transpose inserted.
+          if (retTrans)
+            queue.push_back(retTrans);
+          forOp.getRegionIterArg(operand.getOperandNumber()).setType(newType);
+          tt::TransOp argTrans = updateUsers(
+              forOp.getRegionIterArg(operand.getOperandNumber()), slice);
+          if (argTrans)
+            queue.push_back(argTrans);
+          OpBuilder builder(forOp);
+          OpOperand &init = forOp.getInitsMutable()[operand.getOperandNumber()];
+          Value initTranspose = builder.create<tt::TransOp>(
+              forOp.getLoc(), init.get(), ArrayRef({1, 0}));
+          init.set(initTranspose);
+        }
+      }
+    }
+  }
+}
+
+// Transpose scaled_dot ops that have a scale on lhs.
+static Operation *transposeDotOp(tt::DotScaledOp dotOp) {
+  OpBuilder builder(dotOp);
+  Value lhs = dotOp.getLhs();
+  std::array<int, 2> transOrder = {1, 0};
+  Value lhsTransposed =
+      builder.create<tt::TransOp>(lhs.getLoc(), lhs, transOrder);
+  Value rhs = dotOp.getRhs();
+  Value rhsTransposed =
+      builder.create<tt::TransOp>(rhs.getLoc(), rhs, transOrder);
+  Value c = dotOp.getC();
+  Value cTransposed = builder.create<tt::TransOp>(c.getLoc(), c, transOrder);
+  Value result = builder.create<tt::DotScaledOp>(
+      dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
+      cTransposed, dotOp.getRhsScale(), dotOp.getLhsScale(), dotOp.getRhsType(),
+      dotOp.getLhsType());
+  Operation *transposedResult =
+      builder.create<tt::TransOp>(result.getLoc(), result, transOrder);
+  dotOp.replaceAllUsesWith(transposedResult);
+  dotOp.erase();
+  return transposedResult;
+}
+
+static void transposeDots(ModuleOp m) {
+  SmallVector<tt::DotScaledOp> toTranspose;
+  m.walk([&](tt::DotScaledOp dotOp) -> void {
+    if (dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr)
+      toTranspose.push_back(dotOp);
+  });
+  SmallVector<Operation *> transposes;
+  for (tt::DotScaledOp dotOp : toTranspose) {
+    Operation *transpose = transposeDotOp(dotOp);
+    transposes.push_back(transpose);
+  }
+
+  for (Operation *transpose : transposes) {
+    sinkTransposeOp(cast<tt::TransOp>(transpose));
+  }
+}
+
 class TritonIntelGPUAccelerateMatmulPass
     : public triton::gpu::intel::impl::TritonIntelGPUAccelerateMatmulBase<
           TritonIntelGPUAccelerateMatmulPass> {
@@ -551,6 +694,8 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     auto &dpasAnalysis = getAnalysis<ttg::intel::DPASAnalysis>();
+
+    transposeDots(m);
 
     RewritePatternSet patterns(context);
     patterns.add<BlockedToDPAS, DecomposeScaledBlocked>(context, dpasAnalysis);
