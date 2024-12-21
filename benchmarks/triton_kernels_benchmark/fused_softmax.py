@@ -50,7 +50,7 @@ def naive_softmax(x):
         triton.Config({"threads_per_warp": 16}, num_warps=4),
     ],
     key=["BLOCK_SIZE_X", "BLOCK_SIZE_Y"],
-    do_bench=benchmark_suit.make_do_bench_for_autotune(kernel_name="softmax_kernel"),
+    do_bench=benchmark_suit.make_do_bench_for_autotune(),
 )
 @triton.jit
 def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_cols, BLOCK_SIZE_X: tl.constexpr,

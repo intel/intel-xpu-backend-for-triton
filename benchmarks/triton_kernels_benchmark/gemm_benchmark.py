@@ -39,7 +39,7 @@ use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
             num_stages=s, num_warps=32) for s in [2, 3]
     ],
     key=['M', 'N', 'K'],
-    do_bench=benchmark_suit.make_do_bench_for_autotune(kernel_name='matmul_kernel_with_block_pointers'),
+    do_bench=benchmark_suit.make_do_bench_for_autotune(),
 )
 @triton.jit
 def matmul_kernel_with_block_pointers(
@@ -113,7 +113,7 @@ def matmul_kernel_with_block_pointers(
             num_stages=s, num_warps=4) for s in [2]
     ],
     key=['M', 'N', 'K'],
-    do_bench=benchmark_suit.make_do_bench_for_autotune(kernel_name='matmul_kernel_with_block_pointers_batched'),
+    do_bench=benchmark_suit.make_do_bench_for_autotune(),
 )
 @triton.jit
 def matmul_kernel_with_block_pointers_batched(
