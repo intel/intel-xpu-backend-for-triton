@@ -95,7 +95,6 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
-          repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
 
       - name: Set benchmark repository

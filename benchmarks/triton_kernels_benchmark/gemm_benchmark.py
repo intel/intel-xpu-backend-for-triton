@@ -13,11 +13,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-from triton_kernels_benchmark.benchmark_testing import do_bench_elapsed_time, BENCHMARKING_METHOD
 from triton_kernels_benchmark import xetla_kernel
-
-if benchmark_suit.USE_IPEX_OPTION:
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
 
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
@@ -283,12 +279,8 @@ def benchmark(B, M, N, K, provider):
         torch_b = torch.transpose(torch_b, -2, -1)
 
     if provider == 'onednn':
-        do_bench = benchmark_suit.do_bench
-        if BENCHMARKING_METHOD == 'PYTORCH_LEGACY_PROFILER_USING_IPEX':
-            # Legacy profiler shows ~6000TFLOPS GeoMean for onednn measurements, so use more reliable method
-            do_bench = do_bench_elapsed_time
-        _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10, n_repeat=10,
-                                                  quantiles=quantiles)
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10,
+                                                                 n_repeat=10, quantiles=quantiles)
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:

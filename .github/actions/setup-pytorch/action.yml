@@ -12,13 +12,16 @@ inputs:
     default: /opt/intel/oneapi
   repository:
     description: Repository name with owner
-    default: Stonepia/pytorch
+    default: pytorch/pytorch
   ref:
     description: Branch, tag, commit id
     default: ""
   mode:
     description: Source or wheels
     default: source
+  cache:
+    description: Cache enabled or disabled
+    default: enabled
 runs:
   using: "composite"
   steps:
@@ -26,11 +29,7 @@ runs:
       if: inputs.ref == ''
       shell: bash
       run: |
-        if [[ "${{ inputs.repository }}" == "Stonepia/pytorch" ]]; then
-          PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
-        else
-          PYTORCH_COMMIT_ID="$(<.github/pins/pytorch-upstream.txt)"
-        fi
+        PYTORCH_COMMIT_ID="$(<.github/pins/pytorch.txt)"
         echo "PYTORCH_REPO=${{ inputs.repository }}" | tee -a "$GITHUB_ENV"
         echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" | tee -a "$GITHUB_ENV"
 
@@ -58,7 +57,6 @@ runs:
         fi
 
     # PyTorch build process expects Intel oneAPI in /opt/intel/oneapi
-    # https://github.com/Stonepia/pytorch/blob/c9153c96f547f269581743e7443aa86d7e003505/cmake/Modules/FindMKL.cmake#L44
     - name: Set up oneAPI
       shell: bash
       run: |
@@ -88,6 +86,7 @@ runs:
       with:
         path: pytorch
         key: pytorch-$PYTORCH_CACHE_KEY-$CACHE_NUMBER
+        enabled: ${{ inputs.cache == 'enabled' }}
 
     - name: Clone PyTorch repository
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
@@ -105,13 +104,6 @@ runs:
       run: |
         cd pytorch
         ../scripts/patch-pytorch.sh
-
-    # FIXME: Old PyTorch does not work with numpy==2.0.0
-    - name: Install numpy < 2.0.0
-      if: ${{ inputs.repository == 'Stonepia/pytorch' }}
-      shell: bash
-      run: |
-        pip install 'numpy<2.0.0'
 
     - name: Build PyTorch
       if: ${{ steps.pytorch-cache.outputs.status == 'miss' && inputs.mode == 'source' }}
@@ -150,3 +142,4 @@ runs:
       with:
         path: ${{ steps.pytorch-cache.outputs.path }}
         dest: ${{ steps.pytorch-cache.outputs.dest }}
+        enabled: ${{ inputs.cache == 'enabled' }}
