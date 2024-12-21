@@ -1,58 +1,18 @@
 import os
-import hashlib
-import importlib.util
-import tempfile
 from pathlib import Path
 
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from triton.runtime.cache import get_cache_manager
-from triton.runtime.build import _build, quiet
 from triton._utils import parse_list_string
+from triton.backends.intel.driver import compile_module_from_src, COMPILATION_HELPER
 
 import torch
-
-_dirname = os.getenv("ZE_PATH", default="/usr/local")
-
-include_dir = [
-    os.path.join(_dirname, "include"),
-    os.path.join(torch.utils.cmake_prefix_path, "../../include"),
-    os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include")
-]
-
-oneapi_root = os.getenv("ONEAPI_ROOT")
-if oneapi_root:
-    include_dir += [
-        os.path.join(oneapi_root, "compiler/latest/include"),
-        os.path.join(oneapi_root, "compiler/latest/include/sycl")
-    ]
-
-library_dir = [os.path.join(_dirname, "lib"), os.path.join(torch.utils.cmake_prefix_path, "../../lib")]
-libraries = ["ze_loader", "sycl", "torch"]
-
-
-def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
-    cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, "main.cpp")
-            with open(src_path, "w", encoding="utf-8") as f:
-                f.write(src)
-            with quiet():
-                so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
-            with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
-    spec = importlib.util.spec_from_file_location(name, cache_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
 
 # ------------------------
 # Utils
 # ------------------------
+
+COMPILATION_HELPER.inject_pytorch_dep()
 
 
 class XPUUtils:

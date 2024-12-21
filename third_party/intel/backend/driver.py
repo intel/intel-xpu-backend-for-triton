@@ -68,6 +68,10 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
 class CompilationHelper:
     _library_dir: list[str]
     _include_dir: list[str]
+    libraries: list[str]
+
+    # for benchmarks
+    _build_with_pytorch_dep: bool = False
 
     def __init__(self):
         self._library_dir = None
@@ -76,6 +80,12 @@ class CompilationHelper:
         self.libraries = ['ze_loader']
         if os.name != "nt":
             self.libraries += ["sycl"]
+
+    def inject_pytorch_dep(self):
+        # must be called before any cached properties (if pytorch is needed)
+        if self._build_with_pytorch_dep is False:
+            self._build_with_pytorch_dep = True
+            self.libraries += ['torch']
 
     @cached_property
     def _compute_compilation_options_lazy(self):
@@ -91,8 +101,17 @@ class CompilationHelper:
 
         dirname = os.path.dirname(os.path.realpath(__file__))
         include_dir += [os.path.join(dirname, "include")]
-        # TODO: do we need this?
         library_dir += [os.path.join(dirname, "lib")]
+
+        if self._build_with_pytorch_dep:
+            import torch
+
+            torch_path = torch.utils.cmake_prefix_path
+            include_dir += [
+                os.path.join(torch_path, "../../include"),
+                os.path.join(torch_path, "../../include/torch/csrc/api/include"),
+            ]
+            library_dir += [os.path.join(torch_path, "../../lib")]
 
         self._library_dir = library_dir
         self._include_dir = include_dir
@@ -113,7 +132,7 @@ class CompilationHelper:
         return self._libsycl_dir
 
 
-compilation_helper = CompilationHelper()
+COMPILATION_HELPER = CompilationHelper()
 
 
 def compile_module_from_src(src, name):
@@ -127,10 +146,10 @@ def compile_module_from_src(src, name):
             with open(src_path, "w") as f:
                 f.write(src)
             extra_compiler_args = []
-            if compilation_helper.libsycl_dir:
-                extra_compiler_args += ['-Wl,-rpath,' + compilation_helper.libsycl_dir]
-            so = _build(name, src_path, tmpdir, compilation_helper.library_dir, compilation_helper.include_dir,
-                        compilation_helper.libraries, extra_compile_args=extra_compiler_args)
+            if COMPILATION_HELPER.libsycl_dir:
+                extra_compiler_args += ['-Wl,-rpath,' + COMPILATION_HELPER.libsycl_dir]
+            so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
+                        COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), file_name, binary=True)
     import importlib.util
