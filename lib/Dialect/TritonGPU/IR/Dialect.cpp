@@ -1470,7 +1470,7 @@ SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
 
   SmallVector<unsigned> ret(rank, 1);
   auto nonZero = [](auto val) { return val != 0; };
-  int nonZeroIdx = -1;
+  int nonZeroIdx = 0;
   for (const auto &basis : bases) {
     auto it = std::find_if(basis.begin(), basis.end(), nonZero);
     // Bases can have one or zero non-zero elements
@@ -1482,7 +1482,6 @@ SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
     } else if (!skipBroadcast) {
       // If we've seen a non-zero basis, we double the size of the previous dim
       // This is just needed to count the CTAsPerCGA
-      assert(nonZeroIdx != -1);
       ret[nonZeroIdx] *= 2;
     }
   }
@@ -1633,7 +1632,8 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type) const {
   // the invariant that the shape of the LL is that of the tensor
   // We choose the former for BC
   auto ll = *toLinearLayout(shape);
-  return basesPerDim(ll, StringAttr::get(getContext(), "register"));
+  return basesPerDim(ll, StringAttr::get(getContext(), "register"),
+                     /*skipBroadcast=*/false);
 }
 
 // Start of Selection
