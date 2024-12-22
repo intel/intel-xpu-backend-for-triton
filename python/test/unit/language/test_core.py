@@ -3306,7 +3306,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
         if M < 16 or N < 16 or K < 16:
-            pytest.skip("small dots are supported only on HIP at the moment")
+            pytest.xfail("small dots are supported only on HIP at the moment")
         if in_dtype == 'bfloat16':
             pytest.xfail("bfloat16 is not supported in the interpreter")
     else:
@@ -4847,7 +4847,7 @@ def test_unary_math(func_str, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm(num_ctas, device):
     if not is_cuda():
-        pytest.skip("test_inline_asm is only supported in CUDA")
+        pytest.xfail("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, Z, n: tl.constexpr, BLOCK: tl.constexpr):
@@ -4875,7 +4875,7 @@ def test_inline_asm(num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_inline_asm_packed(num_ctas, device):
     if not is_cuda():
-        pytest.skip("test_inline_asm is only supported in CUDA")
+        pytest.xfail("test_inline_asm is only supported in CUDA")
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4902,7 +4902,7 @@ def test_inline_asm_packed(num_ctas, device):
 @pytest.mark.parametrize('num_ctas', num_ctas_list)
 def test_inline_asm_with_pointers(num_ctas, device):
     if not is_cuda():
-        pytest.skip('test_inline_asm is only supported in CUDA')
+        pytest.xfail('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(X, Y, BLOCK: tl.constexpr):
@@ -4927,7 +4927,7 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 def test_inline_asm_multiple_outputs(device):
     if not is_cuda():
-        pytest.skip('test_inline_asm is only supported in CUDA')
+        pytest.xfail('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -4973,7 +4973,7 @@ def test_inline_asm_multiple_outputs(device):
 
 def test_inline_asm_packed_multiple_outputs(device):
     if not is_cuda():
-        pytest.skip('test_inline_asm is only supported in CUDA')
+        pytest.xfail('test_inline_asm is only supported in CUDA')
 
     @triton.jit
     def kernel(A, B, C, D, BLOCK: tl.constexpr):
@@ -6261,7 +6261,7 @@ def test_num_programs(device):
 @pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
 def test_math_extern(dtype_str, device):
     if is_interpreter():
-        pytest.skip('math_extern does not work in the interpreter mode')
+        pytest.xfail('math_extern does not work in the interpreter mode')
 
     @triton.jit
     def kernel(
