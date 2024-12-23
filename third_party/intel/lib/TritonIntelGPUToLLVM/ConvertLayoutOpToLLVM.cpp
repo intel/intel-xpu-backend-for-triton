@@ -584,9 +584,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kBlock = str_attr("block");
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
     LinearLayout conversion = *comp.quotient(kBlock)->quotient(kWarp);
-    int32_t subGroupSize = conversion.getOutDimSize(kLane);
 
     Location loc = op.getLoc();
+    // FIXME: This workaround addresses the incorrect sgsize and SLM offset in
+    // ReduceOp and ConvertLayoutOp, which prevents a segmentation fault.
+    // However, this is a temporary solution. Once the OutDimSize computation
+    // issue in LinearLayout is resolved, this workaround should be removed.
+    int32_t subGroupSize = std::min((int32_t)op.getType().getNumElements(),
+                                    conversion.getOutDimSize(kLane));
+    if (!op->hasAttr("allocation.offset")) {
+      op->setAttr("allocation.offset",
+                  rewriter.getIntegerAttr(rewriter.getI32Type(), 0));
+    }
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
