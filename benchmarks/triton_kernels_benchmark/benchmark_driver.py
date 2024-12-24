@@ -1,11 +1,7 @@
 import os
 
-from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase
 from triton._utils import parse_list_string
-from triton.backends.intel.driver import compile_module_from_src, COMPILATION_HELPER, XPUUtils, ty_to_cpp, serialize_args
-
-import torch
+from triton.backends.intel.driver import compile_module_from_src, COMPILATION_HELPER, ty_to_cpp, serialize_args
 
 # ------------------------
 # Utils
@@ -310,33 +306,3 @@ class XPULauncher:
         if serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
         self.launch(*args, **kwargs)
-
-
-class XPUDriver(DriverBase):
-
-    def __init__(self):
-        self.launcher_cls = XPULauncher
-
-    def __getattr__(self, name):
-        # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
-        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
-        if name == "utils":
-            self.utils = XPUUtils()  # pylint: disable=attribute-defined-outside-init
-            return self.utils
-        raise AttributeError
-
-    def get_current_device(self):
-        return self.utils.get_current_device()
-
-    def get_current_stream(self, device):  # pylint: disable=unused-argument
-        return torch.xpu.current_stream().sycl_queue
-
-    def get_current_target(self):
-        device = self.get_current_device()
-        dev_property = torch.xpu.get_device_capability(device)
-        warp_size = 32
-        return GPUTarget("xpu", dev_property, warp_size)
-
-    @staticmethod
-    def is_active():
-        return torch.xpu.is_available()
