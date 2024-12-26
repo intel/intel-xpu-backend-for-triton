@@ -5,13 +5,12 @@ import sys
 import tempfile
 
 import numpy as np
-import pytest
 
 import triton
 from triton._internal_testing import is_cuda, is_xpu
 from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dir, library_dirs
-from triton.backends.intel.driver import compilation_helper
+from triton.backends.intel.driver import COMPILATION_HELPER
 
 kernel_utils_src = """
 import triton
@@ -103,17 +102,17 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     subprocess.run(
-        ["icpx"] + cpp_files + ["-I", compilation_helper.include_dir[0], "-c", "-fsycl", "-fPIC"],
+        ["icpx"] + cpp_files + ["-I", COMPILATION_HELPER.include_dir[0], "-c", "-fsycl", "-fPIC"],
         check=True,
         cwd=dir,
     )
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
     command = ["icpx", "-fsycl", "-lze_loader", *o_files, "-shared", "-o", libname]
-    for lib_dir in compilation_helper.library_dir:
+    for lib_dir in COMPILATION_HELPER.library_dir:
         command.extend(["-L", lib_dir])
-    if compilation_helper.libsycl_dir:
-        for lib_dir in compilation_helper.libsycl_dir:
+    if COMPILATION_HELPER.libsycl_dir:
+        for lib_dir in COMPILATION_HELPER.libsycl_dir:
             command.extend(["-L", lib_dir])
     subprocess.run(command, check=True, cwd=dir)
 
@@ -299,12 +298,12 @@ int main(int argc, char ** argv) {{
 
     if is_xpu():
         command = ["icpx", "test.cpp"]
-        for inc_dir in compilation_helper.include_dir:
+        for inc_dir in COMPILATION_HELPER.include_dir:
             command.extend(["-I", inc_dir])
-        for lib_dir in compilation_helper.library_dir:
+        for lib_dir in COMPILATION_HELPER.library_dir:
             command.extend(["-L", lib_dir])
-        if compilation_helper.libsycl_dir:
-            for lib_dir in compilation_helper.libsycl_dir:
+        if COMPILATION_HELPER.libsycl_dir:
+            for lib_dir in COMPILATION_HELPER.libsycl_dir:
                 command.extend(["-L", lib_dir])
         command.extend(["-fsycl", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
@@ -410,8 +409,7 @@ def test_compile_link_matmul_no_specialization():
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         dtype = "fp16"
-        if is_xpu():
-            pytest.skip("FIXME: AssertionError on XPU")
+
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)

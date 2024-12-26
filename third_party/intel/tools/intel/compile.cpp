@@ -115,6 +115,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
       {{sycl_mod, {kernel_name}_func, sycl::ext::oneapi::level_zero::ownership::transfer}},
       ctx);
   std::string kernel_name = sycl_kernel.get_info<sycl::info::kernel::function_name>();
+  std::string driver_version = stream.get_device().get_info<sycl::info::device::driver_version>();
   void *params[] = {{ {arg_pointers} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = sycl_kernel.get_info<sycl::info::kernel::num_args>();
@@ -123,6 +124,9 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   size_t global_range_y = {gridY};
   size_t global_range_z = {gridZ};
   size_t local_range_x = {num_warps} * {threads_per_warp};
+  if (driver_version.find("+") != std::string::npos) {{
+    local_range_x = 16;
+  }}
   size_t local_range_y = 1;
   size_t local_range_z = 1;
 
