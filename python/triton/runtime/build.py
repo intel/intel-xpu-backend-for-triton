@@ -24,7 +24,7 @@ def quiet():
 
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
-    if os.name == "nt":
+    if cc in ["cl", "clang-cl"]:
         cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
@@ -35,7 +35,9 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
         cc_cmd += [f"/LIBPATH:{dir}" for dir in library_dirs]
         cc_cmd += [f'{lib}.lib' for lib in libraries]
     else:
-        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi"]
+        cc_cmd = [cc, src, "-O3", "-shared", "-Wno-psabi"]
+        if os.name != "nt":
+            cc_cmd += ["-fPIC"]
         cc_cmd += [f'-l{lib}' for lib in libraries]
         cc_cmd += [f"-L{dir}" for dir in library_dirs]
         cc_cmd += [f"-I{dir}" for dir in include_dirs]

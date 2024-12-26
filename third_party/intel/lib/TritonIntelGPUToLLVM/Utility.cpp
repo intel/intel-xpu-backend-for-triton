@@ -7,9 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utility.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
@@ -65,19 +62,6 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
   }
 
   return result;
-}
-
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred) {
-  assert(cast<LLVMPointerType>(ptr.getType()).getAddressSpace() == 3 &&
-         "Invalid addr space for loadShared");
-  Value undef = undef(elemTy);
-  Block &endBlock = createPredicatedBlock(rewriter, loc, pred,
-                                          SmallVector<Value, 1>{undef}, [&] {
-                                            Value ret = load(elemTy, ptr);
-                                            return SmallVector<Value, 1>{ret};
-                                          });
-  return *endBlock.args_begin();
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {

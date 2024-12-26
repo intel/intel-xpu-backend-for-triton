@@ -6,6 +6,7 @@
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "third_party/f2reduce/f2reduce.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
@@ -337,6 +338,7 @@ LinearLayout::checkInvariants(bool requireSurjective) {
            "can be reached by some `in` coordinate, but was not:" +
            toString();
   }
+
   return std::nullopt;
 }
 
@@ -650,7 +652,7 @@ bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   // We can quotient out dimNames iff they don't affect the remainingInDimNames
   // in the result. In other words, we want to check that B is zero, and C is
   // zero, and D is the identity
-  return squareSublayoutIsIdentity(dimNames) &&
+  return squareSublayoutIsIdentity(*this, dimNames) &&
          sublayoutIsZero(remainingInDimNames, dimNames) &&
          sublayoutIsZero(dimNames, remainingOutDimNames);
 }
@@ -725,33 +727,6 @@ bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
         return false;
       }
     }
-  }
-  return true;
-}
-
-bool LinearLayout::squareSublayoutIsIdentity(
-    ArrayRef<StringAttr> dimNames) const {
-  // The empty layout is the identity
-  if (dimNames.size() == 0) {
-    return true;
-  }
-  // Check that the input-output sizes are the same
-  LinearLayout sl = sublayout(dimNames, dimNames);
-  for (StringAttr dim : dimNames) {
-    if (getInDimSize(dim) != getOutDimSize(dim)) {
-      return false;
-    }
-  }
-  // Once the inputs and output dimensions are the same, we can just check
-  // that the basis for the single remaining dimension is the identity.
-  sl = sl.flattenIns().flattenOuts();
-  int b = 0;
-  const auto &inDimBases = sl.bases.begin()->second;
-  for (auto basis : inDimBases) {
-    if (basis[0] != (1 << b)) {
-      return false;
-    }
-    b++;
   }
   return true;
 }
@@ -916,6 +891,21 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     retOutDims.push_back({dim, outer.getInDimSize(dim)});
   }
   return flatComposed.reshapeIns(retInDims).reshapeOuts(retOutDims);
+}
+
+LinearLayout LinearLayout::invert() const {
+  assert(isInvertible() &&
+         "A linear layout must be surjective and square to be invertible");
+  return pseudoinvert();
+}
+
+LinearLayout LinearLayout::pseudoinvert() const {
+  // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
+  LinearLayout identity = LinearLayout::empty();
+  for (auto outDim : getOutDimNames()) {
+    identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);
+  }
+  return identity.invertAndCompose(*this);
 }
 
 llvm::MapVector<StringAttr, int32_t>

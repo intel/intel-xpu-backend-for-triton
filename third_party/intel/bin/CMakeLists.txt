@@ -22,3 +22,10 @@ target_link_libraries(triton-translate
   TritonGENToLLVMIRTranslation
 )
 mlir_check_link_libraries(triton-translate)
+
+# Move `triton-translate` to the folder where `lit` expects to find it
+add_custom_command(TARGET triton-translate  POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy
+  "$<TARGET_FILE:triton-translate>"
+  "${triton_BINARY_DIR}/bin"
+)

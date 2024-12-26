@@ -66,6 +66,9 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  Value getStackPointer(RewriterBase &rewriter,
+                        FunctionOpInterface funcOp) const override;
+
 private:
 };
 } // namespace mlir::triton::intel

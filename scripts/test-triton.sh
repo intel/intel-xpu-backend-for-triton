@@ -96,7 +96,8 @@ while [ -v 1 ]; do
       ;;
     --reports-dir)
       TRITON_TEST_REPORTS=true
-      TRITON_TEST_REPORTS_DIR="$2"
+      # Must be absolute
+      TRITON_TEST_REPORTS_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
     --warning-reports)
@@ -108,7 +109,8 @@ while [ -v 1 ]; do
       shift
       ;;
     --skip-list)
-      TRITON_TEST_SKIPLIST_DIR="$2"
+      # Must be absolute
+      TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
     --help)
@@ -121,7 +123,7 @@ while [ -v 1 ]; do
 done
 
 # Only run interpreter test when $TEST_INTERPRETER is true
-if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && ["$TEST_BENCHMARKS" = false] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ] && [ "$TEST_INDUCTOR" = false ]; then
+if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ] && [ "$TEST_INDUCTOR" = false ]; then
   TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -157,11 +159,7 @@ install_deps() {
     echo "**** Skipping installation of pytorch ****"
   else
     echo "**** Installing pytorch ****"
-    if ([ ! -v USE_IPEX ] || [ "$USE_IPEX" = 1 ]) && ([ "$TEST_BENCHMARKS" = true ] || [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]); then
-      $SCRIPTS_DIR/compile-pytorch-ipex.sh $([ $VENV = true ] && echo "--venv")
-    else
-      $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
-    fi
+    $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
   fi
 }
 
@@ -251,7 +249,7 @@ run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  USE_IPEX=0 python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
+  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
 run_benchmark_softmax() {
@@ -331,7 +329,7 @@ run_instrumentation_tests() {
 run_inductor_tests() {
   test -d pytorch || (
     git clone https://github.com/pytorch/pytorch
-    rev=$(cat .github/pins/pytorch-upstream.txt)
+    rev=$(cat .github/pins/pytorch.txt)
     cd pytorch
     git checkout $rev
   )

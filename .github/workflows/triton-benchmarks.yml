@@ -16,10 +16,9 @@ on:
         description: The method used to obtain performance numbers
         type: choice
         options:
-          - PYTORCH_LEGACY_PROFILER_USING_IPEX
           - ELAPSED_TIME
           - UPSTREAM_PYTORCH_PROFILER
-        default: PYTORCH_LEGACY_PROFILER_USING_IPEX
+        default: UPSTREAM_PYTORCH_PROFILER
       run_name:
         description: Run name
         type: string
@@ -32,6 +31,13 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      oneapi_bundle:
+        description: oneAPI bundle
+        type: choice
+        options:
+          - PTDB
+          - DLE
+        default: DLE
 
   schedule:
     - cron: "5 23 * * *"
@@ -46,8 +52,7 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
-  USE_IPEX: ${{ github.event_name != 'workflow_dispatch' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
+  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
@@ -66,16 +71,16 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
+      - name: Use DLE
+        if: ${{ (github.oneapi_bundle || 'DLE') == 'DLE' }}
+        shell: bash
+        run: |
+          if [[ -e /opt/intel/dle ]]; then
+            sudo ln -sfT /opt/intel/dle /opt/intel/oneapi
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        with:
-          path: $HOME/.cache/pip
-          # pip cache per commit id just to minimize network traffic
-          key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
       - name: Install Python
         if: ${{ !(inputs.use_pyenv_python || false) }}
@@ -98,21 +103,8 @@ jobs:
         run: |
           pip install wheel cmake
 
-      - name: Setup PyTorch with IPEX
-        if: ${{ env.USE_IPEX == '1' }}
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
-        with:
-          repository: Stonepia/pytorch
-
-      - name: Setup PyTorch without IPEX
-        if: ${{ env.USE_IPEX == '0' }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: pytorch/pytorch
-
-      - name: Setup IPEX
-        if: ${{ env.USE_IPEX == '1' }}
-        uses: ./.github/actions/setup-ipex
 
       - name: Build Triton wheels
         uses: ./.github/actions/setup-triton
@@ -272,13 +264,6 @@ jobs:
         run: |
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
-
-      - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pip-cache.outputs.path }}
-          dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
