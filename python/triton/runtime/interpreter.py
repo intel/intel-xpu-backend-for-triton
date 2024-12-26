@@ -556,6 +556,9 @@ class InterpreterBuilder:
     def create_histogram(self, data, bins):
         return TensorHandle(np.histogram(data.data, bins=bins, range=(0, bins))[0], tl.int32)
 
+    def create_gather(self, src, indices, axis):
+        return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
+
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):
@@ -998,7 +1001,7 @@ def _patch_lang_core(lang):
 
 
 def _patch_lang(fn):
-    langs = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
+    langs = [value for _, value in fn.__globals__.items() if inspect.ismodule(value) and value in [tl, tl.core]]
     assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
     for lang in langs:
         _patch_builtin(lang, interpreter_builder)

@@ -2112,6 +2112,13 @@ AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
+SmallVector<unsigned>
+AMDMfmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  llvm::report_fatal_error(
+      "getThreadsPerWarpForOperand not implemented for AMDMfmaEncodingAttr");
+  return {};
+}
+
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
                                       int kWidth, int opIdx) const {
@@ -2171,6 +2178,13 @@ SmallVector<unsigned>
 AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   auto rank = getWarpsPerCTA().size();
   return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
+}
+
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  llvm::report_fatal_error("getThreadsPerWarpForOperand not implemented for "
+                           "AMDWmmaEncodingAttr");
+  return {};
 }
 
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
@@ -2350,6 +2364,15 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
+SmallVector<unsigned>
+NvidiaMmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  auto threadsPerWarp = getThreadsPerWarp();
+  auto rank = threadsPerWarp.size();
+  if (opIdx == 1)
+    std::swap(threadsPerWarp[rank - 2], threadsPerWarp[rank - 1]);
+  return threadsPerWarp;
+}
+
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
                                         int kWidth, int opIdx) const {
@@ -2418,16 +2441,12 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
 }
 
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
-  auto parent = getParent();
-  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-    auto threadsPerWarp = mma.getThreadsPerWarp();
-    auto rank = threadsPerWarp.size();
-    if (getOpIdx() == 1)
-      std::swap(threadsPerWarp[rank - 2], threadsPerWarp[rank - 1]);
-    return threadsPerWarp;
+  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
+    return mma.getThreadsPerWarpForOperand(getOpIdx());
   }
   llvm::report_fatal_error(
       "getThreadsPerWarp not implemented for DotOperandEncodingAttr");
+  return {};
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   auto parentLayout = getParent();
