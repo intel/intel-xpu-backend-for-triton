@@ -31,13 +31,6 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
-      oneapi_bundle:
-        description: oneAPI bundle
-        type: choice
-        options:
-          - PTDB
-          - DLE
-        default: DLE
 
   schedule:
     - cron: "5 23 * * *"
@@ -70,14 +63,6 @@ jobs:
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
-
-      - name: Use DLE
-        if: ${{ (github.oneapi_bundle || 'DLE') == 'DLE' }}
-        shell: bash
-        run: |
-          if [[ -e /opt/intel/dle ]]; then
-            sudo ln -sfT /opt/intel/dle /opt/intel/oneapi
-          fi
 
       - name: Checkout repository
         uses: actions/checkout@v4
