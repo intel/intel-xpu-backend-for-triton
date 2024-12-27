@@ -360,45 +360,48 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue
   ptr_info.valid = false;
   return ptr_info;
 }}
+
 // start sycl
 template <class T>
 static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
-cgh.set_arg(index, *static_cast<const T *>(value));
+  cgh.set_arg(index, *static_cast<const T *>(value));
 }}
+
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
-std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-void *params[] = {{ {', '.join(f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none")} }};
-uint32_t num_params = sizeof(params)/sizeof(params[0]);
-uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-size_t global_range_x = gridX*threads_per_warp*num_warps;
-size_t global_range_y = gridY;
-size_t global_range_z = gridZ;
-size_t local_range_x = num_warps*threads_per_warp;
-size_t local_range_y = 1;
-size_t local_range_z = 1;
-sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
-sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
-sycl::nd_range<3> parallel_work_size(global_range, local_range);
-if (shared_memory) {{
-  expected_num_params -= 1;
-}}
-assert(num_params == expected_num_params && "number of kernel param not matched");
-// Submit the imported kernel.
-auto cgf = [&](sycl::handler &cgh) {{
-  {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants and signature[i] != "none"]))}
+  std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+  void *params[] = {{ {', '.join(f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none")} }};
+  uint32_t num_params = sizeof(params)/sizeof(params[0]);
+  uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
+  size_t global_range_x = gridX*threads_per_warp*num_warps;
+  size_t global_range_y = gridY;
+  size_t global_range_z = gridZ;
+  size_t local_range_x = num_warps*threads_per_warp;
+  size_t local_range_y = 1;
+  size_t local_range_z = 1;
+  sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
+  sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
+  sycl::nd_range<3> parallel_work_size(global_range, local_range);
   if (shared_memory) {{
-    using share_mem_t = sycl::local_accessor<int8_t, 1>;
-    share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
-    cgh.set_arg(num_params, local_buffer);
-    cgh.parallel_for(parallel_work_size, kernel_ptr);
-  }} else {{
-    cgh.parallel_for(parallel_work_size, kernel_ptr);
+    expected_num_params -= 1;
   }}
-}};
-auto event = stream.submit(cgf);
+  assert(num_params == expected_num_params && "number of kernel param not matched");
+  // Submit the imported kernel.
+  auto cgf = [&](sycl::handler &cgh) {{
+    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants and signature[i] != "none"]))}
+    if (shared_memory) {{
+      using share_mem_t = sycl::local_accessor<int8_t, 1>;
+      share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
+      cgh.set_arg(num_params, local_buffer);
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
+    }} else {{
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
+    }}
+    }};
+  auto event = stream.submit(cgf);
 }}
 // end sycl
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
 
   int gridX, gridY, gridZ;
