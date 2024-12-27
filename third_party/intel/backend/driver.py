@@ -397,7 +397,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
     }} else {{
       cgh.parallel_for(parallel_work_size, kernel_ptr);
     }}
-    }};
+  }};
   auto event = stream.submit(cgf);
 }}
 // end sycl
