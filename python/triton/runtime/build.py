@@ -92,7 +92,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         else:
             extra_compile_args += ["--std=c++17"]
         if os.name == "nt":
-            library_dirs += [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
+            library_dirs = library_dirs + [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
     else:
         cc_cmd = [cc]
 
