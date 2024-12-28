@@ -6577,7 +6577,7 @@ def test_zero_strided_tensors(device):
 
     a, b, c = x.shape
     grid = (a, b, c)
-    with torch.cuda.device(x.device.index):
+    with device == 'cuda' and torch.cuda.device(x.device.index) or torch.xpu.device(x.device.index):
         _simple_add[grid](x, x.stride(0), x.stride(1))
 
     assert torch.allclose(x, torch.ones_like(x) * c_dim)
