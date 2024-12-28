@@ -420,10 +420,18 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // extract kernel metadata
-  int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
-  int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
-  int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
-  int threads_per_warp = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "threads_per_warp"));
+  PyObject *num_warps_attr = PyObject_GetAttrString(kernel_metadata, "num_warps");
+  int num_warps = PyLong_AsLong(num_warps_attr);
+  Py_DECREF(num_warps_attr);
+  PyObject *num_ctas_attr = PyObject_GetAttrString(kernel_metadata, "num_ctas");
+  int num_ctas = PyLong_AsLong(num_ctas_attr);
+  Py_DECREF(num_ctas_attr);
+  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  int shared_memory = PyLong_AsLong(shared_attr);
+  Py_DECREF(shared_attr);
+  PyObject *threads_per_warp_attr = PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+  int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
+  Py_DECREF(threads_per_warp_attr);
 
   // extract cluster dims
   PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
@@ -434,6 +442,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
   int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
   int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
+  Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
@@ -466,9 +475,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     return NULL;
   }}
 
-  // return None
-  Py_INCREF(Py_None);
-  return Py_None;
+  Py_RETURN_NONE;
 }}
 
 static PyMethodDef ModuleMethods[] = {{
