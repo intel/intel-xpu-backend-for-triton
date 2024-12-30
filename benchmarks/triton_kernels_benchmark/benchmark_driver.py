@@ -1,109 +1,17 @@
 import os
-import hashlib
-import importlib.util
-import tempfile
-from pathlib import Path
 
-from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase
-from triton.runtime.cache import get_cache_manager
-from triton.runtime.build import _build, quiet
 from triton._utils import parse_list_string
-
-import torch
-
-_dirname = os.getenv("ZE_PATH", default="/usr/local")
-
-include_dir = [
-    os.path.join(_dirname, "include"),
-    os.path.join(torch.utils.cmake_prefix_path, "../../include"),
-    os.path.join(torch.utils.cmake_prefix_path, "../../include/torch/csrc/api/include")
-]
-
-oneapi_root = os.getenv("ONEAPI_ROOT")
-if oneapi_root:
-    include_dir += [
-        os.path.join(oneapi_root, "compiler/latest/include"),
-        os.path.join(oneapi_root, "compiler/latest/include/sycl")
-    ]
-
-library_dir = [os.path.join(_dirname, "lib"), os.path.join(torch.utils.cmake_prefix_path, "../../lib")]
-libraries = ["ze_loader", "sycl", "torch"]
-
-
-def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
-    cache = get_cache_manager(key)
-    cache_path = cache.get_file(f"{name}.so")
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, "main.cpp")
-            with open(src_path, "w", encoding="utf-8") as f:
-                f.write(src)
-            with quiet():
-                so = _build(name, src_path, tmpdir, library_dir, include_dir, libraries)
-            with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}.so", binary=True)
-    spec = importlib.util.spec_from_file_location(name, cache_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
+from triton.backends.intel.driver import compile_module_from_src, COMPILATION_HELPER, ty_to_cpp, serialize_args
 
 # ------------------------
 # Utils
 # ------------------------
 
-
-class XPUUtils:
-
-    def __new__(cls):
-        if not hasattr(cls, "instance"):
-            cls.instance = super(XPUUtils, cls).__new__(cls)
-        return cls.instance
-
-    def __init__(self):
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(
-            Path(os.path.join(dirname, "driver.c")).read_text(encoding="utf-8"), "spirv_utils")
-        self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
-        self.context = mod.init_context(self.get_sycl_queue())
-        self.device_count = mod.init_devices(self.get_sycl_queue())
-        self.current_device = 0 if self.device_count[0] > 0 else -1
-
-    def get_current_device(self):
-        return self.current_device
-
-    def get_sycl_queue(self):
-        return torch.xpu.current_stream().sycl_queue
-
+COMPILATION_HELPER.inject_pytorch_dep()
 
 # ------------------------
 # Launcher
 # ------------------------
-
-
-def ty_to_cpp(ty):
-    if ty[0] == "*" or ty == "none":
-        return "void*"
-    return {
-        "i1": "int32_t",
-        "i8": "int8_t",
-        "i16": "int16_t",
-        "i32": "int32_t",
-        "i64": "int64_t",
-        "u1": "uint32_t",
-        "u8": "uint8_t",
-        "u16": "uint16_t",
-        "u32": "uint32_t",
-        "u64": "uint64_t",
-        "fp16": "float",
-        "bf16": "float",
-        "fp32": "float",
-        "f32": "float",
-        "fp64": "double",
-    }[ty]
 
 
 def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
@@ -381,61 +289,6 @@ def make_launcher(constants, signature, ids):  # pylint: disable=unused-argument
     return src
 
 
-def serialize_kernel_metadata(arg, args_dict):
-    args_dict["num_warps"] = arg.num_warps
-    args_dict["threads_per_warp"] = arg.threads_per_warp
-    args_dict["shared_memory"] = arg.shared
-    args_dict["kernel_name"] = arg.name
-    args_dict["spv_name"] = f"{arg.name}.spv"
-    args_dict["build_flags"] = arg.build_flags
-
-
-def serialize_args(args, constants, signature):
-    import numbers
-    dir_path = os.getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path)
-        print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
-
-    cnt = 0
-    args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
-    args_dict["argument_list"] = []
-    counts = {"tensors": 0, "scalars": 0, "karg_cnt": 0}
-    cnt = 4
-    for arg in args[cnt:]:
-        if type(arg).__name__ == "KernelMetadata":
-            serialize_kernel_metadata(arg, args_dict)
-
-        if isinstance(arg, torch.Tensor):
-            cpu_tensor = arg.cpu()
-            tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
-            with open(tensor_path, "wb") as f:
-                torch.save(cpu_tensor, f)
-            new_arg = {
-                "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
-                signature[counts["karg_cnt"]]
-            }
-            args_dict["argument_list"].append(new_arg)
-            counts["karg_cnt"] += 1
-            counts["tensors"] += 1
-
-        if isinstance(arg, numbers.Number):
-            if counts["karg_cnt"] not in constants:
-                new_arg = {
-                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": args[cnt], "ctype":
-                    signature[counts["karg_cnt"]]
-                }
-                args_dict["argument_list"].append(new_arg)
-            counts["karg_cnt"] += 1
-            counts["scalars"] += 1
-        cnt += 1
-    # Dump argument info as a JSON file
-    json_path = os.path.join(dir_path, "args_data.json")
-    with open(json_path, "w", encoding="utf-8") as json_file:
-        import json
-        json.dump(args_dict, json_file, indent=4)
-
-
 class XPULauncher:
 
     def __init__(self, src, metadata):  # pylint: disable=unused-argument
@@ -453,33 +306,3 @@ class XPULauncher:
         if serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
         self.launch(*args, **kwargs)
-
-
-class XPUDriver(DriverBase):
-
-    def __init__(self):
-        self.launcher_cls = XPULauncher
-
-    def __getattr__(self, name):
-        # Lazily initialize utils to avoid unnecessary XPU runtime invocations.
-        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/624
-        if name == "utils":
-            self.utils = XPUUtils()  # pylint: disable=attribute-defined-outside-init
-            return self.utils
-        raise AttributeError
-
-    def get_current_device(self):
-        return self.utils.get_current_device()
-
-    def get_current_stream(self, device):  # pylint: disable=unused-argument
-        return torch.xpu.current_stream().sycl_queue
-
-    def get_current_target(self):
-        device = self.get_current_device()
-        dev_property = torch.xpu.get_device_capability(device)
-        warp_size = 32
-        return GPUTarget("xpu", dev_property, warp_size)
-
-    @staticmethod
-    def is_active():
-        return torch.xpu.is_available()

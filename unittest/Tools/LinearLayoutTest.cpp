@@ -410,26 +410,6 @@ TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
-TEST_F(LinearLayoutTest, InvertAndCompose_SmallerResult) {
-  // The domain of l2 is [0,16), but the codomain of the result is only [0,8),
-  // because there's no value v in the codomain of l1 such that l2^-1(v) >= 8.
-  LinearLayout l1({{S("in1"), {{1}, {2}, {4}}}}, {S("out")});
-  LinearLayout l2({{S("in2"), {{4}, {1}, {2}, {8}}}}, {S("out")});
-  // Pseudo-inverse of l2 is
-  //
-  //  out(1) = 2
-  //  out(2) = 4
-  //  out(4) = 1
-  //  out(8) = 8
-  //
-  // Composing with l1 gives back l2^-1 without the out(8) entry.
-  LinearLayout composition = l1.invertAndCompose(l2);
-  EXPECT_EQ(composition,
-            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {{S("in2"), 16}},
-                         /*requireSurjective=*/false));
-  EXPECT_TRUE(composition.compose(l2).equalIgnoringOutDimSizes(l1));
-}
-
 TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedInDim) {
   LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}, {S("in2"), {{0}}}}, {S("out")});
   LinearLayout l2({{S("in"), {{4}, {1}, {2}}}}, {S("out")});
@@ -514,8 +494,10 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims) {
   LinearLayout l1({{S("in1"), {{1}, {2}, {4}}}, {S("in2"), {{0}}}}, {S("out")});
   LinearLayout l2({{S("in3"), {{1}, {2}, {4}}}, {S("in4"), {{0}}}}, {S("out")});
   LinearLayout c = l1.invertAndCompose(l2);
-  EXPECT_EQ(c, LinearLayout::identity1D(8, S("in1"), S("in3")) *
-                   LinearLayout::identity1D(2, S("in2"), S("in4")));
+  EXPECT_EQ(c, LinearLayout(
+                   {{S("in1"), {{1, 0}, {2, 0}, {4, 0}}}, {S("in2"), {{0, 0}}}},
+                   {{S("in3"), 8}, {S("in4"), 2}},
+                   /*requireSurjective=*/false));
   EXPECT_EQ(c.compose(l2),
             l1.transposeOuts(llvm::to_vector(l2.getOutDimNames())));
 }
@@ -525,8 +507,9 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims2) {
   LinearLayout b({{S("in3"), {{2}, {1}}}, {S("in4"), {{0}}}}, {S("out")});
   LinearLayout c = a.invertAndCompose(b);
   EXPECT_EQ(c,
-            LinearLayout({{S("in1"), {{2, 0}, {1, 0}}}, {S("in2"), {{0, 1}}}},
-                         {S("in3"), S("in4")}));
+            LinearLayout({{S("in1"), {{2, 0}, {1, 0}}}, {S("in2"), {{0, 0}}}},
+                         {{S("in3"), 4}, {S("in4"), 2}},
+                         /*requireSurjective=*/false));
   EXPECT_EQ(c.compose(b), a.transposeOuts(llvm::to_vector(b.getOutDimNames())));
 }
 
@@ -665,35 +648,6 @@ TEST_F(LinearLayoutTest, SublayoutIsZero) {
   EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out2")}));
 }
 
-TEST_F(LinearLayoutTest, SquareSublayoutIsIdentity) {
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
-                  .squareSublayoutIsIdentity({S("in")}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
-                  .squareSublayoutIsIdentity({}));
-
-  LinearLayout l1(
-      {{S("in1"), {{1, 1}, {2, 2}, {4, 4}}}, {S("in2"), {{2, 1}, {1, 2}}}},
-      {{S("in1"), 8}, {S("in2"), 8}}, /*requireSurjective=*/false);
-  EXPECT_TRUE(l1.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_FALSE(l1.squareSublayoutIsIdentity({S("in2")}));
-
-  LinearLayout l2 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("in2")) *
-                    LinearLayout({{S("in3"), {{1, 1, 1}}}},
-                                 {{S("in1"), 2}, {S("in2"), 2}, {S("in3"), 2}},
-                                 /*requireSurjective=*/false);
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in2")}));
-  EXPECT_TRUE(l2.squareSublayoutIsIdentity({S("in3")}));
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1"), S("in2")}));
-
-  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("in2"));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in2")}));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1"), S("in2")}));
-}
-
 TEST_F(LinearLayoutTest, FreeVariableMasks) {
   using llvm::to_vector;
   using AR = llvm::ArrayRef<std::pair<StringAttr, int32_t>>;
@@ -799,40 +753,6 @@ TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
   ASSERT_TRUE(quotientLayout.has_value());
   ASSERT_TRUE(quotientLayout->quotient({S("dim2")}).has_value());
 }
-
-TEST_F(LinearLayoutTest, Resize) {
-  auto init = LinearLayout(
-      {
-          {S("in0"), {{0, 1}, {0, 2}}},
-          {S("in1"), {{1, 0}, {2, 0}}},
-          {S("in2"), {}},
-      },
-      {S("dim0"), S("dim1")});
-  EXPECT_EQ(init.resize(S("in0"), 8),
-            LinearLayout(
-                {
-                    {S("in0"), {{0, 1}, {0, 2}, {0, 0}}},
-                    {S("in1"), {{1, 0}, {2, 0}}},
-                    {S("in2"), {}},
-                },
-                {S("dim0"), S("dim1")}));
-  EXPECT_EQ(init.resize(S("in0"), 4), LinearLayout(
-                                          {
-                                              {S("in0"), {{0, 1}, {0, 2}}},
-                                              {S("in1"), {{1, 0}, {2, 0}}},
-                                              {S("in2"), {}},
-                                          },
-                                          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(init.resize(S("in1"), 8),
-            LinearLayout(
-                {
-                    {S("in0"), {{0, 1}, {0, 2}}},
-                    {S("in1"), {{1, 0}, {2, 0}, {0, 0}}},
-                    {S("in2"), {}},
-                },
-                {S("dim0"), S("dim1")}));
-}
-
 } // anonymous namespace
 } // namespace mlir::triton
 

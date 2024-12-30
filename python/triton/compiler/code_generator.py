@@ -4,6 +4,7 @@ import re
 import warnings
 import os
 import textwrap
+import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
@@ -14,8 +15,7 @@ from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, _value
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
-from .._utils import find_paths_if, list_list_flatten, list_list_unflatten
-from functools import reduce
+from .._utils import list_list_flatten, list_list_unflatten, find_paths_if, get_iterable_path, set_iterable_path
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -196,13 +196,6 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def get_path(self, x, path):
-        return reduce(lambda a, idx: a[idx], path, x)
-
-    def set_path(self, x, path, val):
-        prev = x if len(path) == 1 else self.get_path(x, path[:-1])
-        prev[path[-1]] = val
-
     def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
@@ -214,8 +207,8 @@ class ASTFunction:
         # fill up IR values in template
         # > build function
         is_val = lambda path, _: path not in self.constexprs and _ is not None
-        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
-        arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
+        val_paths = list(find_paths_if(self.arg_types, is_val))
+        arg_types = [get_iterable_path(self.arg_types, path).to_ir(builder) for path in val_paths]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(arg_types, ret_types)
 
@@ -228,24 +221,24 @@ class ASTFunction:
 
         vals = make_template(self.arg_types)
         is_val = lambda path, _: path not in self.constexprs and _ is not None
-        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
+        val_paths = list(find_paths_if(self.arg_types, is_val))
         # > set attributes
         for attr_path, attr_specs in self.attrs.items():
             for attr_name, attr_val in attr_specs:
                 if attr_path in val_paths:
                     fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
         for i, path in enumerate(val_paths):
-            ty = self.get_path(self.arg_types, path)
+            ty = get_iterable_path(self.arg_types, path)
             if isinstance(ty, nv_tma_desc_type):
                 fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
         # > add IR values to the template
         for i, path in enumerate(val_paths):
-            ty = self.get_path(self.arg_types, path)
-            self.set_path(vals, path, language.tensor(fn.args(i), ty))
+            ty = get_iterable_path(self.arg_types, path)
+            set_iterable_path(vals, path, language.tensor(fn.args(i), ty))
         # > add constexpr values to the template
         constants = self.constants | self.constexprs
         for path, val in constants.items():
-            self.set_path(vals, path, language.constexpr(val))
+            set_iterable_path(vals, path, language.constexpr(val))
         return vals
 
 
@@ -438,6 +431,11 @@ class CodeGenerator(ast.NodeVisitor):
         # basic block in case there are any ops after the return.
         post_ret_block = self.builder.create_block()
         self.builder.set_insertion_point_to_end(post_ret_block)
+
+    def visit_Starred(self, node) -> Any:
+        args = self.visit(node.value)
+        assert isinstance(args, language.core.tuple)
+        return args.values
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -1140,7 +1138,9 @@ class CodeGenerator(ast.NodeVisitor):
             if isinstance(arg, (language.dtype, float, int, bool)):
                 args[i] = language.core.constexpr(arg)
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
-        args_val = find_paths_if(args, lambda _, x: not _is_constexpr(x)).values()
+        args_cst = {path: get_iterable_path(args, path) for path in args_cst}
+        args_path = find_paths_if(args, lambda _, x: not _is_constexpr(x))
+        args_val = [get_iterable_path(args, path) for path in args_path]
         # mangle
         fn_name = mangle_fn(fn.__name__, [arg.type for arg in args_val], args_cst)
         # generate function def if necessary
@@ -1191,6 +1191,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)

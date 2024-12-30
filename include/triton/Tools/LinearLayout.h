@@ -611,11 +611,6 @@ public:
   bool sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
                        ArrayRef<StringAttr> outDimNames) const;
 
-  // Is the sublayout defined from dimNames to dimNames the identity?
-  // In particular, is the input and  output size in these dimensions
-  // the same, and are the bases the identity?
-  bool squareSublayoutIsIdentity(ArrayRef<StringAttr> dimNames) const;
-
   // Computes and returns L(x, y, z).
   //
   // If you want to apply the layout to mlir Values instead of integers, that
@@ -691,13 +686,6 @@ public:
   // output.  If all of the free variables are 0, then the layout is injective
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
-
-  // Increase an input dimension without affecting the output dimension.  The
-  // added free variables are mapped to 0, ensuring that the new input
-  // dimensions correspond directly to the existing output space.  The function
-  // errors out if `newInDimSize` is less than the current size or the new size
-  // is not a power of 2.
-  LinearLayout resize(StringAttr inDim, int32_t newInDimSize) const;
 
   std::string toString() const;
 
