@@ -71,9 +71,21 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Pass rate
+        shell: bash
         run: |
           pip install defusedxml
-          python scripts/pass_rate.py --reports reports --skip-list scripts/skiplist/a770
+          source ./scripts/capture-hw-details.sh
+          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
+          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
+
+      - name: Upload pass rate report
+#        # upload reports only for the default branch
+#        if: github.ref_name == 'main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass_rate
+          path: pass_rate*.json
 
       - name: Clean up workspace
         if: ${{ always() }}
