@@ -1858,6 +1858,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   unsigned version = 0;
+  bool isTransposed = false;
   SmallVector<unsigned> warpsPerCTA;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
@@ -1866,6 +1867,10 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
       if (parseUInt(parser, attr, version, "version").failed())
+        return {};
+    }
+    if (attr.getName() == "isTranspose") {
+      if (parseBool(parser, attr, isTransposed, "isTranspose").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -1894,17 +1899,35 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
-                                                warpsPerCTA, *CTALayout);
+  return parser.getChecked<AMDWmmaEncodingAttr>(
+      parser.getContext(), version, isTransposed, warpsPerCTA, *CTALayout);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersion() << ", warpsPerCTA = ["
+          << "version = " << getVersion()
+          << ", isTranspose = " << getIsTransposed() << ", warpsPerCTA = ["
           << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
+}
+
+LogicalResult
+AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
+                            unsigned version, bool isTransposed,
+                            llvm::ArrayRef<unsigned int> warpsPerCTA,
+                            mlir::triton::gpu::CTALayoutAttr) {
+  if (version != 1 && version != 2) {
+    return emitError() << "WMMA version must be in the [1, 2] range";
+  }
+  // Transposed layout is needed for bypassing LDS between multiple dots.
+  // Version 1 tt.dot results and tt.dot operand layouts are different,
+  // therefore we test and support transposed only for version 2.
+  if (version != 2 && isTransposed) {
+    return emitError() << "Transposed WMMA is supported only for version 2";
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -2203,7 +2226,10 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
+  auto order = ::getOrder(*this);
+  if (getIsTransposed())
+    std::swap(order[0], order[1]);
+  return order;
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
@@ -2217,8 +2243,13 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
 SmallVector<unsigned> AMDWmmaEncodingAttr::getSizePerThread() const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> sizePerThread(rank, 1);
-  sizePerThread[rank - 2] = 8;
-  sizePerThread[rank - 1] = 1;
+  if (getIsTransposed()) {
+    sizePerThread[rank - 2] = 1;
+    sizePerThread[rank - 1] = 8;
+  } else {
+    sizePerThread[rank - 2] = 8;
+    sizePerThread[rank - 1] = 1;
+  }
   return sizePerThread;
 }
 SmallVector<unsigned>
