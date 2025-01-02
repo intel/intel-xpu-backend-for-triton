@@ -1,26 +1,22 @@
-name: Build on Windows
+name: Build and test on Windows
 
 on:
   workflow_dispatch:
-
-  pull_request:
-    branches:
-      - main
-      - release/**
-  push:
-    branches:
-      - main
-      - release/**
+  schedule:
+    - cron: "1 5 * * *"
 
 permissions: read-all
 
 env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
+  ZE_PATH: C:\level_zero
+  PYTEST_MAX_PROCESSES: 8
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
 
 jobs:
   build:
-    name: Build
-    runs-on: avc336
+    name: Build and test
+    runs-on: win-a770
     steps:
       - name: Enable long paths
         run: |
@@ -29,7 +25,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
@@ -39,25 +35,47 @@ jobs:
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
 
+      - name: PyTorch version
+        run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          python -c 'import torch;print(torch.__version__)'
+
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
       # runner.
-      - name: Build Triton
+      - name: Setup Triton
         run: |
           cd ${{ env.NEW_WORKSPACE }}
-
-          cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 && set' | ForEach-Object {
-              if ($_ -match '^(.*?)=(.*)$') {
-                  [Environment]::SetEnvironmentVariable($matches[1], $matches[2])
-              }
-          }
-
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd python
-          pip install -U wheel pybind11 certifi cython cmake setuptools>=65.6.1
-          python -m certifi
-          pip install -v --no-build-isolation '.[build]'
+          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
+          pip install -v --no-build-isolation '.[build,tests,tutorials]'
 
-      - name: Clean
+      - name: Triton version
+        run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts\requirements-test.txt
+
+      - name: Run core tests
+        run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run interpreter tests
+        run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Pass rate
+        run: |
+          pip install defusedxml
+          python scripts/pass_rate.py --reports reports --skip-list scripts/skiplist/a770
+
+      - name: Clean up workspace
         if: ${{ always() }}
         run: |
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
