@@ -1,0 +1,25 @@
+diff --git a/torch/_higher_order_ops/triton_kernel_wrap.py b/torch/_higher_order_ops/triton_kernel_wrap.py
+index ace56135fe1..55543075f7a 100644
+--- a/torch/_higher_order_ops/triton_kernel_wrap.py
++++ b/torch/_higher_order_ops/triton_kernel_wrap.py
+@@ -238,7 +238,7 @@ def generate_ttir(
+ 
+             target = triton.runtime.driver.active.get_current_target()
+             backend = triton.compiler.compiler.make_backend(target)
+-            return backend.get_attrs_descriptor(args, kernel.params)
++            return backend.get_attrs_descriptor(kernel.params, args)
+         except ImportError:
+             return kernel._get_config(*args)
+ 
+@@ -247,11 +247,9 @@ def generate_ttir(
+         name: arg for name, arg in ordered_args.items() if not isinstance(arg, Tensor)
+     }
+ 
+-    # Build kernel signature -- doesn't include constexpr arguments.
+     signature = {
+         name: kernel._type_of(kernel._key_of(arg))
+         for i, (name, arg) in enumerate(ordered_args.items())
+-        if i not in kernel.constexprs
+     }
+ 
+     triton._C.libtriton.ir.load_dialects(context)
