@@ -266,229 +266,232 @@ def make_launcher(constants, signature, ids):
 
     # generate glue code
     src = f"""
-    #include <cstddef>
-    #include <string>
-    #include <iostream>
-    #include <iomanip>
-    #include <level_zero/ze_api.h>
-    #include <sycl/sycl.hpp>
-    { "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
+#include <cstddef>
+#include <string>
+#include <iostream>
+#include <iomanip>
+#include <level_zero/ze_api.h>
+#include <sycl/sycl.hpp>
+{ "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
-    #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
-    #include <Python.h>
-    #include <stdio.h>
-    #include <numpy/arrayobject.h>
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+#include <Python.h>
+#include <stdio.h>
+#include <numpy/arrayobject.h>
 
-    static inline void gpuAssert(ze_result_t code, const char *file, int line)
-    {{
-      if (code != ZE_RESULT_SUCCESS)
-      {{
-         const char* prefix = "Triton Error [ZE]: ";
-         std::string str = std::to_string(code);
-         char err[1024] = {{0}};
-         strcat(err, prefix);
-         strcat(err, str.c_str());
-         PyErr_SetString(PyExc_RuntimeError, err);
-      }}
-    }}
+static inline void gpuAssert(ze_result_t code, const char *file, int line)
+{{
+  if (code != ZE_RESULT_SUCCESS)
+  {{
+    const char* prefix = "Triton Error [ZE]: ";
+    std::string str = std::to_string(code);
+    char err[1024] = {{0}};
+    strcat(err, prefix);
+    strcat(err, str.c_str());
+    PyErr_SetString(PyExc_RuntimeError, err);
+  }}
+}}
 
-    #define ZE_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+#define ZE_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-    typedef struct _DevicePtrInfo {{
-      void* dev_ptr;
-      bool valid;
-    }} DevicePtrInfo;
+typedef struct _DevicePtrInfo {{
+  void* dev_ptr;
+  bool valid;
+}} DevicePtrInfo;
 
-    static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sycl::queue &queue) {{
-      if (!ptr_info->dev_ptr || !ptr_info->valid) {{
-        return;
-      }}
-      auto context = queue.get_context();
-      auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
-      ze_memory_allocation_properties_t prop;
-      prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
-      prop.pNext = nullptr;
-      ze_device_handle_t device;
-      auto res = zeMemGetAllocProperties((ze_context_handle_t)handle, ptr_info->dev_ptr, &prop, &device);
-      if (res != ZE_RESULT_SUCCESS) {{
-        PyErr_Format(PyExc_ValueError,
-                     "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
-        ptr_info->valid = false;
-      }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
-        PyErr_Format(PyExc_ValueError,
-                     "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
-        ptr_info->valid = false;
-      }}
-    }}
+static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sycl::queue &queue) {{
+  if (!ptr_info->dev_ptr || !ptr_info->valid) {{
+    return;
+  }}
+  auto context = queue.get_context();
+  auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
+  ze_memory_allocation_properties_t prop;
+  prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
+  prop.pNext = nullptr;
+  ze_device_handle_t device;
+  auto res = zeMemGetAllocProperties((ze_context_handle_t)handle, ptr_info->dev_ptr, &prop, &device);
+  if (res != ZE_RESULT_SUCCESS) {{
+    PyErr_Format(PyExc_ValueError,
+                 "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
+    ptr_info->valid = false;
+  }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
+    PyErr_Format(PyExc_ValueError,
+                 "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
+    ptr_info->valid = false;
+  }}
+}}
 
-    static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue &queue) {{
-      DevicePtrInfo ptr_info;
-      ptr_info.dev_ptr = 0;
-      ptr_info.valid = true;
-      if (PyLong_Check(obj)) {{
-        ptr_info.dev_ptr = PyLong_AsVoidPtr(obj);
-        checkDevicePointer(&ptr_info, idx, queue);
-        return ptr_info;
-      }}
-      if (obj == Py_None) {{
-        // valid nullptr
-        return ptr_info;
-      }}
-      PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-      if(ptr){{
-        PyObject *empty_tuple = PyTuple_New(0);
-        PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-        Py_DECREF(empty_tuple);
-        Py_DECREF(ptr);
-        if (!PyLong_Check(ret)) {{
-          PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-          ptr_info.valid = false;
-          return ptr_info;
-        }}
-        ptr_info.dev_ptr = PyLong_AsVoidPtr(ret);
-        if(!ptr_info.dev_ptr) {{
-          return ptr_info;
-        }}
-        checkDevicePointer(&ptr_info, idx, queue);
-        Py_DECREF(ret);  // Thanks ChatGPT!
-        return ptr_info;
-      }}
-      PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue &queue) {{
+  DevicePtrInfo ptr_info;
+  ptr_info.dev_ptr = 0;
+  ptr_info.valid = true;
+  if (PyLong_Check(obj)) {{
+    ptr_info.dev_ptr = PyLong_AsVoidPtr(obj);
+    checkDevicePointer(&ptr_info, idx, queue);
+    return ptr_info;
+  }}
+  if (obj == Py_None) {{
+    // valid nullptr
+    return ptr_info;
+  }}
+  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if(ptr){{
+    PyObject *empty_tuple = PyTuple_New(0);
+    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+    Py_DECREF(empty_tuple);
+    Py_DECREF(ptr);
+    if (!PyLong_Check(ret)) {{
+      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
       ptr_info.valid = false;
       return ptr_info;
     }}
+    ptr_info.dev_ptr = PyLong_AsVoidPtr(ret);
+    if(!ptr_info.dev_ptr) {{
+      return ptr_info;
+    }}
+    checkDevicePointer(&ptr_info, idx, queue);
+    Py_DECREF(ret);  // Thanks ChatGPT!
+    return ptr_info;
+  }}
+  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  ptr_info.valid = false;
+  return ptr_info;
+}}
+
 // start sycl
-  template <class T>
-  static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
-    cgh.set_arg(index, *static_cast<const T *>(value));
+template <class T>
+static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
+  cgh.set_arg(index, *static_cast<const T *>(value));
+}}
+
+static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+
+  std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+  { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
+
+  void *params[] = {{ {', '.join(f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none")} }};
+  uint32_t num_params = sizeof(params)/sizeof(params[0]);
+  uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
+  size_t global_range_x = gridX*threads_per_warp*num_warps;
+  size_t global_range_y = gridY;
+  size_t global_range_z = gridZ;
+  size_t local_range_x = num_warps*threads_per_warp;
+  size_t local_range_y = 1;
+  size_t local_range_z = 1;
+  sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
+  sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
+  sycl::nd_range<3> parallel_work_size(global_range, local_range);
+  if (shared_memory) {{
+    expected_num_params -= 1;
   }}
-  static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-
-    std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-    { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
-
-    void *params[] = {{ {', '.join(f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none")} }};
-    uint32_t num_params = sizeof(params)/sizeof(params[0]);
-    uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-    size_t global_range_x = gridX*threads_per_warp*num_warps;
-    size_t global_range_y = gridY;
-    size_t global_range_z = gridZ;
-    size_t local_range_x = num_warps*threads_per_warp;
-    size_t local_range_y = 1;
-    size_t local_range_z = 1;
-    sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
-    sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
-    sycl::nd_range<3> parallel_work_size(global_range, local_range);
+  assert(num_params == expected_num_params && "number of kernel param not matched");
+  // Submit the imported kernel.
+  auto cgf = [&](sycl::handler &cgh) {{
+    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants and signature[i] != "none"]))}
     if (shared_memory) {{
-      expected_num_params -= 1;
+      using share_mem_t = sycl::local_accessor<int8_t, 1>;
+      share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
+      cgh.set_arg(num_params, local_buffer);
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
+    }} else {{
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
     }}
-    assert(num_params == expected_num_params && "number of kernel param not matched");
-    // Submit the imported kernel.
-    auto cgf = [&](sycl::handler &cgh) {{
-      {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants and signature[i] != "none"]))}
-      if (shared_memory) {{
-          using share_mem_t = sycl::local_accessor<int8_t, 1>;
-          share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
-          cgh.set_arg(num_params, local_buffer);
-          cgh.parallel_for(parallel_work_size, kernel_ptr);
-      }} else {{
-          cgh.parallel_for(parallel_work_size, kernel_ptr);
-      }}
-      }};
-    auto event = stream.submit(cgf);
-  }}
+  }};
+  auto event = stream.submit(cgf);
+}}
 // end sycl
-    static PyObject* launch(PyObject* self, PyObject* args) {{
 
-      int gridX, gridY, gridZ;
-      PyObject *launch_enter_hook = NULL;
-      PyObject *launch_exit_hook = NULL;
-      PyObject *kernel_metadata = NULL;
-      PyObject *launch_metadata = NULL;
-      PyObject *py_obj_stream;
-      PyObject* py_kernel;
+static PyObject* launch(PyObject* self, PyObject* args) {{
 
-      {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
-                                           &kernel_metadata, &launch_metadata,
-                                           &launch_enter_hook, &launch_exit_hook {args_list})) {{
-        return NULL;
-      }}
+  int gridX, gridY, gridZ;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  PyObject *kernel_metadata = NULL;
+  PyObject *launch_metadata = NULL;
+  PyObject *py_obj_stream;
+  PyObject* py_kernel;
 
-      // extract kernel metadata
-      int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
-      int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
-      int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
-      int threads_per_warp = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "threads_per_warp"));
+  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
+                                      &kernel_metadata, &launch_metadata,
+                                      &launch_enter_hook, &launch_exit_hook {args_list})) {{
+    return NULL;
+  }}
 
-      // extract cluster dims
-      PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
-      if (!PyTuple_Check(kernel_metadata)) {{
-        PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
-        return NULL;
-      }}
-      int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
-      int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
-      int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
-      // extract launch metadata
-      if (launch_enter_hook != Py_None){{
-        PyObject* args = Py_BuildValue("(O)", launch_metadata);
-        PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
-        Py_DECREF(args);
-        if (!ret)
-          return NULL;
-      }}
+  // extract kernel metadata
+  int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
+  int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
+  int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
+  int threads_per_warp = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "threads_per_warp"));
 
-      void * pStream = PyLong_AsVoidPtr(py_obj_stream);
-      //error check
-      if(pStream == nullptr || py_kernel == nullptr) return NULL;
+  // extract cluster dims
+  PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
+  if (!PyTuple_Check(kernel_metadata)) {{
+    PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
+    return NULL;
+  }}
+  int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
+  int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
+  int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
+  // extract launch metadata
+  if (launch_enter_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
+  }}
 
-      sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
-      sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
-      if(kernel_ptr == nullptr) return NULL;
-      sycl::kernel kernel = *kernel_ptr;
+  void * pStream = PyLong_AsVoidPtr(py_obj_stream);
+  //error check
+  if(pStream == nullptr || py_kernel == nullptr) return NULL;
 
-      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
-      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" or ty == "none" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+  sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
+  sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
+  if(kernel_ptr == nullptr) return NULL;
+  sycl::kernel kernel = *kernel_ptr;
 
-      if(launch_exit_hook != Py_None){{
-        PyObject* args = Py_BuildValue("(O)", launch_metadata);
-        PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
-        Py_DECREF(args);
-        if (!ret)
-          return NULL;
-      }}
-      if (PyErr_Occurred()) {{
-        return NULL;
-      }}
+  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" or ty == "none" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
 
-      // return None
-      Py_INCREF(Py_None);
-      return Py_None;
-    }}
+  if(launch_exit_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
+  }}
+  if (PyErr_Occurred()) {{
+    return NULL;
+  }}
 
-    static PyMethodDef ModuleMethods[] = {{
-      {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-      {{NULL, NULL, 0, NULL}} // sentinel
-    }};
+  // return None
+  Py_INCREF(Py_None);
+  return Py_None;
+}}
 
-    static struct PyModuleDef ModuleDef = {{
-      PyModuleDef_HEAD_INIT,
-      \"__triton_launcher\",
-      NULL, //documentation
-      -1, //size
-      ModuleMethods
-    }};
+static PyMethodDef ModuleMethods[] = {{
+  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+  {{NULL, NULL, 0, NULL}} // sentinel
+}};
 
-    PyMODINIT_FUNC PyInit___triton_launcher(void) {{
-      PyObject *m = PyModule_Create(&ModuleDef);
-      if(m == NULL) {{
-        return NULL;
-      }}
-      PyModule_AddFunctions(m, ModuleMethods);
-      return m;
-    }}
-    """
+static struct PyModuleDef ModuleDef = {{
+  PyModuleDef_HEAD_INIT,
+  \"__triton_launcher\",
+  NULL, //documentation
+  -1, //size
+  ModuleMethods
+}};
+
+PyMODINIT_FUNC PyInit___triton_launcher(void) {{
+  PyObject *m = PyModule_Create(&ModuleDef);
+  if(m == NULL) {{
+    return NULL;
+  }}
+  PyModule_AddFunctions(m, ModuleMethods);
+  return m;
+}}
+"""
     return src
 
 
