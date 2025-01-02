@@ -22,5 +22,6 @@ curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
 git apply "${SCRIPT_DIR}/pytorch2.patch"
 git apply "${SCRIPT_DIR}/triton_kernel_wrap.patch"
 git apply "${SCRIPT_DIR}/test_codegen_triton.patch"
+git apply "${SCRIPT_DIR}/triton.py.patch"
 # REVERT ME: it's just a trigger for pytorch rebuild
 # git apply "${SCRIPT_DIR}/pytorch.patch"
