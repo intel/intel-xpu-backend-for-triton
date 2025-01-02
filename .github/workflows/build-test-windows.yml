@@ -73,7 +73,19 @@ jobs:
       - name: Pass rate
         run: |
           pip install defusedxml
-          python scripts/pass_rate.py --reports reports --skip-list scripts/skiplist/a770
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          bash -c "\
+            source ./scripts/capture-hw-details.sh; \
+            python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
+            python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json; \
+            python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \
+          "
+
+      - name: Upload pass rate report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass_rate
+          path: pass_rate*.json
 
       - name: Clean up workspace
         if: ${{ always() }}
