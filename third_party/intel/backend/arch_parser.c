@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <iostream>
+
 #include <sycl/sycl.hpp>
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -31,7 +33,7 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
     arch = "lnl";
     break;
   default:
-    printf("sycl_arch = %d", sycl_arch);
+    std::cerr << "sycl_arch not recognized: " << sycl_arch << std::endl;
   }
 
   return Py_BuildValue("s", arch.c_str());
