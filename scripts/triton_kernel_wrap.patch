@@ -1,5 +1,5 @@
 diff --git a/torch/_higher_order_ops/triton_kernel_wrap.py b/torch/_higher_order_ops/triton_kernel_wrap.py
-index ace56135fe1..55543075f7a 100644
+index ace56135fe1..89283792093 100644
 --- a/torch/_higher_order_ops/triton_kernel_wrap.py
 +++ b/torch/_higher_order_ops/triton_kernel_wrap.py
 @@ -238,7 +238,7 @@ def generate_ttir(
@@ -11,15 +11,31 @@ index ace56135fe1..55543075f7a 100644
          except ImportError:
              return kernel._get_config(*args)
  
-@@ -247,11 +247,9 @@ def generate_ttir(
+@@ -247,7 +247,8 @@ def generate_ttir(
          name: arg for name, arg in ordered_args.items() if not isinstance(arg, Tensor)
      }
  
 -    # Build kernel signature -- doesn't include constexpr arguments.
++    # Build kernel signature; it should also include `constexpr` arguments but `kernel._key_of`
++    # doesn't work correctly with them. They will be added in `fixup_signature` function later.
      signature = {
          name: kernel._type_of(kernel._key_of(arg))
          for i, (name, arg) in enumerate(ordered_args.items())
--        if i not in kernel.constexprs
-     }
- 
+@@ -257,7 +258,16 @@ def generate_ttir(
      triton._C.libtriton.ir.load_dialects(context)
+     backend.load_dialects(context)
+ 
+-    src = ASTSource(kernel, signature, constants, specialization)
++    def fixup_signature(signature, constants):
++        signature = signature.copy()
++        for constant in constants:
++            # If it's not in the signature already, it's a constexpr
++            # argument that we need to add in
++            if constant not in signature:
++                signature[constant] = "constexpr"
++        return signature
++
++    src = ASTSource(kernel, fixup_signature(signature, constants), constants, specialization)
+ 
+     # Triton changes ASTSource.make_ir to take 3/4 arguments. Handle
+     # backward compatibility here.
