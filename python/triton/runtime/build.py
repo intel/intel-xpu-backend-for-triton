@@ -29,6 +29,7 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
+        cc_cmd += ["/ignore:4221"]
         cc_cmd += [f"/OUT:{out}"]
         cc_cmd += [f"/IMPLIB:{os.path.join(os.path.dirname(out), 'main.lib')}"]
         cc_cmd += [f"/PDB:{os.path.join(os.path.dirname(out), 'main.pdb')}"]
@@ -123,12 +124,10 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     args = ['build_ext']
     args.append('--build-temp=' + srcdir)
     args.append('--build-lib=' + srcdir)
-    args.append('-q')
     args = dict(
         name=name,
         ext_modules=[ext],
         script_args=args,
     )
-    with quiet():
-        setuptools.setup(**args)
+    setuptools.setup(**args)
     return so
