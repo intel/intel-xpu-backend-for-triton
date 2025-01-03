@@ -124,12 +124,10 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     args = ['build_ext']
     args.append('--build-temp=' + srcdir)
     args.append('--build-lib=' + srcdir)
-    args.append('-q')
     args = dict(
         name=name,
         ext_modules=[ext],
         script_args=args,
     )
-    with quiet():
-        setuptools.setup(**args)
+    setuptools.setup(**args)
     return so
