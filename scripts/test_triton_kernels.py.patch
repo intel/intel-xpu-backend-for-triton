@@ -1,5 +1,5 @@
 diff --git a/test/inductor/test_triton_kernels.py b/test/inductor/test_triton_kernels.py
-index 4d7a85029e3..6cf5e05a6f5 100644
+index 4d7a85029e3..f3d45ea5520 100644
 --- a/test/inductor/test_triton_kernels.py
 +++ b/test/inductor/test_triton_kernels.py
 @@ -1268,9 +1268,9 @@ def forward(self, x_1, output_1):
@@ -11,6 +11,15 @@ index 4d7a85029e3..6cf5e05a6f5 100644
          else:
 -            self.assertTrue(_triton_get_ast_equal_to_str((3,)) in sources[0])
 +            self.assertTrue(_triton_get_ast_equal_to_str([(3,)]) in sources[0])
+         self.assertEqual(compiled_out, eager_out)
+ 
+     @requires_gpu
+@@ -1299,7 +1299,7 @@ def forward(self, x_1, output_1):
+ 
+         # float 1.0 (both literal or symbolic)
+         # should not be added to equal_to_1
+-        self.assertTrue(_triton_get_ast_equal_to_str(()) in sources[0])
++        self.assertTrue(_triton_get_ast_equal_to_str([]) in sources[0])
          self.assertEqual(compiled_out, eager_out)
  
      @requires_gpu
