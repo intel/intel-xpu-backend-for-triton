@@ -5,7 +5,6 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
@@ -339,12 +338,8 @@ LogicalResult UpcastMXFPOp::verify() {
     return success();
   }
 
-  /// TODO: Temporarily disabled this check to allow for the blocked encoding.
-  /// Enable once we have the dot op encoding UpcastMXFPOp lowering.
   auto dotEncoding = dyn_cast<DotOperandEncodingAttr>(layoutX);
-  if (mlir::triton::tools::getBoolEnv(
-          "TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING") &&
-      !dotEncoding) {
+  if (!dotEncoding) {
     return emitOpError("Expected a DotOperandEncodingAttr for values");
   }
   if (!isa<BlockedEncodingAttr, LinearEncodingAttr>(layoutScale)) {
@@ -352,8 +347,6 @@ LogicalResult UpcastMXFPOp::verify() {
         "Expected a BlockOperandEncoding or LinearOperandEncoding "
         "for scales");
   }
-  if (!dotEncoding)
-    return success();
 
   if (isa<NvidiaMmaEncodingAttr>(dotEncoding.getParent())) {
     // Necessary to keep all of the scales of a given block of values in the
@@ -411,47 +404,36 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
     } else {
       Type elemType = FloatType::getBF16(ctx);
       Attribute newVEncoding = nullptr;
-      if (auto oldEncoding = dyn_cast<DotOperandEncodingAttr>(encoding)) {
-        const int opIdx = oldEncoding.getOpIdx();
-        const bool hasBatch = xShape.size() == 3;
-        const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
-        newShape[kIdx] *= 2;
+      auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+      const int opIdx = oldEncoding.getOpIdx();
+      const bool hasBatch = xShape.size() == 3;
+      const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
+      newShape[kIdx] *= 2;
 
-        // Note: For Intel the dot operands layout's kWidth parameter must match
-        // the parent's DPAS layout opsPerChannel so we need to materialize a
-        // new DPAS layout.
-        if (auto dpasEncoding =
-                dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
-          unsigned opsPerChannel =
-              intel::DpasEncodingAttr::getOpsPerChannel(elemType);
-          // e2m1 is packed 2 elements per int8
-          if (xTy.getElementType() == IntegerType::get(ctx, 8))
-            opsPerChannel *= 2;
-          auto newDpasEncoding = intel::DpasEncodingAttr::get(
-              ctx, dpasEncoding.getRepeatCount(),
-              dpasEncoding.getSystolicDepth(), dpasEncoding.getExecutionSize(),
-              opsPerChannel, dpasEncoding.getWarpsPerCTA(),
-              dpasEncoding.getRepCluster(), dpasEncoding.getSubGroupSize());
-          newVEncoding = DotOperandEncodingAttr::get(
-              ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
-        } else {
-          // Figure out the K dimension for the input A/B, given that the return
-          // type is upcasted A/B type so we need to update the proper dim size.
-          newVEncoding = DotOperandEncodingAttr::get(
-              ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
-              oldEncoding.getKWidth() * 2);
-        }
-      } else if (auto oldEncoding = dyn_cast<BlockedEncodingAttr>(encoding)) {
-        // TODO: Temporary code, remove once upcast_mxfp support dot encoding.
-        assert(!tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING"));
-        SmallVector<unsigned> sizePerThread = oldEncoding.getSizePerThread();
-        int opIdx = sizePerThread.back() == 1 ? 1 : 0;
-        sizePerThread[!opIdx] *= 2;
-        newShape[!opIdx] *= 2;
-        newVEncoding = BlockedEncodingAttr::get(
-            ctx, sizePerThread, oldEncoding.getThreadsPerWarp(),
-            oldEncoding.getWarpsPerCTA(), oldEncoding.getCTAOrder(),
-            oldEncoding.getCTALayout());
+      // Note: For Intel the dot operands layout's kWidth parameter must match
+      // the parent's DPAS layout opsPerChannel so we need to materialize a
+      // new DPAS layout.
+      if (auto dpasEncoding =
+              dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
+        unsigned opsPerChannel =
+            intel::DpasEncodingAttr::getOpsPerChannel(elemType);
+        // e2m1 is packed 2 elements per int8, we must handle continuous 2
+        // elements when upcasting to bf16
+        if (xTy.getElementType() == IntegerType::get(ctx, 8))
+          opsPerChannel *= 2;
+        auto newDpasEncoding = intel::DpasEncodingAttr::get(
+            ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
+            dpasEncoding.getExecutionSize(), opsPerChannel,
+            dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
+            dpasEncoding.getSubGroupSize());
+        newVEncoding = DotOperandEncodingAttr::get(
+            ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
+      } else {
+        // Figure out the K dimension for the input A/B, given that the return
+        // type is upcasted A/B type so we need to update the proper dim size.
+        newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
+                                                   oldEncoding.getParent(),
+                                                   oldEncoding.getKWidth() * 2);
       }
       retTy = RankedTensorType::get(newShape, elemType, newVEncoding);
     }
