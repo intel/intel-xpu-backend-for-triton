@@ -91,6 +91,7 @@ along the row (resp. col) dimension.
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const;
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;
+    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, OpIdx opIdx) const;
 
     // Forwarder functions for casting unsigned to OpIdx.

@@ -87,6 +87,7 @@ class BackendInstaller:
         tools_package_data = []
         if tools_dir is not None:
             tools_package_data = [f"{os.path.relpath(p, tools_dir)}/*" for p, _, _, in os.walk(tools_dir)]
+
         return Backend(name=backend_name, package_data=package_data, language_package_data=language_package_data,
                        tools_package_data=tools_package_data, src_dir=backend_src_dir, backend_dir=backend_path,
                        language_dir=language_dir, tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
@@ -760,11 +761,11 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
     ],
     test_suite="tests",
     extras_require={

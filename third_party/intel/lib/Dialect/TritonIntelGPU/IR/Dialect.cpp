@@ -158,6 +158,13 @@ DpasEncodingAttr::getRepOrderForOperand(OpIdx opIdx) const {
 }
 
 SmallVector<unsigned>
+DpasEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  llvm::report_fatal_error(
+      "getThreadsPerWarpForOperand not implemented for DpasEncodingAttr");
+  return {};
+}
+
+SmallVector<unsigned>
 DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
   assert((rank == 2 || rank == 3) && "Unexpected rank of mma layout");

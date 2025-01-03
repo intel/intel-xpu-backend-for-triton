@@ -180,6 +180,7 @@ def print_json_stats(stats: ReportStats):
     """Print JSON stats."""
     data = {
         'ts': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+        'os': platform.system(),
         'git_ref': os.getenv('GITHUB_REF_NAME', ''),
         'git_sha': os.getenv('GITHUB_SHA', ''),
         'libigc1_version': os.getenv('LIBIGC1_VERSION', ''),

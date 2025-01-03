@@ -76,8 +76,9 @@ class ASTSource:
         sorted_sig = [v for k, v in sorted(self.signature.items())]
         # Note - we stringify the keys here to allow sorting to work for cases
         # where constants have mixed int/str keys.
-        sorted_constants = sorted((str(k), v) for k, v in self.constexprs.items())
-        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
+        get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
+        constexprs_key = '-'.join([get_key(v) for k, v in sorted(self.constexprs.items())])
+        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{constexprs_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
@@ -251,7 +252,6 @@ def compile(src, target=None, options=None):
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
     if not always_compile and metadata_path is not None:
         # cache hit!
-        metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
     # initialize metadata
     metadata = {
