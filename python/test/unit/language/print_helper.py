@@ -154,6 +154,7 @@ def test_print(func: str, data_type: str, device: str):
                                       BLOCK_SIZE_Y=BLOCK_SIZE_Y)
     else:
         assert f"Unknown kernel: {func}"
+
     if func != "print_no_arg" and func != "no_arg_print" and func != "device_print_large" and \
        func != "print_multiple_args" and func != "device_print_multiple_args" and \
        func != "device_print_pointer" and func != "device_print_scalar" and func != "device_print_2d_tensor":
