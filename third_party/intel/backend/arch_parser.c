@@ -33,7 +33,7 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
     arch = "lnl";
     break;
   default:
-    std::cerr << "sycl_arch not recognized: " << sycl_arch << std::endl;
+    std::cerr << "sycl_arch not recognized: " << (int)sycl_arch << std::endl;
   }
 
   return Py_BuildValue("s", arch.c_str());
