@@ -200,6 +200,9 @@ run_core_tests() {
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
     pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
+    pytest --verbose tools/
 }
 
 run_regression_tests() {
