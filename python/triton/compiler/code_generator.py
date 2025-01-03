@@ -414,7 +414,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.ret([])
             ret_ty = language.void
         elif isinstance(ret_value, language.tuple):
-            ret_values = [language.semantic.to_tensor(v, self.builder) for v in ret_value.values]
+            ret_values = [semantic.to_tensor(v, self.builder) for v in ret_value.values]
             ret_types = [v.type for v in ret_values]
             self.builder.ret([v.handle for v in ret_values])
             ret_ty = language.tuple_type(ret_types)
@@ -543,7 +543,7 @@ class CodeGenerator(ast.NodeVisitor):
             if value is not None and \
                 not _is_triton_value(value) and \
                 not isinstance(value, native_nontensor_types):
-                value = language.semantic.to_tensor(value, self.builder)
+                value = semantic.to_tensor(value, self.builder)
             return value
 
         values = _sanitize_value(self.visit(node.value))
