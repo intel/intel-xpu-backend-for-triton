@@ -1,5 +1,4 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include <iostream>
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -60,76 +59,56 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    auto xType = cast<RankedTensorType>(op->getOperandTypes()[0]);
-    std::cout << "xVals size before fp4 -> fp8: " << xVals.size() << std::endl;
     if (fpType == ScaleDotElemType::E2M1)
       xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
-    std::cout << "xVals size after fp4 -> fp8: " << xVals.size() << std::endl;
-    std::cout << "scaledVals size: " << scaleVals.size() << std::endl;
 
+    auto xType = cast<RankedTensorType>(op->getOperandTypes()[0]);
     auto dotEnc = cast<DotOperandEncodingAttr>(xType.getEncoding());
-    auto dpasEnc = cast<DpasEncodingAttr>(dotEnc.getParent());
+    // For RHS dot operand with dot layout encoding, each thread access tensor
+    // elements in column which require scaling values from threads across
+    // warps. We can only access the scaling values by shuffle in the same warp.
     assert(dotEnc.getOpIdx() == 0 && "NYI: rhs scale with dot encoding");
-    // FIXME: Doc is not completedly correct with Intel DPAS layout
-    // For Intel GPU PVC, each thread owns elements of 16 mxfp vectors so we
-    // need 16 scales Since we go from a threadShape of 2x16 to 32x1, we let
-    // c = tid / 16.
-    dpasEnc.dump();
+
+    auto dpasEnc = cast<DpasEncodingAttr>(dotEnc.getParent());
     unsigned instShapeM = dpasEnc.getDPASInstShapeA()[0];
     unsigned instShapeK = dpasEnc.getDPASInstShapeA()[1];
     unsigned scalingBlockSize = 32;
-    unsigned repSize = scalingBlockSize / instShapeK; // 2 for bf16, 1 for e2m1
+    unsigned repSize = scalingBlockSize / instShapeK;
     unsigned subTileSize = instShapeM;
-    unsigned stepSize =
-        dpasEnc.getOpsPerChannel() / 2; // TODO: check this definision
+    // kWidth here is the contiguous number of elements each thread access.
+    unsigned kWidth = dpasEnc.getOpsPerChannel() / 2;
     unsigned numMxfp =
         TritonGPUDialect::TritonGPUDialect::getThreadsPerWarp(mod) / instShapeM;
-    unsigned mxfpSize = repSize * subTileSize * stepSize;
+    unsigned mxfpSize = repSize * subTileSize * kWidth;
     unsigned numScales = 16;
-    // 2 fp4 are packed in one i8
+
     if (fpType == ScaleDotElemType::E2M1) {
-      // numMxfp /= 2;
-      // numScales /= 2;
-      repSize /= 2;
-      stepSize *= 2;
+      repSize /= 2; // for E2M1, actual scaling block size is 16
+      kWidth *= 2;  // 2 fp4 are packed in one i8
     }
 
-    std::cout << "ci: ";
     Value c = udiv(laneId, i32_val(numScales));
     SmallVector<Value, 16> ci;
     for (int row = 0; row < numMxfp; ++row)
-      for (int col = 0; col < subTileSize; ++col) {
+      for (int col = 0; col < subTileSize; ++col)
         ci.emplace_back(add(c, i32_val(row + 2 * col)));
-        std::cout << " " << row + 2 * col;
-      }
-    std::cout << std::endl;
 
-    std::cout << "repSize: " << repSize << " subTileSize: " << subTileSize
-              << " numMxfp: " << numMxfp << " mxfpSize: " << mxfpSize
-              << " stepSize: " << stepSize << std::endl;
     for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
       for (int mxfp = 0; mxfp < numMxfp; ++mxfp) {
         SmallVector<Value, 8> si;
-        std::cout << "ci -> si (idx): ";
-        for (int subTile = 0; subTile < 8; ++subTile) {
+        for (int subTile = 0; subTile < 8; ++subTile)
           si.emplace_back(targetInfo.shuffleIdx(rewriter, loc, scaleVal,
                                                 ci[8 * mxfp + subTile]));
-          std::cout << " " << 8 * mxfp + subTile;
-        }
-        std::cout << "\nIdx: ";
-        for (int rep = 0; rep < repSize; ++rep)
+        for (int rep = 0; rep < repSize; ++rep) {
           for (int subTile = 0; subTile < subTileSize; ++subTile) {
-            std::cout << " Subtile(" << subTile << ") ";
-            for (int k = 0; k < stepSize; ++k) {
+            for (int k = 0; k < kWidth; ++k) {
               unsigned idx = i * scalingBlockSize + mxfp * mxfpSize +
-                             rep * subTileSize * stepSize + subTile * stepSize +
-                             k;
-              std::cout << " " << idx;
+                             rep * subTileSize * kWidth + subTile * kWidth + k;
               xVals[idx] =
                   mxfpScaleBf16(rewriter, loc, xVals[idx], si[subTile]);
             }
           }
-        std::cout << std::endl;
+        }
       }
     }
 
