@@ -14,28 +14,30 @@ index 276c01f3f42..5c633b7963b 100644
  
              # Instantiate AttrsDescriptor with the prepared arguments
 diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
-index af8530e94d0..0d0e35d35eb 100644
+index af8530e94d0..1ec44de9806 100644
 --- a/torch/_inductor/runtime/triton_heuristics.py
 +++ b/torch/_inductor/runtime/triton_heuristics.py
-@@ -435,11 +435,20 @@ class CachingAutotuner(KernelInterface):
+@@ -435,11 +435,22 @@ class CachingAutotuner(KernelInterface):
          else:
              triton_helpers.set_driver_to_gpu()
  
-+        def fixup_signature(signature, constants):
-+            signature = signature.copy()
-+            for constant in constants:
-+                # If it's not in the signature already, it's a constexpr
-+                # argument that we need to add in
-+                if constant not in signature:
-+                    signature[constant] = "constexpr"
-+            return signature
++        def fixup_signature(arg_names, signature, constants):
++            new_signature = {arg_name: None for arg_name in arg_names}
++            for arg_name in arg_names:
++                if arg_name in constants and arg_name not in signature:
++                    # If it's not in the signature already, it's a constexpr
++                    # argument that we need to add in
++                    new_signature[arg_name] = "constexpr"
++                else:
++                    new_signature[arg_name] = signature[arg_name]
++            return new_signature
 +
          if ASTSource:
              compile_args = (
                  ASTSource(
                      self.fn,
 -                    compile_meta["signature"],
-+                    fixup_signature(compile_meta["signature"], compile_meta["constants"]),
++                    fixup_signature(self.fn.arg_names, compile_meta["signature"], compile_meta["constants"]),
                      compile_meta["constants"],
                      compile_meta["configs"][0],
                  ),

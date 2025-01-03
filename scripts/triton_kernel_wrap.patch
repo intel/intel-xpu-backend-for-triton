@@ -1,5 +1,5 @@
 diff --git a/torch/_higher_order_ops/triton_kernel_wrap.py b/torch/_higher_order_ops/triton_kernel_wrap.py
-index ace56135fe1..89283792093 100644
+index ace56135fe1..7e925dd6e45 100644
 --- a/torch/_higher_order_ops/triton_kernel_wrap.py
 +++ b/torch/_higher_order_ops/triton_kernel_wrap.py
 @@ -238,7 +238,7 @@ def generate_ttir(
@@ -21,21 +21,23 @@ index ace56135fe1..89283792093 100644
      signature = {
          name: kernel._type_of(kernel._key_of(arg))
          for i, (name, arg) in enumerate(ordered_args.items())
-@@ -257,7 +258,16 @@ def generate_ttir(
+@@ -257,7 +258,18 @@ def generate_ttir(
      triton._C.libtriton.ir.load_dialects(context)
      backend.load_dialects(context)
  
 -    src = ASTSource(kernel, signature, constants, specialization)
-+    def fixup_signature(signature, constants):
-+        signature = signature.copy()
-+        for constant in constants:
-+            # If it's not in the signature already, it's a constexpr
-+            # argument that we need to add in
-+            if constant not in signature:
-+                signature[constant] = "constexpr"
-+        return signature
++    def fixup_signature(arg_names, signature, constants):
++        new_signature = {arg_name: None for arg_name in arg_names}
++        for arg_name in arg_names:
++            if arg_name in constants and arg_name not in signature:
++                # If it's not in the signature already, it's a constexpr
++                # argument that we need to add in
++                new_signature[arg_name] = "constexpr"
++            else:
++                new_signature[arg_name] = signature[arg_name]
++        return new_signature
 +
-+    src = ASTSource(kernel, fixup_signature(signature, constants), constants, specialization)
++    src = ASTSource(kernel, fixup_signature(kernel.arg_names, signature, constants), constants, specialization)
  
      # Triton changes ASTSource.make_ir to take 3/4 arguments. Handle
      # backward compatibility here.
