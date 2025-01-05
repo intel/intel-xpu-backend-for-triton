@@ -20,6 +20,7 @@ def quiet():
     try:
         yield
     finally:
+        print(f"MARK: stdout: {sys.stdout}\n stderr: {sys.stderr}")
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
@@ -126,10 +127,12 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     args = ['build_ext']
     args.append('--build-temp=' + srcdir)
     args.append('--build-lib=' + srcdir)
+    args.append('-q')
     args = dict(
         name=name,
         ext_modules=[ext],
         script_args=args,
     )
-    setuptools.setup(**args)
+    with quiet():
+        setuptools.setup(**args)
     return so
