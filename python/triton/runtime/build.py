@@ -6,11 +6,23 @@ import os
 import shutil
 import subprocess
 import setuptools
+import traceback
 
 
 def is_xpu():
     import torch
     return torch.xpu.is_available()
+
+
+class DebugStdout:
+    def write(self, msg):
+        sys.__stdout__.write("Captured: " + msg)
+        traceback.print_stack(file=sys.__stdout__)
+
+    def flush(self):
+        pass
+
+sys.stdout = DebugStdout()
 
 
 @contextlib.contextmanager
