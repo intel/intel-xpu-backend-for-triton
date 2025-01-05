@@ -109,6 +109,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         return so
     # extra arguments
     extra_link_args = []
+    if os.name == "nt":
+        extra_link_args=['/nologo']
     # create extension module
     ext = setuptools.Extension(
         name=name,
