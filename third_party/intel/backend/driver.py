@@ -582,8 +582,7 @@ class XPULauncher(object):
         self.constants = {idx: value for idx, value in constants.items()}
         self.signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(self.constants, self.signature, ids)
-        with quiet():
-            mod = compile_module_from_src(src, "__triton_launcher")
+        mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 
     def __call__(self, *args, **kwargs):
