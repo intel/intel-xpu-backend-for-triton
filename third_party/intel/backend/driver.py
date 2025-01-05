@@ -568,8 +568,10 @@ def quiet():
     try:
         yield
     finally:
-        print(f"OUTSIDE BUILD MARK: stdout: {sys.stdout}\n stderr: {sys.stderr}")
+        stdout_io, stderr_io = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = old_stdout, old_stderr
+        stdout_io.seek(0), stderr_io.seek(0)
+        print(f"OUTSIDE BUILD MARK: stdout: '{stdout_io.read()}'\n stderr: '{stderr_io.read()}'")
 
 
 class XPULauncher(object):
