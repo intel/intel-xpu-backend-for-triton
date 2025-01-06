@@ -46,10 +46,10 @@ index 4d7a85029e3..f3d45ea5520 100644
  
      @requires_gpu
 diff --git a/torch/_higher_order_ops/triton_kernel_wrap.py b/torch/_higher_order_ops/triton_kernel_wrap.py
-index ace56135fe1..7e925dd6e45 100644
+index c3f72bc5215..03aab72dca9 100644
 --- a/torch/_higher_order_ops/triton_kernel_wrap.py
 +++ b/torch/_higher_order_ops/triton_kernel_wrap.py
-@@ -238,7 +238,7 @@ def generate_ttir(
+@@ -239,7 +239,7 @@ def generate_ttir(
  
              target = triton.runtime.driver.active.get_current_target()
              backend = triton.compiler.compiler.make_backend(target)
@@ -58,7 +58,7 @@ index ace56135fe1..7e925dd6e45 100644
          except ImportError:
              return kernel._get_config(*args)
  
-@@ -247,7 +247,8 @@ def generate_ttir(
+@@ -248,9 +248,10 @@ def generate_ttir(
          name: arg for name, arg in ordered_args.items() if not isinstance(arg, Tensor)
      }
  
@@ -66,9 +66,12 @@ index ace56135fe1..7e925dd6e45 100644
 +    # Build kernel signature; it should also include `constexpr` arguments but `kernel._key_of`
 +    # doesn't work correctly with them. They will be added in `fixup_signature` function later.
      signature = {
-         name: kernel._type_of(kernel._key_of(arg))
+-        name: kernel._type_of(kernel._key_of(arg))
++        name: triton.runtime.jit.mangle_type(arg)
          for i, (name, arg) in enumerate(ordered_args.items())
-@@ -257,7 +258,18 @@ def generate_ttir(
+         if i not in kernel.constexprs
+     }
+@@ -258,7 +259,18 @@ def generate_ttir(
      triton._C.libtriton.ir.load_dialects(context)
      backend.load_dialects(context)
  
