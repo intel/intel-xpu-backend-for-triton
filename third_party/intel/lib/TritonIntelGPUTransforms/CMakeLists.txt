@@ -19,7 +19,6 @@ add_triton_library(TritonIntelGPUTransforms
 
   LINK_LIBS PUBLIC
   MLIRSCFTransforms
-  MLIRSPIRVDialect
   MLIRTransforms
   MLIRTransformUtils
   TritonIntelAnalysis
