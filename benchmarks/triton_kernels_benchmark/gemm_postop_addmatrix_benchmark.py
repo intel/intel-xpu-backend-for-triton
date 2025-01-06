@@ -12,6 +12,20 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 
+import os
+
+INT8_ONLY_OPTION = os.getenv("INT8_ONLY", "0") == "1"
+ALL_DTYPES_OPTION = os.getenv("ALL_DTYPES", "0") == "1"
+
+
+def dtypes():
+    if ALL_DTYPES_OPTION:
+        return [torch.bfloat16, torch.int8]
+    elif INT8_ONLY_OPTION:
+        return [torch.int8]
+    else:
+        return [torch.bfloat16]
+
 
 @triton.autotune(
     configs=[
@@ -214,9 +228,7 @@ def matmul(a, b, d, c):
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N', 'dtype'],
         # different possible values for `x_name`
-        x_vals=[[1, 1024 * i, 1024 * i, 1024 * i, dtype]
-                for i in [1, 2, 4, 8]
-                for dtype in [torch.bfloat16, torch.int8]] +  #
+        x_vals=[[1, 1024 * i, 1024 * i, 1024 * i, dtype] for i in [1, 2, 4, 8] for dtype in dtypes()] +  #
         [[*shape, dtype]
          for shape in [[1, 1, 5120, 13824],  #
                        [1, 4, 4096, 12288],  #
@@ -238,7 +250,7 @@ def matmul(a, b, d, c):
                        [32, 4096, 4096, 128],  #
                        [4096, 8, 128, 16384],  #
                        [4096, 8, 16384, 128]]
-         for dtype in [torch.bfloat16, torch.int8]],
+         for dtype in dtypes()],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
