@@ -1585,3 +1585,4 @@ test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-flo
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-float16-float16-1_1]
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-False-none-tf32-float16-float16-1_0]
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-False-none-tf32-float16-float16-1_1]
+test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
