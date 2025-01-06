@@ -263,8 +263,15 @@ def make_launcher(constants, signature, ids):
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+    internal_args_list = []
+    for i, ty in signature.items():
+        if ty[0] == "*" or ty == "none":
+            internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        else:
+            internal_args_list.append(f"_arg{i}")
 
     # generate glue code
+    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none"]
     src = f"""
 #include <cstddef>
 #include <string>
@@ -369,7 +376,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
   { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
-  void *params[] = {{ {', '.join(f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none")} }};
+  void *params[] = {{ {', '.join(params)} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
   size_t global_range_x = gridX*threads_per_warp*num_warps;
@@ -461,7 +468,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   sycl::kernel kernel = *kernel_ptr;
 
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" or ty == "none" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
