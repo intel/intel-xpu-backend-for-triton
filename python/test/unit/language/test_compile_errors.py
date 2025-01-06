@@ -406,6 +406,9 @@ def test_min_dot_size(dtype):
             pytest.skip("fp16 FMA path supports all sizes")
         else:
             error_msg = "M >= 16, N >= 16 and K >= 16"
+    elif is_xpu():
+        # XPU supports all sizes
+        pass
     else:
         pytest.skip("Test only supported on CUDA and HIP")
 
