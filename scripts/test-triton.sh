@@ -203,6 +203,10 @@ run_core_tests() {
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
     pytest --verbose tools/
+
+  cd $TRITON_PROJ/third_party/intel/python/test
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
+  pytest --device xpu .
 }
 
 run_regression_tests() {
