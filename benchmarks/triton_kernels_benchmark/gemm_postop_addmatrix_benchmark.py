@@ -5,6 +5,7 @@ Gemm + PostOp (add matrix) benchmark
 This benchmark is modified from gemm_benchmark.py to add a matrix to the output of the gemm operation.
 
 """
+import os
 
 import torch
 import triton
@@ -12,19 +13,16 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 
-import os
-
-INT8_ONLY_OPTION = os.getenv("INT8_ONLY", "0") == "1"
-ALL_DTYPES_OPTION = os.getenv("ALL_DTYPES", "0") == "1"
+INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
+ALL_DTYPES_OPTION = os.getenv('ALL_DTYPES', '0') == '1'
 
 
 def dtypes():
     if ALL_DTYPES_OPTION:
         return [torch.bfloat16, torch.int8]
-    elif INT8_ONLY_OPTION:
+    if INT8_ONLY_OPTION:
         return [torch.int8]
-    else:
-        return [torch.bfloat16]
+    return [torch.bfloat16]
 
 
 @triton.autotune(
