@@ -195,9 +195,9 @@ jobs:
       - name: Pass rate
         run: |
           source ./scripts/capture-hw-details.sh
-          python3 scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
-          python3 scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
-          python3 scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
+          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
+          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
 
       - name: Report environment details
         run: |

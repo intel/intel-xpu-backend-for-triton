@@ -70,9 +70,6 @@ class CompilationHelper:
     _include_dir: list[str]
     libraries: list[str]
 
-    # for benchmarks
-    _build_with_pytorch_dep: bool = False
-
     def __init__(self):
         self._library_dir = None
         self._include_dir = None
@@ -81,11 +78,9 @@ class CompilationHelper:
         if os.name != "nt":
             self.libraries += ["sycl"]
 
+    @property
     def inject_pytorch_dep(self):
-        # must be called before any cached properties (if pytorch is needed)
-        if self._build_with_pytorch_dep is False:
-            self._build_with_pytorch_dep = True
-            self.libraries += ['torch']
+        return os.environ.get("INJECT_PYTORCH", "False") == "True"
 
     @cached_property
     def _compute_compilation_options_lazy(self):
@@ -103,7 +98,7 @@ class CompilationHelper:
         include_dir += [os.path.join(dirname, "include")]
         library_dir += [os.path.join(dirname, "lib")]
 
-        if self._build_with_pytorch_dep:
+        if self.inject_pytorch_dep:
             import torch
 
             torch_path = torch.utils.cmake_prefix_path
@@ -112,6 +107,7 @@ class CompilationHelper:
                 os.path.join(torch_path, "../../include/torch/csrc/api/include"),
             ]
             library_dir += [os.path.join(torch_path, "../../lib")]
+            self.libraries += ['torch']
 
         self._library_dir = library_dir
         self._include_dir = include_dir
@@ -276,6 +272,7 @@ def make_launcher(constants, signature, ids):
 #include <iomanip>
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
+{ "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
@@ -370,6 +367,8 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *val
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+  { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
+
   void *params[] = {{ {', '.join(f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none")} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
@@ -420,10 +419,18 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // extract kernel metadata
-  int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
-  int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
-  int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
-  int threads_per_warp = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "threads_per_warp"));
+  PyObject *num_warps_attr = PyObject_GetAttrString(kernel_metadata, "num_warps");
+  int num_warps = PyLong_AsLong(num_warps_attr);
+  Py_DECREF(num_warps_attr);
+  PyObject *num_ctas_attr = PyObject_GetAttrString(kernel_metadata, "num_ctas");
+  int num_ctas = PyLong_AsLong(num_ctas_attr);
+  Py_DECREF(num_ctas_attr);
+  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  int shared_memory = PyLong_AsLong(shared_attr);
+  Py_DECREF(shared_attr);
+  PyObject *threads_per_warp_attr = PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+  int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
+  Py_DECREF(threads_per_warp_attr);
 
   // extract cluster dims
   PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
@@ -434,6 +441,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
   int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
   int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
+  Py_DECREF(clusterDim);
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
@@ -466,9 +474,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     return NULL;
   }}
 
-  // return None
-  Py_INCREF(Py_None);
-  return Py_None;
+  Py_RETURN_NONE;
 }}
 
 static PyMethodDef ModuleMethods[] = {{
