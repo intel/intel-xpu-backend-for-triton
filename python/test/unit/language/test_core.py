@@ -6545,7 +6545,9 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     temp_file.write_text(ir)
 
     kernel = triton.compile(str(temp_file))
-    assert ("nvvm.shfl.sync.idx" in kernel.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in kernel.asm["llir"]) or device == "xpu"
+    print(kernel.asm["llir"])
+    assert ("nvvm.shfl.sync.idx" in kernel.asm["llir"]) or ("llvm.amdgcn.ds.bpermute"
+                                                            in kernel.asm["llir"]) or device == "xpu"
 
     kernel[(1, 1, 1)](src, indices, output)
 
