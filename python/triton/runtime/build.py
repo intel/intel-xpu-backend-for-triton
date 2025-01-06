@@ -107,7 +107,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
 
-    ret = subprocess.check_call(cc_cmd)
+    ret = subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     if ret == 0:
         return so
     # extra arguments
