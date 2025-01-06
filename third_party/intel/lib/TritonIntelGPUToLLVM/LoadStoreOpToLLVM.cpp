@@ -535,6 +535,9 @@ struct LoadOpConversion
            "Only row_major or column_major is supported");
     const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
+    // this needs to be improved to show an algorithm. right now it is just a list of variables. maybe start with free functions and go from there? capture needed state in a lot of structs. if we make it really verbose it should be easier to tighten up later. 
+
+
     auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
       if (hasDpasLayout) {
         return DpasEncodingAttr::OpIdx::OperandC;
