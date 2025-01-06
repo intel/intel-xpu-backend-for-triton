@@ -1,5 +1,23 @@
 // RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
+// CHECK-DAG: llvm.func spir_funccc @_Z31intel_work_group_barrier_arriveii(i32, i32) attributes {convergent, no_unwind, will_return}
+// CHECK-DAG: llvm.func spir_funccc @_Z29intel_work_group_barrier_waitii(i32, i32) attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.split_barrier() {
+  // CHECK-LABEL: triton_gen.split_barrier() {
+  // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:     llvm.call spir_funccc @_Z31intel_work_group_barrier_arriveii([[ZERO]], [[ONE]]) {{.*}} : (i32, i32) -> ()
+  // CHECK-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:     llvm.call spir_funccc @_Z29intel_work_group_barrier_waitii([[ZERO]], [[ONE]]) {{.*}} : (i32, i32) -> ()
+  triton_gen.split_barrier_signal {mem_fence=None, mem_scope=WorkGroup}
+  triton_gen.split_barrier_wait {mem_fence=None, mem_scope=WorkGroup}
+  llvm.return
+}
+
+// -----
+
 // CHECK: llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.dpas.i8(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
