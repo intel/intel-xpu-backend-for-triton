@@ -316,6 +316,92 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
 namespace {
 
 //===----------------------------------------------------------------------===//
+// Synchronization Ops Lowerings
+//===----------------------------------------------------------------------===//
+
+struct TritonGENSplitBarrier {
+protected:
+  template <typename OpType>
+  void replaceWithCall(OpType op, StringRef funcName,
+                       ConversionPatternRewriter &rewriter) const {
+    static_assert(
+        std::is_same<OpType, TritonGEN::SplitBarrierSignalOp>::value ||
+            std::is_same<OpType, TritonGEN::SplitBarrierWaitOp>::value ||
+            std::is_same<OpType, TritonGEN::SplitBarrierReleaseOp>::value,
+        "Unexpected OpType");
+
+    MLIRContext *ctx = rewriter.getContext();
+    Type smemPtrTy = ptr_ty(ctx, 3);
+    LLVM::CallOp callOp =
+        createDeviceFunctionCall(rewriter, funcName, void_ty(ctx), {smemPtrTy},
+                                 {op.getBData()}, {}, intel::noUnwindAttrs);
+    rewriter.replaceOp(op, callOp);
+  }
+};
+
+struct TritonGENSplitBarrierInitLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierInitOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierInitOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierInitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type smemPtrTy = ptr_ty(ctx, 3);
+    LLVM::CallOp initOp = createDeviceFunctionCall(
+        rewriter, "ManageableBarriersInitINTEL", smemPtrTy, {i32_ty, i32_ty},
+        {b.i32_val(op.getConsumerCount()), b.i32_val(op.getProducerCount())},
+        {}, intel::noUnwindAttrs);
+    rewriter.replaceOp(op, initOp);
+    return success();
+  }
+};
+
+struct TritonGENSplitBarrierSignalLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierSignalOp>,
+      public TritonGENSplitBarrier {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierSignalOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierSignalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonGENSplitBarrier::replaceWithCall(op, "ManageableBarriersArriveINTEL",
+                                           rewriter);
+    return success();
+  }
+};
+
+struct TritonGENSplitBarrierWaitLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierWaitOp>,
+      public TritonGENSplitBarrier {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierWaitOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonGENSplitBarrier::replaceWithCall(op, "ManageableBarriersWaitINTEL",
+                                           rewriter);
+    return success();
+  }
+};
+
+struct TritonGENSplitBarrierReleaseLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierReleaseOp>,
+      public TritonGENSplitBarrier {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SplitBarrierReleaseOp>::ConvertOpToLLVMPattern;
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierReleaseOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    TritonGENSplitBarrier::replaceWithCall(op, "ManageableBarriersReleaseINTEL",
+                                           rewriter);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
@@ -781,12 +867,13 @@ struct TritonGENToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
 
 void mlir::triton::populateTritonGENToLLVMConversionPatterns(
     LLVMTypeConverter &converter, RewritePatternSet &patterns) {
-  patterns
-      .add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
-           TritonMatrix2DBlockStoreLowering,
-           TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
-           TritonSubGroupBlockWriteLowering, TritonFToTf32OpLowering>(
-          converter);
+  patterns.add<
+      TritonGENSplitBarrierInitLowering, TritonGENSplitBarrierSignalLowering,
+      TritonGENSplitBarrierWaitLowering, TritonGENSplitBarrierReleaseLowering,
+      TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
+      TritonMatrix2DBlockStoreLowering, TritonMatrix2DBlockPrefetchLowering,
+      TritonSubGroupBlockReadLowering, TritonSubGroupBlockWriteLowering,
+      TritonFToTf32OpLowering>(converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {

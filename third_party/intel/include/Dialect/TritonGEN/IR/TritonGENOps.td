@@ -30,6 +30,68 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
   Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
+// Synchronization
+//===----------------------------------------------------------------------===//
+
+def TritonGEN_SplitBarrierInitOp : TritonGEN_Op<"split_barrier_init"> {
+  let summary = "Split barrier init";
+  let description = [{}];
+  let arguments = (ins I32Attr:$producer_count, I32Attr:$consumer_count);
+  let results = (outs LLVM_PointerInAddressSpace<3>:$bData);
+  let assemblyFormat = [{
+    ` ` `{` `producer_count` `=` $producer_count `,` `consumer_count` `=` $consumer_count `}` attr-dict
+  }];
+}
+
+def TritonGEN_SplitBarrierSignalOp : TritonGEN_Op<"split_barrier_signal"> {
+  let summary = "Split barrier signal";
+  let description = [{
+    The `triton_gen.split_barrier_signal` operation signals the arrival of a
+    workgroup thread at the current program point; the issuing thread continue
+    execution.
+    Once all threads in a workgroup have signaled their arrival, any other thread
+    waiting at the `triton_gen.split_barrier_wait` operation can exit it.
+    The '$mem_fence' attribute is a bitfield that specifies the memory address
+    spaces to apply the memory ordering constraints. The '$mem_scope' attribute
+    describes the work-items to apply the memory ordering constraints.
+    Behavior is undefined:
+      - unless all threads in a workgroup participate in the barrier
+      - a thread waits on a barrier before signaling
+      - the '$mem_fence' and '$mem_scope' attributes aren't the same for all
+        threads in a workgroup
+    Furthermore, if the `$mem_fence` argument differs between the barrier signal
+    and wait operation, then only memory operations for the address spaces specified
+    by the intersection of the two flags arguments are visible.
+  }];
+  let arguments = (ins LLVM_PointerInAddressSpace<3>:$bData);
+  let results = (outs);
+  let assemblyFormat = "operands attr-dict";
+}
+
+def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
+  let summary = "Split barrier wait";
+  let description = [{
+    The `triton_gen.split_barrier_wait` operation blocks the issuing workgroup
+    thread until all other threads arrive at the corresponding
+    `triton_gen.split_barrier_arrive` operation. Please refer to the
+    `triton_gen.split_barrier_signal` documentation for the description of the
+    attributes and the constrains on the operation.
+  }];
+  let arguments = (ins LLVM_PointerInAddressSpace<3>:$bData);
+  let results = (outs);
+  let assemblyFormat = "operands attr-dict";
+}
+
+def TritonGEN_SplitBarrierReleaseOp : TritonGEN_Op<"split_barrier_release"> {
+  let summary = "Split barrier release";
+  let description = [{
+  }];
+  let arguments = (ins LLVM_PointerInAddressSpace<3>:$bData);
+  let results = (outs);
+  let assemblyFormat = "operands attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
