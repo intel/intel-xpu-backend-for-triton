@@ -20,10 +20,7 @@ def quiet():
     try:
         yield
     finally:
-        stdout_io, stderr_io = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = old_stdout, old_stderr
-        stdout_io.seek(0), stderr_io.seek(0)
-        print(f"MARK: stdout: '{stdout_io.read()}'\n stderr: '{stderr_io.read()}'")
 
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
@@ -32,7 +29,6 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
-        cc_cmd += ["/ignore:4221"]
         cc_cmd += [f"/OUT:{out}"]
         cc_cmd += [f"/IMPLIB:{os.path.join(os.path.dirname(out), 'main.lib')}"]
         cc_cmd += [f"/PDB:{os.path.join(os.path.dirname(out), 'main.pdb')}"]
@@ -112,8 +108,6 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         return so
     # extra arguments
     extra_link_args = []
-    if os.name == "nt":
-        extra_link_args=['/nologo']
     # create extension module
     ext = setuptools.Extension(
         name=name,

@@ -7,9 +7,6 @@ import tempfile
 from pathlib import Path
 from functools import cached_property
 from typing import Optional
-import sys
-import io
-import contextlib
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -559,19 +556,6 @@ def serialize_args(args, constants, signature):
     with open(json_path, 'w') as json_file:
         import json
         json.dump(args_dict, json_file, indent=4)
-
-
-@contextlib.contextmanager
-def quiet():
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
-    try:
-        yield
-    finally:
-        stdout_io, stderr_io = sys.stdout, sys.stderr
-        sys.stdout, sys.stderr = old_stdout, old_stderr
-        stdout_io.seek(0), stderr_io.seek(0)
-        print(f"OUTSIDE BUILD MARK: stdout: '{stdout_io.read()}'\n stderr: '{stderr_io.read()}'")
 
 
 class XPULauncher(object):
