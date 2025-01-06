@@ -6516,13 +6516,13 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
 
         pat = r"(%[0-9]+) = tt.gather (%[0-9]+)\[(%[0-9]+)\] {axis = "
         pat += str(axis)
-        pat += r" : i32} : \(tensor\<"
+        pat += r" : i32[, efficient_layout]*} : \(tensor\<"
         pat += src_spec
-        pat += r", (#[a-z]+[0-9]+)\>, tensor\<"
+        pat += r", (#[a-z]+[0-9]*)\>, tensor\<"
         pat += indices_spec
-        pat += r", (#[a-z]+[0-9]+)\>\) -> tensor\<"
+        pat += r", (#[a-z]+[0-9]*)\>\) -> tensor\<"
         pat += output_spec
-        pat += r", (#[a-z]+[0-9]+)\>"
+        pat += r", (#[a-z]+[0-9]*)\>"
 
         repl = r"""
     %src = ttg.convert_layout \2 : tensor<""" + src_spec + r""", \4> -> tensor<""" + src_spec + r""", #src_layout>
@@ -6546,7 +6546,8 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
 
     kernel = triton.compile(str(temp_file))
     assert ("nvvm.shfl.sync.idx" in kernel.asm["llir"]) or ("llvm.amdgcn.ds.bpermute"
-                                                            in kernel.asm["llir"]) or device == "xpu"
+                                                            in kernel.asm["llir"]) or ("_Z17sub_group_shufflefj"
+                                                                                       in kernel.asm["llir"])
 
     kernel[(1, 1, 1)](src, indices, output)
 

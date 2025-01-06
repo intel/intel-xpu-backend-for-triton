@@ -896,11 +896,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  // We prefer using the linear layout conversion, so it gets a higher benefit.
-  // Eventually the LL conversion will subsume all of the others and be the only
-  // one left.
+  // We prefer using the Intel specific linear layout conversion, so it gets a
+  // higher benefit. Eventually the LL conversion will subsume all of the others
+  // and be the only one left.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
       typeConverter, targetInfo, benefit.getBenefit() + 1);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
                                                benefit);
+  mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                      patterns, benefit);
 }
