@@ -135,12 +135,12 @@ index 276c01f3f42..5c633b7963b 100644
  
              # Instantiate AttrsDescriptor with the prepared arguments
 diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
-index af8530e94d0..1ec44de9806 100644
+index 281d0e78ba4..901263df4aa 100644
 --- a/torch/_inductor/runtime/triton_heuristics.py
 +++ b/torch/_inductor/runtime/triton_heuristics.py
-@@ -435,11 +435,22 @@ class CachingAutotuner(KernelInterface):
-         else:
-             triton_helpers.set_driver_to_gpu()
+@@ -414,10 +414,21 @@ class CachingAutotuner(KernelInterface):
+         if not ASTSource:
+             raise RuntimeError("Installed triton version too old, please upgrade")
  
 +        def fixup_signature(arg_names, signature, constants):
 +            new_signature = {arg_name: None for arg_name in arg_names}
@@ -153,12 +153,11 @@ index af8530e94d0..1ec44de9806 100644
 +                    new_signature[arg_name] = signature[arg_name]
 +            return new_signature
 +
-         if ASTSource:
-             compile_args = (
-                 ASTSource(
-                     self.fn,
--                    compile_meta["signature"],
-+                    fixup_signature(self.fn.arg_names, compile_meta["signature"], compile_meta["constants"]),
-                     compile_meta["constants"],
-                     compile_meta["configs"][0],
-                 ),
+         compile_args = (
+             ASTSource(
+                 self.fn,
+-                compile_meta["signature"],
++                fixup_signature(self.fn.arg_names, compile_meta["signature"], compile_meta["constants"]),
+                 compile_meta["constants"],
+                 compile_meta["configs"][0],
+             ),
