@@ -371,7 +371,7 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
     Location loc = loop.getLoc();
     b.setInsertionPoint(loop);
     Type smemPtrTy = LLVM::LLVMPointerType::get(b.getContext(), 3);
-    bData = b.create<tt::TritonGEN::SplitBarrierInitOp>(loc, smemPtrTy, 16, 16);
+    bData = b.create<tt::TritonGEN::SplitBarrierInitOp>(loc, smemPtrTy, 32, 32);
     b.create<tt::TritonGEN::SplitBarrierSignalOp>(loc, bData);
     b.setInsertionPoint(loop->getNextNode());
     b.create<tt::TritonGEN::SplitBarrierWaitOp>(loc, bData);
