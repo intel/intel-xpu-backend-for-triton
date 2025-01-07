@@ -123,22 +123,40 @@ index 2ab2b326354..42d76b8bf94 100644
              "configs": [
                  config_of(
 diff --git a/torch/_inductor/runtime/hints.py b/torch/_inductor/runtime/hints.py
-index 276c01f3f42..5c633b7963b 100644
+index fa2a1334380..11de4dc6e5f 100644
 --- a/torch/_inductor/runtime/hints.py
 +++ b/torch/_inductor/runtime/hints.py
-@@ -48,8 +48,8 @@ if _is_triton_available():
+@@ -44,25 +44,16 @@ def _is_triton_available() -> bool:
+ # Define `AttrsDescriptorWrapper` function with clear conditional handling
+ if _is_triton_available():
+     try:
+-        from triton.backends.compiler import AttrsDescriptor
+ 
+         def AttrsDescriptorWrapper(
+             divisible_by_16=None,
+             equal_to_1=None,
          ):
-             # Prepare the arguments for AttrsDescriptor
+-            # Prepare the arguments for AttrsDescriptor
              kwargs = {
 -                "tt.divisibility": divisible_by_16,
 -                "tt.equal_to": equal_to_1,
-+                "tt.divisibility": tuple([(i,) for i in divisible_by_16]),
-+                "tt.equal_to": tuple([(i,) for i in equal_to_1]),
++                tuple([(i,) for i in divisible_by_16]): [["tt.divisibility", 16]],
++                tuple([(i,) for i in equal_to_1]): [["tt.equal_to", 1]],
              }
+-
+-            # Instantiate AttrsDescriptor with the prepared arguments
+-            res = AttrsDescriptor.from_dict(
+-                {"arg_properties": kwargs, "cls": AttrsDescriptor.__name__}
+-            )
+-            assert res.property_values["tt.divisibility"] == 16
+-            assert res.property_values["tt.equal_to"] == 1
+-            return res
++            return kwargs
  
-             # Instantiate AttrsDescriptor with the prepared arguments
+     except ImportError:
+         from triton.compiler.compiler import AttrsDescriptor
 diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
-index 281d0e78ba4..901263df4aa 100644
+index 281d0e78ba4..302700dfe81 100644
 --- a/torch/_inductor/runtime/triton_heuristics.py
 +++ b/torch/_inductor/runtime/triton_heuristics.py
 @@ -414,10 +414,21 @@ class CachingAutotuner(KernelInterface):
@@ -164,3 +182,12 @@ index 281d0e78ba4..901263df4aa 100644
                  compile_meta["constants"],
                  compile_meta["configs"][0],
              ),
+@@ -502,7 +513,7 @@ class CachingAutotuner(KernelInterface):
+         call_args = [
+             arg
+             for i, arg in enumerate(self.fn.arg_names)
+-            if i not in self.fn.constexprs and arg not in none_args
++            if arg not in none_args
+         ]
+ 
+         def_args = [
