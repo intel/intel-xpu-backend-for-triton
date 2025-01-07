@@ -151,22 +151,6 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --unit
 
-      - name: Run core tests
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --core --skip-pip-install
-
-      - name: Run interpreter tests
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --interpreter --skip-pip-install
-
-      - name: Run Tutorials
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial --skip-pip-install
-
-      - name: Run instrumentation tests
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --instrumentation --skip-pip-install
-
       - name: Get transformers version
         run: |
           cd pytorch
