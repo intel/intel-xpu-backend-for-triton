@@ -900,9 +900,9 @@ void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
   // higher benefit. Eventually the LL conversion will subsume all of the others
   // and be the only one left.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, targetInfo, benefit.getBenefit() + 1);
+      typeConverter, targetInfo, benefit.getBenefit() + 2);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
-                                               benefit);
+                                               benefit.getBenefit() + 1);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                       patterns, benefit);
 }
