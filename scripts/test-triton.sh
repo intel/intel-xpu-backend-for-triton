@@ -271,9 +271,10 @@ run_benchmark_gemm() {
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
   python setup.py install
+  rm -rf ~/.triton/cache
 
-  echo "Default path:"
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  #echo "Default path:"
+  #python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
