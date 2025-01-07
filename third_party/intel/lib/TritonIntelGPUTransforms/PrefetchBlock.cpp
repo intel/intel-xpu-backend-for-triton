@@ -375,6 +375,7 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
     b.create<tt::TritonGEN::SplitBarrierSignalOp>(loc, bData);
     b.setInsertionPoint(loop->getNextNode());
     b.create<tt::TritonGEN::SplitBarrierWaitOp>(loc, bData);
+    b.create<mlir::gpu::BarrierOp>(loc);
     b.create<tt::TritonGEN::SplitBarrierReleaseOp>(loc, bData);
   }
 }
