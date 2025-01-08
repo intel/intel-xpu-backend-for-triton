@@ -3299,7 +3299,7 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
      for float8_type in ["float8e5", "float8e4nv"]] +
     [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1)
-     for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
+     for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4), (8, 16, 16, 1)]
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
      for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -3308,7 +3308,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if in_dtype == 'bfloat16':
             pytest.xfail("bfloat16 is not supported in the interpreter")
     else:
-        if not is_hip() and (M < 16 or N < 16 or K < 16):
+        if is_xpu():
+            if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
+                pytest.xfail("XPU: small dots are not supported")
+        elif not is_hip() and (M < 16 or N < 16 or K < 16):
             pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
@@ -3760,7 +3763,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
                          [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
                           for B in [1, 2, 8]
                           for num_warps in [1, 2, 4]
-                          for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
+                          for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8), (8, 16)]
                           for M, N, K in [(32, 32, 32)]
                           for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
@@ -3775,7 +3778,10 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
         input_precision = "tf32" if (is_cuda() or is_xpu()) and in_dtype_str == 'float32' else "ieee"
-        if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
+        if is_xpu():
+            if (BLOCK_M < 8 or BLOCK_N < 16):
+                pytest.xfail("XPU: small dots are not supported")
+        elif not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
             pytest.skip("small dots are supported only on HIP at the moment")
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
