@@ -6,9 +6,6 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
 
-if benchmark_suit.USE_IPEX_OPTION:
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 
 # pylint: disable=unused-argument
 @triton.jit
@@ -157,7 +154,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 
 
 configs = [
-    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large'}, num_stages=s, num_warps=w) \
+    triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
     for BN in [32, 64] \
     for s in [3, 4] \
@@ -214,6 +211,7 @@ def forward(q, k, v, causal, sm_scale):
             num_warps=num_warps,  #
             num_stages=num_stages,  #
             grf_mode='large',  #
+            advanced_path=True,  #
         )
     return o
 
@@ -255,17 +253,12 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
 
     elif provider == 'triton':
         triton_fn = lambda: forward(q, k, v, CAUSAL, sm_scale)
-        if benchmark_suit.USE_IPEX_OPTION:
-            torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
-        else:
-            # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-            torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-            ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
+        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
+        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              kernel_name='_attn_fwd')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'xetla':
         module_name = f'flash_attn_causal_{CAUSAL}'.lower()
@@ -280,8 +273,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, provider):
         l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
 
         xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles,
-                                                              kernel_name='gpu::xetla::fmha::FmhaForwardKernel<')
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')

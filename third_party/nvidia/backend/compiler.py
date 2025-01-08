@@ -17,7 +17,17 @@ import sysconfig
 
 
 def min_dot_size(target: GPUTarget):
-    return lambda lhsType, rhsType: (16, 32, 16) if lhsType.is_int8() else (16, 16, 16)
+
+    def check_dot_compatibility(lhs_type, rhs_type) -> Tuple[int, int, int]:  # [m, n, k]
+        lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
+        rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
+        assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
+        if lhs_bitwidth == 8:
+            return (16, 16, 32)
+        else:
+            return (16, 16, 16)
+
+    return check_dot_compatibility
 
 
 @functools.lru_cache()
@@ -102,6 +112,7 @@ class CUDAOptions:
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     enable_fp_fusion: bool = True
+    launch_cooperative_grid: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -234,6 +245,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
+        passes.ttgpuir.add_coalesce_async_copy(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -252,7 +264,7 @@ class CUDABackend(BaseBackend):
         ptx_version = get_ptx_version_from_options(options)
 
         # warp-specialization mutates num_warps
-        num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
+        num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
         mod = src
@@ -303,9 +315,9 @@ class CUDABackend(BaseBackend):
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
-        metadata["global_scratch_size"] = src.get_int_attr("triton_gpu.global_scratch_memory_size")
-        metadata["global_scratch_align"] = src.get_int_attr("triton_gpu.global_scratch_memory_alignment")
+        metadata["shared"] = src.get_int_attr("ttg.shared")
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         ret = str(llvm_mod)
         del llvm_mod
         del context

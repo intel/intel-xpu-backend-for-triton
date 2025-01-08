@@ -28,7 +28,6 @@ class CMakeBuild():
         self.extdir = build_lib + "/triton_kernels_benchmark"
         self.build_type = self.get_build_type(debug)
         self.cmake_prefix_paths = [torch.utils.cmake_prefix_path]
-        self.use_ipex = False
         self.dry_run = dry_run
 
     def get_build_type(self, debug):
@@ -36,20 +35,7 @@ class CMakeBuild():
         return "Debug" if debug or (DEBUG_OPTION == "1") else "Release"
 
     def run(self):
-        self.check_ipex()
         self.build_extension()
-
-    def check_ipex(self):
-        self.use_ipex = os.getenv("USE_IPEX", "1") == "1"
-        if not self.use_ipex:
-            return
-        try:
-            import intel_extension_for_pytorch
-        except ImportError:
-            log.warn("ipex is not installed trying to build without ipex")
-            self.use_ipex = False
-            return
-        self.cmake_prefix_paths.append(intel_extension_for_pytorch.cmake_prefix_path)
 
     def check_call(self, *popenargs, **kwargs):
         log.info(" ".join(popenargs[0]))
@@ -67,10 +53,8 @@ class CMakeBuild():
             "-DCMAKE_MAKE_PROGRAM=" +
             ninja_dir,  # Pass explicit path to ninja otherwise cmake may cache a temporary path
             "-DCMAKE_PREFIX_PATH=" + ";".join(self.cmake_prefix_paths),
-            f"-DUSE_IPEX={int(self.use_ipex)}",
             "-DCMAKE_INSTALL_PREFIX=" + self.extdir,
             "-DPython3_ROOT_DIR:FILEPATH=" + sys.exec_prefix,
-            "-DCMAKE_VERBOSE_MAKEFILE=TRUE",
             "-DCMAKE_C_COMPILER=icx",
             "-DCMAKE_CXX_COMPILER=icpx",
             "-DCMAKE_BUILD_TYPE=" + self.build_type,
@@ -142,7 +126,6 @@ setup(
     },
     ext_modules=[CMakeExtension("triton_kernels_benchmark.xetla_kernel")],
     extras_require={
-        "ipex": ["numpy<=2.0", "intel-extension-for-pytorch==2.1.10"],
         "pytorch": ["torch>=2.6"],
     },
 )

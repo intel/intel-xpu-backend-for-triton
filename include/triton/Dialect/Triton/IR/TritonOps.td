@@ -13,7 +13,6 @@ include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
-include "triton/Dialect/Triton/IR/TritonTypeInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 
 
@@ -868,6 +867,41 @@ def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
   let assemblyFormat = [{
     $src attr-dict `:` type($src) `->` type($result)
   }];
+}
+
+//
+// Gather Op
+//
+def TT_GatherOp : TT_Op<"gather", [Pure,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "local gather operation";
+  let description = [{
+    Gather elements from the input tensor using the indices tensor along a
+    single specified axis. The output tensor has the same shape as the indices
+    tensor. The input and indices tensors must have the same number of
+    dimension, and each dimension of the indices tensor that is not the gather
+    dimension cannot be greater than the corresponding dimension in the input
+    tensor.
+
+    The `efficient_layout` attribute is set when the compiler has determined an
+    optimized layout for the operation, indicating that it should not be
+    changed.
+  }];
+
+  let arguments = (ins
+    TT_Tensor:$src,
+    TT_IntTensor:$indices,
+    I32Attr:$axis,
+    UnitAttr:$efficient_layout
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `[` $indices `]` attr-dict `:`
+    functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
 }
 
 //

@@ -224,7 +224,7 @@ static void rewriteLoadWithSLM(ModuleOp &m, DenseSet<Value> &dotWithSLMOperands,
   unsigned slmSize = numWarps * bytes;
 
   // TODO: use LocalAllocOp for SLM allocation
-  static constexpr char sharedAttr[] = "triton_gpu.shared";
+  static constexpr char sharedAttr[] = "ttg.shared";
   m->setAttr(sharedAttr,
              mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), slmSize));
   auto func = load->getParentOfType<FunctionOpInterface>();
@@ -282,7 +282,7 @@ public:
     // FIXME: force threads-per-warp=16 in simt(this should be done via an
     // analysis designed to determine whether the kernel contains tt.dot
     // operations that use block pointers).
-    m->setAttr("triton_gpu.threads-per-warp",
+    m->setAttr("ttg.threads-per-warp",
                IntegerAttr::get(IntegerType::get(ctx, 32), 16));
 
     Workload workload = Workload::None;
@@ -815,7 +815,7 @@ static Value hackAlloc(OpBuilder &b, Location loc, Type ptrTy, int64_t size) {
       &*b.getInsertionPoint()
             ->getParentWithTrait<FunctionOpInterface::Trait>());
   auto m = func->getParentOfType<ModuleOp>();
-  constexpr StringLiteral SharedAttrName = "triton_gpu.shared";
+  constexpr StringLiteral SharedAttrName = "ttg.shared";
   if (!m->getAttr(SharedAttrName)) {
     m->setAttr(SharedAttrName, b.getIndexAttr(size));
     func.insertArgument(func.getNumArguments(), ptrTy, b.getDictionaryAttr({}),

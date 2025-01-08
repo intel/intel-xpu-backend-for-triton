@@ -7,7 +7,6 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -45,7 +44,6 @@ class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
   explicit TritonLLVMFunctionConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
-    addLegalDialect<index::IndexDialect>();
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -125,9 +123,6 @@ struct ConvertTritonGPUToLLVM
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
-    mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMOptimizedPatterns(
-        typeConverter, targetInfo, patterns,
-        patternBenefitConvertLayoutOptimizedPattern);
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
     mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
@@ -145,6 +140,8 @@ struct ConvertTritonGPUToLLVM
                                                  targetInfo, benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
                                                targetInfo, benefit);
+    mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
+                                                 targetInfo, benefit);
     populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
     populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit);
@@ -171,8 +168,8 @@ struct ConvertTritonGPUToLLVM
                                                benefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
                                                 targetInfo, benefit);
-    mlir::triton::populateMemoryOpToLLVMPattern(typeConverter, targetInfo,
-                                                patterns, benefit);
+    mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
     mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(

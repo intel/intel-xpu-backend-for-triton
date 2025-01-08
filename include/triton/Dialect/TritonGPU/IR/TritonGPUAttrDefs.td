@@ -2,8 +2,8 @@
 #define TRITONGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
-include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
 //===----------------------------------------------------------------------===//
 // TritonGPU Attribute Definitions
@@ -56,7 +56,6 @@ Right now, Triton implements two main classes of layouts: shared, and distribute
   code extraBaseClassDeclaration = [{
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
-    ::mlir::LogicalResult verifyLayoutForArg(::mlir::Operation* op, unsigned argNo) const;
   }];
 }
 
@@ -147,7 +146,6 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
   let genVerifyDecl = 1;
   let skipDefaultBuilders = 1;
 }
-
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
@@ -362,7 +360,7 @@ compared to 1*64 when the hasLeadingOffset is false.
               int k = (needTrans) ? matShape[0] : matShape[2];
               int vec = (order[0] == rank-1) ? k : m;
               int mmaStride = (order[0] == rank-1) ? m : k;
-              int maxPhase = mmaStride / perPhase;
+              int maxPhase = std::max(mmaStride / perPhase, 1);
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
 
@@ -375,7 +373,7 @@ compared to 1*64 when the hasLeadingOffset is false.
               int k = needTrans ? matShape[1] : matShape[2];
               int vec = (order[0] == rank-1) ? n : k;
               int mmaStride = (order[0] == rank-1) ? k : n;
-              int maxPhase = mmaStride / perPhase;
+              int maxPhase = std::max(mmaStride / perPhase, 1);
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
 
@@ -502,11 +500,6 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getCTASplitNum">,
 
-    InterfaceMethod<"Gets the shape of the encoding's tile, e.g. sizePerThread * threadsPerWarp * warpsPerCTA",
-                    "SmallVector<unsigned>",
-                    "getShapePerCTATile",
-                     (ins "ArrayRef<int64_t>":$tensorShape)>,
-
     InterfaceMethod<"Gets the number of contiguous elements per thread.",
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
@@ -565,11 +558,38 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getThreadOrder() const;
 
     SmallVector<unsigned> getSizePerThread() const;
-    SmallVector<unsigned> getShapePerCTATile(ArrayRef<int64_t> tensorShape = ArrayRef<int64_t>()) const;
 
     std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 }
+
+//===----------------------------------------------------------------------===//
+// Linear Layout Encoding
+//===----------------------------------------------------------------------===//
+
+def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
+  let mnemonic = "linear";
+
+  let description = [{
+    See the docs in LinearLayout.h for the definition of linear layouts.
+  }];
+
+  let parameters = (ins "LinearLayout":$linearLayout);
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<unsigned> getContigPerThread() const;
+    SmallVector<unsigned> getOrder() const;
+  }];
+
+  let genVerifyDecl = 1;
+  // Example of assembly format:
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
+  let hasCustomAssemblyFormat = 1;
+}
+
 
 //===----------------------------------------------------------------------===//
 // Blocked Layout Encoding
@@ -596,7 +616,7 @@ Example 1, a row-major coalesced layout may partition a 16x16 tensor over 2 warp
 
 for
 
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -622,7 +642,7 @@ Example 2, a row-major coalesced layout may partition a 32x32 tensor over 2 warp
 [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63  28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
 for
 
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -652,7 +672,7 @@ CTA [1,0]                                              CTA [1,1]
 [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]  [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
 for
 
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -742,8 +762,6 @@ for
   ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SliceEncodingAttr squeeze(int axis);
-
     SmallVector<unsigned> getContigPerThread() {
       // Block encoding is dense stride layout. The elements per thread are contiguous.
       return getSizePerThread();
@@ -765,28 +783,21 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "bool",
                     "supportReduction">,
 
-    InterfaceMethod<"Return shape per CTA.",
-                    "SmallVector<unsigned>",
-                    "getShapePerCTATileForOperand",
-                    (ins "ArrayRef<int64_t>":$tensorShape,
-                         "int":$kWidth,
-                         "int":$opIdx)>,
-
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperand",
                     (ins "int":$opIdx,
                          "int":$kWidth)>,
 
+    InterfaceMethod<"Return the number of threads per warp for dot operands.",
+                    "SmallVector<unsigned>",
+                    "getThreadsPerWarpForOperand",
+                    (ins "int":$opIdx)>,
+
     InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
                     "SmallVector<unsigned>",
                     "getRepOrderForOperand",
                     (ins "int":$opIdx)>,
-
-    InterfaceMethod<"Return element sizes per thread for dot operands.", "SmallVector<unsigned>",
-      "getElemsPerThreadForOperands", (ins "ArrayRef<int64_t>":$tensorShape,
-                                           "Type":$eltTy,
-                                           "unsigned":$opIdx)>,
   ];
 }
 
@@ -905,11 +916,11 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
       return true;
     }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       auto rank = getWarpsPerCTA().size();
@@ -919,10 +930,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
       else
         contigPerThread[rank - 2] = 4;
       return contigPerThread;
-    };
-
-    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
-      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
     };
 
   }];
@@ -954,7 +961,7 @@ is supported.
 
 // ----------------------------------- version = 1 ----------------------------------- //
 
-Row |                  warp 0                                    warp 2
+Row |                  warp 0                                    warp 1
     |/-------------------^-------------------\ /-------------------^-------------------\
 0   |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 1   |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
@@ -964,7 +971,7 @@ Row |                  warp 0                                    warp 2
 14  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 15  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-    |                  warp 1                                    warp 3
+    |                  warp 2                                    warp 3
 16  |/-------------------^-------------------\ /-------------------^-------------------\
 17  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 18  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
@@ -974,9 +981,9 @@ Row |                  warp 0                                    warp 2
 30  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-// ----------------------------------- version = 2 ----------------------------------- //
+// ------------------------ version = 2, isTransposed = false ------------------------ //
 
-Row |       warp 0                warp 2
+Row |       warp 0                warp 1
     |/--------^---------\ /---------^--------\
 0   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
 1   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
@@ -989,7 +996,7 @@ Row |       warp 0                warp 2
 14  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 15  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
     |
-    |       warp 1                warp 3
+    |       warp 2                warp 3
     |/--------^---------\ /---------^--------\
 16  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
 17  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
@@ -1001,15 +1008,37 @@ Row |       warp 0                warp 2
 ..  | ...                  ...
 30  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+
+// ------------------------ version = 2, isTransposed = true ------------------------ //
+
+    |               warp 0                     warp 1
+    |/----------------^----------------\ /-------^-------\
+Col>| 0  1  2  3  4  5  6  7  8  ... 15  16 17 18  ... 32
+Row |
+0   |[0  0  0  0  0  0  0  0  16 ... 16] [0  0  0  ... 16]
+1   |[1  1  1  1  1  1  1  1  17 ... 17] [1  1  1  ... 17]
+..  | ...                  ...
+14  |[14 14 14 14 14 14 14 14 30 ... 30] [14 14 14 ... 30]
+15  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
+    |
+    |               warp 2                     warp 3
+    |/----------------^----------------\ /-------^-------\
+16  |[0  0  0  0  0  0  0  0  16 ... 16] [0  0  0  ... 16]
+17  |[1  1  1  1  1  1  1  1  17 ... 17] [1  1  1  ... 17]
+..  | ...                  ...
+30  |[14 14 14 14 14 14 14 14 30 ... 30] [14 14 14 ... 30]
+31  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
   }];
 
   let parameters = (
     ins
     "unsigned": $version,
+    "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     "CTALayoutAttr":$CTALayout
   );
 
+  let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
@@ -1017,12 +1046,12 @@ Row |       warp 0                warp 2
       return true;
     }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
 
     SmallVector<unsigned> getContigPerThread() {
@@ -1033,10 +1062,6 @@ Row |       warp 0                warp 2
         contigPerThread[rank - 2] = 8;
       }
       return contigPerThread;
-    };
-
-    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
-      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
     };
   }];
 }
@@ -1145,6 +1170,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int bitwidth, int kWidth,
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
 
     bool supportReduction() const {
       if (isAmpere() || isHopper()) {
@@ -1153,7 +1179,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       return false;
     };
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    SmallVector<unsigned> getShapePerCTATileForOperand(ArrayRef<int64_t> shape, int kWidth, int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       assert(isAmpere() || isHopper());
@@ -1161,10 +1186,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
       SmallVector<unsigned> contigPerThread(rank, 1);
       contigPerThread[rank - 1] = 2;
       return contigPerThread;
-    };
-
-    SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, unsigned opIdx) const {
-      llvm_unreachable("getElemsPerThreadForOperands is not supported.");
     };
 
   }];

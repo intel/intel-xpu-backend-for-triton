@@ -68,13 +68,14 @@ public:
       }
       if (auto srcDpasEncoding =
               dyn_cast<triton::gpu::intel::DpasEncodingAttr>(srcEncoding)) {
-        unsigned opIdx = dstDotOp.getOpIdx();
-        if ((opIdx == 0 /* Operand A */ &&
-             dstDotOp.getParent() == srcDpasEncoding &&
+        auto opIdx =
+            static_cast<intel::DpasEncodingAttr::OpIdx>(dstDotOp.getOpIdx());
+        if ((opIdx == intel::DpasEncodingAttr::OpIdx::OperandA /* Operand A */
+             && dstDotOp.getParent() == srcDpasEncoding &&
              srcDpasEncoding.getWarpsPerCTA()[rank - 1] ==
                  1 /* No parallel on N dim */) ||
-            (opIdx == 1 /* Operand B */ &&
-             dstDotOp.getParent() == srcDpasEncoding &&
+            (opIdx == intel::DpasEncodingAttr::OpIdx::OperandB /* Operand B */
+             && dstDotOp.getParent() == srcDpasEncoding &&
              srcDpasEncoding.getWarpsPerCTA()[rank - 2] ==
                  1 /* No parallel on M dim */))
           /* The destination dot layout has no duplication. */
@@ -92,7 +93,7 @@ public:
       }
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
-      auto tmpType = triton::MemDescType::get(
+      auto tmpType = triton::gpu::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SharedEncodingAttr::get(
               mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,

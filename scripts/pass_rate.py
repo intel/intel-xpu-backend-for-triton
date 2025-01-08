@@ -103,7 +103,7 @@ def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> Repor
             pass
         stats.fixme += len(testsuite_fixme_tests)
 
-    test_unskip = os.getenv('TEST_UNSKIP')
+    test_unskip = os.getenv('TEST_UNSKIP', 'false')
     if test_unskip not in ('true', 'false'):
         raise ValueError('Error: please set TEST_UNSKIP true or false')
     if test_unskip == 'false':
@@ -180,6 +180,7 @@ def print_json_stats(stats: ReportStats):
     """Print JSON stats."""
     data = {
         'ts': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+        'os': platform.system(),
         'git_ref': os.getenv('GITHUB_REF_NAME', ''),
         'git_sha': os.getenv('GITHUB_SHA', ''),
         'libigc1_version': os.getenv('LIBIGC1_VERSION', ''),

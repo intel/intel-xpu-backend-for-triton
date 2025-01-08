@@ -1,6 +1,6 @@
 // RUN: TRITON_INTEL_ADVANCED_PATH=1 triton-opt %s --convert-triton-intel-gpu-to-llvm --split-input-file | FileCheck %s
 
-module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 1 : i32} {
+module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 1 : i32} {
   // CHECK-DAG: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z52intel_sub_group_2d_block_read_transform_16b_32r16x2cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {no_unwind, will_return}
@@ -112,9 +112,9 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
 
 // COM: Checks the correct lowering of the A operand load for TF32, i.e. using 4xi32 and vnni=false.
 
-module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @matmul_kernel_with_block_pointers_tf32(
-  // CHECK-SAME:                                                                  [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [512 : i32, 1 : i32, 1 : i32]} {
+  // CHECK-SAME:                                                                  [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @matmul_kernel_with_block_pointers_tf32(%arg0: !tt.ptr<f32>) {
     %c0_i64 = arith.constant 0 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -132,9 +132,9 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
 
 // COM: Checks the correct lowering of a 16-bit 2D-block-store.
 
-module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @matmul_kernel_with_block_pointers_f16accu(
-  // CHECK-SAME:                                                                     [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [512 : i32, 1 : i32, 1 : i32]} {
+  // CHECK-SAME:                                                                     [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @matmul_kernel_with_block_pointers_f16accu(%arg0: !tt.ptr<f16>) {
     %c0_i64 = arith.constant 0 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -151,17 +151,14 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
 // COM: Checks the correct lowering of sub-group reductions.
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
-
-  // CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_maxf(f32) -> f32
-  // CHECK-DAG: llvm.func spir_funccc @_Z32sub_group_non_uniform_reduce_addf(f32) -> f32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
 
   // CHECK-LABEL: llvm.func spir_kernelcc @reduce_sum(
-  // CHECK-SAME:                                      [[VAL_0:%.*]]: vector<8xf32>) -> f32 attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]}
+  // CHECK-SAME:                                      [[VAL_0:%.*]]: vector<8xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>}
   tt.func public @reduce_sum(%arg0: tensor<8x16xf32>) -> f32 {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_2:%.*]] = llvm.extractelement [[VAL_0]][[[VAL_1]] : i32] : vector<8xf32>
-    // CHECK: [[VAL_3:%.*]] = llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_addf([[VAL_2]]) {{.*}} : (f32) -> f32
+    // CHECK: [[VAL_3:%.*]] = llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiif(%{{.*}}, %{{.*}}, [[VAL_2]]) {{.*}} : (i32, i32, f32) -> f32
     %0 = triton_intel_gpu.extract %arg0[0] : tensor<8x16xf32> -> tensor<16xf32>
     %1 = "tt.reduce"(%0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
@@ -172,11 +169,11 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @reduce_max(
-  // CHECK-SAME:                                        [[VAL_0:%.*]]: vector<8xf32>) -> f32 attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]}
+  // CHECK-SAME:                                        [[VAL_0:%.*]]: vector<8xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>}
   tt.func public @reduce_max(%arg0: tensor<8x16xf32>) -> f32 {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_2:%.*]] = llvm.extractelement [[VAL_0]][[[VAL_1]] : i32] : vector<8xf32>
-    // CHECK: [[VAL_3:%.*]] = llvm.call spir_funccc @_Z32sub_group_non_uniform_reduce_maxf([[VAL_2]]) {{.*}} : (f32) -> f32
+    // CHECK: [[VAL_3:%.*]] = llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFMaxiif(%{{.*}}, %{{.*}}, [[VAL_2]]) {{.*}} : (i32, i32, f32) -> f32
     %0 = triton_intel_gpu.extract %arg0[0] : tensor<8x16xf32> -> tensor<16xf32>
     %1 = "tt.reduce"(%0) <{axis = 0 : i32}> ({
     ^bb0(%arg1: f32, %arg2: f32):
@@ -192,7 +189,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 // COM: Checks the correct lowering of triton ops, including broadcast, splat, expand_dims, addptr.
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
 
   // CHECK: llvm.func spir_funccc @_Z12get_group_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK: llvm.func spir_funccc @_Z22get_sub_group_local_id() -> i32
@@ -204,8 +201,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: [[VAL_2:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_3:%.*]] = llvm.insertelement [[VAL_0]], [[VAL_1]][[[VAL_2]] : i32] : vector<1xf32>
     // CHECK: [[VAL_4:%.*]] = llvm.shufflevector [[VAL_3]], [[VAL_1]] [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] : vector<1xf32>
-    %0 = tt.splat %arg0 : f32 -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
-    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xf32, #warp>
+    %0 = tt.splat %arg0 : f32 -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xf32, #warp>
     %2 = triton_intel_gpu.broadcast %1 : tensor<16x1xf32, #warp> -> tensor<16x16xf32>
     tt.return %2 : tensor<16x16xf32>
   }
@@ -222,14 +219,14 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
     // CHECK: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VEC:%.*]] = llvm.insertelement [[EXTRACT]], [[EMPTY]][[[ZERO]] : i32] : vector<1xi32>
     // CHECK: llvm.shufflevector [[VEC]], [[EMPTY]] [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] : vector<1xi32>
-    %0 = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #triton_gpu.slice<{dim = 0, parent = #warp}>> -> tensor<1x16xi32, #warp>
+    %0 = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #warp}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #warp}>> -> tensor<1x16xi32, #warp>
     %2 = triton_intel_gpu.broadcast %1 : tensor<1x16xi32, #warp> -> tensor<16x16xi32>
     tt.return %2 : tensor<16x16xi32>
   }
 
   // CHECK-LABEL: llvm.func spir_kernelcc @addptr(
-  // CHECK-SAME:                                  [[VAL_0:%.*]]: !llvm.ptr<1>) -> !llvm.ptr<1> attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [128 : i32, 1 : i32, 1 : i32]}
+  // CHECK-SAME:                                  [[VAL_0:%.*]]: !llvm.ptr<1>) -> !llvm.ptr<1> attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>}
   tt.func public @addptr(%arg0: !tt.ptr<f16>) -> !tt.ptr<f16> {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_2:%.*]] = llvm.call spir_funccc @_Z12get_group_idj([[VAL_1]]) {{.*}} : (i32) -> i64
@@ -248,8 +245,8 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 :
 // COM: Checks tt.load lowering for SLM
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
-module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us8PU3AS3t(!llvm.ptr<3>) -> vector<8xi16>
   // CHECK-LABEL: @slm_load
   tt.func public @slm_load(%arg0: !tt.ptr<f16, 3>) {
@@ -292,8 +289,8 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
 // COM: Checks tt.store lowering for SLM
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
-module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK: llvm.func spir_funccc @_Z31intel_sub_group_block_write_us8PU3AS3tDv8_t(!llvm.ptr<3>, vector<8xi16>)
   // CHECK-LABEL: @slm_store
   tt.func public @slm_store(%arg0: !tt.ptr<f16, 3>, %arg1: tensor<16x64xf16, #dot0>) {
@@ -334,7 +331,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
 
 // -----
 
-module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @test(
 // CHECK-SAME:                                  %[[VAL_0:.*]]: !llvm.ptr<3>,
 // CHECK-SAME:                                  %[[VAL_1:.*]]: vector<16xf32>) -> vector<16xf32>
@@ -368,7 +365,7 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 #warp = #triton_intel_gpu.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 
 // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-// CHECK-SAME:                                  %[[VAL_0:.*]]: f32) -> vector<16xf32> attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [64 : i32, 1 : i32, 1 : i32]} {
+// CHECK-SAME:                                  %[[VAL_0:.*]]: f32) -> vector<16xf32> attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 64, 1, 1>} {
 // CHECK:           %[[VAL_2:.*]] = llvm.mlir.poison : vector<16xf32>
 // CHECK:           %[[VAL_3:.*]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK:           %[[VAL_4:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_3]])
@@ -419,9 +416,9 @@ module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-war
 // CHECK:           %[[VAL_49:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_48]])
 // CHECK:           %[[VAL_50:.*]] = llvm.insertelement %[[VAL_49]], %[[VAL_47]]{{\[}}%[[VAL_48]] : i32] : vector<16xf32>
 // CHECK:           llvm.return %[[VAL_50]] : vector<16xf32>
-module attributes {"triton_gpu.num-warps" = 4 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
-  tt.func @test(%arg0: tensor<16xf32>) -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>> {
-    %0 = triton_gpu.convert_layout %arg0 : tensor<16xf32> -> tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
-    tt.return %0 : tensor<16xf32, #triton_gpu.slice<{dim = 1, parent = #warp}>>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+  tt.func @test(%arg0: tensor<16xf32>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>> {
+    %0 = ttg.convert_layout %arg0 : tensor<16xf32> -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>>
+    tt.return %0 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>>
   }
 }

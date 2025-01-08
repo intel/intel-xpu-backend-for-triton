@@ -31,6 +31,7 @@ void init_triton_passes_common(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_canonicalizer", createCanonicalizerPass);
   ADD_PASS_WRAPPER_0("add_cse", createCSEPass);
   ADD_PASS_WRAPPER_0("add_licm", createLoopInvariantCodeMotionPass);
+  ADD_PASS_WRAPPER_0("print_ir", createPrintIRPass);
 }
 
 void init_triton_passes_ttir(py::module &&m) {
@@ -72,6 +73,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUOptimizeAccumulatorInit);
   ADD_PASS_OPTION_WRAPPER_1("add_loop_scheduling",
                             createTritonGPULoopScheduling, int);
+  ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
+                     createTritonGPUCoalesceAsyncCopy);
 }
 
 void init_triton_passes_convert(py::module &&m) {

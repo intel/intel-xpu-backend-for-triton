@@ -237,8 +237,8 @@ private:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    Value smemBase = LLVM::intel::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                      op.getOperation());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
@@ -248,8 +248,8 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
-    auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-    auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
+    auto srcShapePerCTATile = getShapePerCTATile(srcLayout);
+    auto dstShapePerCTATile = getShapePerCTATile(dstLayout);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
     for (unsigned d = 0; d < rank; ++d) {
@@ -374,7 +374,8 @@ private:
       RankedTensorType dstType) const {
     auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstType.getEncoding());
     auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
-    unsigned opIdx = dotLayout.getOpIdx();
+
+    auto opIdx = static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
@@ -383,16 +384,20 @@ private:
     unsigned repOuter = 0u;
     unsigned repInner = 0u;
     unsigned repClusterOuter = 0u;
-    if (opIdx == 0) {
+
+    switch (opIdx) {
+    case DpasEncodingAttr::OpIdx::OperandA: {
       // operand A
       repOuter = repetitions[1];
       repInner = repetitions[2];
       repClusterOuter = repCluster[rank - 2];
-    } else {
+    } break;
+    case DpasEncodingAttr::OpIdx::OperandB: {
       // operand B
       repOuter = repetitions[2];
       repInner = repetitions[1];
       repClusterOuter = repCluster[rank - 1];
+    } break;
     }
 
     // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].
@@ -405,7 +410,7 @@ private:
             unsigned offsetM = m * repClusterOuter + repOuterIdx;
             unsigned offsetN = k;
             Value matVal = vals.at({b, offsetM, offsetN});
-            VectorType vecType = cast<mlir::VectorType>(matVal.getType());
+            auto vecType = cast<VectorType>(matVal.getType());
             Type valTy = vecType.getElementType();
             for (int i = 0; i < vecType.getNumElements(); ++i) {
               Value val = extract_element(valTy, matVal, i32_val(i));
@@ -416,10 +421,9 @@ private:
       }
     }
 
-    Type elemTy =
-        this->getTypeConverter()->convertType(dstType.getElementType());
+    Type elemTy = getTypeConverter()->convertType(dstType.getElementType());
     Type structTy = LLVM::LLVMStructType::getLiteral(
-        this->getContext(), SmallVector<Type>(elems.size(), elemTy));
+        getContext(), SmallVector<Type>(elems.size(), elemTy));
     return packLLElements(loc, this->getTypeConverter(), elems, rewriter,
                           structTy);
   }
@@ -516,14 +520,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
       // TODO(jlebar): Implement me.
       return failure();
-    } else if (llvm::is_contained(dims, kRegister) ||
-               dstLayout.getInDimSize(kRegister) !=
-                   srcLayout.getInDimSize(kRegister)) {
+    } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(
-          op, dstLayout.getFreeVariableMasks()[kRegister],
-          dstLayout.getInDimSize(kRegister), *conversion, adaptor, rewriter);
+      return transferWithinThread(op, *conversion, adaptor, rewriter);
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
@@ -533,8 +533,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, int32_t regMasks, int32_t numRegs,
-                       const LinearLayout &conversion, OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
+                       OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
@@ -542,22 +542,34 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals(numRegs);
+
+    SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
-      // Remove free masks from the register index
-      // For example, if idx = 0b00111, and masks = 0b00100, then we get
-      // 0b00011. It means that register 7 (0b111) has the same value as
-      // register 3 (0b011).
-      auto idx = i & (~regMasks);
-      auto srcIdx = conversion.hasInDim(kRegister)
-                        ? conversion.apply({{kRegister, idx}}).begin()->second
-                        : idx;
+      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
       outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
     return success();
+  }
+
+  int getNumContiguousRowsForShuffle(const LinearLayout &srcLayout,
+                                     const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = getContext();
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp =
+        *dstLayout.invertAndCompose(srcLayout).quotient({kWarp, kBlock});
+    // Basic case: the number of contiguous rows is 1.
+    if (comp.getBasis(kRegister, 0)[1] == 1)
+      return 1;
+    // In other case, we only allow all threads handled by a single element to
+    // be contiguous, so we can simply:
+    return comp.getOutDimSize(kRegister);
   }
 
   void performSubGroupShuffle(ConvertLayoutOp op, const LinearLayout &srcLayout,
@@ -572,9 +584,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kBlock = str_attr("block");
     LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
     LinearLayout conversion = *comp.quotient(kBlock)->quotient(kWarp);
-    int32_t subGroupSize = conversion.getOutDimSize(kLane);
 
     Location loc = op.getLoc();
+    // FIXME: This workaround addresses the incorrect sgsize and SLM offset in
+    // ReduceOp and ConvertLayoutOp, which prevents a segmentation fault.
+    // However, this is a temporary solution. Once the OutDimSize computation
+    // issue in LinearLayout is resolved, this workaround should be removed.
+    int32_t subGroupSize = std::min((int32_t)op.getType().getNumElements(),
+                                    conversion.getOutDimSize(kLane));
+    if (!op->hasAttr("allocation.offset")) {
+      op->setAttr("allocation.offset",
+                  rewriter.getIntegerAttr(rewriter.getI32Type(), 0));
+    }
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -605,8 +626,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
           });
         });
 
-    SmallVector<Value> outVals =
-        performSubGroupShuffle(loc, inVals, subGroupSize, rewriter);
+    SmallVector<Value> outVals = performSubGroupShuffle(
+        loc, inVals, subGroupSize, rewriter,
+        getNumContiguousRowsForShuffle(srcLayout, dstLayout));
 
     // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
     // upstream level. We are not enabling support for all types here as that
@@ -636,21 +658,64 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     rewriter.replaceOp(op, result);
   }
 
-  SmallVector<Value>
-  performSubGroupShuffle(Location loc, ArrayRef<Value> inVals,
-                         int32_t subGroupSize,
-                         ConversionPatternRewriter &rewriter) const {
+  SmallVector<Value> performSubGroupShuffle(Location loc,
+                                            ArrayRef<Value> inVals,
+                                            int32_t subGroupSize,
+                                            ConversionPatternRewriter &rewriter,
+                                            int numContiguousRows) const {
     SmallVector<Value> res;
     Value width = i32_val(subGroupSize);
-    for (Value val : inVals) {
-      for (int32_t i = 0; i < subGroupSize; ++i)
-        res.push_back(
-            rewriter
-                .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
-                                              mlir::gpu::ShuffleMode::IDX)
-                .getShuffleResult());
+    // A work-item may handle more than one element. There are two cases we
+    // support:
+    if (numContiguousRows == 1) {
+      // 1. Elements held by a work-item are strided rows in the abstract slice
+      // matrix: Output element `i` will take the `i / 16`th value from the `i %
+      // 16`th thread.
+      for (Value val : inVals) {
+        for (int32_t i = 0; i < subGroupSize; ++i) {
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+        }
+      }
+    } else {
+      // 2. Elements held by a work-item are contiguous rows in the abstract
+      // slice matrix: Output element `i` will take the `i % 16`th value from
+      // the `i / 16`th thread.
+      for (int32_t i = 0; i < subGroupSize; ++i) {
+        for (Value val : inVals) {
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+        }
+      }
     }
     return res;
+  }
+
+  int getNumContiguousRowsForTranspose(const LinearLayout &srcLayout,
+                                       const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = getContext();
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp =
+        *dstLayout.invertAndCompose(srcLayout).quotient({kWarp, kBlock});
+    // Basic case: the number of contiguous rows is 0.
+    if (comp.getBasis(kLane, 0)[0] == 1)
+      return 1;
+    // In other case, we only allow all threads handled by a single element to
+    // be contiguous, so we can simply:
+    int32_t sizePerThread = comp.getOutDimSize(kRegister);
+    int32_t threadsPerWarp = comp.getOutDimSize(kLane);
+    assert(sizePerThread % threadsPerWarp == 0 && "Invalid transpose");
+    return sizePerThread / threadsPerWarp;
   }
 
   void performSubGroupTranspose(ConvertLayoutOp op,
@@ -697,8 +762,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         })
         .Default([](auto) { llvm_unreachable("Unsupported type"); });
 
-    SmallVector<Value> outVals =
-        performSubGroupTranspose(loc, inVals, rewriter);
+    SmallVector<Value> outVals = performSubGroupTranspose(
+        loc, inVals, rewriter,
+        getNumContiguousRowsForTranspose(srcLayout, dstLayout));
 
     TypeSwitch<Type>(origElemTy)
         .Case([&](FloatType floatTy) {
@@ -747,12 +813,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   SmallVector<Value>
   performSubGroupTranspose(Location loc, ArrayRef<Value> inVals,
-                           ConversionPatternRewriter &rewriter) const {
+                           ConversionPatternRewriter &rewriter,
+                           int numContiguousRows) const {
     Type elementType = inVals.front().getType();
     auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
 
-    Value smemBase = LLVM::intel::getSharedMemoryBase(
-        loc, rewriter, targetInfo, &*rewriter.getInsertionPoint());
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                               &*rewriter.getInsertionPoint());
     Type ptrType = smemBase.getType();
 
     int numRows = inVals.size();
@@ -787,12 +854,18 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
     // Each work-item will load a row (but the last garbage element) and go to
     // the next row it needs to handle.
-    int32_t workItemStride = rowLength * threadsPerWarp;
+
+    int32_t workItemStride =
+        numContiguousRows == 1 ? rowLength * threadsPerWarp : rowLength;
     Value workItemOffset =
-        mul(subGroupLocalId, int_val(offsetBitWidth, workItemStride));
+        mul(subGroupLocalId,
+            int_val(offsetBitWidth, numContiguousRows * rowLength));
     Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
                                 ValueRange{workItemOffset}, /*inbounds=*/true);
     int32_t rowsPerThread = numRows / threadsPerWarp;
+    assert((numContiguousRows == 1 || numContiguousRows == rowsPerThread) &&
+           "In case of more than one contiguous rows per thread, these must be "
+           "consecutive");
     // We may not be able to load rows in a single operation if the sub-group
     // size exceeds a given threshold (16):
     unsigned vecLoadWidth = getVecLoadWidth(threadsPerWarp);
@@ -823,11 +896,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  // We prefer using the linear layout conversion, so it gets a higher benefit.
-  // Eventually the LL conversion will subsume all of the others and be the only
-  // one left.
+  // We prefer using the Intel specific linear layout conversion, so it gets a
+  // higher benefit. Eventually the LL conversion will subsume all of the others
+  // and be the only one left.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, targetInfo, benefit.getBenefit() + 1);
+      typeConverter, targetInfo, benefit.getBenefit() + 2);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
-                                               benefit);
+                                               benefit.getBenefit() + 1);
+  mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                      patterns, benefit);
 }

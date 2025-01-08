@@ -6,7 +6,6 @@
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -140,17 +139,6 @@ void outputWarning(Location loc, const std::string &msg) {
 } // anonymous namespace
 
 /*****************************************************************************/
-/* Python bindings for triton::ir::ttgir                                     */
-/*****************************************************************************/
-
-void init_triton_ttgpuir(py::module &&m) {
-  m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
-    auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    return py::int_(ret);
-  });
-}
-
-/*****************************************************************************/
 /* Python bindings for ir                                                    */
 /*****************************************************************************/
 
@@ -245,10 +233,9 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
-                    math::MathDialect, arith::ArithDialect, index::IndexDialect,
-                    scf::SCFDialect, ::mlir::gpu::GPUDialect,
-                    cf::ControlFlowDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect>();
+                    math::MathDialect, arith::ArithDialect, scf::SCFDialect,
+                    ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
+                    LLVM::LLVMDialect, mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -618,6 +605,7 @@ void init_triton_ir(py::module &&m) {
                    "Function argument index out of range");
              return self.getArgument(idx);
            })
+      .def("get_num_args", &FuncOp::getNumArguments)
       .def(
           "add_entry_block",
           [](FuncOp &self) -> Block * { return self.addEntryBlock(); },
@@ -819,11 +807,6 @@ void init_triton_ir(py::module &&m) {
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI8Type();
-           })
-      .def("get_fp8e4m3b11fnuz_ty",
-           [](TritonOpBuilder &self) -> Type {
-             // TODO: align with upstream code to use i8
-             return self.getBuilder().getType<Float8E4M3B11FNUZType>();
            })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -1643,6 +1626,9 @@ void init_triton_ir(py::module &&m) {
                      IntegerType::get(operand.getContext(), 32)),
                  operand);
            })
+      .def("create_gather",
+           [](TritonOpBuilder &self, Value src, Value indices, int axis)
+               -> Value { return self.create<GatherOp>(src, indices, axis); })
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
@@ -1690,11 +1676,11 @@ void init_triton_ir(py::module &&m) {
              if (haveDiagnostics) {
                context->printOpOnDiagnostic(true);
                context->printStackTraceOnDiagnostic(true);
+               context->getDiagEngine().registerHandler([](Diagnostic &diag) {
+                 llvm::outs() << diag << "\n";
+                 return success();
+               });
              }
-             context->getDiagEngine().registerHandler([](Diagnostic &diag) {
-               llvm::outs() << diag << "\n";
-               return success();
-             });
              if (haveDump) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
@@ -1793,9 +1779,6 @@ void init_triton_ir(py::module &&m) {
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
-
-  // ttgpu dialect bindings.
-  init_triton_ttgpuir(m.def_submodule("ttgpuir"));
 }
 
 void init_triton_env_vars(py::module &m) {

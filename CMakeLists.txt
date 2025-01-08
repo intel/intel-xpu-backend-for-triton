@@ -8,9 +8,11 @@ endif()
 
 include(ExternalProject)
 
+set(CMAKE_CXX_STANDARD 17)
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-project(triton CXX)
+project(triton CXX C)
 include(CTest)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -58,19 +60,16 @@ endif()
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 if(NOT MSVC)
-  set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
   set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
 else()
-  set(CMAKE_CXX_STANDARD 20)
-  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1 /bigobj /Zc:preprocessor")
-  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /Ob0 /Od /RTC1 /bigobj /Zc:preprocessor")
+  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
+  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
   set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
   set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
-  set(CMAKE_STATIC_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
 endif()
 
 # Default build type
@@ -84,19 +83,18 @@ if(NOT WIN32)
 endif()
 
 if(TRITON_BUILD_UT)
+  # This is an aggregate target for all unit tests.
+  add_custom_target(TritonUnitTests)
+  set_target_properties(TritonUnitTests PROPERTIES FOLDER "Triton/Tests")
   include(AddTritonUnitTest)
 endif()
 
 # Compiler flags
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(NOT MSVC)
-  if(NOT WIN32)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -fPIC")
-  else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS -Wno-deprecated")
-  endif()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17")
 else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS /wd4244 /wd4624 /wd4715 /wd4530")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__STDC_FORMAT_MACROS")
 endif()
 
 
@@ -154,7 +152,7 @@ endfunction()
 if(NOT MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -Wno-covered-switch-default -fvisibility=hidden")
 else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX-")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4244 /wd4624 /wd4715 /wd4530")
 endif()
 
 include_directories(".")
@@ -165,14 +163,9 @@ include_directories(${PROJECT_BINARY_DIR}/include) # Tablegen'd files
 include_directories(${PROJECT_SOURCE_DIR}/third_party)
 include_directories(${PROJECT_BINARY_DIR}/third_party) # Tablegen'd files
 
-link_directories(${LLVM_LIBRARY_DIR})
-
+# link_directories(${LLVM_LIBRARY_DIR})
 add_subdirectory(include)
 add_subdirectory(lib)
-
-# find_package(PythonLibs REQUIRED)
-set(TRITON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-set(TRITON_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets
@@ -190,24 +183,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(PYTHON_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/src)
   include_directories(${PYTHON_SRC_PATH})
 
-  if(PYTHON_INCLUDE_DIRS)
-    # We have PYTHON_INCLUDE_DIRS set--this is what we expect when building
-    # using pip install.
-    include_directories(${PYTHON_INCLUDE_DIRS})
-    include_directories(${PYBIND11_INCLUDE_DIR})
-    message(STATUS "PYTHON_LIB_DIRS ${PYTHON_LIB_DIRS}")
-    link_directories(${PYTHON_LIB_DIRS})
-  else()
-    # Otherwise, we might be building from top CMakeLists.txt directly.
-    # Try to find Python and pybind11 packages.
-    find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
-    find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
-    include_directories(${Python3_INCLUDE_DIRS})
-    include_directories(${pybind11_INCLUDE_DIR})
-    link_directories(${Python3_LIBRARY_DIRS})
-    link_libraries(${Python3_LIBRARIES})
-    add_link_options(${Python3_LINK_OPTIONS})
-  endif()
+  # Python Interpreter is used to run lit tests
+  find_package(Python3 REQUIRED COMPONENTS Development.Module Interpreter)
+  find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
   if (DEFINED TRITON_PLUGIN_DIRS)
     foreach(PLUGIN_DIR ${TRITON_PLUGIN_DIRS})
@@ -242,7 +220,6 @@ if(TRITON_BUILD_PYTHON_MODULE)
   set(TRITON_LIBRARIES
     ${triton_libs}
     ${triton_plugins}
-    TritonSPIRV
 
     # mlir
     MLIRAMDGPUDialect
@@ -273,6 +250,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     # LLVMNVPTXAsmPrinter
     LLVMAMDGPUCodeGen
     LLVMAMDGPUAsmParser
+
+    Python3::Module
+    pybind11::headers
 
   )
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR # Linux arm64
@@ -314,7 +294,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
                   ${PYTHON_SRC_PATH}/llvm.cc)
 
   # Link triton with its dependencies
-  target_link_libraries(triton PUBLIC ${TRITON_LIBRARIES})
+  target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
   if(WIN32)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
@@ -337,7 +317,7 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
     set(PYTHON_LDFLAGS "-undefined dynamic_lookup")
   endif()
 
-  target_link_libraries(triton PRIVATE ${PYTHON_LDFLAGS})
+  target_link_options(triton PRIVATE ${PYTHON_LDFLAGS})
 endif()
 
 if(NOT TRITON_BUILD_PYTHON_MODULE)
@@ -346,10 +326,8 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   endforeach()
   add_subdirectory(third_party/proton/dialect)
 endif()
-if(WIN32)
-  option(CMAKE_USE_WIN32_THREADS_INIT "using WIN32 threads" ON)
-  option(gtest_disable_pthreads "Disable uses of pthreads in gtest." ON)
-endif()
+
+find_package(Threads REQUIRED)
 
 add_subdirectory(third_party/f2reduce)
 add_subdirectory(bin)
@@ -357,4 +335,10 @@ add_subdirectory(test)
 
 if(TRITON_BUILD_UT)
   add_subdirectory(unittest)
+  # This target runs all the unit tests.
+  add_custom_target(check-triton-unit-tests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS TritonUnitTests
+    USES_TERMINAL
+  )
 endif()

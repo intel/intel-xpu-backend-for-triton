@@ -48,6 +48,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
       >();
 }
 
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.cpp.inc"
+
 #define GET_ATTRDEF_CLASSES
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUAttrDefs.cpp.inc"
 
@@ -78,8 +80,7 @@ LogicalResult ExtractSliceOp::verify() {
   }
 
   auto srcShape = srcTy.getShape();
-  auto shapePerCTATile =
-      mlir::triton::gpu::getShapePerCTATile(srcLayout, srcShape);
+  auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcLayout);
   shapePerCTATile[0] =
       std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
   shapePerCTATile[1] =

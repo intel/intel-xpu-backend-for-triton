@@ -6,8 +6,6 @@ import os
 import shutil
 import subprocess
 import setuptools
-import platform
-from .CLFinder import initialize_visual_studio_env
 
 
 def is_xpu():
@@ -58,9 +56,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
-        if platform.system() == "Windows":
-            cc = "cl"
-            initialize_visual_studio_env(["[17.0,18.0)", "[16.0,17.0)"])
+        if os.name == "nt":
+            cc = shutil.which("cl")
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10
@@ -95,7 +92,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         else:
             extra_compile_args += ["--std=c++17"]
         if os.name == "nt":
-            library_dirs += [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
+            library_dirs = library_dirs + [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
     else:
         cc_cmd = [cc]
 
@@ -106,7 +103,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
 
-    ret = subprocess.check_call(cc_cmd)
+    ret = subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     if ret == 0:
         return so
     # extra arguments
@@ -117,7 +114,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         language='c',
         sources=[src],
         include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3' if "-O3" in cc_cmd else "/O2"],
+        extra_compile_args=extra_compile_args + ['-O3' if os.name != "nt" else "/O2"],
         extra_link_args=extra_link_args,
         library_dirs=library_dirs,
         libraries=libraries,

@@ -1,6 +1,7 @@
 /// Trimmed down clone of llvm opt to be able to test triton custom llvm ir
 /// passes.
 #include "lib/Target/LLVMIR/LLVMPasses.h"
+#include "third_party/intel/lib/Target/LLVMIR/LLVMPasses.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -42,6 +43,11 @@ static cl::opt<bool>
                         llvm::cl::desc("run pass to break phi struct"),
                         cl::init(false));
 
+static cl::opt<bool> FreezeMaskedDivRem(
+    "freeze-masked-div-rem",
+    llvm::cl::desc("run pass to insert freeze between masked load and div/rem"),
+    cl::init(false));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -62,6 +68,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
+    if (FreezeMaskedDivRem)
+      fpm.addPass(FreezeMaskedDivRemPass());
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     mpm.run(*m, mam);
     return Error::success();

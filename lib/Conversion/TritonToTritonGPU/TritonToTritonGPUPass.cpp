@@ -2,12 +2,9 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -230,6 +227,11 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
       retSizePerThread[rank - 1] = 4;
       retSizePerThread[rank - 2] = 4;
     }
+    retSizePerThread[rank - 1] = std::min(
+        retSizePerThread[rank - 1], static_cast<unsigned>(origShape[rank - 1]));
+    retSizePerThread[rank - 2] = std::min(
+        retSizePerThread[rank - 2], static_cast<unsigned>(origShape[rank - 2]));
+
     SmallVector<unsigned> retOrder(rank);
     for (unsigned i = 0; i < rank; ++i)
       retOrder[i] = rank - 1 - i;
@@ -540,6 +542,7 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
       TritonTransPattern, TritonDotPattern, GenericOpPattern<triton::LoadOp>,
       GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
+      GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,

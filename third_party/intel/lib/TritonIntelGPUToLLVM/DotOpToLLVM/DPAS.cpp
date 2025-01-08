@@ -1,5 +1,6 @@
 #include "../TritonGPUToLLVMBase.h"
 #include "../Utility.h"
+#include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 #include "intel/include/Analysis/DPAS.h"
@@ -148,13 +149,16 @@ public:
         getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repBatch, repM, repK,
-        typeConverter->convertType(ATensorTy.getElementType()), aTy, 0);
+        typeConverter->convertType(ATensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::OperandA);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repBatch, repN, repK,
-        typeConverter->convertType(BTensorTy.getElementType()), bTy, 1);
+        typeConverter->convertType(BTensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::OperandB);
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
         loadedC, repBatch, repM, repN,
-        typeConverter->convertType(CTensorTy.getElementType()), cTy, 2);
+        typeConverter->convertType(CTensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::OperandC);
 
     Type resElemTy = DTensorTy.getElementType();
 
@@ -186,7 +190,8 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
       fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
-          loc, dTy, valc, valA, valB, pA, pB, RC);
+          loc, dTy, bitcast(valc, cTy), bitcast(valA, aTy), bitcast(valB, bTy),
+          pA, pB, RC);
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -295,34 +300,30 @@ private:
     return packLLElements(loc, typeConverter, elems, rewriter, structTy);
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
-                                                 int64_t outer, int64_t inner,
-                                                 Type elemTy,
-                                                 Type dotOperandType,
-                                                 uint32_t opIdx) const {
+  ValueTable
+  getValuesFromDotOperandLayoutStruct(Value val, int64_t batch, int64_t outer,
+                                      int64_t inner, Type elemTy,
+                                      DpasEncodingAttr::OpIdx opIdx) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
     unsigned repClusterInner = 0u;
     switch (opIdx) {
-    case 0:
+    case DpasEncodingAttr::OpIdx::OperandA:
       // operand A
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = 1;
       break;
-    case 1:
+    case DpasEncodingAttr::OpIdx::OperandB:
       // operand B
       repClusterInner = 1;
       repClusterOuter = repCluster[rank - 1];
       break;
-    case 2:
+    case DpasEncodingAttr::OpIdx::OperandC:
       // operand C
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = repCluster[rank - 1];
-      break;
-    default:
-      assert(false && "invalid operand type in lowering");
       break;
     }
 
@@ -345,8 +346,7 @@ private:
                                         i32_val(k));
               }
               vals[{b, i * repClusterOuter + repOuter,
-                    j * repClusterInner + repInner}] =
-                  bitcast(matVal, dotOperandType);
+                    j * repClusterInner + repInner}] = matVal;
             }
           }
         }

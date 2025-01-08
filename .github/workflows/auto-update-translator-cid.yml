@@ -55,8 +55,6 @@ jobs:
       - name: Setup PyTorch
         if: ${{ env.TARGET_PRID == null }}
         uses: ./.github/actions/setup-pytorch
-        with:
-          repository: pytorch/pytorch
 
       - name: Install test dependencies
         if: ${{ env.TARGET_PRID == null }}
@@ -66,7 +64,7 @@ jobs:
 
       - name: Get commit ID from Triton's spirv-llvm-translator.conf
         if: ${{ env.TARGET_PRID == null }}
-        run: echo "CID_CURRENT=$(cat ./lib/Target/SPIRV/spirv-llvm-translator.conf)" >> $GITHUB_ENV
+        run: echo "CID_CURRENT=$(<third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf)" >> $GITHUB_ENV
 
       - name: Checkout SPIRV-LLVM-Translator
         if: ${{ env.TARGET_PRID == null }}
@@ -82,12 +80,12 @@ jobs:
         run: |
           echo "CID_LATEST=$(git -C external/SPIRV-LLVM-Translator rev-parse HEAD)" >> $GITHUB_ENV
 
-      # the latest valid cid has been weitten to spirv-llvm-translator.conf
+      # the latest valid cid has been written to spirv-llvm-translator.conf
       - name: Search the latest valid Translator cid
         if: ${{ env.TARGET_PRID == null }}
         run: |
           ./scripts/check-update-translator-cid.sh $CID_LATEST $CID_CURRENT
-          if git status --porcelain ./lib/Target/SPIRV/spirv-llvm-translator.conf | grep '^ M'; then
+          if git status --porcelain third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf | grep '^ M'; then
             echo "MODIFIED=true" >> $GITHUB_ENV
             echo "spirv-llvm-translator.conf has been modified"
           fi
@@ -112,7 +110,7 @@ jobs:
           git checkout -b ${PR_BRANCH}
           git branch --show-current # bot/update_translator_cid
           git status
-          git add ./lib/Target/SPIRV/spirv-llvm-translator.conf
+          git add third_party/intel/lib/Target/SPIRV/spirv-llvm-translator.conf
           git commit -m "Update spirv-llvm-translator.conf"
           git push origin ${PR_BRANCH}
-          pr_url=$(gh pr create --title "[github-bot] Update spirv-llvm-translator.conf" --body "Automated PR to update translator commit id." --reviewer whitneywhtsang --head ${PR_BRANCH} --base main)
+          gh pr create --title "[github-bot] Update spirv-llvm-translator.conf" --body "Automated PR to update translator commit id." --reviewer whitneywhtsang --head ${PR_BRANCH} --base main

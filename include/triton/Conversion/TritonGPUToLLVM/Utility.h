@@ -14,6 +14,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -52,6 +53,7 @@ using namespace mlir::triton;
 #define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
 #define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
 #define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
+#define ashr(...) rewriter.create<LLVM::AShrOp>(loc, __VA_ARGS__)
 #define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
@@ -271,12 +273,25 @@ struct SharedMemoryObject {
                      ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
         strides(strides.begin(), strides.end()),
-        offsets(offsets.begin(), offsets.end()) {}
+        offsets(offsets.begin(), offsets.end()) {
+    assert(strides.size() == offsets.size());
+  }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
-                     ArrayRef<unsigned> order, Location loc,
+                     triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
+    SmallVector<unsigned> order(shape.size());
+    // Default minor-to-major order
+    std::iota(order.rbegin(), order.rend(), 0);
+    if (layout) {
+      auto layoutOrder = convertType<int>(layout.getOrder());
+      int rankDiff = layoutOrder.size() - shape.size();
+      auto minRank = std::min(shape.size(), layoutOrder.size());
+      for (size_t i = 0; i < minRank; ++i)
+        order[i] = layoutOrder[i] - rankDiff;
+    }
+    assert(isPermutationOfIota(order) && "Invalid order");
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     offsets.append(order.size(), i32_val(0));
   }
@@ -302,14 +317,14 @@ struct SharedMemoryObject {
     return types;
   }
 
-  Value getCSwizzleOffset(int order) const {
-    assert(order >= 0 && order < strides.size());
-    return offsets[order];
+  Value getCSwizzleOffset(int dim) const {
+    assert(dim >= 0 && dim < strides.size());
+    return offsets[dim];
   }
 
-  Value getBaseBeforeSlice(int order, Location loc,
+  Value getBaseBeforeSlice(int dim, Location loc,
                            RewriterBase &rewriter) const {
-    Value cSwizzleOffset = getCSwizzleOffset(order);
+    Value cSwizzleOffset = getCSwizzleOffset(dim);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
     return gep(type, baseElemType, base, offset);
@@ -333,11 +348,17 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
                                Value linear, ArrayRef<unsigned> shape);
 
+SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
+                                  ArrayRef<unsigned> order);
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
+
+size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
+                 ArrayRef<unsigned> order);
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
@@ -366,19 +387,6 @@ inline bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
-inline Value getStackPointer(RewriterBase &rewriter,
-                             FunctionOpInterface funcOp) {
-  // See NOTE: [Additional Function Arguments]
-  if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 2);
-  }
-
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
-  assert(globalBase);
-  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-}
-
 inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                                  FunctionOpInterface funcOp,
                                  Value allocOffset = {}) {
@@ -399,7 +407,7 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-      "triton_gpu.global_scratch_memory_size");
+      "ttg.global_scratch_memory_size");
   if (!allocSizeAttr) {
     return gmemBase;
   }
@@ -442,7 +450,8 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                       .getValue()
                       .getZExtValue();
   Value offVal = i32_val(offset);
-  Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
+  Value base =
+      gep(ptrTy, i8_ty, target.getStackPointer(rewriter, func), offVal);
   return base;
 }
 
@@ -492,6 +501,24 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
   }
   return ret;
 }
+
+/// Extend 2d shared object to 3d.
+///
+/// If tensor has 3 dimensions, returns original shared object.
+/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
+///
+/// This Function is used to simplify processing of 2d and 3d dot operands,
+/// particularly in the conversion of local_load operation.
+///
+/// \param rewriter
+/// \param loc
+/// \param smemObj
+/// \param shape shape of a tensor represented by smemObj
+/// \returns shared object describing 3d tensor
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape);
 
 // -----------------------------------------------------------------------
 // Blocked layout indices
@@ -865,9 +892,15 @@ inline void emitWmmaOffsetForCTA(const AMDWmmaEncodingAttr &wmmaLayout,
   if (rank == 3)
     elemOffset[0] = ctaBatchOffset;
   for (unsigned elem = 0; elem < elemsPerThreadPerGroup; elem++) {
-    elemOffset[rank - 2] =
-        ctaOffsetX * shapePerCta[rank - 2] + elemStride * elem;
-    elemOffset[rank - 1] = ctaOffsetY * shapePerCta[rank - 1];
+    if (wmmaLayout.getIsTransposed()) {
+      elemOffset[rank - 1] =
+          ctaOffsetX * shapePerCta[rank - 1] + elemStride * elem;
+      elemOffset[rank - 2] = ctaOffsetY * shapePerCta[rank - 2];
+    } else {
+      elemOffset[rank - 2] =
+          ctaOffsetX * shapePerCta[rank - 2] + elemStride * elem;
+      elemOffset[rank - 1] = ctaOffsetY * shapePerCta[rank - 1];
+    }
     offsets.push_back(elemOffset);
   }
 }
@@ -918,10 +951,19 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
         add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0);
   } else {
     assert(ver == 2);
-    multiDimBase[rank - 2] =
-        add(mul(udiv(threadIdPerWarp, i32_val(mnkDim[2])),
-                i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
-            offWarp0);
+    if (wmmaLayout.getIsTransposed()) {
+      multiDimBase[rank - 1] =
+          add(mul(udiv(threadIdPerWarp, i32_val(16)),
+                  i32_val(wmmaLayout.getSizePerThread()[rank - 1])),
+              offWarp1);
+      multiDimBase[rank - 2] = add(laneId, offWarp0);
+    } else {
+      multiDimBase[rank - 2] =
+          add(mul(udiv(threadIdPerWarp, i32_val(16)),
+                  i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
+              offWarp0);
+      multiDimBase[rank - 1] = add(laneId, offWarp1);
+    }
   }
   multiDimBase[rank - 1] = add(laneId, offWarp1);
 
@@ -1122,8 +1164,19 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
+// Emit code to compute the (laneId, warpId, blockId) for the current thread.
+std::tuple</*laneId=*/Value, /*warpId=*/Value, /*blockId=*/Value>
+emitHardwareTuple(Location loc, RewriterBase &rewriter,
+                  const TargetInfoBase &target, bool withCTAOffset,
+                  unsigned threadsPerWarp);
+
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
+//
+// For example, for a thread a owns `elemsPerThread` elements of a tensor with
+// type `type` and layout `layout`, the result will contain `elemsPerThread`
+// vectors. Each vector contains the SSA values of the indices required to
+// access the corresponding element, starting from the inner dimension.
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);
@@ -1141,16 +1194,16 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 //
 // Returns true on success.
 [[nodiscard]] bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, Value shmemBase,
-    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
+    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     Location loc, const TargetInfoBase &target, unsigned inVec,
     RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
-    Type resElemTy, SharedMemoryObject smemObj, RewriterBase &rewriter,
+    Type resElemTy, const SharedMemoryObject &smemObj, RewriterBase &rewriter,
     ArrayRef<Value> offsetVals, ArrayRef<Value> srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
@@ -1310,15 +1363,16 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 }
 
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           MemDescType srcTy, Type elemLlvmTy,
-                                           SharedMemoryObject smemObj,
+                                           triton::gpu::MemDescType srcTy,
+                                           Type elemLlvmTy,
+                                           const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
 void storeDistributedToShared(
-    MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
+    ArrayRef<Value> srcVals, const SharedMemoryObject &smemObj, Location loc,
+    RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,

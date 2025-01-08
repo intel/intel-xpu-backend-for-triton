@@ -11,41 +11,41 @@ using namespace mlir;
 using namespace mlir::triton;
 
 // clang-format off
-/***
-   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-   # WO   #  W1 #                                     |                                #
-   #      #     #                                     |                                #
-   #  #   #  #  #                                     |                                #
-   # W2   # W3  #   ....                              |                                #
-   #      #     #                                     |  SkipElems                     #
-   #  #   #  #  #                                     |                                #
-   #                                                  |                                #
-   #                                        Slice     |                                #
-   #    .                                 /        \  |                                #
-   #    .                                /          \ |                                #
-   #    .                               /            \|                                #
-   #                                    #   #  #  #  #                                 #
-   #                                    #  W0  #  W1 #                                 #
-   #                                    #      #     #                                 #
-   #                                    #  #   #  #  #    tensorStride                 #
-   #                                    #  W2  #  W3 # --------------------------------#
-   #                                    #      #     #                                 #
-   #                                    #  #   #  #  #                                 #
-   #          tensorStride              #  W0  #  W1 #                                 #
-   # ---------------------------------- #      #     #                                 #
-   #                                    #  #   #  #  #                                 #
-   #                                    #  W2  #  W3 #                                 #
-   #                                    #      #     #                                 #
-   #                                    #  #   #  #  # ---> lastIdx                    #
-   #                                         .                                         #
-   #                                         .                                         #
-   #                                         .                                         #
-   #                                                                                   #
-   #                                                                                   #
-   #                                                                                   #
-   #                                                                                   #
-   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-***/
+//===--------------------------------------------------------------------------------===//
+//   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+//   # WO   #  W1 #                                     |                                #
+//   #      #     #                                     |                                #
+//   #  #   #  #  #                                     |                                #
+//   # W2   # W3  #   ....                              |                                #
+//   #      #     #                                     |  SkipElems                     #
+//   #  #   #  #  #                                     |                                #
+//   #                                                  |                                #
+//   #                                        Slice     |                                #
+//   #    .                                 /        \  |                                #
+//   #    .                                /          \ |                                #
+//   #    .                               /            \|                                #
+//   #                                    #   #  #  #  #                                 #
+//   #                                    #  W0  #  W1 #                                 #
+//   #                                    #      #     #                                 #
+//   #                                    #  #   #  #  #    tensorStride                 #
+//   #                                    #  W2  #  W3 # --------------------------------#
+//   #                                    #      #     #                                 #
+//   #                                    #  #   #  #  #                                 #
+//   #          tensorStride              #  W0  #  W1 #                                 #
+//   # ---------------------------------- #      #     #                                 #
+//   #                                    #  #   #  #  #                                 #
+//   #                                    #  W2  #  W3 #                                 #
+//   #                                    #      #     #                                 #
+//   #                                    #  #   #  #  # ---> lastIdx                    #
+//   #                                         .                                         #
+//   #                                         .                                         #
+//   #                                         .                                         #
+//   #                                                                                   #
+//   #                                                                                   #
+//   #                                                                                   #
+//   #                                                                                   #
+//   # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+//===--------------------------------------------------------------------------------===//
 // clang-format on
 
 namespace {
@@ -70,7 +70,7 @@ struct ExtractSliceOpConversion
     auto order = triton::gpu::getOrder(srcLayout);
 
     // Calculate valid total number of workers in each dimension
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcLayout, srcShape);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcLayout);
     shapePerCTATile[0] =
         std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
     shapePerCTATile[1] =

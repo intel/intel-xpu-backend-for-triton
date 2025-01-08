@@ -30,18 +30,6 @@ def TritonGEN_Dialect : Dialect {
       return ::llvm::StringLiteral("triton_gen.max_work_group_size");
     }
 
-    /// Get the name of the attribute used to annotate exact work group size
-    /// required for kernels.
-    static constexpr ::llvm::StringLiteral getReqdWorkGroupSizeAttrName() {
-      return ::llvm::StringLiteral("triton_gen.reqd_work_group_size");
-    }
-
-    /// Get the name for the attribute used to annotate the exact sub group
-    /// size required for kernels.
-    static constexpr ::llvm::StringLiteral getReqdSubGroupSizeAttrName() {
-      return ::llvm::StringLiteral("triton_gen.intel_reqd_sub_group_size");
-    }
-
     /// Get the name for the attribute used to specify cache control
     /// decorations.
     static constexpr ::llvm::StringRef getCacheControlsAttrName() {

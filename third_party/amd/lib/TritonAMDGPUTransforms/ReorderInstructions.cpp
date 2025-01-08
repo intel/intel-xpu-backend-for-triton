@@ -3,7 +3,6 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -17,9 +16,23 @@ namespace ttg = mlir::triton::gpu;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
-// Return true if the given moduleOp contains a pure matmul problem; i.e.,
-// single dot in the main loop.
-static bool isPureMatmulProblem(triton::FuncOp funcOp) {
+static SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp) {
+  SmallVector<scf::ForOp> allOps;
+  funcOp->walk([&](scf::ForOp forOp) { allOps.push_back(forOp); });
+
+  SmallVector<scf::ForOp> leafOps;
+  for (scf::ForOp forOp : allOps) {
+    auto searchResult = forOp.getBody()->walk(
+        [](scf::ForOp) { return WalkResult::interrupt(); });
+    if (!searchResult.wasInterrupted())
+      leafOps.push_back(forOp);
+  }
+  return leafOps;
+}
+
+// Return true if the given funcOp is a pure matmul problem; i.e.,
+// a single main loop with a single dot.
+static bool isPureMatmulFunc(triton::FuncOp funcOp) {
   bool isMatmul = true;
   bool foundLoop = false;
   funcOp.walk([&](scf::ForOp forOp) -> void {
@@ -29,6 +42,20 @@ static bool isPureMatmulProblem(triton::FuncOp funcOp) {
     foundLoop = true;
   });
   return foundLoop && isMatmul;
+}
+
+// Return true if the given ForOp contains a pure matmul problem; i.e.,
+// single dot and at least 2 glboal loads in the main loop.
+static bool isPureMatmulLoop(scf::ForOp forOp) {
+  int dotCounter = 0;
+  int loadCounter = 0;
+  forOp.walk([&](Operation *op) {
+    if (isa<triton::DotOp>(op))
+      ++dotCounter;
+    else if (isa<triton::LoadOp>(op))
+      ++loadCounter;
+  });
+  return dotCounter == 1 && loadCounter >= 2;
 }
 
 // Search through block to find earliest insertion point for move op. This can
@@ -214,14 +241,41 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
 }
 
 // Schedule global load and local store ops for better GEMM performance.
-static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
+static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
   SmallVector<Operation *> moveOps;
-  // Move global loads early to prefetch. This may increase register pressure
-  // but it enables issuing global loads early.
-  funcOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
-  // Move local_stores early if dependence distance greater than one iteration.
-  // Best perf on GEMM when these precede global loads.
-  funcOp.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+
+  // Search through the forOp initArgs to find global loads for a GEMM that
+  // the pipeliner may have peeled into a loop prologue.
+  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+    SmallVector<Value> vals = forOp.getInitArgs();
+    while (!vals.empty()) {
+      SmallVector<Value> nextVals; // Next set of values to search via BFS.
+      for (size_t i = 0; i < vals.size(); ++i) {
+        Operation *defOp = vals[i].getDefiningOp();
+        if (isa_and_nonnull<triton::LoadOp>(defOp)) {
+          moveOps.push_back(defOp);
+          continue;
+        }
+
+        // Find uses of the op that are local_store
+        for (Operation *op : vals[i].getUsers()) {
+          if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
+            // Recurse on operands of the local_store (to find a global_load).
+            nextVals.push_back(storeOp.getSrc());
+          }
+        }
+      }
+      vals.swap(nextVals);
+    }
+  }
+
+  // Move local_store ops inside the loop early if dependence distance greater
+  // than one iteration (i.e., num_stages > 2). For such case, better perf on
+  // GEMM when local_store ops precede global loads.
+  parentOp->walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+  // Move global_load ops inside the loop early to prefetch. This may increase
+  // register pressure but it enables issuing global loads early.
+  parentOp->walk([&](triton::LoadOp op) { moveOps.push_back(op); });
 
   for (auto op : llvm::reverse(moveOps)) {
     // Gather use-def chain in block.
@@ -232,10 +286,13 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.inclusive = false;
+    // Slice should inlcude values flowing into op regions
+    options.omitUsesFromAbove = false;
     options.filter = [&](Operation *defOp) -> bool {
       Block *defBlock = defOp->getBlock();
       if (!block->findAncestorOpInBlock(*defOp))
         return false;
+
       // Check for a `load` dependent path.
       leadsToLoad |= isa<triton::LoadOp>(defOp);
       // Only move ops residing in the same block.
@@ -269,80 +326,78 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
   }
 }
 
-/**
- * Sched-load optimization for matmul kernels with large tile sizes
- * The basic idea of sched-load optimization is to sink the 2nd tt.load
- * after local_load so that global_load instructions can be interleaved with
- * mfma's. This can help hide the issue latency of global_load instructions
- * and improve performance on MI300X.
- *
- * It's assumed that the IR before this optimization has the following
- * structure:
- * ```mlir
- * scf.for ..
- * {
- *   tileA = tt.load a_ptr
- *   tileB = tt.load b_ptr
- *   opA = local_load bufferA
- *   opB = local_load bufferB
- *   res = tt.dot opA, opB
- *   local_store tileA, bufferA
- *   local_store tileB, bufferB
- * }
- * ```
- * After this optimization, the IR is transformed to
- * ```mlir
- * scf.for ..
- * {
- *   tileA = tt.load a_ptr
- *   opA = local_load bufferA
- *   opB = local_load bufferB
- *   tileB = tt.load b_ptr  <-- 2nd tt.load is sinked here
- *   res = tt.dot opA, opB
- *   local_store tileA, bufferA
- *   local_store tileB, bufferB
- * }
- * ```
- * For now, we don't have a perfect hueristic about when should this
- * optimization be applied. Therefore, we implement a simple hueristic that
- * this is applied when the tile size of A and B are large enough, i.e.
- * nonKDim >= 128  and kDim >= 64. And also this is only applied for typical
- * matmul kernels, i.e. only two tt.load's and one dotOp inside the loop. We
- * are experimenting how to better control instruction scheduling and enable
- * such optimizations.
- */
-static void sinkSecondLoad(triton::FuncOp funcOp) {
-  funcOp.walk([&](scf::ForOp forOp) -> void {
-    SetVector<triton::LoadOp> loadOps;
-    triton::DotOp dotOp;
-    for (Operation &op : forOp) {
-      if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
-        loadOps.insert(loadOp);
-      if (auto curOp = dyn_cast<triton::DotOp>(&op))
-        dotOp = curOp;
-    }
-    // Only apply the optimization when there are 2 load's in the loop
-    if (loadOps.size() != 2)
-      return;
-    // Only apply the optimization when tile size is large enough
-    // 1. nonKDim >= 128
-    // 2. kDim >= 64
-    auto ldAOp = loadOps[0];
-    auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
-    auto ldBOp = loadOps[1];
-    auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
-    if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
-      return;
-    // Only apply the optimization when the moving is legal
-    // 1. Make sure the 2nd loadOp is before the dot
-    // 2. Make sure the first user of the 2nd loadOp is after the dot.
-    bool isBeforeDotOp = ldBOp->isBeforeInBlock(dotOp);
-    auto firstUser = *ldBOp.getResult().getUsers().begin();
-    bool firstUserAfterDotOp = dotOp->isBeforeInBlock(firstUser);
-    if (isBeforeDotOp && firstUserAfterDotOp)
-      // move ldBOp right before tt.dot
-      ldBOp->moveBefore(dotOp);
-  });
+//===-------------------------------------------------------------------===//
+// Sched-load optimization for matmul kernels with large tile sizes
+// The basic idea of sched-load optimization is to sink the 2nd tt.load
+// after local_load so that global_load instructions can be interleaved with
+// mfma's. This can help hide the issue latency of global_load instructions
+// and improve performance on MI300X.
+//
+// It's assumed that the IR before this optimization has the following
+// structure:
+// ```mlir
+// scf.for ..
+// {
+//   tileA = tt.load a_ptr
+//   tileB = tt.load b_ptr
+//   opA = local_load bufferA
+//   opB = local_load bufferB
+//   res = tt.dot opA, opB
+//   local_store tileA, bufferA
+//   local_store tileB, bufferB
+// }
+// ```
+// After this optimization, the IR is transformed to
+// ```mlir
+// scf.for ..
+// {
+//   tileA = tt.load a_ptr
+//   opA = local_load bufferA
+//   opB = local_load bufferB
+//   tileB = tt.load b_ptr  <-- 2nd tt.load is sinked here
+//   res = tt.dot opA, opB
+//   local_store tileA, bufferA
+//   local_store tileB, bufferB
+// }
+// ```
+// For now, we don't have a perfect hueristic about when should this
+// optimization be applied. Therefore, we implement a simple hueristic that
+// this is applied when the tile size of A and B are large enough, i.e.
+// nonKDim >= 128  and kDim >= 64. And also this is only applied for typical
+// matmul kernels, i.e. only two tt.load's and one dotOp inside the loop. We
+// are experimenting how to better control instruction scheduling and enable
+// such optimizations.
+//===-------------------------------------------------------------------===//
+static void sinkSecondLoad(scf::ForOp forOp) {
+  SetVector<triton::LoadOp> loadOps;
+  triton::DotOp dotOp;
+  for (Operation &op : forOp) {
+    if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
+      loadOps.insert(loadOp);
+    if (auto curOp = dyn_cast<triton::DotOp>(&op))
+      dotOp = curOp;
+  }
+  // Only apply the optimization when there are 2 load's in the loop
+  if (loadOps.size() != 2)
+    return;
+  // Only apply the optimization when tile size is large enough
+  // 1. nonKDim >= 128
+  // 2. kDim >= 64
+  auto ldAOp = loadOps[0];
+  auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
+  auto ldBOp = loadOps[1];
+  auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
+  if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
+    return;
+  // Only apply the optimization when the moving is legal
+  // 1. Make sure the 2nd loadOp is before the dot
+  // 2. Make sure the first user of the 2nd loadOp is after the dot.
+  bool isBeforeDotOp = ldBOp->isBeforeInBlock(dotOp);
+  auto firstUser = *ldBOp.getResult().getUsers().begin();
+  bool firstUserAfterDotOp = dotOp->isBeforeInBlock(firstUser);
+  if (isBeforeDotOp && firstUserAfterDotOp)
+    // move ldBOp right before tt.dot
+    ldBOp->moveBefore(dotOp);
 }
 
 //===----------------------------------------------------------------------===//
@@ -366,9 +421,17 @@ struct TritonAMDGPUReorderInstructionsPass
 
       moveUpTranspose(funcOp);
 
-      if (isPureMatmulProblem(funcOp)) {
+      if (isPureMatmulFunc(funcOp)) {
         scheduleGlobalLoadLocalStore(funcOp);
-        sinkSecondLoad(funcOp);
+        funcOp.walk([&](scf::ForOp forOp) -> void { sinkSecondLoad(forOp); });
+      } else {
+        SmallVector<scf::ForOp> leafForOps = getLeafForOps(funcOp);
+        for (auto forOp : leafForOps) {
+          if (isPureMatmulLoop(forOp)) {
+            scheduleGlobalLoadLocalStore(forOp);
+            sinkSecondLoad(forOp);
+          }
+        }
       }
     }
   }
