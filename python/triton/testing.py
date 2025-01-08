@@ -15,6 +15,7 @@ import logging
 @functools.cache
 def _support_elapsed_time():
     import torch
+    import triton
 
     e1 = torch.xpu.Event(enable_timing=True)
     e1.record()
@@ -25,6 +26,7 @@ def _support_elapsed_time():
     e2.synchronize()
 
     try:
+        triton.runtime.driver.active.utils.wait()
         support = e1.elapsed_time(e2) > 0
     except Exception:
         support = False
@@ -186,6 +188,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type return_mode: str
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
+    import triton
 
     di = runtime.driver.active.get_device_interface()
 
@@ -208,6 +211,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     end_event.record()
     if not USE_WALL_TIME:
         di.synchronize()
+    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
@@ -239,6 +243,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     # Record clocks
     if not USE_WALL_TIME:
         di.synchronize()
+    triton.runtime.driver.active.utils.wait()
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
