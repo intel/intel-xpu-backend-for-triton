@@ -1508,7 +1508,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "triton_
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #slice = #ttg.slice<{dim = 0, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @reduce_all(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>) {
+  tt.func public @reduce_all(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>, %arg_1: tensor<256x1xi1, #blocked>) {
 
     // CHECK: @_Z27__spirv_GroupNonUniformFAddiif
     %0 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
@@ -1572,6 +1572,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       %48 = arith.xori %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: llvm.zext
+    // CHECK-SAME: : i1 to i8
+    // CHECK: @_Z27__spirv_GroupNonUniformIAddiic
+    // CHECK: llvm.trunc
+    // CHECK-SAME: : i8 to i1
+    %10 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.addi %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
 
     tt.return
   }

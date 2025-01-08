@@ -111,7 +111,8 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
 namespace {
 
-template <typename GroupOp>
+template <typename GroupOp,
+          typename = std::enable_if_t<is_spirv_group_op_v<GroupOp>>>
 Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
                          Value acc, unsigned numLanesToReduce,
                          unsigned warpSize) {
@@ -124,8 +125,25 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
         rewriter.getI32IntegerAttr(numLanesToReduce));
   }
 
+  // Extend `i1` values if the operation is not a logical operation.
+  bool isBoolType =
+      resultTy.isInteger() && resultTy.getIntOrFloatBitWidth() == 1;
+  assert(!(isBoolType &&
+           is_spirv_bitwise_group_op_v<
+               GroupOp>)&&"Unexpected bitwise operation on a Boolean type");
+  bool needsExtension = is_spirv_arithmetic_group_op_v<GroupOp> && isBoolType;
+  if (needsExtension) {
+    acc = zext(i8_ty, acc);
+    resultTy = i8_ty;
+  }
+
   Value result = rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
                                           spvGroupOp, acc, clusterSize);
+
+  // Truncate back to `i1` if previously extended.
+  if (needsExtension)
+    result = trunc(i1_ty, result);
+
   return result;
 }
 
