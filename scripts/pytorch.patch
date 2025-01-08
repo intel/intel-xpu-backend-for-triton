@@ -156,7 +156,7 @@ index fa2a1334380..11de4dc6e5f 100644
      except ImportError:
          from triton.compiler.compiler import AttrsDescriptor
 diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
-index 281d0e78ba4..901263df4aa 100644
+index 281d0e78ba4..8e7ca6b5822 100644
 --- a/torch/_inductor/runtime/triton_heuristics.py
 +++ b/torch/_inductor/runtime/triton_heuristics.py
 @@ -414,10 +414,21 @@ class CachingAutotuner(KernelInterface):
@@ -182,3 +182,17 @@ index 281d0e78ba4..901263df4aa 100644
                  compile_meta["constants"],
                  compile_meta["configs"][0],
              ),
+@@ -502,13 +513,11 @@ class CachingAutotuner(KernelInterface):
+         call_args = [
+             arg
+             for i, arg in enumerate(self.fn.arg_names)
+-            if i not in self.fn.constexprs and arg not in none_args
+         ]
+ 
+         def_args = [
+             name
+             for name in self.fn.arg_names
+-            if name not in cfg.kwargs and name not in none_args
+         ]
+         binary_shared = (
+             binary.shared if hasattr(binary, "shared") else binary.metadata.shared
