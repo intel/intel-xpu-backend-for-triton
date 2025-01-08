@@ -13,6 +13,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <optional>
 
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
 #define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
@@ -306,11 +307,7 @@ private:
     unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[0];
     SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
                                             warpSize / instrShapeM};
-    // auto scaleTy = cast<RankedTensorType>(opDesc.scale.getType());
-    // unsigned scalingBlocks = scaleTy.getShape()[1];
-    // unsigned repeatCount = dpasEnc.getRepeatCount();
-    // SmallVector<unsigned, 2> threadsPerWarp = {repeatCount, warpSize /
-    // repeatCount};
+
     SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
     warpsPerCTA[0] = numWarps;
     auto CTALayout = ttg::getCTALayout(retType.getEncoding());
@@ -494,27 +491,27 @@ static void updateValueType(Value v, Attribute encoding,
   v.setType(newType);
 }
 
-static tt::TransOp updateUsers(Value result,
-                               const SetVector<Operation *> &slice) {
-  tt::TransOp transOp;
+static std::optional<tt::TransOp>
+updateUsers(Value result, const SetVector<Operation *> &slice) {
   if (llvm::any_of(result.getUsers(),
                    [&](Operation *user) { return slice.count(user) == 0; })) {
     OpBuilder builder(result.getContext());
     builder.setInsertionPointAfterValue(result);
-    transOp =
+    auto transOp =
         builder.create<tt::TransOp>(result.getLoc(), result, ArrayRef({1, 0}));
     result.replaceUsesWithIf(transOp.getResult(), [&](OpOperand &operand) {
       return operand.getOwner() != transOp.getOperation() &&
              slice.count(operand.getOwner()) == 0;
     });
+    return transOp;
   }
-  return transOp;
+  return std::nullopt;
 }
 
-// Sync the transpose in the IR, this is done to avoid generating convert layout
-// when we have a transpose right after a dot as mma layout cannot be propagated
-// through transpose op. Once we have layouts that can represent transposed MMA
-// we can remove this transformation.
+// TODO: Sync the transpose in the IR, this is done to avoid generating convert
+// layout when we have a transpose right after a dot as mma layout cannot be
+// propagated through transpose op. Once we have layouts that can represent
+// transposed MMA we can remove this transformation.
 static void sinkTransposeOp(tt::TransOp input) {
   SmallVector<tt::TransOp> queue = {input};
   while (!queue.empty()) {
@@ -527,9 +524,7 @@ static void sinkTransposeOp(tt::TransOp input) {
         return true;
       if (isa<scf::YieldOp>(op))
         return isa<scf::ForOp>(op->getParentOp());
-      if (isa<ttg::ConvertLayoutOp>(op))
-        return true;
-      return false;
+      return isa<ttg::ConvertLayoutOp>(op);
     };
     SetVector<Operation *> slice;
     mlir::getForwardSlice(currentValue, &slice, options);
@@ -552,15 +547,16 @@ static void sinkTransposeOp(tt::TransOp input) {
           op->setOperand(0, transOp.getOperand());
         auto resultEncoding = cvtOp.getType().getEncoding();
         auto newDstEncoding = ttgi::inferSrcEncoding(transOp, resultEncoding);
-        assert(newDstEncoding);
+        assert(newDstEncoding && "Expecting valid result encoding");
         auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
         updateValueType(cvtOp.getResult(), newDstEncoding, srcType.getShape());
         updateUsers(cvtOp.getResult(), slice);
         continue;
       }
-      assert(isa<scf::YieldOp>(op));
-      auto forOp = dyn_cast<scf::ForOp>(op->getParentOp());
-      assert(forOp);
+      assert(isa<scf::YieldOp>(op) &&
+             "Transpose forward slice should contain "
+             "only elementwise, convert layout and yield ops.");
+      auto forOp = cast<scf::ForOp>(op->getParentOp());
       for (OpOperand &operand : op->getOpOperands()) {
         Operation *def = operand.get().getDefiningOp();
         if (def && (slice.count(def)) || def == transOp.getOperation()) {
@@ -568,19 +564,19 @@ static void sinkTransposeOp(tt::TransOp input) {
             operand.set(transOp.getOperand());
           Type newType = operand.get().getType();
           forOp.getResult(operand.getOperandNumber()).setType(newType);
-          tt::TransOp retTrans =
+          std::optional<tt::TransOp> retTrans =
               updateUsers(forOp.getResult(operand.getOperandNumber()), slice);
           // Recursively try to propagate the new transpose inserted.
-          if (retTrans)
-            queue.push_back(retTrans);
+          if (retTrans.has_value())
+            queue.push_back(retTrans.value());
           forOp.getRegionIterArg(operand.getOperandNumber()).setType(newType);
-          tt::TransOp argTrans = updateUsers(
+          std::optional<tt::TransOp> argTrans = updateUsers(
               forOp.getRegionIterArg(operand.getOperandNumber()), slice);
-          if (argTrans)
-            queue.push_back(argTrans);
+          if (argTrans.has_value())
+            queue.push_back(argTrans.value());
           OpBuilder builder(forOp);
           OpOperand &init = forOp.getInitsMutable()[operand.getOperandNumber()];
-          Value initTranspose = builder.create<tt::TransOp>(
+          auto initTranspose = builder.create<tt::TransOp>(
               forOp.getLoc(), init.get(), ArrayRef({1, 0}));
           init.set(initTranspose);
         }
@@ -589,27 +585,28 @@ static void sinkTransposeOp(tt::TransOp input) {
   }
 }
 
-// Transpose scaled_dot ops that have a scale on lhs.
-static Operation *transposeDotOp(tt::DotScaledOp dotOp) {
+static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
+  assert(dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr &&
+         "Transpose DotOp expects scale on RHS");
   OpBuilder builder(dotOp);
   Value lhs = dotOp.getLhs();
   std::array<int, 2> transOrder = {1, 0};
-  Value lhsTransposed =
+  auto lhsTransposed =
       builder.create<tt::TransOp>(lhs.getLoc(), lhs, transOrder);
   Value rhs = dotOp.getRhs();
-  Value rhsTransposed =
+  auto rhsTransposed =
       builder.create<tt::TransOp>(rhs.getLoc(), rhs, transOrder);
   Value c = dotOp.getC();
-  Value cTransposed = builder.create<tt::TransOp>(c.getLoc(), c, transOrder);
-  Value result = builder.create<tt::DotScaledOp>(
+  auto cTransposed = builder.create<tt::TransOp>(c.getLoc(), c, transOrder);
+  auto result = builder.create<tt::DotScaledOp>(
       dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
       cTransposed, dotOp.getRhsScale(), dotOp.getLhsScale(), dotOp.getRhsType(),
       dotOp.getLhsType());
-  Operation *transposedResult =
+  auto transOp =
       builder.create<tt::TransOp>(result.getLoc(), result, transOrder);
-  dotOp.replaceAllUsesWith(transposedResult);
+  dotOp.replaceAllUsesWith(transOp.getOperation());
   dotOp.erase();
-  return transposedResult;
+  return transOp;
 }
 
 static void transposeDots(ModuleOp m) {
@@ -618,14 +615,14 @@ static void transposeDots(ModuleOp m) {
     if (dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr)
       toTranspose.push_back(dotOp);
   });
-  SmallVector<Operation *> transposes;
-  for (tt::DotScaledOp dotOp : toTranspose) {
-    Operation *transpose = transposeDotOp(dotOp);
+  SmallVector<tt::TransOp> transposes;
+  for (tt::DotScaledOp &dotOp : toTranspose) {
+    tt::TransOp transpose = transposeDotOp(dotOp);
     transposes.push_back(transpose);
   }
 
-  for (Operation *transpose : transposes) {
-    sinkTransposeOp(cast<tt::TransOp>(transpose));
+  for (tt::TransOp transpose : transposes) {
+    sinkTransposeOp(transpose);
   }
 }
 
@@ -641,6 +638,7 @@ public:
     ModuleOp m = getOperation();
     auto &dpasAnalysis = getAnalysis<ttg::intel::DPASAnalysis>();
 
+    // Transpose dotOp operations that have a scale on the RHS.
     transposeDots(m);
 
     RewritePatternSet patterns(context);

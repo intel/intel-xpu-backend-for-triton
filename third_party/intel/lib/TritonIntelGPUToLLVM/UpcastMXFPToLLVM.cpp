@@ -72,7 +72,7 @@ public:
     auto dpasEnc = cast<DpasEncodingAttr>(dotEnc.getParent());
     unsigned instShapeM = dpasEnc.getDPASInstShapeA()[0];
     unsigned instShapeK = dpasEnc.getDPASInstShapeA()[1];
-    unsigned scalingBlockSize = 32;
+    constexpr unsigned scalingBlockSize = 32;
     unsigned repSize = scalingBlockSize / instShapeK;
     unsigned subTileSize = instShapeM;
     // kWidth here is the contiguous number of elements each thread access.
@@ -80,7 +80,7 @@ public:
     unsigned numMxfp =
         TritonGPUDialect::TritonGPUDialect::getThreadsPerWarp(mod) / instShapeM;
     unsigned mxfpSize = repSize * subTileSize * kWidth;
-    unsigned numScales = 16;
+    constexpr unsigned numScales = 16;
 
     if (fpType == ScaleDotElemType::E2M1) {
       repSize /= 2; // for E2M1, actual scaling block size is 16
