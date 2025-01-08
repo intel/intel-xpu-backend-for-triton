@@ -12,8 +12,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/TypeSwitch.h"
+#include <optional>
 
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
 #define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
@@ -249,9 +249,6 @@ public:
   }
 
 private:
-  const bool upcastMXFPUseDotOpEnc =
-      mlir::triton::tools::getBoolEnv("TRITON_INTEL_UPCASTMXFP_DOTOP_ENCODING");
-
   struct OpDescriptor {
     TensorValue op;
     triton::ScaleDotElemType elemType;
@@ -297,85 +294,39 @@ private:
     unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
     unsigned rank = retType.getRank();
 
-    if (upcastMXFPUseDotOpEnc) {
-      if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
-        opsPerChannel *= 2;
-
-      auto opEncoding = ttg::intel::DpasEncodingAttr::get(
-          ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
-          dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-          dpasEnc.getRepCluster(),
-          product<unsigned>(dpasEnc.getThreadsPerWarp()));
-
-      auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
-          ctx, unsigned(opIdx), opEncoding, opEncoding.getOpsPerChannel());
-      TensorValue op =
-          createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
-
-      unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-      unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
-      SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
-                                              warpSize / instrShapeM};
-      SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
-      warpsPerCTA[0] = numWarps;
-      auto CTALayout = ttg::getCTALayout(retType.getEncoding());
-
-      auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
-          ctx, {1, 1}, threadsPerWarp, warpsPerCTA, newOpEncoding.getCTAOrder(),
-          CTALayout);
-      TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
-
-      return createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
-    }
-
-    auto scaleEncoding = dyn_cast<ttg::BlockedEncodingAttr>(
-        opDesc.scale.getType().getEncoding());
-    assert(scaleEncoding && "Expecting blocked encoding for scale");
-
-    // Referring to
-    // https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
-    // the scalingBlockSize should be 32 for E5M2, E4M3 and E2M1
-    unsigned scalingBlockSize = 32;
-    // 2 FP4E2M1 are packed in one i8
-    if (opDesc.elemType == tt::ScaleDotElemType::E2M1)
-      scalingBlockSize = 16;
-
-    SmallVector<unsigned> sizePerThread = {1, 1};
-    SmallVector<unsigned> threadsPerWarp = {1, 1};
-
-    sizePerThread[!unsigned(opIdx)] = scalingBlockSize;
-    threadsPerWarp[unsigned(opIdx)] = warpSize;
-    SmallVector<unsigned> warpsPerCTA = {numWarps, 1};
-
-    auto newOpEncoding = ttg::BlockedEncodingAttr::get(
-        ctx, sizePerThread, threadsPerWarp, warpsPerCTA,
-        scaleEncoding.getCTAOrder(), scaleEncoding.getCTALayout());
-    TensorValue op =
-        createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
-
-    warpsPerCTA = bool(opIdx) ? SmallVector<unsigned>{1, numWarps}
-                              : SmallVector<unsigned>{numWarps, 1};
-    auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
-        ctx, {1, 1}, {warpSize, 1}, warpsPerCTA, scaleEncoding.getCTAOrder(),
-        scaleEncoding.getCTALayout());
-    TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
-
-    auto retDpasEncoding = ttg::intel::DpasEncodingAttr::get(
+    auto opEncoding = ttg::intel::DpasEncodingAttr::get(
         ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
         dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
         dpasEnc.getRepCluster(),
         product<unsigned>(dpasEnc.getThreadsPerWarp()));
-    auto retDotOpEncoding =
-        ttg::DotOperandEncodingAttr::get(ctx, unsigned(opIdx), retDpasEncoding,
-                                         retDpasEncoding.getOpsPerChannel());
+
+    auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
+        ctx, unsigned(opIdx), opEncoding, opEncoding.getOpsPerChannel());
+    TensorValue op =
+        createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
+
+    unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[0];
+    SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
+                                            warpSize / instrShapeM};
+
+    SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
+    warpsPerCTA[0] = numWarps;
+    auto CTALayout = ttg::getCTALayout(retType.getEncoding());
+
+    auto newScaleEncoding =
+        ttg::BlockedEncodingAttr::get(ctx, {1, 1}, threadsPerWarp, warpsPerCTA,
+                                      newOpEncoding.getCTAOrder(), CTALayout);
+    TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
 
     auto upcastOp = createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
-
-    auto resultType = cast<RankedTensorType>(upcastOp.getType());
-    resultType = RankedTensorType::get(
-        resultType.getShape(), resultType.getElementType(), retDotOpEncoding);
-    return rewriter.create<ttg::ConvertLayoutOp>(opDesc.op.getLoc(), resultType,
-                                                 upcastOp);
+    if (opDesc.elemType == tt::ScaleDotElemType::E2M1) {
+      auto resultType = cast<RankedTensorType>(upcastOp.getType());
+      auto newRetType = RankedTensorType::get(
+          resultType.getShape(), resultType.getElementType(), newOpEncoding);
+      upcastOp = rewriter.create<ttg::ConvertLayoutOp>(opDesc.op.getLoc(),
+                                                       newRetType, upcastOp);
+    }
+    return upcastOp;
   }
 
   template <ttgi::DpasEncodingAttr::OpIdx opIdx>
@@ -533,6 +484,149 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
+static void updateValueType(Value v, Attribute encoding,
+                            ArrayRef<int64_t> shape) {
+  auto tensorType = cast<RankedTensorType>(v.getType());
+  auto newType =
+      RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+  v.setType(newType);
+}
+
+static std::optional<tt::TransOp>
+updateUsers(Value result, const SetVector<Operation *> &slice) {
+  if (llvm::any_of(result.getUsers(),
+                   [&](Operation *user) { return slice.count(user) == 0; })) {
+    OpBuilder builder(result.getContext());
+    builder.setInsertionPointAfterValue(result);
+    auto transOp =
+        builder.create<tt::TransOp>(result.getLoc(), result, ArrayRef({1, 0}));
+    result.replaceUsesWithIf(transOp.getResult(), [&](OpOperand &operand) {
+      return operand.getOwner() != transOp.getOperation() &&
+             slice.count(operand.getOwner()) == 0;
+    });
+    return transOp;
+  }
+  return std::nullopt;
+}
+
+// TODO: Sync the transpose in the IR, this is done to avoid generating convert
+// layout when we have a transpose right after a dot as mma layout cannot be
+// propagated through transpose op. Once we have layouts that can represent
+// transposed MMA we can remove this transformation.
+static void sinkTransposeOp(tt::TransOp input) {
+  SmallVector<tt::TransOp> queue = {input};
+  while (!queue.empty()) {
+    tt::TransOp transOp = queue.back();
+    Value currentValue = transOp.getResult();
+    queue.pop_back();
+    mlir::ForwardSliceOptions options;
+    options.filter = [](Operation *op) {
+      if (op->hasTrait<OpTrait::Elementwise>() && op->getNumOperands() == 1)
+        return true;
+      if (isa<scf::YieldOp>(op))
+        return isa<scf::ForOp>(op->getParentOp());
+      return isa<ttg::ConvertLayoutOp>(op);
+    };
+    SetVector<Operation *> slice;
+    mlir::getForwardSlice(currentValue, &slice, options);
+    for (Operation *op : slice) {
+      if (op->hasTrait<OpTrait::Elementwise>()) {
+        // Update users of transpose op.
+        if (op->getOperand(0) == transOp.getResult())
+          op->setOperand(0, transOp.getOperand());
+        // Update the type of the result.
+        for (Value result : op->getResults()) {
+          auto srcType = cast<RankedTensorType>(op->getOperand(0).getType());
+          updateValueType(result, srcType.getEncoding(), srcType.getShape());
+          updateUsers(result, slice);
+        }
+        continue;
+      }
+      if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+        // Update users of transpose op.
+        if (op->getOperand(0) == transOp.getResult())
+          op->setOperand(0, transOp.getOperand());
+        auto resultEncoding = cvtOp.getType().getEncoding();
+        auto newDstEncoding = ttgi::inferSrcEncoding(transOp, resultEncoding);
+        assert(newDstEncoding && "Expecting valid result encoding");
+        auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
+        updateValueType(cvtOp.getResult(), newDstEncoding, srcType.getShape());
+        updateUsers(cvtOp.getResult(), slice);
+        continue;
+      }
+      assert(isa<scf::YieldOp>(op) &&
+             "Transpose forward slice should contain "
+             "only elementwise, convert layout and yield ops.");
+      auto forOp = cast<scf::ForOp>(op->getParentOp());
+      for (OpOperand &operand : op->getOpOperands()) {
+        Operation *def = operand.get().getDefiningOp();
+        if (def && (slice.count(def)) || def == transOp.getOperation()) {
+          if (def == transOp.getOperation())
+            operand.set(transOp.getOperand());
+          Type newType = operand.get().getType();
+          forOp.getResult(operand.getOperandNumber()).setType(newType);
+          std::optional<tt::TransOp> retTrans =
+              updateUsers(forOp.getResult(operand.getOperandNumber()), slice);
+          // Recursively try to propagate the new transpose inserted.
+          if (retTrans.has_value())
+            queue.push_back(retTrans.value());
+          forOp.getRegionIterArg(operand.getOperandNumber()).setType(newType);
+          std::optional<tt::TransOp> argTrans = updateUsers(
+              forOp.getRegionIterArg(operand.getOperandNumber()), slice);
+          if (argTrans.has_value())
+            queue.push_back(argTrans.value());
+          OpBuilder builder(forOp);
+          OpOperand &init = forOp.getInitsMutable()[operand.getOperandNumber()];
+          auto initTranspose = builder.create<tt::TransOp>(
+              forOp.getLoc(), init.get(), ArrayRef({1, 0}));
+          init.set(initTranspose);
+        }
+      }
+    }
+  }
+}
+
+static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
+  assert(dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr &&
+         "Transpose DotOp expects scale on RHS");
+  OpBuilder builder(dotOp);
+  Value lhs = dotOp.getLhs();
+  std::array<int, 2> transOrder = {1, 0};
+  auto lhsTransposed =
+      builder.create<tt::TransOp>(lhs.getLoc(), lhs, transOrder);
+  Value rhs = dotOp.getRhs();
+  auto rhsTransposed =
+      builder.create<tt::TransOp>(rhs.getLoc(), rhs, transOrder);
+  Value c = dotOp.getC();
+  auto cTransposed = builder.create<tt::TransOp>(c.getLoc(), c, transOrder);
+  auto result = builder.create<tt::DotScaledOp>(
+      dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
+      cTransposed, dotOp.getRhsScale(), dotOp.getLhsScale(), dotOp.getRhsType(),
+      dotOp.getLhsType());
+  auto transOp =
+      builder.create<tt::TransOp>(result.getLoc(), result, transOrder);
+  dotOp.replaceAllUsesWith(transOp.getOperation());
+  dotOp.erase();
+  return transOp;
+}
+
+static void transposeDots(ModuleOp m) {
+  SmallVector<tt::DotScaledOp> toTranspose;
+  m.walk([&](tt::DotScaledOp dotOp) -> void {
+    if (dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr)
+      toTranspose.push_back(dotOp);
+  });
+  SmallVector<tt::TransOp> transposes;
+  for (tt::DotScaledOp &dotOp : toTranspose) {
+    tt::TransOp transpose = transposeDotOp(dotOp);
+    transposes.push_back(transpose);
+  }
+
+  for (tt::TransOp transpose : transposes) {
+    sinkTransposeOp(transpose);
+  }
+}
+
 class TritonIntelGPUAccelerateMatmulPass
     : public triton::gpu::intel::impl::TritonIntelGPUAccelerateMatmulBase<
           TritonIntelGPUAccelerateMatmulPass> {
@@ -544,6 +638,9 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     auto &dpasAnalysis = getAnalysis<ttg::intel::DPASAnalysis>();
+
+    // Transpose dotOp operations that have a scale on the RHS.
+    transposeDots(m);
 
     RewritePatternSet patterns(context);
     patterns.add<BlockedToDPAS, DecomposeScaledBlocked>(context, dpasAnalysis);
