@@ -304,7 +304,7 @@ private:
       auto opEncoding = ttg::intel::DpasEncodingAttr::get(
           ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
           dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-          dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
+          dpasEnc.getRepCluster(), dpasEnc.getThreadsPerWarp_());
 
       auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
           ctx, unsigned(opIdx), opEncoding, opEncoding.getOpsPerChannel());
@@ -362,7 +362,7 @@ private:
     auto retDpasEncoding = ttg::intel::DpasEncodingAttr::get(
         ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
         dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-        dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
+        dpasEnc.getRepCluster(), dpasEnc.getThreadsPerWarp_());
     auto retDotOpEncoding =
         ttg::DotOperandEncodingAttr::get(ctx, unsigned(opIdx), retDpasEncoding,
                                          retDpasEncoding.getOpsPerChannel());
