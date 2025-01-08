@@ -297,7 +297,8 @@ private:
     auto opEncoding = ttg::intel::DpasEncodingAttr::get(
         ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
         dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-        dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
+        dpasEnc.getRepCluster(),
+        product<unsigned>(dpasEnc.getThreadsPerWarp()));
 
     auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
         ctx, unsigned(opIdx), opEncoding, opEncoding.getOpsPerChannel());

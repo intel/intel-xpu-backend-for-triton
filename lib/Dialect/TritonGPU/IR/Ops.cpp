@@ -425,7 +425,7 @@ LogicalResult UpcastMXFPOp::inferReturnTypes(
             ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
             dpasEncoding.getExecutionSize(), opsPerChannel,
             dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
-            dpasEncoding.getSubGroupSize());
+            product<unsigned>(dpasEncoding.getThreadsPerWarp()));
         newVEncoding = DotOperandEncodingAttr::get(
             ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
       } else {
