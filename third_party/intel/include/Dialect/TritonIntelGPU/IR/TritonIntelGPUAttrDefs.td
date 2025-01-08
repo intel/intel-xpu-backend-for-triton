@@ -28,7 +28,7 @@ The encoding is characterized by parameters:
                           1 for 32 bit scalar type of A/B operands of DPAS instruction.
         - `warpsPerCTA` indicates the distribution of the warps in the block. The order is [1, 0] for rank 2.
         - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
-        - `threadsPerWarp_` AKA threadsPerWarp, use the name threadsPerWarp_ to avoid conflicting
+        - `threadsPerWarp__` AKA threadsPerWarp, use the name threadsPerWarp__ to avoid conflicting
                             with the `getThreadsPerWarp` in interface DistributedLayout. Currently only 16 is supported.
 
 The values of the matrix is distributed across the threads in the subgroup as row-major order.
@@ -186,7 +186,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     "unsigned":$opsPerChannel,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     ArrayRefParameter<"unsigned">:$repCluster,
-    "unsigned":$threadsPerWarp_
+    "unsigned":$threadsPerWarp__
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
