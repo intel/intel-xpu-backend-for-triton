@@ -41,6 +41,26 @@ namespace {
 constexpr unsigned offsetBitwidth = 32u;
 constexpr unsigned shapeAndStridesBitwidth = 64u;
 
+// Lookup for a constant with the given value and bitwidth in the current block
+// (before the builder insertion point). Return it a suitable constant is found,
+// otherwise create a new one.
+arith::ConstantIntOp findOrCreate(Location loc, int val, unsigned bitWidth,
+                                  OpBuilder &builder) {
+  Block *block = builder.getInsertionBlock();
+  const Block::iterator insertPoint = builder.getInsertionPoint();
+
+  auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
+    if (auto cstOp = dyn_cast<arith::ConstantIntOp>(op))
+      return cstOp.value() == val &&
+             cstOp.getType().getIntOrFloatBitWidth() == bitWidth;
+    return false;
+  });
+
+  return (it != insertPoint)
+             ? cast<arith::ConstantIntOp>(*it)
+             : builder.create<arith::ConstantIntOp>(loc, val, bitWidth);
+}
+
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
 // same as pointer arithmetic operations in Triton language. Scalar is a
@@ -110,20 +130,26 @@ struct PtrState {
 
     source = lhsState.source ? lhsState.source : rhsState.source;
     Location loc = op->getLoc();
+    ArithBuilder abuilder(builder, loc);
+
+    auto addIfNecessary = [&](Value lhs, Value rhs) {
+      return ttgi::isConstant(lhs, 0)
+                 ? rhs
+                 : (ttgi::isConstant(rhs, 0) ? lhs : abuilder.add(lhs, rhs));
+    };
 
     if (lhsState.scalar && rhsState.scalar)
-      scalar =
-          builder.create<arith::AddIOp>(loc, lhsState.scalar, rhsState.scalar)
-              .getResult();
+      scalar = addIfNecessary(lhsState.scalar, rhsState.scalar);
     else if (lhsState.getRank() == 0)
       scalar = lhsState.scalar ? lhsState.scalar : rhsState.scalar;
 
-    ArithBuilder abuilder(builder, loc);
     for (unsigned i = 0; i < lhsState.getRank(); ++i) {
-      Value newOffset = abuilder.add(lhsState.offsets[i], rhsState.offsets[i]);
+      Value newOffset =
+          addIfNecessary(lhsState.offsets[i], rhsState.offsets[i]);
       offsets.push_back(newOffset);
 
-      Value newStride = abuilder.add(lhsState.strides[i], rhsState.strides[i]);
+      Value newStride =
+          addIfNecessary(lhsState.strides[i], rhsState.strides[i]);
       strides.push_back(newStride);
 
       sizes.push_back(lhsState.sizes[i]);
@@ -200,19 +226,33 @@ struct PtrState {
     Value i64Scalar = getValueOrCreateCastToIndexLike(
         builder, loc, builder.getI64Type(), rhs->scalar);
     ArithBuilder abuilder(builder, loc);
+
+    auto mulIfNecessary = [&](Value lhs, Value rhs) {
+      if (ttgi::isConstant(lhs, 0))
+        return lhs;
+      if (ttgi::isConstant(rhs, 0))
+        return rhs;
+      if (ttgi::isConstant(lhs, 1))
+        return rhs;
+      if (ttgi::isConstant(rhs, 1))
+        return lhs;
+      return abuilder.mul(lhs, rhs);
+    };
+
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
       Value newOffset =
-          abuilder.mul(getValueOrCreateCastToIndexLike(
-                           builder, loc, builder.getI32Type(), offset),
-                       i32Scalar);
+          mulIfNecessary(getValueOrCreateCastToIndexLike(
+                             builder, loc, builder.getI32Type(), offset),
+                         i32Scalar);
       Value newStride =
-          abuilder.mul(getValueOrCreateCastToIndexLike(
-                           builder, loc, builder.getI64Type(), stride),
-                       i64Scalar);
-      Value newDim = abuilder.mul(getValueOrCreateCastToIndexLike(
-                                      builder, loc, builder.getI64Type(), dim),
-                                  i64Scalar);
+          mulIfNecessary(getValueOrCreateCastToIndexLike(
+                             builder, loc, builder.getI64Type(), stride),
+                         i64Scalar);
+      Value newDim =
+          mulIfNecessary(getValueOrCreateCastToIndexLike(
+                             builder, loc, builder.getI64Type(), dim),
+                         i64Scalar);
       offsets.push_back(newOffset);
       strides.push_back(newStride);
       shape.push_back(newDim);
@@ -567,12 +607,12 @@ public:
 
       PtrState state;
       LogicalResult ret = failure();
-      if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
+      if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>())
         ret = visitOperandMakeTensorPtr(makeTPtrOp, state, op.getLoc(), builder,
                                         true);
-      } else if (auto addptrOp = mappedV.getDefiningOp<tt::AddPtrOp>()) {
+      else if (auto addptrOp = mappedV.getDefiningOp<tt::AddPtrOp>())
         ret = visitOperandAddptr(addptrOp, state, op.getLoc(), builder);
-      }
+
       if (ret.failed()) {
         op->emitRemark("Failed to rewrite yield op");
         return failure();
@@ -586,9 +626,8 @@ public:
           // Special case, see comments in addState in dealing with shape/modulo
           if (i == 0 && forState.getRank() == 2) {
             if (forState.shape[1] == state.shape[0] &&
-                forState.shape[0] == state.shape[1]) {
+                forState.shape[0] == state.shape[1])
               break;
-            }
           }
           op->emitRemark(
               "TritonRaiseToBlockPointer: operand's shape/modulo state changed "
@@ -697,23 +736,23 @@ public:
     return false;
   }
 
-  int checkIfOffsetMultipliedByStride(Value operand,
-                                      SmallVector<Value> &strides) const {
+  std::optional<unsigned>
+  checkIfOffsetMultipliedByStride(Value operand,
+                                  SmallVector<Value> &strides) const {
     Operation *defOp = operand.getDefiningOp();
 
     SmallVector<Value> finalStrides;
-    // check all strides different
-    // if not => skip
+    // check whether all strides are different, if not => skip
     for (auto stride : strides) {
       Value currentVal = getFinalValue(stride);
       if (llvm::any_of(finalStrides, [&](Value val) {
             return areValuesEqual(val, currentVal);
           }))
-        return -1;
+        return std::nullopt;
       finalStrides.push_back(currentVal);
     }
 
-    unsigned axis = 0;
+    unsigned axis = 0u;
     for (auto finalStride : finalStrides) {
       // search for a mul to finalStride in the predecessors
       if (lookForMulitplyingValueInDefiningPath(operand, finalStride))
@@ -722,7 +761,7 @@ public:
         return axis;
       ++axis;
     }
-    return -1;
+    return std::nullopt;
   }
 
   // Return true if a `tt::ExpandOp` has been found is the defining path.
@@ -758,7 +797,6 @@ public:
 
     OpBuilder builder(op);
     Location loc = op.getLoc();
-
     PtrState state;
     if (failed(visitOperandAddptr(op, state, loc, builder)))
       return failure();
@@ -800,6 +838,19 @@ public:
     auto resType = cast<tt::PointerType>(makeTPtrOp.getResult().getType());
     auto pointeeType = cast<ShapedType>(resType.getPointeeType());
     ArrayRef<int64_t> shape = pointeeType.getShape();
+    ArithBuilder abuilder(builder, loc);
+
+    auto mulIfNecessary = [&](Value lhs, Value rhs) {
+      if (ttgi::isConstant(lhs, 0))
+        return lhs;
+      if (ttgi::isConstant(rhs, 0))
+        return rhs;
+      if (ttgi::isConstant(lhs, 1))
+        return rhs;
+      if (ttgi::isConstant(rhs, 1))
+        return lhs;
+      return abuilder.mul(lhs, rhs);
+    };
 
     for (int i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
@@ -808,11 +859,10 @@ public:
           loc, builder.getIndexType(), makeTPtrOp.getStrides()[i]);
       auto offsetCst = builder.create<arith::IndexCastOp>(
           loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
-      auto scaledOffset = builder.create<arith::MulIOp>(
-          loc, offsetCst.getResult(), strideCst.getResult());
+      auto scaledOffset =
+          mulIfNecessary(offsetCst.getResult(), strideCst.getResult());
       state.offsets.push_back(getValueOrCreateCastToIndexLike(
-          builder, loc, builder.getIntegerType(offsetBitwidth),
-          scaledOffset.getResult()));
+          builder, loc, builder.getIntegerType(offsetBitwidth), scaledOffset));
     }
     state.strides = makeTPtrOp.getStrides();
     state.shape = makeTPtrOp.getShape();
@@ -826,16 +876,22 @@ public:
     assert(state.isEmpty() && "state is a return argument");
 
     PtrState ptrState;
-    if (failed(visitOperand(addptrOp.getPtr(), ptrState, addptrOp.getLoc(),
-                            builder))) {
+    if (failed(visitOperand(addptrOp.getPtr(), ptrState, loc, builder)))
       return failure();
-    }
+
+    LLVM_DEBUG({
+      auto modOp = addptrOp->getParentOfType<ModuleOp>();
+      llvm::dbgs() << "Module(line " << __LINE__ << "):\n" << modOp << "\n";
+    });
 
     PtrState offsetState;
-    if (failed(visitOperand(addptrOp.getOffset(), offsetState,
-                            addptrOp.getLoc(), builder))) {
+    if (failed(visitOperand(addptrOp.getOffset(), offsetState, loc, builder)))
       return failure();
-    }
+
+    LLVM_DEBUG({
+      auto modOp = addptrOp->getParentOfType<ModuleOp>();
+      llvm::dbgs() << "Module(line " << __LINE__ << "):\n" << modOp << "\n";
+    });
 
     // The axis to which the offset must be applied need to be known.
     // However, in some cases, the pass fails to detect whether an offset should
@@ -859,16 +915,16 @@ public:
     //       support is unable to determine the right axis and will not correct
     //       anything. That said, we do not guarantee the current support does
     //       not give rise to false positive detections.
-    auto parentOp = addptrOp->getParentOp();
+    Operation *parentOp = addptrOp->getParentOp();
     if (isa<scf::ForOp>(parentOp)) {
-      // ExpandOp direclty sets offset to the expected axis.
+      // ExpandOp directly sets offset to the expected axis.
       // So if an ExpandOp has been found in defining path, the analysis is
       // skipped.
       if (!hasExpandOpInDefiningPath(addptrOp.getOffset())) {
-        auto axis = checkIfOffsetMultipliedByStride(addptrOp.getOffset(),
-                                                    ptrState.strides);
-        if (axis >= 1)
-          std::swap(offsetState.offsets[0], offsetState.offsets[axis]);
+        std::optional<unsigned> axis = checkIfOffsetMultipliedByStride(
+            addptrOp.getOffset(), ptrState.strides);
+        if (axis && *axis >= 1)
+          std::swap(offsetState.offsets[0], offsetState.offsets[*axis]);
       }
     }
 
@@ -879,6 +935,11 @@ public:
     LLVM_DEBUG(llvm::dbgs() << "Base: " << ptrState << "\n"
                             << "Offset: " << offsetState << "\n";);
 
+    LLVM_DEBUG({
+      auto modOp = addptrOp->getParentOfType<ModuleOp>();
+      llvm::dbgs() << "Module(line " << __LINE__ << "):\n" << modOp << "\n";
+    });
+
     return state.addState(ptrState, offsetState, addptrOp, builder);
   }
 
@@ -886,6 +947,13 @@ public:
                              OpBuilder &builder) {
     if (knownPtrs.find(operand) != knownPtrs.end()) {
       state = knownPtrs.lookup(operand);
+      return success();
+    }
+
+    llvm::dbgs() << "operand(line" << __LINE__ << "): " << operand << "\n";
+
+    if (isa<IndexType>(operand.getType())) {
+      state.scalar = operand;
       return success();
     }
 
@@ -899,14 +967,8 @@ public:
       return success();
     }
 
-    if (isa<IndexType>(operand.getType())) {
-      state.scalar = operand;
-      return success();
-    }
-
     if (isa<tt::PointerType>(operand.getType())) {
-      // A scalar pointer can either be produced by AddPtrOp or a block
-      // argument
+      // A scalar pointer can either be produced by AddPtrOp or a block argument
       if (Operation *op = operand.getDefiningOp()) {
         if (auto addPtrOp = dyn_cast<tt::AddPtrOp>(op))
           return visitOperandAddptr(addPtrOp, state, loc, builder);
@@ -1114,12 +1176,10 @@ TritonRaiseBlockPointer::visitAddPointerOperand(tt::MakeRangeOp rangeOp,
   assert(stride == 1 &&
          "Expect make_range op to always return tensor of stride 1");
 
-  state.offsets.push_back(
-      builder.create<arith::ConstantIntOp>(loc, start, offsetBitwidth));
-  state.strides.push_back(builder.create<arith::ConstantIntOp>(
-      loc, stride, shapeAndStridesBitwidth));
-  state.shape.push_back(
-      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+  state.offsets.push_back(findOrCreate(loc, start, offsetBitwidth, builder));
+  state.strides.push_back(
+      findOrCreate(loc, stride, shapeAndStridesBitwidth, builder));
+  state.shape.push_back(findOrCreate(loc, 0, shapeAndStridesBitwidth, builder));
   state.sizes.push_back(shape[0]);
 
   LLVM_DEBUG(llvm::dbgs().indent(2) << "MakeRange state: " << state << "\n";);
@@ -1143,9 +1203,8 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     return failure();
   }
 
-  Value c0i32 = builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
-  Value c0i64 =
-      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
+  Value c0i32 = findOrCreate(loc, 0, offsetBitwidth, builder);
+  Value c0i64 = findOrCreate(loc, 0, shapeAndStridesBitwidth, builder);
 
   for (int64_t s : dstShape) {
     state.offsets.push_back(c0i32);
@@ -1221,15 +1280,12 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
                                       /*isUnsignedCast=*/true);
   state.offsets.push_back(offset);
-  state.offsets.insert(
-      state.offsets.end(), resultType.getShape().size() - 1,
-      builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth));
-  state.strides.insert(
-      state.strides.end(), resultType.getShape().size(),
-      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
-  state.shape.insert(
-      state.shape.end(), resultType.getShape().size(),
-      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth));
+  state.offsets.insert(state.offsets.end(), resultType.getShape().size() - 1,
+                       findOrCreate(loc, 0, offsetBitwidth, builder));
+  state.strides.insert(state.strides.end(), resultType.getShape().size(),
+                       findOrCreate(loc, 0, shapeAndStridesBitwidth, builder));
+  state.shape.insert(state.shape.end(), resultType.getShape().size(),
+                     findOrCreate(loc, 0, shapeAndStridesBitwidth, builder));
 
   for (int dim : resultType.getShape())
     state.sizes.push_back(dim);
@@ -1255,9 +1311,8 @@ TritonRaiseBlockPointer::visitAddPointerOperand(tt::ExpandDimsOp expandDimsOp,
          "expect changed dimension to be 1 in expand_dims");
 
   // insert dimension info
-  Value c0i32 = builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
-  Value c0i64 =
-      builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
+  Value c0i32 = findOrCreate(loc, 0, offsetBitwidth, builder);
+  Value c0i64 = findOrCreate(loc, 0, shapeAndStridesBitwidth, builder);
   state.offsets.insert(state.offsets.begin() + axis, c0i32);
   state.sizes.insert(state.sizes.begin() + axis, 1);
   state.strides.insert(state.strides.begin() + axis, c0i64);
@@ -1322,10 +1377,8 @@ TritonRaiseBlockPointer::visitAddPointerOperand(tt::BroadcastOp broadcastOp,
         ++srcAxis;
         continue;
       }
-      Value c0i32 =
-          builder.create<arith::ConstantIntOp>(loc, 0, offsetBitwidth);
-      Value c0i64 =
-          builder.create<arith::ConstantIntOp>(loc, 0, shapeAndStridesBitwidth);
+      Value c0i32 = findOrCreate(loc, 0, offsetBitwidth, builder);
+      Value c0i64 = findOrCreate(loc, 0, shapeAndStridesBitwidth, builder);
       state.offsets.insert(state.offsets.begin() + axis,
                            getValueOrCreateCastToIndexLike(
                                builder, loc,
