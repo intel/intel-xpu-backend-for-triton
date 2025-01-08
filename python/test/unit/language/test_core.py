@@ -266,6 +266,10 @@ def filter_layouts(layouts):
     return [l for l in layouts if is_layout_applicable(l)]
 
 
+def filter_layout_pairs(pairs):
+    return [p for p in pairs if is_layout_applicable(p[0]) and is_layout_applicable(p[1])]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x", list(dtypes) + ["bfloat16"])
 def test_empty_kernel(dtype_x, device):
@@ -5765,12 +5769,18 @@ mma_pairs = [
         MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 16]),
         MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
     ],
+    [
+        DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+                   warps_per_cta=[4, 1], rep_cluster=[1, 1]),
+        DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=2, threads_per_warp=32,
+                   warps_per_cta=[2, 2], rep_cluster=[1, 1]),
+    ],
 ]
 
 
 @pytest.mark.parametrize("M, N", [[64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
 @pytest.mark.parametrize("dtype", ['float16'])
-@pytest.mark.parametrize("mma_pair", filter_layouts(mma_pairs))
+@pytest.mark.parametrize("mma_pair", filter_layout_pairs(mma_pairs))
 def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
     src_layout, _ = mma_pair
     num_warps = np.prod(src_layout.warps_per_cta)
