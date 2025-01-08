@@ -334,7 +334,7 @@ private:
     size_t totalElems = elems.size();
     auto numElemsPerOperand =
         product<unsigned>(dpasLayout.getDPASInstShapeC()) /
-        dpasLayout.getSubGroupSize();
+        product<unsigned>(dpasLayout.getThreadsPerWarp());
     Type elemTy =
         this->getTypeConverter()->convertType(srcType.getElementType());
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
