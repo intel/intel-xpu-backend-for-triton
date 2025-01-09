@@ -128,6 +128,7 @@ using is_spirv_group_op = std::disjunction<is_spirv_arithmetic_group_op<OpTy>,
 template <typename OpTy>
 constexpr bool is_spirv_group_op_v = is_spirv_group_op<OpTy>::value;
 
+/// Obtain logical operation bitwise-equivalent to a given arithmetic operation.
 template <typename OpTy> struct spirv_corresponding_logical_op {};
 
 template <>

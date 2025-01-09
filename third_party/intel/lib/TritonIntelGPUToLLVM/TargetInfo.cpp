@@ -125,7 +125,6 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
         rewriter.getI32IntegerAttr(numLanesToReduce));
   }
 
-  // Extend `i1` values if the operation is not a logical operation.
   bool isBoolType =
       resultTy.isInteger() && resultTy.getIntOrFloatBitWidth() == 1;
   assert(!(isBoolType && is_spirv_bitwise_group_op_v<GroupOp>) &&
@@ -135,10 +134,12 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
          "Unexpected FP arithmetic operation on a Boolean type");
 
   if constexpr (has_spirv_corresponding_logical_op_v<GroupOp>) {
-    using LogicalGroupOp = spirv_corresponding_logical_op_t<GroupOp>;
-    if (isBoolType)
+    if (isBoolType) {
+      // Use bitwise-equivalent logical operation instead of GroupOp.
+      using LogicalGroupOp = spirv_corresponding_logical_op_t<GroupOp>;
       return rewriter.create<LogicalGroupOp>(
           loc, resultTy, spirv::Scope::Subgroup, spvGroupOp, acc, clusterSize);
+    }
   }
 
   return rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
