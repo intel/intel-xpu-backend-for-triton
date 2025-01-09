@@ -272,7 +272,7 @@ def matmul(a, b, d, c):
         args={},
     ))
 def benchmark(B, M, N, K, dtype, provider):
-    res_dtype = torch.float32 if dtype is torch.bfloat16 else torch.int32
+    res_dtype = torch.float32 if dtype.is_floating_point else torch.int32
     if dtype.is_floating_point:
         rand = lambda shape, dtype: torch.rand(shape, device='xpu', dtype=dtype)
     else:
