@@ -630,8 +630,11 @@ class XPUDriver(DriverBase):
 
     @staticmethod
     def is_active():
-        import torch
-        return torch.xpu.is_available()
+        try:
+            import torch
+            return torch.xpu.is_available()
+        except ImportError:
+            return False
 
     def get_benchmarker(self):
         from triton.testing import do_bench
@@ -645,3 +648,6 @@ class XPUDriver(DriverBase):
         # doesn't contain any input data before the run
         cache_size = 256 * 1024 * 1024
         return torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
+
+    def clear_cache(self, cache):
+        cache.zero_()

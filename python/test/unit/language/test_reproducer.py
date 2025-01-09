@@ -13,7 +13,7 @@ def triton_():
     return
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
+@pytest.mark.skipif(not torch.xpu.is_available() and not torch.cuda.is_available(), reason="requires cuda")
 def test_reproducer():
     tmpdir = ".tmp"
     reproducer = 'triton-reproducer.mlir'
