@@ -261,7 +261,7 @@ index fa2a1334380..4d730fd45de 100644
      except ImportError:
          from triton.compiler.compiler import AttrsDescriptor
 diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
-index 281d0e78ba4..3b059a365c9 100644
+index 281d0e78ba4..e68c2405e8d 100644
 --- a/torch/_inductor/runtime/triton_heuristics.py
 +++ b/torch/_inductor/runtime/triton_heuristics.py
 @@ -414,10 +414,21 @@ class CachingAutotuner(KernelInterface):
@@ -301,7 +301,15 @@ index 281d0e78ba4..3b059a365c9 100644
          ]
          binary_shared = (
              binary.shared if hasattr(binary, "shared") else binary.metadata.shared
-@@ -952,6 +961,7 @@ class CachingAutotuner(KernelInterface):
+@@ -648,6 +657,7 @@ class CachingAutotuner(KernelInterface):
+             self.reset_to_zero_args(*args, **kwargs)
+             launcher(
+                 *cloned_args,
++                **launcher.config.kwargs,
+                 **cloned_kwargs,
+                 grid=grid,
+                 stream=stream,
+@@ -952,6 +962,7 @@ class CachingAutotuner(KernelInterface):
              ):
                  return launcher(
                      *args,
@@ -309,7 +317,7 @@ index 281d0e78ba4..3b059a365c9 100644
                      **kwargs,
                      grid=grid,
                      stream=stream,
-@@ -959,6 +969,7 @@ class CachingAutotuner(KernelInterface):
+@@ -959,6 +970,7 @@ class CachingAutotuner(KernelInterface):
          else:
              return launcher(
                  *args,

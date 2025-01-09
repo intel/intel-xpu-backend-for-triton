@@ -113,7 +113,8 @@ runs:
         cd pytorch
         pip install wheel
         pip install -r requirements.txt
-        USE_STATIC_MKL=1 CFLAGS="-Wno-error=maybe-uninitialized" PYTHONWARNINGS="ignore:Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)." python setup.py bdist_wheel
+        USE_STATIC_MKL=1 CFLAGS="-Wno-error=maybe-uninitialized" python setup.py bdist_wheel 2>&1 | grep -v \
+          "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)."
 
     - name: Install PyTorch (built from source)
       if: ${{ inputs.mode == 'source' }}
