@@ -97,19 +97,52 @@ index 4d7a85029e3..f3d45ea5520 100644
  
      @requires_gpu
 diff --git a/torch/_higher_order_ops/triton_kernel_wrap.py b/torch/_higher_order_ops/triton_kernel_wrap.py
-index c3f72bc5215..03aab72dca9 100644
+index c3f72bc521..016e30790a 100644
 --- a/torch/_higher_order_ops/triton_kernel_wrap.py
 +++ b/torch/_higher_order_ops/triton_kernel_wrap.py
-@@ -239,7 +239,7 @@ def generate_ttir(
+@@ -184,6 +184,7 @@ def generate_ttir(
+     from triton.compiler.compiler import ASTSource
+     from triton.runtime.autotuner import Autotuner
+     from triton.runtime.jit import JITFunction
++    from triton._utils import find_paths_if, get_iterable_path
+ 
+     import torch._inductor.ir
+     from torch._subclasses.fake_tensor import FakeTensor
+@@ -233,24 +234,40 @@ def generate_ttir(
+         name for name, arg in ordered_args.items() if isinstance(arg, Tensor)
+     ]
+ 
+-    def _get_specialization(args):  # type: ignore[no-untyped-def]
++    def _get_specialization(kernel, *args):  # type: ignore[no-untyped-def]
+         try:
+-            from triton.backends.compiler import AttrsDescriptor  # noqa: F401
++            from triton.runtime.jit import create_function_from_signature
  
              target = triton.runtime.driver.active.get_current_target()
              backend = triton.compiler.compiler.make_backend(target)
 -            return backend.get_attrs_descriptor(args, kernel.params)
-+            return backend.get_attrs_descriptor(kernel.params, args)
++            # from: binder = create_function_from_signature(self.signature, self.params, backend)
++            specialization = []
++            # signature
++            for name, kp in zip(kernel.signature.parameters.keys(), kernel.params):
++                if kp.is_constexpr:
++                    specialization.append(f'("constexpr", {name})')
++                else:
++                    is_const = 'True' if kp.is_const else 'False'
++                    specialize = 'False' if kp.do_not_specialize else 'True'
++                    align = 'False' if kp.do_not_specialize_on_alignment else 'True'
++                    ret = f"specialize_impl({name}, specialize_extra, {is_const}, {specialize}, {align})"
++                    if kp.annotation_type:
++                        specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
++                    else:
++                        specialization.append(f"{ret}")
++            return specialization
          except ImportError:
              return kernel._get_config(*args)
  
-@@ -248,9 +248,10 @@ def generate_ttir(
+-    specialization = _get_specialization(ordered_args.values())
++    specialization = _get_specialization(kernel, ordered_args.values())
+     constants = {
          name: arg for name, arg in ordered_args.items() if not isinstance(arg, Tensor)
      }
  
@@ -122,7 +155,7 @@ index c3f72bc5215..03aab72dca9 100644
          for i, (name, arg) in enumerate(ordered_args.items())
          if i not in kernel.constexprs
      }
-@@ -258,7 +259,18 @@ def generate_ttir(
+@@ -258,7 +275,22 @@ def generate_ttir(
      triton._C.libtriton.ir.load_dialects(context)
      backend.load_dialects(context)
  
@@ -138,7 +171,11 @@ index c3f72bc5215..03aab72dca9 100644
 +                new_signature[arg_name] = signature[arg_name]
 +        return new_signature
 +
-+    src = ASTSource(kernel, fixup_signature(kernel.arg_names, signature, constants), constants, specialization)
++    attrvals = [x[1] for x in specialization]
++    from triton._utils import find_paths_if, get_iterable_path
++    attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
++    attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
++    src = ASTSource(kernel, fixup_signature(kernel.arg_names, signature, constants), constants, attrs)
  
      # Triton changes ASTSource.make_ir to take 3/4 arguments. Handle
      # backward compatibility here.
