@@ -18,7 +18,9 @@ for arg in "$@"; do
   esac
 done
 
-if dpkg-query --show libigc1 &> /dev/null; then
+if dpkg-query --show libigc2 &> /dev/null; then
+    export LIBIGC1_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc2 | grep -oP '.+(?=~)')
+elif dpkg-query --show libigc1 &> /dev/null; then
     export LIBIGC1_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc1 | grep -oP '.+(?=~)')
 else
     export LIBIGC1_VERSION="Not Installed"
@@ -32,7 +34,9 @@ else
     export LEVEL_ZERO_VERSION="Not Installed"
 fi
 
-if dpkg-query --show libigc1 &> /dev/null; then
+if dpkg-query --show libigc2 &> /dev/null; then
+    export AGAMA_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc2 | sed 's/.*-\(.*\)~.*/\1/')
+elif dpkg-query --show libigc1 &> /dev/null; then
     export AGAMA_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc1 | sed 's/.*-\(.*\)~.*/\1/')
 else
     export AGAMA_VERSION="Not Installed"
