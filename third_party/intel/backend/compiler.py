@@ -329,6 +329,10 @@ class XPUBackend(BaseBackend):
         if os.getenv("TRITON_INTEL_ENABLE_POST_PROCESS_LLIR", "0") == "1":
             intel.post_process_llir(llvm_mod)
 
+        if os.environ.get("FROM_LLVM", ""):
+            llvm_mod = llvm.parse_ir_file(
+                "/home/jovyan/intel-xpu-backend-for-triton/python/test/unit/language/input.ll", context)
+
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
         ret = str(llvm_mod)
