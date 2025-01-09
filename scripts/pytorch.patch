@@ -72,27 +72,44 @@ index 84264bf1b0..54b6d028cf 100644
  
  if __name__ == "__main__":
 diff --git a/test/inductor/test_triton_kernels.py b/test/inductor/test_triton_kernels.py
-index 4d7a85029e3..f3d45ea5520 100644
+index f674262ab6..fc2b8a6c27 100644
 --- a/test/inductor/test_triton_kernels.py
 +++ b/test/inductor/test_triton_kernels.py
-@@ -1268,9 +1268,9 @@ def forward(self, x_1, output_1):
-         if dynamic:
-             # when half_n_elements passed to the Triton kernel is
-             # dynamic, equal_to_1 specializaiton can't be enforced
+@@ -55,14 +55,6 @@ if HAS_GPU:
+                 fast_dividef as my_fast_dividef,
+             )
+ 
+-    def _triton_get_ast_equal_to_str(params):
+-        try:
+-            from triton.backends.compiler import AttrsDescriptor  # noqa: F401
+-
+-            return f"'tt.equal_to': {params}"
+-        except ImportError:
+-            return f"equal_to_1={params}"
+-
+     # Define shared triton constants here.
+     CONSTANT_C: tl.constexpr = 4
+     STRING_CONSTANT_C: tl.constexpr = "CONSTANT_C"
+@@ -1266,12 +1258,6 @@ def forward(self, x_1, output_1):
+             torch.compile(f, dynamic=dynamic), x, y
+         )
+ 
+-        if dynamic:
+-            # when half_n_elements passed to the Triton kernel is
+-            # dynamic, equal_to_1 specializaiton can't be enforced
 -            self.assertTrue(_triton_get_ast_equal_to_str(()) in sources[0])
-+            self.assertTrue(_triton_get_ast_equal_to_str([]) in sources[0])
-         else:
+-        else:
 -            self.assertTrue(_triton_get_ast_equal_to_str((3,)) in sources[0])
-+            self.assertTrue(_triton_get_ast_equal_to_str([(3,)]) in sources[0])
          self.assertEqual(compiled_out, eager_out)
  
      @requires_gpu
-@@ -1299,7 +1299,7 @@ def forward(self, x_1, output_1):
+@@ -1298,9 +1284,6 @@ def forward(self, x_1, output_1):
+             torch.compile(f, dynamic=dynamic), x, y
+         )
  
-         # float 1.0 (both literal or symbolic)
-         # should not be added to equal_to_1
+-        # float 1.0 (both literal or symbolic)
+-        # should not be added to equal_to_1
 -        self.assertTrue(_triton_get_ast_equal_to_str(()) in sources[0])
-+        self.assertTrue(_triton_get_ast_equal_to_str([]) in sources[0])
          self.assertEqual(compiled_out, eager_out)
  
      @requires_gpu
