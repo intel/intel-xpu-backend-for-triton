@@ -1,25 +1,76 @@
 diff --git a/test/inductor/test_codegen_triton.py b/test/inductor/test_codegen_triton.py
-index 84264bf1b01..aa9a624d5ac 100644
+index 84264bf1b0..54b6d028cf 100644
 --- a/test/inductor/test_codegen_triton.py
 +++ b/test/inductor/test_codegen_triton.py
-@@ -48,7 +48,7 @@ class TestCodegenTriton(InductorTestCase):
-                 return config.divisible_by_16
+@@ -39,45 +39,31 @@ class TestCodegenTriton(InductorTestCase):
+         s0 = sympy.Symbol("s0", positive=True, integer=True)
+         s1 = sympy.Symbol("s1", positive=True, integer=True)
  
-         self.assertEqual(
+-        def _check_divisibility(config):
+-            try:
+-                from triton.backends.compiler import AttrsDescriptor  # noqa: F401
+-
+-                return config.divisibility_16
+-            except ImportError:
+-                return config.divisible_by_16
+-
+-        self.assertEqual(
 -            (2,),
-+            [(2,)],
-             _check_divisibility(
-                 triton_utils.config_of(
-                     [
-@@ -63,7 +63,7 @@ class TestCodegenTriton(InductorTestCase):
+-            _check_divisibility(
+-                triton_utils.config_of(
+-                    [
+-                        SizeArg("A", two),  # no
+-                        SizeArg("B", eight),  # no
+-                        SizeArg("C", sixteen),  # yes
+-                        SizeArg("D", s0),  # no
+-                        SizeArg("E", s1),  # no
+-                    ]
+-                )
+-            ),
++        config = triton_utils.config_of(
++            [
++                SizeArg("A", two),  # no
++                SizeArg("B", eight),  # no
++                SizeArg("C", sixteen),  # yes
++                SizeArg("D", s0),  # no
++                SizeArg("E", s1),  # no
++            ]
          )
- 
-         self.assertEqual(
+-
+-        self.assertEqual(
 -            (0, 2, 4, 5, 6),
-+            [(0,), (2,), (4,), (5,), (6,)],
-             _check_divisibility(
-                 triton_utils.config_of(
-                     [
+-            _check_divisibility(
+-                triton_utils.config_of(
+-                    [
+-                        SizeArg("A", two * eight),  # 0: yes
+-                        SizeArg("B", eight * s0),  # 1: no
+-                        SizeArg("C", two * eight * s0),  # 2: yes
+-                        SizeArg("D", s0 * s1),  # 3: no
+-                        SizeArg("E", sixteen * s0),  # 4: yes
+-                        SizeArg("F", sixteen * eight * s0 * s1),  # 5: yes
+-                        SizeArg("G", two * eight * s0 * s1),  # 6: yes
+-                    ]
+-                )
+-            ),
++        # check for key
++        config[((2,),)]
++
++        config = triton_utils.config_of(
++            [
++                SizeArg("A", two * eight),  # 0: yes
++                SizeArg("B", eight * s0),  # 1: no
++                SizeArg("C", two * eight * s0),  # 2: yes
++                SizeArg("D", s0 * s1),  # 3: no
++                SizeArg("E", sixteen * s0),  # 4: yes
++                SizeArg("F", sixteen * eight * s0 * s1),  # 5: yes
++                SizeArg("G", two * eight * s0 * s1),  # 6: yes
++            ]
+         )
++        # check for key
++        config[((0,), (2,), (4,), (5,), (6,))]
+ 
+ 
+ if __name__ == "__main__":
 diff --git a/test/inductor/test_triton_kernels.py b/test/inductor/test_triton_kernels.py
 index 4d7a85029e3..f3d45ea5520 100644
 --- a/test/inductor/test_triton_kernels.py
