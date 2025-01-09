@@ -646,26 +646,10 @@ struct TritonIntelGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
-                                      Attribute expected, Attribute got,
-                                      Location loc) const override {
-    if (expected == got) {
-      return success();
-    }
-    // Check whether the encodings are structurally the same.
-    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
-    auto gotLL = triton::gpu::toLinearLayout(shape, got);
-    if (expectedLL != gotLL) {
-      return emitError(loc, "Expected result encoding ")
-             << expected << " but was " << got;
-    }
-    return success();
-  }
-
   LogicalResult
-  inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         std::optional<Location> loc) const override {
+  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                                  std::optional<Location> loc) const override {
     // TODO
     return failure();
   }
