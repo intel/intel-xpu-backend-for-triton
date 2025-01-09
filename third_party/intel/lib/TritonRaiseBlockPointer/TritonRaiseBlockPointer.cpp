@@ -44,9 +44,8 @@ constexpr unsigned shapeAndStridesBitwidth = 64u;
 // Lookup for a constant with the given value and bitwidth in the current block
 // (before the builder insertion point). Return it a suitable constant is found,
 // otherwise create a new one.
-arith::ConstantIntOp findOrCreateConstant(Location loc, int val,
-                                          unsigned bitWidth,
-                                          OpBuilder &builder) {
+Value findOrCreateConstant(Location loc, int val, unsigned bitWidth,
+                           OpBuilder &builder) {
   Block *block = builder.getInsertionBlock();
   const Block::iterator insertPoint = builder.getInsertionPoint();
 
@@ -59,7 +58,7 @@ arith::ConstantIntOp findOrCreateConstant(Location loc, int val,
 
   return (it != insertPoint)
              ? cast<arith::ConstantIntOp>(*it)
-             : builder.create<arith::ConstantIntOp>(loc, val, bitWidth);
+             : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
 }
 
 Value findOrCreateCast(Location loc, Value val, Type tgtType,
@@ -238,12 +237,6 @@ struct PtrState {
       std::swap(lhs, rhs);
 
     Location loc = op->getLoc();
-
-    Value i32Scalar =
-        findOrCreateCast(loc, rhs->scalar, builder.getI32Type(), builder);
-    Value i64Scalar =
-        findOrCreateCast(loc, rhs->scalar, builder.getI64Type(), builder);
-
     ArithBuilder abuilder(builder, loc);
 
     auto mulIfNecessary = [&](Value lhs, Value rhs) {
@@ -261,13 +254,24 @@ struct PtrState {
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
       Value newOffset = mulIfNecessary(
-          findOrCreateCast(loc, offset, builder.getI32Type(), builder),
-          i32Scalar);
+          findOrCreateCast(loc, offset, builder.getIntegerType(offsetBitwidth),
+                           builder),
+          findOrCreateCast(loc, rhs->scalar,
+                           builder.getIntegerType(offsetBitwidth), builder));
       Value newStride = mulIfNecessary(
-          findOrCreateCast(loc, stride, builder.getI64Type(), builder),
-          i64Scalar);
+          findOrCreateCast(loc, stride,
+                           builder.getIntegerType(shapeAndStridesBitwidth),
+                           builder),
+          findOrCreateCast(loc, rhs->scalar,
+                           builder.getIntegerType(shapeAndStridesBitwidth),
+                           builder));
       Value newDim = mulIfNecessary(
-          findOrCreateCast(loc, dim, builder.getI64Type(), builder), i64Scalar);
+          findOrCreateCast(loc, dim,
+                           builder.getIntegerType(shapeAndStridesBitwidth),
+                           builder),
+          findOrCreateCast(loc, rhs->scalar,
+                           builder.getIntegerType(shapeAndStridesBitwidth),
+                           builder));
       offsets.push_back(newOffset);
       strides.push_back(newStride);
       shape.push_back(newDim);
@@ -277,36 +281,45 @@ struct PtrState {
     return success();
   }
 
-  tt::MakeTensorPtrOp createTTMakeTensorPtrOp(OpBuilder &builder,
-                                              Location loc) const {
+  Value createTTMakeTensorPtrOp(OpBuilder &builder, Location loc) const {
     SmallVector<Value> newOffsets, newStrides, newShape;
+
+    auto divIfNecessary = [&](Location loc, Type type, Value num, Value den) {
+      // Attempt to prove that the denominator has value one. If so return the
+      // numerator, otherwise create a div operation.
+      Operation *defOp = den.getDefiningOp();
+      assert(defOp && "Expecting a defining operation for the value");
+      if (isa<arith::TruncIOp>(defOp) &&
+          ttgi::isConstant(cast<arith::TruncIOp>(defOp).getOperand(), 1))
+        return num;
+
+      return builder.createOrFold<arith::DivUIOp>(loc, type, num, den);
+    };
+
     for (const auto &[offset, stride, dim] :
          llvm::zip(offsets, strides, shape)) {
-
       if (ttgi::isConstant(stride, 0)) {
         newOffsets.push_back(
             findOrCreateCast(loc, offset, builder.getI32Type(), builder));
       } else {
-        auto divOffset = builder.create<arith::DivUIOp>(
+        auto divOffset = divIfNecessary(
             loc, builder.getI32Type(),
-            findOrCreateCast(loc, offset, builder.getI32Type(), builder),
-            findOrCreateCast(loc, stride, builder.getI32Type(), builder));
+            findOrCreateCast(loc, offset,
+                             builder.getIntegerType(offsetBitwidth), builder),
+            findOrCreateCast(loc, stride,
+                             builder.getIntegerType(offsetBitwidth), builder));
+        llvm::dbgs() << "divOffset: " << divOffset << "\n";
         newOffsets.push_back(divOffset);
       }
-      newStrides.push_back(
-          findOrCreateCast(loc, stride, builder.getI64Type(), builder));
-      newShape.push_back(
-          findOrCreateCast(loc, dim, builder.getI64Type(), builder));
+      newStrides.push_back(findOrCreateCast(
+          loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
+          builder));
+      newShape.push_back(findOrCreateCast(
+          loc, dim, builder.getIntegerType(shapeAndStridesBitwidth), builder));
     }
 
-    auto op = builder.create<tt::MakeTensorPtrOp>(
+    auto op = builder.createOrFold<tt::MakeTensorPtrOp>(
         loc, source, newShape, newStrides, newOffsets, sizes, order);
-
-    LLVM_DEBUG({
-      llvm::dbgs() << "Created: " << op << "\n";
-      auto modOp = op->getParentOfType<ModuleOp>();
-      llvm::dbgs() << "Module:\n" << modOp << "\n";
-    });
 
     return op;
   }
@@ -542,10 +555,9 @@ public:
       if (state.getRank() != 0) {
         OpBuilder::InsertionGuard guard(builder);
         builder.setInsertionPointToStart(&newOp.getRegion().front());
-        tt::MakeTensorPtrOp makePtrOp =
-            state.createTTMakeTensorPtrOp(builder, op.getLoc());
-        ptrMap.map(key, makePtrOp.getResult());
-        knownPtrs[makePtrOp.getResult()] = std::move(state);
+        Value makePtrOp = state.createTTMakeTensorPtrOp(builder, op.getLoc());
+        ptrMap.map(key, makePtrOp);
+        knownPtrs[makePtrOp] = std::move(state);
       }
     }
 
@@ -667,7 +679,7 @@ public:
         operands.push_back(state.scalar);
     }
 
-    auto newOp = builder.create<scf::YieldOp>(op->getLoc(), operands);
+    auto newOp = builder.createOrFold<scf::YieldOp>(op->getLoc(), operands);
 
     LLVM_DEBUG({
       llvm::dbgs() << "new yield:";
@@ -818,10 +830,9 @@ public:
     Value result = op.getResult();
     Value mapped = result;
     if (isa<RankedTensorType>(result.getType())) {
-      tt::MakeTensorPtrOp makePtrOp =
-          state.createTTMakeTensorPtrOp(builder, loc);
-      knownPtrs[makePtrOp.getResult()] = std::move(state);
-      mapped = makePtrOp.getResult();
+      Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
+      knownPtrs[makePtrOp] = std::move(state);
+      mapped = makePtrOp;
     }
 
     ptrMap.map(result, mapped);
@@ -867,12 +878,11 @@ public:
     for (int i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
 
-      auto strideCst = builder.create<arith::IndexCastOp>(
+      auto strideCst = builder.createOrFold<arith::IndexCastOp>(
           loc, builder.getIndexType(), makeTPtrOp.getStrides()[i]);
-      auto offsetCst = builder.create<arith::IndexCastOp>(
+      auto offsetCst = builder.createOrFold<arith::IndexCastOp>(
           loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
-      auto scaledOffset =
-          mulIfNecessary(offsetCst.getResult(), strideCst.getResult());
+      auto scaledOffset = mulIfNecessary(offsetCst, strideCst);
       state.offsets.push_back(findOrCreateCast(
           loc, scaledOffset, builder.getIntegerType(offsetBitwidth), builder));
     }
@@ -956,9 +966,8 @@ public:
       OpBuilder::InsertionGuard guard(builder);
       if (Operation *definingOp = operand.getDefiningOp())
         builder.setInsertionPointAfter(definingOp);
-      auto castOp = builder.create<arith::IndexCastOp>(
+      state.scalar = builder.createOrFold<arith::IndexCastOp>(
           loc, builder.getIndexType(), operand);
-      state.scalar = castOp.getResult();
       return success();
     }
 
@@ -1054,13 +1063,13 @@ public:
 
     OpBuilder builder(op);
     if constexpr (isLoad) {
-      auto loadOp = builder.create<tt::LoadOp>(
+      auto loadOp = builder.createOrFold<tt::LoadOp>(
           op.getLoc(), ptr, newBoundaryCheck, op.getPadding(), op.getCache(),
           op.getEvict(), op.getIsVolatile());
       LLVM_DEBUG(llvm::dbgs() << "Created: " << loadOp << "\n";);
-      op.replaceAllUsesWith(loadOp.getResult());
+      op.replaceAllUsesWith(loadOp);
     } else {
-      [[maybe_unused]] auto storeOp = builder.create<tt::StoreOp>(
+      [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
           op.getLoc(), ptr, op.getValue(), newBoundaryCheck, op.getCache(),
           op.getEvict());
       LLVM_DEBUG(llvm::dbgs() << "Created: " << storeOp << "\n";);
@@ -1269,7 +1278,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   assert(attr.isSplat() && isa<IntegerType>(attr.getElementType()) &&
          "Expecting constant tensor");
 
-  state.scalar = builder.create<arith::ConstantIndexOp>(
+  state.scalar = builder.createOrFold<arith::ConstantIndexOp>(
       loc, attr.getValues<IntegerAttr>()[0].getValue().getSExtValue());
 
   Type offsetType = builder.getIntegerType(offsetBitwidth);
