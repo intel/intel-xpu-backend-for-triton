@@ -128,9 +128,8 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
   // Extend `i1` values if the operation is not a logical operation.
   bool isBoolType =
       resultTy.isInteger() && resultTy.getIntOrFloatBitWidth() == 1;
-  assert(!(isBoolType &&
-           is_spirv_bitwise_group_op_v<
-               GroupOp>)&&"Unexpected bitwise operation on a Boolean type");
+  assert(!(isBoolType && is_spirv_bitwise_group_op_v<GroupOp>) &&
+         "Unexpected bitwise operation on a Boolean type");
   bool needsExtension = is_spirv_arithmetic_group_op_v<GroupOp> && isBoolType;
   if (needsExtension) {
     acc = zext(i8_ty, acc);
