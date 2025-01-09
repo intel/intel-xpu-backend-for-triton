@@ -2,9 +2,9 @@
 
 // CHECK-LABEL:   tt.func @test_addptr_splat_make_range(
 // CHECK-SAME:                                          %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<128xf32> {
-// CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i64
-// CHECK:           %[[VAL_2:.*]] = arith.constant 128 : i32
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1 : i64
+// CHECK-DAG:       %[[VAL_1:.*]] = arith.constant 0 : i64
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant 128 : i32
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1 : i64
 // CHECK:           %[[VAL_4:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_1]]], {{\[}}%[[VAL_3]]], {{\[}}%[[VAL_2]]] {order = array<i32>} : <tensor<128xf32>>
 // CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<tensor<128xf32>>
 // CHECK:           tt.return %[[VAL_5]] : tensor<128xf32>
@@ -500,16 +500,16 @@ module {
 }
 
 
-// CHECK:         tt.func @test_addptr_for_more_init_args([[PARAM_0_:%.+]]: !tt.ptr<bf16>, [[PARAM_1_:%.+]]: !tt.ptr<bf16>) {
-// CHECK:       [[CST_3_i32:%.+]] = arith.constant 3 : i32
-// CHECK:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
-// CHECK:       [[CST_0_:%.+]] = arith.constant 0 : index
-// CHECK:       [[CST_1_:%.+]] = arith.constant 1 : index
-// CHECK:       [[CST_2_:%.+]] = arith.constant 2 : index
-// CHECK:       [[CST_3_:%.+]] = arith.constant 3 : index
-// CHECK:       [[CST_12_:%.+]] = arith.constant 12 : index
-// CHECK:       [[CST_1024_i32:%.+]] = arith.constant 1024 : i32
-// CHECK:       [[CST_1_i64:%.+]] = arith.constant 1 : i64
+// CHECK:     tt.func @test_addptr_for_more_init_args([[PARAM_0_:%.+]]: !tt.ptr<bf16>, [[PARAM_1_:%.+]]: !tt.ptr<bf16>) {
+// CHECK-DAG:   [[CST_3_i32:%.+]] = arith.constant 3 : i32
+// CHECK-DAG:   [[CST_0_i64:%.+]] = arith.constant 0 : i64
+// CHECK-DAG:   [[CST_0_:%.+]] = arith.constant 0 : index
+// CHECK-DAG:   [[CST_1_:%.+]] = arith.constant 1 : index
+// CHECK-DAG:   [[CST_2_:%.+]] = arith.constant 2 : index
+// CHECK-DAG:   [[CST_3_:%.+]] = arith.constant 3 : index
+// CHECK-DAG:   [[CST_12_:%.+]] = arith.constant 12 : index
+// CHECK-DAG:   [[CST_1024_i32:%.+]] = arith.constant 1024 : i32
+// CHECK-DAG:   [[CST_1_i64:%.+]] = arith.constant 1 : i64
 // CHECK:       [[VAR_0_:%.+]]:5 = scf.for [[VAR_arg2_:%.+]] = [[CST_0_]] to [[CST_12_]] step [[CST_3_]] iter_args([[VAR_arg3_:%.+]] = [[CST_1_]], [[VAR_arg4_:%.+]] = [[CST_2_]], [[VAR_arg5_:%.+]] = [[CST_3_]], [[VAR_arg6_:%.+]] = [[CST_1024_i32]], [[VAR_arg7_:%.+]] = [[CST_1024_i32]]) -> (index, index, index, i32, i32) {
 // CHECK:           [[VAR_1_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]]], {{\[}}[[CST_1_i64]]], {{\[}}[[VAR_arg7_]]] {order = array<i32>} : <tensor<256xbf16>>
 // CHECK:           [[VAR_2_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]]], {{\[}}[[CST_1_i64]]], {{\[}}[[VAR_arg6_]]] {order = array<i32>} : <tensor<256xbf16>>
@@ -526,7 +526,7 @@ module {
 // CHECK:           scf.yield [[VAR_5_]], [[VAR_6_]], [[VAR_7_]], [[VAR_4_]], [[VAR_11_]] : index, index, index, i32, i32
 // CHECK:       }
 // CHECK:       tt.return
-// CHECK:       }
+// CHECK:     }
 module {
   tt.func @test_addptr_for_more_init_args(
     %arg0 : !tt.ptr<bf16>,
@@ -564,22 +564,22 @@ module {
 }
 
 
-// CHECK:         tt.func @test_addptr_for_used_after_update([[PARAM_0_:%.+]]: !tt.ptr<bf16>) {
-// CHECK:       [[CST_3_i32:%.+]] = arith.constant 3 : i32
-// CHECK:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
-// CHECK:       [[CST_0_:%.+]] = arith.constant 0 : index
-// CHECK:       [[CST_12_:%.+]] = arith.constant 12 : index
-// CHECK:       [[CST_1024_i32:%.+]] = arith.constant 1024 : i32
-// CHECK:       [[CST_1_i64:%.+]] = arith.constant 1 : i64
+// CHECK:     tt.func @test_addptr_for_used_after_update([[PARAM_0_:%.+]]: !tt.ptr<bf16>) {
+// CHECK-DAG:   [[CST_3_i32:%.+]] = arith.constant 3 : i32
+// CHECK-DAG:   [[CST_0_i64:%.+]] = arith.constant 0 : i64
+// CHECK-DAG:   [[CST_0_:%.+]] = arith.constant 0 : index
+// CHECK-DAG:   [[CST_12_:%.+]] = arith.constant 12 : index
+// CHECK-DAG:   [[CST_1024_i32:%.+]] = arith.constant 1024 : i32
+// CHECK-DAG:   [[CST_1_i64:%.+]] = arith.constant 1 : i64
 // CHECK:       [[VAR_0_:%.+]] = scf.for [[VAR_arg1_:%.+]] = [[CST_0_]] to [[CST_12_]] step [[CST_3_]] iter_args([[VAR_arg2_:%.+]] = [[CST_1024_i32]]) -> (i32) {
 // CHECK:         [[VAR_1_:%.+]] = arith.addi [[VAR_arg2_]], [[CST_3_i32]] : i32
 // CHECK:         [[VAR_2_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]]], {{\[}}[[CST_1_i64]]], {{\[}}[[VAR_1_]]] {order = array<i32>} : <tensor<256xbf16>>
 // CHECK:         [[VAR_3_:%.+]] = tt.load [[VAR_2_]] : !tt.ptr<tensor<256xbf16>>
 // CHECK:         tt.store [[VAR_2_]], [[VAR_3_]] : !tt.ptr<tensor<256xbf16>>
 // CHECK:         scf.yield [[VAR_1_]] : i32
-// CHECK:         }
-// CHECK:         tt.return
-// CHECK:      }
+// CHECK:       }
+// CHECK:       tt.return
+// CHECK:     }
 module {
   tt.func @test_addptr_for_used_after_update(
     %arg0 : !tt.ptr<bf16>
@@ -604,14 +604,14 @@ module {
 }
 
 
-// CHECK:       tt.func @test_addptr_for_used_before_update([[PARAM_0_:%.+]]: !tt.ptr<bf16>) {
-// CHECK:       [[CST_3_i32:%.+]] = arith.constant 3 : i32
-// CHECK:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
-// CHECK:       [[CST_0_:%.+]] = arith.constant 0 : index
-// CHECK:       [[CST_12_:%.+]] = arith.constant 12 : index
-// CHECK:       [[CST_3_:%.+]] = arith.constant 3 : index
-// CHECK:       [[CST_1024_i32:%.+]] = arith.constant 1024 : i32
-// CHECK:       [[CST_1_i64:%.+]] = arith.constant 1 : i64
+// CHECK:     tt.func @test_addptr_for_used_before_update([[PARAM_0_:%.+]]: !tt.ptr<bf16>) {
+// CHECK-DAG:   [[CST_3_i32:%.+]] = arith.constant 3 : i32
+// CHECK-DAG:   [[CST_0_i64:%.+]] = arith.constant 0 : i64
+// CHECK-DAG:   [[CST_0_:%.+]] = arith.constant 0 : index
+// CHECK-DAG:   [[CST_12_:%.+]] = arith.constant 12 : index
+// CHECK-DAG:   [[CST_3_:%.+]] = arith.constant 3 : index
+// CHECK-DAG:   [[CST_1024_i32:%.+]] = arith.constant 1024 : i32
+// CHECK-DAG:   [[CST_1_i64:%.+]] = arith.constant 1 : i64
 // CHECK:       [[VAR_0_:%.+]] = scf.for [[VAR_arg1_:%.+]] = [[CST_0_]] to [[CST_12_]] step [[CST_3_]] iter_args([[VAR_arg2_:%.+]] = [[CST_1024_i32]]) -> (i32) {
 
 // CHECK:           [[VAR_2_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]]], {{\[}}[[CST_1_i64]]], {{\[}}[[VAR_arg2_]]] {order = array<i32>} : <tensor<256xbf16>>
@@ -621,7 +621,7 @@ module {
 // CHECK:           scf.yield [[VAR_3_]] : i32
 // CHECK:       }
 // CHECK:       tt.return
-// CHECK:       }
+// CHECK:     }
 module {
   tt.func @test_addptr_for_used_before_update(
     %arg0 : !tt.ptr<bf16>
@@ -645,7 +645,7 @@ module {
   }
 }
 
-// CHECK:       tt.func @matmul_kernel
+// CHECK: tt.func @matmul_kernel
 // CHECK: tt.make_tensor_ptr %arg0
 // CHECK: tt.make_tensor_ptr %arg1
 // CHECK: tt.dot
