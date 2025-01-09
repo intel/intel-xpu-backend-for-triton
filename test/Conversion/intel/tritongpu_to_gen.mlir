@@ -1573,11 +1573,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: llvm.zext
-    // CHECK-SAME: : i1 to i8
-    // CHECK: @_Z27__spirv_GroupNonUniformIAddiic
-    // CHECK: llvm.trunc
-    // CHECK-SAME: : i8 to i1
+    // CHECK: %[[EXT:.*]] = llvm.zext %{{.*}} : i1 to i8
+    // CHECK: %[[RES:.*]] = llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiic(%{{.*}}, %{{.*}}, %[[EXT]])
+    // CHECK: llvm.trunc %[[RES]] : i8 to i1
     %10 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.addi %arg4, %arg5 : i1
