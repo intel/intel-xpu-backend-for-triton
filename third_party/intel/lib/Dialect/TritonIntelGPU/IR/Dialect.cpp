@@ -134,7 +134,7 @@ SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
 SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
-  unsigned threadsPerWarp = getSubGroupSize();
+  unsigned threadsPerWarp = getThreadsPerWarp__();
   SmallVector<unsigned> shapeC = getDPASInstShapeC();
   unsigned elemsNum = product<unsigned>(shapeC);
   unsigned elemsPerThread = elemsNum / threadsPerWarp;
@@ -263,7 +263,7 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
     ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, OpIdx opIdx) const {
   SmallVector<int64_t> shapePerCTA = getShapePerCTA(*this, shape);
   SmallVector<int64_t> rep = getDPASRepetitions(shapePerCTA, opIdx);
-  unsigned threadsPerWar = getSubGroupSize();
+  unsigned threadsPerWar = getThreadsPerWarp__();
   size_t rank = shape.size();
 
   switch (opIdx) {
@@ -302,7 +302,7 @@ SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
   unsigned executionSize = getExecutionSize();
-  unsigned subGroupSize = getSubGroupSize();
+  unsigned subGroupSize = getThreadsPerWarp__();
   if (subGroupSize < executionSize) {
     llvm::report_fatal_error("DpasEncodingAttr sub-group size could not be "
                              "smaller than the execution size");
@@ -321,7 +321,7 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
   switch (opIdx) {
   case OpIdx::OperandA: {
     SmallVector<unsigned> shapeA = getDPASInstShapeA();
-    unsigned subGroupSize = getSubGroupSize();
+    unsigned subGroupSize = getThreadsPerWarp__();
     unsigned opsPerChannel = getOpsPerChannel();
 
     // pack the value to i16 for scalar bit width <=16.
@@ -339,7 +339,7 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
   } break;
   case OpIdx::OperandB: {
     SmallVector<unsigned> shapeB = getShapeB();
-    unsigned subGroupSize = getSubGroupSize();
+    unsigned subGroupSize = getThreadsPerWarp__();
     unsigned executionSize = getExecutionSize();
     if (subGroupSize < executionSize) {
       llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
@@ -359,7 +359,7 @@ SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
   assert(rank == 2 || rank == 3);
   SmallVector<unsigned> contigPerThread(rank, 1);
 
-  unsigned threadsPerWarp = getSubGroupSize();
+  unsigned threadsPerWarp = getThreadsPerWarp__();
   SmallVector<unsigned> instShapeC = getDPASInstShapeC();
   // The software vectorization vectorized the value as C array: int a[N] ->
   // int a[N][threadsPerWarp]
@@ -494,7 +494,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", "
-          << "threadsPerWarp = " << getSubGroupSize() << ", "
+          << "threadsPerWarp = " << getThreadsPerWarp__() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
           << "repCluster = [" << repCluster << "], " << "A = [" << rA << "], "
           << "B = [" << rB << "], " << "C = [" << rC << "]" << "}>";
@@ -646,26 +646,10 @@ struct TritonIntelGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
-                                      Attribute expected, Attribute got,
-                                      Location loc) const override {
-    if (expected == got) {
-      return success();
-    }
-    // Check whether the encodings are structurally the same.
-    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
-    auto gotLL = triton::gpu::toLinearLayout(shape, got);
-    if (expectedLL != gotLL) {
-      return emitError(loc, "Expected result encoding ")
-             << expected << " but was " << got;
-    }
-    return success();
-  }
-
   LogicalResult
-  inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                         std::optional<Location> loc) const override {
+  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                                  std::optional<Location> loc) const override {
     // TODO
     return failure();
   }

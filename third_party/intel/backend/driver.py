@@ -12,7 +12,6 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from triton._utils import parse_list_string
 
 
 def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
@@ -194,7 +193,7 @@ class XPUUtils(object):
 
 
 def ty_to_cpp(ty):
-    if ty[0] == '*' or ty == "none":
+    if ty[0] == '*':
         return "void*"
     return {
         "i1": "int32_t",
@@ -215,30 +214,34 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
+def make_launcher(constants, signature):
+
+    def _serialize_signature(sig):
+        if isinstance(sig, tuple):
+            return ','.join(map(_serialize_signature, sig))
+        return sig
 
     def _extracted_type(ty):
-        if ty[0] == '*' or ty == "none":
-            return "PyObject*"
-        if ty[0] == '[':
-            if ty == "[]":
-                return "[]"
-            tys = parse_list_string(ty)
-            val = ','.join(map(_extracted_type, tys))
+        if isinstance(ty, tuple):
+            val = ','.join(map(_extracted_type, ty))
             return f"[{val}]"
+        if ty[0] == '*':
+            return "PyObject*"
+        if ty in ("constexpr"):
+            return "PyObject*"
         return ty_to_cpp(ty)
 
     def format_of(ty):
+        if isinstance(ty, tuple):
+            val = ''.join(map(format_of, ty))
+            return f"({val})"
+        if ty[0] == '*':
+            return "O"
+        if ty in ("constexpr"):
+            return "O"
         if ty == "void*":
             return "O"
-        if ty[0] == "[":
-            if ty == "[]":
-                return "()"
-            tys = parse_list_string(ty)
-            val = ''.join(map(format_of, tys))
-            return f"({val})"
         return {
-            "PyObject*": "O",
             "float": "f",
             "double": "d",
             "long": "l",
@@ -250,28 +253,33 @@ def make_launcher(constants, signature, ids):
             "uint16_t": "H",
             "uint32_t": "I",
             "uint64_t": "K",
-        }[ty]
+        }[ty_to_cpp(ty)]
 
-    signature = {k: v for k, v in signature.items() if v != 'constexpr'}
-    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = "iiiOOOOOO" + args_format
-    signature = ','.join(signature.values()).replace('[', '').replace(']', '')
+    signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
     internal_args_list = []
     for i, ty in signature.items():
-        if ty[0] == "*" or ty == "none":
+        if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
-        else:
+        elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
 
     # generate glue code
-    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none"]
+    newline = '\n  '
+    ptr_decls = [
+        f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;"
+        for i, ty in signature.items()
+        if ty[0] == "*"
+    ]
+    params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     src = f"""
 #include <cstddef>
 #include <string>
@@ -394,7 +402,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
   assert(num_params == expected_num_params && "number of kernel param not matched");
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {{
-    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants and signature[i] != "none"]))}
+    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
     if (shared_memory) {{
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
@@ -418,7 +426,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *py_obj_stream;
   PyObject* py_kernel;
 
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+  {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
                                       &kernel_metadata, &launch_metadata,
                                       &launch_enter_hook, &launch_exit_hook {args_list})) {{
@@ -467,7 +475,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   if(kernel_ptr == nullptr) return NULL;
   sycl::kernel kernel = *kernel_ptr;
 
-  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
+  {newline.join(ptr_decls)}
   sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
@@ -568,11 +576,11 @@ def serialize_args(args, constants, signature):
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
-        ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
-        self.constants = {idx: value for idx, value in constants.items()}
+        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
+        self.constants = {arg_idx(idx): value for idx, value in constants.items()}
         self.signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(self.constants, self.signature, ids)
+        src = make_launcher(self.constants, self.signature)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 

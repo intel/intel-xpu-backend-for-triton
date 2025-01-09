@@ -120,7 +120,8 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
       sizePerThreads[rank - 2] / repCluster[rank - 2],
       sizePerThreads[rank - 1] / repCluster[rank - 1]};
 
-  unsigned rowsPerElem = dpasLayout.getSubGroupSize() / instShapeC[1];
+  unsigned rowsPerElem =
+      product<unsigned>(dpasLayout.getThreadsPerWarp()) / instShapeC[1];
   unsigned colsPerElem = 1;
 
   unsigned repNumber = product<unsigned>(repCluster);
