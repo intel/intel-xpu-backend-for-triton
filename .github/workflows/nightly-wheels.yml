@@ -20,7 +20,7 @@ jobs:
   build:
     name: Build
     runs-on:
-      - max1100
+      - max1550
       - rolling
       - runner-0.0.21
     strategy:
