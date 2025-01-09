@@ -25,6 +25,14 @@ def dtypes():
     return [torch.bfloat16]
 
 
+def suffix():
+    if ALL_DTYPES_OPTION:
+        return 'all'
+    if INT8_ONLY_OPTION:
+        return 'int8'
+    return 'bfloat16'
+
+
 @triton.autotune(
     configs=[
         triton.Config(
@@ -259,7 +267,7 @@ def matmul(a, b, d, c):
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='matmul-performance-postop-addmatrix' + '-int8' if INT8_ONLY_OPTION else '',
+        plot_name='matmul-performance-postop-addmatrix' + '-' + suffix(),
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
