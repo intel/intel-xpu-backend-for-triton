@@ -1573,12 +1573,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
 
-    // CHECK: %[[EXT:.*]] = llvm.zext %{{.*}} : i1 to i8
-    // CHECK: %[[RES:.*]] = llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiic(%{{.*}}, %{{.*}}, %[[EXT]])
-    // CHECK: llvm.trunc %[[RES]] : i8 to i1
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
     %10 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
       %48 = arith.addi %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    %11 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.muli %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    %12 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.maxsi %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    %13 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.maxui %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    %14 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.minsi %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    %15 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.minui %arg4, %arg5 : i1
       tt.reduce.return %48 : i1
     }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
 

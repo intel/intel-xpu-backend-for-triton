@@ -130,20 +130,19 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
       resultTy.isInteger() && resultTy.getIntOrFloatBitWidth() == 1;
   assert(!(isBoolType && is_spirv_bitwise_group_op_v<GroupOp>) &&
          "Unexpected bitwise operation on a Boolean type");
-  bool needsExtension = is_spirv_arithmetic_group_op_v<GroupOp> && isBoolType;
-  if (needsExtension) {
-    acc = zext(i8_ty, acc);
-    resultTy = i8_ty;
+  assert(!(isBoolType && is_spirv_arithmetic_group_op_v<GroupOp> &&
+           !has_spirv_corresponding_logical_op_v<GroupOp>) &&
+         "Unexpected FP arithmetic operation on a Boolean type");
+
+  if constexpr (has_spirv_corresponding_logical_op_v<GroupOp>) {
+    using LogicalGroupOp = spirv_corresponding_logical_op_t<GroupOp>;
+    if (isBoolType)
+      return rewriter.create<LogicalGroupOp>(
+          loc, resultTy, spirv::Scope::Subgroup, spvGroupOp, acc, clusterSize);
   }
 
-  Value result = rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
-                                          spvGroupOp, acc, clusterSize);
-
-  // Truncate back to `i1` if previously extended.
-  if (needsExtension)
-    result = trunc(i1_ty, result);
-
-  return result;
+  return rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
+                                  spvGroupOp, acc, clusterSize);
 }
 
 Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
