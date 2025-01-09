@@ -111,8 +111,7 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
 namespace {
 
-template <typename GroupOp,
-          typename = std::enable_if_t<is_spirv_group_op_v<GroupOp>>>
+template <typename GroupOp>
 Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
                          Value acc, unsigned numLanesToReduce,
                          unsigned warpSize) {
@@ -125,50 +124,32 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
         rewriter.getI32IntegerAttr(numLanesToReduce));
   }
 
-  bool isBoolType =
-      resultTy.isInteger() && resultTy.getIntOrFloatBitWidth() == 1;
-  assert(!(isBoolType && is_spirv_bitwise_group_op_v<GroupOp>) &&
-         "Unexpected bitwise operation on a Boolean type");
-  assert(!(isBoolType && is_spirv_arithmetic_group_op_v<GroupOp> &&
-           !has_spirv_corresponding_logical_op_v<GroupOp>) &&
-         "Unexpected FP arithmetic operation on a Boolean type");
-
-  if constexpr (has_spirv_corresponding_logical_op_v<GroupOp>) {
-    if (isBoolType) {
-      // Use bitwise-equivalent logical operation instead of GroupOp.
-      using LogicalGroupOp = spirv_corresponding_logical_op_t<GroupOp>;
-      return rewriter.create<LogicalGroupOp>(
-          loc, resultTy, spirv::Scope::Subgroup, spvGroupOp, acc, clusterSize);
-    }
-  }
-
-  return rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
-                                  spvGroupOp, acc, clusterSize);
+  Value result = rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
+                                          spvGroupOp, acc, clusterSize);
+  return result;
 }
 
 Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
                        Operation *reduceOp, unsigned numLanesToReduce,
                        unsigned warpSize) {
   auto resultType = reduceOp->getResult(0).getType();
-  Value warpReduce =
-      TypeSwitch<mlir::Operation *, Value>(reduceOp)
-          .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
-                arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
-                arith::MaxNumFOp, arith::MinNumFOp>([&](auto groupOp) {
-            return createSPIRVGroupOp<
-                SPIRVArithmeticGroupOpTy<decltype(groupOp)>>(
-                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-          })
-          .Case<arith::AndIOp, arith::OrIOp, arith::XOrIOp>([&](auto groupOp) {
-            if (resultType.isInteger(1)) {
-              return createSPIRVGroupOp<
-                  SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
-                  rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-            }
-            return createSPIRVGroupOp<SPIRVBitwiseGroupOpTy<decltype(groupOp)>>(
-                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-          });
-  return warpReduce;
+  // Use bit-equivalent logical operation for Boolean values.
+  if (resultType.isInteger(1))
+    return TypeSwitch<mlir::Operation *, Value>(reduceOp)
+        .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
+              arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
+              arith::XOrIOp>([&](auto groupOp) {
+          return createSPIRVGroupOp<SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
+              rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+        });
+  return TypeSwitch<mlir::Operation *, Value>(reduceOp)
+      .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+            arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+            arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+            arith::XOrIOp>([&](auto groupOp) {
+        return createSPIRVGroupOp<SPIRVGroupOpTy<decltype(groupOp)>>(
+            rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+      });
 }
 
 } // namespace
