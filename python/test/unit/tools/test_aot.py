@@ -102,19 +102,16 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     subprocess.run(
-        ["icpx"] + cpp_files + ["-I", COMPILATION_HELPER.include_dir[0], "-c", "-fsycl", "-fPIC"],
+        ["g++"] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
+        ["-L" + COMPILATION_HELPER.libsycl_dir, "-c", "-lsycl", "-fPIC"],
         check=True,
         cwd=dir,
     )
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
-    command = ["icpx", "-fsycl", "-lze_loader", *o_files, "-shared", "-o", libname]
-    for lib_dir in COMPILATION_HELPER.library_dir:
-        command.extend(["-L", lib_dir])
-    if COMPILATION_HELPER.libsycl_dir:
-        for lib_dir in COMPILATION_HELPER.libsycl_dir:
-            command.extend(["-L", lib_dir])
-    subprocess.run(command, check=True, cwd=dir)
+    subprocess.run(["g++"] + [*o_files, "-shared", "-o", libname] +
+                   ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
+                   ["-L" + COMPILATION_HELPER.libsycl_dir, "-lsycl", "-lze_loader"], check=True, cwd=dir)
 
 
 def gen_kernel_library(dir, libname):
@@ -297,7 +294,7 @@ int main(int argc, char ** argv) {{
         command.extend(["-l", "cuda", "-L", dir, "-l", "kernel", "-o", exe])
 
     if is_xpu():
-        command = ["icpx", "test.cpp"]
+        command = ["g++", "test.cpp"]
         for inc_dir in COMPILATION_HELPER.include_dir:
             command.extend(["-I", inc_dir])
         for lib_dir in COMPILATION_HELPER.library_dir:
@@ -305,7 +302,7 @@ int main(int argc, char ** argv) {{
         if COMPILATION_HELPER.libsycl_dir:
             for lib_dir in COMPILATION_HELPER.libsycl_dir:
                 command.extend(["-L", lib_dir])
-        command.extend(["-fsycl", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
+        command.extend(["-lsycl", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
 

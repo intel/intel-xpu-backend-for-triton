@@ -6,7 +6,6 @@ import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
-from typing import Optional
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -14,7 +13,7 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
+def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
     """
     Looks for the sycl library in known places.
 
@@ -28,13 +27,18 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
       AssertionError: if library was not found.
     """
     include_dir = include_dir.copy()
+    sycl_dir = None
     assertion_message = ("sycl headers not found, please install `icpx` compiler, "
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
-
-    if shutil.which("icpx") and os.name != "nt":
+    icpx_path = shutil.which("icpx")
+    if icpx_path and os.name != "nt":
         # only `icpx` compiler knows where sycl runtime binaries and header files are
-        return include_dir, None
+        icpx_dir = os.path.dirname(icpx_path)
+        compiler_root = os.path.dirname(icpx_dir)
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        sycl_dir = os.path.join(compiler_root, "lib")
+        return include_dir, sycl_dir
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
@@ -42,7 +46,8 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
-        return include_dir, None
+        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib"),
+        return include_dir, sycl_dir
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
@@ -52,7 +57,6 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
     if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
-    sycl_dir = None
     for f in importlib.metadata.files("intel-sycl-rt"):
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
@@ -122,7 +126,7 @@ class CompilationHelper:
         return self._include_dir
 
     @cached_property
-    def libsycl_dir(self) -> Optional[str]:
+    def libsycl_dir(self) -> str:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
 
