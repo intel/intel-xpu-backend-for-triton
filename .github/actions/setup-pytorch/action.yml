@@ -113,8 +113,7 @@ runs:
         cd pytorch
         pip install wheel
         pip install -r requirements.txt
-        USE_STATIC_MKL=1 CFLAGS="-Wno-error=maybe-uninitialized" python setup.py bdist_wheel 2>&1 | grep -v \
-          "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)." | grep -v '^$'
+        USE_STATIC_MKL=1 CFLAGS="-Wno-error=maybe-uninitialized" python setup.py bdist_wheel
 
     - name: Install PyTorch (built from source)
       if: ${{ inputs.mode == 'source' }}
@@ -136,3 +135,11 @@ runs:
         source ${{ inputs.oneapi }}/setvars.sh
         PYTORCH_VERSION="$(python -c 'import torch;print(torch.__version__)')"
         echo "PYTORCH_VERSION=$PYTORCH_VERSION" | tee -a "$GITHUB_ENV"
+
+    - name: Save PyTorch to a cache
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss' }}
+      uses: ./.github/actions/save
+      with:
+        path: ${{ steps.pytorch-cache.outputs.path }}
+        dest: ${{ steps.pytorch-cache.outputs.dest }}
+        enabled: ${{ inputs.cache == 'enabled' }}
