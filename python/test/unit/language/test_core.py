@@ -1702,7 +1702,7 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
+@pytest.mark.skipif(not (is_xpu() or is_interpreter()) and (not is_cuda() or torch.cuda.get_device_capability()[0] < 9),
                     reason="Requires compute capability >= 9 for NV")
 def test_load_scope_sem_coop_grid_cta_not_one(device):
 
@@ -6134,6 +6134,37 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
         return
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
     assert found_fma == enable_fp_fusion
+
+
+# -----------------------
+# test override_nv_compute_capability
+# -----------------------
+
+
+@pytest.mark.parametrize("nv_compute_capability", [70, 80, 90])
+@pytest.mark.parametrize("env_var_override", [False, True])
+def test_override_nv_compute_capability(nv_compute_capability, env_var_override, device):
+    if not is_cuda():
+        pytest.xfail('test_override_nv_compute_capability only for CUDA')
+
+    @triton.jit
+    def simple(data, out):
+        in_ptrs = data + tl.arange(0, 128)
+        out_ptrs = out + tl.arange(0, 128)
+        tl.store(out_ptrs, tl.load(in_ptrs) * 1.5 + 1.0)
+
+    data = torch.randn((128, ), device=device, dtype=torch.float32)
+    out = torch.empty_like(data)
+
+    if env_var_override:
+        os.environ["TRITON_OVERRIDE_NV_CAPABILITY"] = str(nv_compute_capability)
+        h = simple[(1, )](data, out)
+        os.environ.pop("TRITON_OVERRIDE_NV_CAPABILITY")
+    else:
+        h = simple[(1, )](data, out, override_nv_compute_capability=nv_compute_capability)
+    torch.testing.assert_close(data * 1.5 + 1.0, out)
+    ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
+    assert int(ttgir_cc.group(1)) == nv_compute_capability
 
 
 # -----------------------

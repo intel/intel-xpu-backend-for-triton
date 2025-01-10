@@ -133,25 +133,23 @@ Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
                        Operation *reduceOp, unsigned numLanesToReduce,
                        unsigned warpSize) {
   auto resultType = reduceOp->getResult(0).getType();
-  Value warpReduce =
-      TypeSwitch<mlir::Operation *, Value>(reduceOp)
-          .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
-                arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
-                arith::MaxNumFOp, arith::MinNumFOp>([&](auto groupOp) {
-            return createSPIRVGroupOp<
-                SPIRVArithmeticGroupOpTy<decltype(groupOp)>>(
-                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-          })
-          .Case<arith::AndIOp, arith::OrIOp, arith::XOrIOp>([&](auto groupOp) {
-            if (resultType.isInteger(1)) {
-              return createSPIRVGroupOp<
-                  SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
-                  rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-            }
-            return createSPIRVGroupOp<SPIRVBitwiseGroupOpTy<decltype(groupOp)>>(
-                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-          });
-  return warpReduce;
+  // Use bit-equivalent logical operation for Boolean values.
+  if (resultType.isInteger(1))
+    return TypeSwitch<mlir::Operation *, Value>(reduceOp)
+        .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
+              arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
+              arith::XOrIOp>([&](auto groupOp) {
+          return createSPIRVGroupOp<SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
+              rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+        });
+  return TypeSwitch<mlir::Operation *, Value>(reduceOp)
+      .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+            arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+            arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+            arith::XOrIOp>([&](auto groupOp) {
+        return createSPIRVGroupOp<SPIRVGroupOpTy<decltype(groupOp)>>(
+            rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+      });
 }
 
 } // namespace

@@ -1,5 +1,7 @@
 import functools
+import math
 import os
+import statistics
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -64,16 +66,42 @@ def nvsmi(attrs):
     return ret
 
 
+# pure Python implementation of np.quantile/torch.quantile
+# to avoid unnecessary runtime dependency on numpy/torch
+
+
+def _quantile(a, q):
+    n = len(a)
+    a = sorted(a)
+
+    def get_quantile(q):
+        if not (0 <= q <= 1):
+            raise ValueError("Quantiles must be in the range [0, 1]")
+        point = q * (n - 1)
+        lower = math.floor(point)
+        upper = math.ceil(point)
+        t = point - lower
+        return (1 - t) * a[lower] + t * a[upper]
+
+    return [get_quantile(q) for q in q]
+
+
 def _summarize_statistics(times, quantiles, return_mode):
-    import torch
     if quantiles is not None:
-        ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
+        ret = _quantile(times, quantiles)
         if len(ret) == 1:
             ret = ret[0]
         return ret
     if return_mode == "all":
-        return times.tolist()
-    return getattr(torch, return_mode)(times).item()
+        return times
+    elif return_mode == "min":
+        return min(times)
+    elif return_mode == "max":
+        return max(times)
+    elif return_mode == "mean":
+        return statistics.mean(times)
+    elif return_mode == "median":
+        return statistics.median(times)
 
 
 def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
@@ -86,7 +114,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type rep: int
     :param grad_to_none: Reset the gradient of the provided tensor to None
     :type grad_to_none: torch.tensor, optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
     """
     import torch
@@ -136,7 +164,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
             end_event.record()
             torch.cuda.synchronize()
             ret += [start_event.elapsed_time(end_event) / n_repeat]
-        return _summarize_statistics(torch.tensor(ret), quantiles, return_mode)
+        return _summarize_statistics(ret, quantiles, return_mode)
 
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
@@ -154,10 +182,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type grad_to_none: torch.tensor, optional
     :param quantiles: Performance percentile to return in addition to the median.
     :type quantiles: list[float], optional
-    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all" Default is "mean".    :type return_mode: str
+    :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
+    :type return_mode: str
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
-    import torch
 
     di = runtime.driver.active.get_device_interface()
 
@@ -173,7 +201,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
 
     start_event.record()
     for _ in range(5):
-        cache.zero_()
+        runtime.driver.active.clear_cache(cache)
         fn()
         if USE_WALL_TIME:
             di.synchronize()
@@ -199,7 +227,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
             for x in grad_to_none:
                 x.grad = None
         # we clear the L2 cache before each run
-        cache.zero_()
+        runtime.driver.active.clear_cache(cache)
         if USE_WALL_TIME:
             di.synchronize()
         # record time of `fn`
@@ -211,7 +239,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     # Record clocks
     if not USE_WALL_TIME:
         di.synchronize()
-    times = torch.tensor([s.elapsed_time(e) for s, e in zip(start_event, end_event)], dtype=torch.float)
+    times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
 
