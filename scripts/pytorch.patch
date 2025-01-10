@@ -369,41 +369,24 @@ index fa2a1334380..4d730fd45de 100644
      except ImportError:
          from triton.compiler.compiler import AttrsDescriptor
 diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
-index 281d0e78ba..91a37e742b 100644
+index 281d0e78ba..8b3857bf2e 100644
 --- a/torch/_inductor/runtime/triton_heuristics.py
 +++ b/torch/_inductor/runtime/triton_heuristics.py
-@@ -193,6 +193,7 @@ class CachingAutotuner(KernelInterface):
-             "device": self.device_props.index,
-             "device_type": self.device_props.type,
-         }
-+        print(f"triton_meta[signature]: {triton_meta['signature']}")
-         self.inductor_meta = {} if inductor_meta is None else inductor_meta
-         self.save_cache_hook = save_cache_hook
-         self.mutated_arg_names = mutated_arg_names
-@@ -413,11 +414,30 @@ class CachingAutotuner(KernelInterface):
- 
+@@ -414,10 +414,21 @@ class CachingAutotuner(KernelInterface):
          if not ASTSource:
              raise RuntimeError("Installed triton version too old, please upgrade")
-+        
-+        print("\n")
-+
+ 
 +        def fixup_signature(arg_names, signature, constants):
 +            new_signature = {arg_name: None for arg_name in arg_names}
 +            for arg_name in arg_names:
 +                if arg_name in constants and arg_name not in signature:
 +                    # If it's not in the signature already, it's a constexpr
 +                    # argument that we need to add in
-+                    #if constants[arg_name] != 1:
 +                    new_signature[arg_name] = "constexpr"
-+                    #else:
-+                    #    new_signature[arg_name] = "i32"
 +                else:
 +                    new_signature[arg_name] = signature[arg_name]
-+            print(f"new_signature: {new_signature}")
 +            return new_signature
-+        
-+        # self.triton_meta["signature"] = fixup_signature(self.fn.arg_names, compile_meta["signature"], compile_meta["constants"])
- 
++
          compile_args = (
              ASTSource(
                  self.fn,
@@ -412,33 +395,24 @@ index 281d0e78ba..91a37e742b 100644
                  compile_meta["constants"],
                  compile_meta["configs"][0],
              ),
-@@ -502,14 +522,18 @@ class CachingAutotuner(KernelInterface):
+@@ -502,13 +513,11 @@ class CachingAutotuner(KernelInterface):
          call_args = [
              arg
              for i, arg in enumerate(self.fn.arg_names)
 -            if i not in self.fn.constexprs and arg not in none_args
          ]
-+        print(f"self.fn: {self.fn.__name__}")
-+        print(f"call_args: {call_args}")
-+        print(f"self.fn.arg_names: {self.fn.arg_names}")
-+        print(f"cfg.kwargs: {cfg.kwargs}")
-+        print(f"compile_meta['constants']: {compile_meta['constants']}")
  
          def_args = [
              name
              for name in self.fn.arg_names
 -            if name not in cfg.kwargs and name not in none_args
          ]
-+        print(f"def_args: {def_args}\n")
          binary_shared = (
              binary.shared if hasattr(binary, "shared") else binary.metadata.shared
-         )
-@@ -646,8 +670,13 @@ class CachingAutotuner(KernelInterface):
+@@ -646,8 +655,11 @@ class CachingAutotuner(KernelInterface):
              )
              # reset to zero before evaluating any config
              self.reset_to_zero_args(*args, **kwargs)
-+            print(f"HERE")
-+            #breakpoint()
 +            new_cloned_args = [*cloned_args]
 +            for arg_name, arg_value in launcher.config.kwargs.items():
 +                new_cloned_args.insert(self.fn.arg_names.index(arg_name), arg_value)
@@ -448,22 +422,10 @@ index 281d0e78ba..91a37e742b 100644
                  **cloned_kwargs,
                  grid=grid,
                  stream=stream,
-@@ -899,7 +928,10 @@ class CachingAutotuner(KernelInterface):
-     def run(
-         self, *args, grid, stream, benchmark_run=False, **kwargs
-     ):  # type:ignore[override]
-+        #print(f"caching autotuner: run: {args}")
-+        # breakpoint()
-         if self.triton_interpret:
-+            print("MARK0")
-             return self.fn[grid](
-                 *args,
-                 **kwargs,
-@@ -950,15 +982,23 @@ class CachingAutotuner(KernelInterface):
+@@ -950,15 +962,21 @@ class CachingAutotuner(KernelInterface):
                      "stream": stream,
                  },
              ):
-+                print(f"MARK2")
 +                new_args = [*args]
 +                for arg_name, arg_value in launcher.config.kwargs.items():
 +                    new_args.insert(self.fn.arg_names.index(arg_name), arg_value)
@@ -475,7 +437,6 @@ index 281d0e78ba..91a37e742b 100644
                      stream=stream,
                  )
          else:
-+            print("MARK3")
 +            new_args = [*args]
 +            for arg_name, arg_value in launcher.config.kwargs.items():
 +                new_args.insert(self.fn.arg_names.index(arg_name), arg_value)
