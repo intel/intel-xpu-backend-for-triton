@@ -552,6 +552,7 @@ struct LoadOpConversion
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
     assert(llEncoding.has_value() && "invalid dot layout to linear layout");
+    llvm::errs() << "Linear layout for load (" << int(opIdx) << "): " << op << "\n\t" << llEncoding->toString() << "\n\n";
     LinearEncodingAttr llAttr =
         LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
     SmallVector<unsigned> threadOrder = llAttr.getThreadOrder();
@@ -863,10 +864,68 @@ struct LoadOpConversion
     }
     Value elemSizeInBytes = i32_val(originalElemBits / 8);
 
+    llvm::errs() << "numReps: ";
+    for(size_t i = 0; i < numReps.size(); i++) {
+      llvm::errs() << numReps[i] << " ";
+    }
+    llvm::errs() << "\n";
+
+    llvm::errs() << "threadsPerWarp: " << threadsPerWarp << "\n";
+
+    llvm::errs() << "multiDimWarpId: ";
+    for(size_t i = 0; i < multiDimWarpId.size(); i++) {
+      llvm::errs() << multiDimWarpId[i] << " ";
+    }
+    llvm::errs() << "\n";
+
+    MLIRContext *ctx = rewriter.getContext();
+    StringAttr kRegister = StringAttr::get(ctx, "register");
+    StringAttr kLane = StringAttr::get(ctx, "lane");
+    StringAttr kWarp = StringAttr::get(ctx, "warp");
+    StringAttr kBlock = StringAttr::get(ctx, "block");
+
+    auto ll = *llEncoding;
+
+    llvm::errs() << "Layout register dimension: " << ll.getInDimSize(kRegister) << "\n";
+    llvm::errs() << "Layout lane dimension: " << ll.getInDimSize(kLane) << "\n";
+    llvm::errs() << "Layout warp dimension: " << ll.getInDimSize(kWarp) << "\n";
+
+    llvm::errs() << "\n";
+    llvm::errs() << "numRepOuter: " << numRepOuter << "\n";
+    llvm::errs() << "numLoadPerOutRepCluster: " << numLoadPerOutRepCluster << "\n";
+    llvm::errs() << "numOperandsInnerDimPerLoad: " << numOperandsInnerDimPerLoad << "\n";
+
+    llvm::errs() << "repOuterStride: " << repOuterStride << "\n";
+    llvm::errs() << "repStride: " << repStride << "\n";
+    llvm::errs() << "repKStride: " << repKStride << "\n";
+    
+#if 0
+    unsigned vec = getVectorSize(ptr);
+    unsigned numElems2 = getTotalElemsPerThread(ptr.getType());
+    llvm::errs() << "vec size: " << vec << ", numElems from ptr type: " << numElems2 << " vs numElems (totalElemsPerThread from dpas): " << numElems << "\n";
+#endif 
+#if 0
+    for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      llvm::errs() << "vec " << vecStart << "\n";
+    }
+#endif
+    llvm::errs() << "\n";
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
         for (int k = 0; k < numRepInner; k += numOperandsInnerDimPerLoad) {
+
+          llvm::errs() << "outer = " << outer << ", outer rep = " << rep << ", inner = " << k << "\n";
+
+          auto tensorVals = ll.apply({{kRegister, k}, {kLane, rep}, {kWarp, outer}, {kBlock, 0}});
+          for (size_t i = 0; i < tensorVals.size(); i++) {
+            llvm::errs() << tensorVals[i].first << " : " << tensorVals[i].second << "\n";
+          }
+          
+          llvm::errs() << "width: " << tile.tileWidth << ", height: " << tile.tileHeight << "\n";
+          llvm::errs() << "\n";
+
           Value offsetX, offsetY;
           switch (opIdx) {
           case DpasEncodingAttr::OpIdx::OperandA: {
