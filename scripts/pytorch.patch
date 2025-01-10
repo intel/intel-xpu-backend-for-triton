@@ -253,6 +253,40 @@ index a5fe2d1119..5ea0018957 100644
  
          # Call to kernel
          self.codegen_comment(wrapper)
+diff --git a/torch/_inductor/codegen/cpp_wrapper_gpu.py b/torch/_inductor/codegen/cpp_wrapper_gpu.py
+index ccd69bf828..2c89659132 100644
+--- a/torch/_inductor/codegen/cpp_wrapper_gpu.py
++++ b/torch/_inductor/codegen/cpp_wrapper_gpu.py
+@@ -551,28 +551,8 @@ class CppWrapperGpu(CppWrapperCpu):
+             )
+             kernel_var_name = self.generate_load_kernel_once(kernel_name, V.graph)
+ 
+-            # args with value 1 are added into equal_to_1 and constants
+-            # in triton_meta (in the Python codegen) which makes them
+-            # inlined in the PTX and compiled CUBIN
+-            arg_signatures = []
+-            if (
+-                triton_meta is not None
+-                and triton_meta.get("configs")
+-                and triton_meta.get("signature")
+-            ):
+-                equal_to_1 = triton_meta["configs"][0].equal_to_1
+-                call_args = [
+-                    arg for i, arg in enumerate(call_args) if i not in equal_to_1
+-                ]
+-                arg_types = [t for i, t in enumerate(arg_types) if i not in equal_to_1]
+-                # extract the arg signatures from triton_meta
+-                arg_signatures = triton_meta["signature"].values()
+-                arg_signatures = [
+-                    v for i, v in enumerate(arg_signatures) if i not in equal_to_1
+-                ]
+-
+             call_args_str = self.generate_args_decl(
+-                call_args, arg_types, arg_signatures
++                call_args, arg_types, list(triton_meta["signature"].values())
+             )
+             kernel_args_var = f"kernel_args_var_{next(self.kernel_callsite_id)}"
+             self.writeline(f"void* {kernel_args_var}[] = {{{call_args_str}}};")
 diff --git a/torch/_inductor/codegen/triton.py b/torch/_inductor/codegen/triton.py
 index 00031a56b8d..59086d41b40 100644
 --- a/torch/_inductor/codegen/triton.py
@@ -335,24 +369,41 @@ index fa2a1334380..4d730fd45de 100644
      except ImportError:
          from triton.compiler.compiler import AttrsDescriptor
 diff --git a/torch/_inductor/runtime/triton_heuristics.py b/torch/_inductor/runtime/triton_heuristics.py
-index 281d0e78ba4..e68c2405e8d 100644
+index 281d0e78ba..91a37e742b 100644
 --- a/torch/_inductor/runtime/triton_heuristics.py
 +++ b/torch/_inductor/runtime/triton_heuristics.py
-@@ -414,10 +414,21 @@ class CachingAutotuner(KernelInterface):
+@@ -193,6 +193,7 @@ class CachingAutotuner(KernelInterface):
+             "device": self.device_props.index,
+             "device_type": self.device_props.type,
+         }
++        print(f"triton_meta[signature]: {triton_meta['signature']}")
+         self.inductor_meta = {} if inductor_meta is None else inductor_meta
+         self.save_cache_hook = save_cache_hook
+         self.mutated_arg_names = mutated_arg_names
+@@ -413,11 +414,30 @@ class CachingAutotuner(KernelInterface):
+ 
          if not ASTSource:
              raise RuntimeError("Installed triton version too old, please upgrade")
- 
++        
++        print("\n")
++
 +        def fixup_signature(arg_names, signature, constants):
 +            new_signature = {arg_name: None for arg_name in arg_names}
 +            for arg_name in arg_names:
 +                if arg_name in constants and arg_name not in signature:
 +                    # If it's not in the signature already, it's a constexpr
 +                    # argument that we need to add in
++                    #if constants[arg_name] != 1:
 +                    new_signature[arg_name] = "constexpr"
++                    #else:
++                    #    new_signature[arg_name] = "i32"
 +                else:
 +                    new_signature[arg_name] = signature[arg_name]
++            print(f"new_signature: {new_signature}")
 +            return new_signature
-+
++        
++        # self.triton_meta["signature"] = fixup_signature(self.fn.arg_names, compile_meta["signature"], compile_meta["constants"])
+ 
          compile_args = (
              ASTSource(
                  self.fn,
@@ -361,41 +412,76 @@ index 281d0e78ba4..e68c2405e8d 100644
                  compile_meta["constants"],
                  compile_meta["configs"][0],
              ),
-@@ -502,13 +513,11 @@ class CachingAutotuner(KernelInterface):
+@@ -502,14 +522,18 @@ class CachingAutotuner(KernelInterface):
          call_args = [
              arg
              for i, arg in enumerate(self.fn.arg_names)
 -            if i not in self.fn.constexprs and arg not in none_args
          ]
++        print(f"self.fn: {self.fn.__name__}")
++        print(f"call_args: {call_args}")
++        print(f"self.fn.arg_names: {self.fn.arg_names}")
++        print(f"cfg.kwargs: {cfg.kwargs}")
++        print(f"compile_meta['constants']: {compile_meta['constants']}")
  
          def_args = [
              name
              for name in self.fn.arg_names
 -            if name not in cfg.kwargs and name not in none_args
          ]
++        print(f"def_args: {def_args}\n")
          binary_shared = (
              binary.shared if hasattr(binary, "shared") else binary.metadata.shared
-@@ -648,6 +657,7 @@ class CachingAutotuner(KernelInterface):
+         )
+@@ -646,8 +670,13 @@ class CachingAutotuner(KernelInterface):
+             )
+             # reset to zero before evaluating any config
              self.reset_to_zero_args(*args, **kwargs)
++            print(f"HERE")
++            #breakpoint()
++            new_cloned_args = [*cloned_args]
++            for arg_name, arg_value in launcher.config.kwargs.items():
++                new_cloned_args.insert(self.fn.arg_names.index(arg_name), arg_value)
              launcher(
-                 *cloned_args,
-+                **launcher.config.kwargs,
+-                *cloned_args,
++                *new_cloned_args,
                  **cloned_kwargs,
                  grid=grid,
                  stream=stream,
-@@ -952,6 +962,7 @@ class CachingAutotuner(KernelInterface):
+@@ -899,7 +928,10 @@ class CachingAutotuner(KernelInterface):
+     def run(
+         self, *args, grid, stream, benchmark_run=False, **kwargs
+     ):  # type:ignore[override]
++        #print(f"caching autotuner: run: {args}")
++        # breakpoint()
+         if self.triton_interpret:
++            print("MARK0")
+             return self.fn[grid](
+                 *args,
+                 **kwargs,
+@@ -950,15 +982,23 @@ class CachingAutotuner(KernelInterface):
+                     "stream": stream,
+                 },
              ):
++                print(f"MARK2")
++                new_args = [*args]
++                for arg_name, arg_value in launcher.config.kwargs.items():
++                    new_args.insert(self.fn.arg_names.index(arg_name), arg_value)
                  return launcher(
-                     *args,
-+                    **launcher.config.kwargs,
+-                    *args,
++                    *new_args,
                      **kwargs,
                      grid=grid,
                      stream=stream,
-@@ -959,6 +970,7 @@ class CachingAutotuner(KernelInterface):
+                 )
          else:
++            print("MARK3")
++            new_args = [*args]
++            for arg_name, arg_value in launcher.config.kwargs.items():
++                new_args.insert(self.fn.arg_names.index(arg_name), arg_value)
              return launcher(
-                 *args,
-+                **launcher.config.kwargs,
+-                *args,
++                *new_args,
                  **kwargs,
                  grid=grid,
                  stream=stream,
