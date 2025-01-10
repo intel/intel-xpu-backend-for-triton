@@ -82,40 +82,6 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, mlir::gpu::ShuffleMode::IDX);
 }
 
-Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
-                        StringRef content, unsigned addressSpace) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto ctx = moduleOp.getContext();
-  unsigned stringNumber = 0;
-  SmallString<16> stringConstName;
-  do {
-    stringConstName.clear();
-    (key + Twine(stringNumber++)).toStringRef(stringConstName);
-  } while (moduleOp.lookupSymbol(stringConstName));
-
-  llvm::SmallString<64> contentStr(content);
-  size_t contentSize = contentStr.size_in_bytes();
-  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
-
-  LLVM::GlobalOp global;
-  {
-    RewriterBase::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-    global = rewriter.create<LLVM::GlobalOp>(
-        UnknownLoc::get(ctx), globalType,
-        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-        rewriter.getStringAttr(contentStr), /*alignment=*/0, addressSpace);
-  }
-
-  Value zero = i32_val(0);
-  Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
-  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
-      UnknownLoc::get(ctx), globalPtrType, global.getSymName());
-  Value stringStart = gep(ptr_ty(ctx, global.getAddrSpace()), i8_ty, globalPtr,
-                          SmallVector<Value>({zero}));
-  return stringStart;
-}
-
 // declare __spirv_ocl_printf(i8*, ...) as external function
 LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
