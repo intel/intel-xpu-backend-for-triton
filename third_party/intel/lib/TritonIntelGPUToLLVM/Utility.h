@@ -78,9 +78,6 @@ Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 
-Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
-                        StringRef content, unsigned addressSpace);
-
 LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter);
 
 static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
