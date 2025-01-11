@@ -421,7 +421,10 @@ private:
     if (!scale)
       return v;
 
-    return rewriter.create<ttg::UpcastMXFPOp>(v.getLoc(), v, scale, elemType);
+    auto retTy = triton::gpu::UpcastMXFPOp::deduceOutputType(
+        v, elemType, Builder(v.getContext()).getBF16Type());
+    return rewriter.create<ttg::UpcastMXFPOp>(v.getLoc(), retTy, v, scale,
+                                              elemType);
   }
 };
 
