@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_mi300
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300, is_xpu
 
 
 def matching_int(dtype):
@@ -317,6 +317,12 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if (src_dtype in ('float8e4b15') or
             (src_dtype in ('float8e4b8', 'float8e5b16') and not is_hip_mi300())):
+            # If the dtype should error out in the given device, we assert that and return
+            with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
+                launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
+            return
+    elif is_xpu():
+        if (src_dtype in ('float8e4b8', 'float8e5b16')):
             # If the dtype should error out in the given device, we assert that and return
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
