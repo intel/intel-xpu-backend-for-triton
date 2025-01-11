@@ -1,5 +1,4 @@
 #include "third_party/intel/include/Target/LLVMIR/PostProcess.h"
-#include "third_party/intel/include/Target/LLVMIR/SLPVectorizer.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
@@ -33,9 +32,6 @@ void postProcessLLVMIR(llvm::Module &mod) {
              "__devicelib_assert_fail must be a declaration!");
     }
   }
-  print("PostProcessing: Before SLPVectorizer", mod);
-  SLPVectorizer(mod, trace);
-  print("PostProcessing: After SLPVectorizer", mod);
 }
 
 } // namespace mlir::triton::intel
