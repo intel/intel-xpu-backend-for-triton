@@ -237,9 +237,10 @@ public:
     TensorValue newAcc = convertAccumulator(scaledDotOp, dpasEnc, rewriter);
     RankedTensorType newRetType = newAcc.getType();
 
-    std::tie(a, b) = convertOperands(
-        {a, aElemType, aScale}, {b, bElemType, bScale}, dpasEnc, newRetType,
-        scaledDotOp->getParentOfType<ModuleOp>(), rewriter);
+    std::tie(a, b) =
+        convertOperands({a, aElemType, aScale}, {b, bElemType, bScale},
+                        scaledDotOp.getFastMath(), dpasEnc, newRetType,
+                        scaledDotOp->getParentOfType<ModuleOp>(), rewriter);
 
     auto newDot = rewriter.create<tt::DotOp>(scaledDotOp.getLoc(), newRetType,
                                              a, b, newAcc);
@@ -256,7 +257,7 @@ private:
   };
 
   std::pair<TensorValue, TensorValue>
-  convertOperands(OpDescriptor aDesc, OpDescriptor bDesc,
+  convertOperands(OpDescriptor aDesc, OpDescriptor bDesc, bool fastMath,
                   ttgi::DpasEncodingAttr dpasEnc, RankedTensorType newRetType,
                   ModuleOp mod, PatternRewriter &rewriter) const {
     assert((aDesc.scale || bDesc.scale) && "No scale provided");
@@ -265,7 +266,7 @@ private:
     if (aDesc.scale) {
       TensorValue newA =
           convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
-              aDesc, dpasEnc, newRetType, mod, rewriter);
+              aDesc, fastMath, dpasEnc, newRetType, mod, rewriter);
       TensorValue newB =
           convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
               bDesc, dpasEnc, newRetType, rewriter);
@@ -274,7 +275,7 @@ private:
 
     TensorValue newB =
         convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
-            bDesc, dpasEnc, newRetType, mod, rewriter);
+            bDesc, fastMath, dpasEnc, newRetType, mod, rewriter);
     TensorValue newA =
         convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
             aDesc, dpasEnc, newRetType, rewriter);
@@ -282,7 +283,7 @@ private:
   }
 
   template <ttgi::DpasEncodingAttr::OpIdx opIdx>
-  TensorValue convertScaledOperand(OpDescriptor opDesc,
+  TensorValue convertScaledOperand(OpDescriptor opDesc, bool fastMath,
                                    ttg::intel::DpasEncodingAttr dpasEnc,
                                    RankedTensorType retType, ModuleOp mod,
                                    PatternRewriter &rewriter) const {
@@ -318,7 +319,8 @@ private:
                                       newOpEncoding.getCTAOrder(), CTALayout);
     TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
 
-    auto upcastOp = createUpcastMxfpOp(op, scale, opDesc.elemType, rewriter);
+    auto upcastOp =
+        createUpcastMxfpOp(op, scale, opDesc.elemType, fastMath, rewriter);
     if (opDesc.elemType == tt::ScaleDotElemType::E2M1) {
       auto resultType = cast<RankedTensorType>(upcastOp.getType());
       auto newRetType = RankedTensorType::get(
@@ -416,7 +418,7 @@ private:
   }
 
   TensorValue createUpcastMxfpOp(TensorValue v, TensorValue scale,
-                                 tt::ScaleDotElemType elemType,
+                                 tt::ScaleDotElemType elemType, bool fastMath,
                                  PatternRewriter &rewriter) const {
     if (!scale)
       return v;
@@ -424,7 +426,7 @@ private:
     auto retTy = triton::gpu::UpcastMXFPOp::deduceOutputType(
         v, elemType, Builder(v.getContext()).getBF16Type());
     return rewriter.create<ttg::UpcastMXFPOp>(v.getLoc(), retTy, v, scale,
-                                              elemType);
+                                              elemType, fastMath);
   }
 };
 
@@ -605,7 +607,7 @@ static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
   auto result = builder.create<tt::DotScaledOp>(
       dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
       cTransposed, dotOp.getRhsScale(), dotOp.getLhsScale(), dotOp.getRhsType(),
-      dotOp.getLhsType());
+      dotOp.getLhsType(), dotOp.getFastMath());
   auto transOp =
       builder.create<tt::TransOp>(result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transOp.getOperation());
