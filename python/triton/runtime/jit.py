@@ -520,11 +520,8 @@ class JITFunction(KernelInterface[T]):
         kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
         # parse options
-        # device = driver.active.get_current_device()
-        # stream = driver.active.get_current_stream(device)
-        device = 0 # driver.active.get_current_device()
-        stream = 0 # driver.active.get_current_stream(device)
-
+        device = driver.active.get_current_device()
+        stream = driver.active.get_current_stream(device)
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
