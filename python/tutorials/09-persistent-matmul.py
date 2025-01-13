@@ -309,7 +309,7 @@ def matmul_persistent(a, b):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = torch.xpu.get_device_properties("xpu").max_compute_units
     M, K = a.shape
     K, N = b.shape
     dtype = a.dtype
@@ -671,8 +671,8 @@ def bench(K, dtype, reps=1000, warmup_reps=10000):
 
 
 def validate(M, N, K, dtype):
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
+    a = torch.randn((M, K), device="xpu", dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device="xpu", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
 
     torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
