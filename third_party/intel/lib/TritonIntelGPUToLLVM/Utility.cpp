@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utility.h"
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
@@ -141,6 +142,32 @@ LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   printFunc->setAttr("nounwind", rewriter.getUnitAttr());
 
   return printFunc;
+}
+
+static LLVM::RoundingMode
+convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
+  LLVM::RoundingMode roundingMode;
+  switch (rounding) {
+  case triton::RoundingMode::RTNE:
+    return LLVM::RoundingMode::NearestTiesToEven;
+  case triton::RoundingMode::RTZ:
+    return LLVM::RoundingMode::TowardZero;
+  default:
+    llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
+                    "conversion: "
+                 << stringifyRoundingMode(rounding) << "\n";
+    llvm_unreachable("");
+  }
+}
+
+Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, const triton::RoundingMode rounding) {
+  MLIRContext *ctx = rewriter.getContext();
+  return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+      loc, f16_ty, v,
+      LLVM::RoundingModeAttr::get(ctx,
+                                  convertTritonRoundingModeToLLVM(rounding)),
+      arith::getLLVMDefaultFPExceptionBehavior(*ctx));
 }
 
 } // namespace mlir::LLVM::intel

@@ -88,6 +88,9 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
+Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, triton::RoundingMode rounding);
+
 } // namespace mlir::LLVM::intel
 
 using mlir::triton::gpu::intel::DpasEncodingAttr;
