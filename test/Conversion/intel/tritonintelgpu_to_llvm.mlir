@@ -7,10 +7,11 @@
 module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32 } {
   // As the assert message is shared, a single instance is emitted.
 
-  // CHECK:         llvm.mlir.global internal constant @assertFunc_0("unknown\00") {addr_space = 1 : i32}
-  // CHECK:         llvm.mlir.global internal constant @assertFile_0("{{.*}}/test/Conversion/intel/tritonintelgpu_to_llvm.mlir\00") {addr_space = 1 : i32}
-  // CHECK:         llvm.mlir.global internal constant @assertMessage_0("assert text\00") {addr_space = 1 : i32}
-  // CHECK:         llvm.func spir_funccc @__assert_fail(!llvm.ptr<4>, !llvm.ptr<4>, i32, !llvm.ptr<4>)
+  // CHECK-DAG:         llvm.mlir.global internal constant @assertFunc_("unknown\00") {addr_space = 1 : i32}
+  // CHECK-DAG:         llvm.mlir.global internal constant @assertFile_("{{.*}}/test/Conversion/intel/tritonintelgpu_to_llvm.mlir\00") {addr_space = 1 : i32}
+  // CHECK-DAG:         llvm.mlir.global internal constant @assertMessage_("assert text\00") {addr_space = 1 : i32}
+  // CHECK-DAG:         llvm.mlir.global internal constant @assertMessage_3("different assert text\00") {addr_space = 1 : i32}
+  // CHECK-DAG:         llvm.func spir_funccc @__assert_fail(!llvm.ptr<4>, !llvm.ptr<4>, i32, !llvm.ptr<4>)
 
   // CHECK:   llvm.func spir_kernelcc @assert(%[[VAL_0:.*]]: !llvm.struct<(i1)>, %[[VAL_1:.*]]: !llvm.struct<(i1)>, %[[VAL_2:.*]]: !llvm.struct<(i1)>)
   tt.func public @assert(%arg0: tensor<1xi1, #blocked>, %arg1: tensor<1xi1, #blocked>, %arg2: tensor<1xi1, #blocked>) {
@@ -21,11 +22,11 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     // CHECK:           %[[VAL_7:.*]] = llvm.or %[[VAL_4]], %[[VAL_6]] : i1
     // CHECK:           llvm.cond_br %[[VAL_7]], ^bb1, ^bb2
     // CHECK:         ^bb1:
-    // CHECK:           %[[VAL_8:.*]] = llvm.mlir.addressof @assertMessage_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_8:.*]] = llvm.mlir.addressof @assertMessage_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_9:.*]] = llvm.getelementptr %[[VAL_8]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
-    // CHECK:           %[[VAL_10:.*]] = llvm.mlir.addressof @assertFile_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_10:.*]] = llvm.mlir.addressof @assertFile_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_11:.*]] = llvm.getelementptr %[[VAL_10]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
-    // CHECK:           %[[VAL_12:.*]] = llvm.mlir.addressof @assertFunc_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_12:.*]] = llvm.mlir.addressof @assertFunc_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_13:.*]] = llvm.getelementptr %[[VAL_12]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
     // CHECK:           %[[VAL_14:.*]] = llvm.mlir.constant
     // CHECK:           %[[VAL_15:.*]] = llvm.addrspacecast %[[VAL_9]] : !llvm.ptr<1> to !llvm.ptr<4>
@@ -44,11 +45,11 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     // CHECK:           %[[VAL_23:.*]] = llvm.or %[[VAL_20]], %[[VAL_22]] : i1
     // CHECK:           llvm.cond_br %[[VAL_23]], ^bb3, ^bb4
     // CHECK:         ^bb3:
-    // CHECK:           %[[VAL_24:.*]] = llvm.mlir.addressof @assertMessage_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_24:.*]] = llvm.mlir.addressof @assertMessage_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_25:.*]] = llvm.getelementptr %[[VAL_24]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
-    // CHECK:           %[[VAL_26:.*]] = llvm.mlir.addressof @assertFile_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_26:.*]] = llvm.mlir.addressof @assertFile_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_27:.*]] = llvm.getelementptr %[[VAL_26]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
-    // CHECK:           %[[VAL_28:.*]] = llvm.mlir.addressof @assertFunc_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_28:.*]] = llvm.mlir.addressof @assertFunc_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_29:.*]] = llvm.getelementptr %[[VAL_28]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
     // CHECK:           %[[VAL_30:.*]] = llvm.mlir.constant
     // CHECK:           %[[VAL_31:.*]] = llvm.addrspacecast %[[VAL_25]] : !llvm.ptr<1> to !llvm.ptr<4>
@@ -67,11 +68,11 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     // CHECK:           %[[VAL_39:.*]] = llvm.or %[[VAL_36]], %[[VAL_38]] : i1
     // CHECK:           llvm.cond_br %[[VAL_39]], ^bb5, ^bb6
     // CHECK:         ^bb5:
-    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.addressof @assertMessage_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_40:.*]] = llvm.mlir.addressof @assertMessage_3 : !llvm.ptr<1>
     // CHECK:           %[[VAL_41:.*]] = llvm.getelementptr %[[VAL_40]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
-    // CHECK:           %[[VAL_42:.*]] = llvm.mlir.addressof @assertFile_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_42:.*]] = llvm.mlir.addressof @assertFile_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_43:.*]] = llvm.getelementptr %[[VAL_42]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
-    // CHECK:           %[[VAL_44:.*]] = llvm.mlir.addressof @assertFunc_0 : !llvm.ptr<1>
+    // CHECK:           %[[VAL_44:.*]] = llvm.mlir.addressof @assertFunc_ : !llvm.ptr<1>
     // CHECK:           %[[VAL_45:.*]] = llvm.getelementptr %[[VAL_44]][0] : (!llvm.ptr<1>) -> !llvm.ptr<1>, i8
     // CHECK:           %[[VAL_46:.*]] = llvm.mlir.constant
     // CHECK:           %[[VAL_47:.*]] = llvm.addrspacecast %[[VAL_41]] : !llvm.ptr<1> to !llvm.ptr<4>
@@ -82,7 +83,7 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     // CHECK:         ^bb6:
     // CHECK:           %[[VAL_50:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           llvm.call spir_funccc @_Z7barrierj(%[[VAL_50]]) {convergent, no_unwind, will_return} : (i32) -> ()
-    tt.assert %arg2, "assert text" : tensor<1xi1, #blocked>
+    tt.assert %arg2, "different assert text" : tensor<1xi1, #blocked>
     tt.return
   }
 }

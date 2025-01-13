@@ -334,27 +334,26 @@ LLVM::GlobalOp TargetInfo::getGlobalString(Location loc, RewriterBase &rewriter,
   auto pos = globals.find(cacheKey);
   if (pos != globals.end())
     return pos->second;
+
   ModuleOp moduleOp = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
-  unsigned stringNumber = 0;
-  SmallString<16> stringConstName;
-  do {
-    stringConstName.clear();
-    (name + Twine(stringNumber++)).toStringRef(stringConstName);
-  } while (moduleOp.lookupSymbol(stringConstName));
 
   llvm::SmallString<64> contentStr(value);
   size_t contentSize = contentStr.size_in_bytes();
   auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
 
-  LLVM::GlobalOp global;
-  {
+  auto createGlobal = [&](StringRef name) {
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
-    global = rewriter.create<LLVM::GlobalOp>(
+    return rewriter.create<LLVM::GlobalOp>(
         rewriter.getUnknownLoc(), globalType,
-        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-        valueAttr, /*alignment=*/0, addressSpace);
-  }
+        /*isConstant=*/true, LLVM::Linkage::Internal, name, valueAttr,
+        /*alignment=*/0, addressSpace);
+  };
+
+  LLVM::GlobalOp global =
+      moduleOp.lookupSymbol(name)
+          ? createGlobal(Twine{name}.concat(Twine{globals.size()}).str())
+          : createGlobal(name);
 
   globals.try_emplace(cacheKey, global);
 
