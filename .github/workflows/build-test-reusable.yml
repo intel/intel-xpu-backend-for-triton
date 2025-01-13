@@ -55,7 +55,7 @@ on:
       runner_version:
         description: Runner label for version
         type: string
-        default: runner-0.0.20
+        default: runner-0.0.21
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -195,9 +195,9 @@ jobs:
       - name: Pass rate
         run: |
           source ./scripts/capture-hw-details.sh
-          python3 scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
-          python3 scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
-          python3 scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
+          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
+          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
 
       - name: Report environment details
         run: |

@@ -881,33 +881,6 @@ struct FpToFpOpConversion
     return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
-  static LLVM::RoundingMode
-  convertTritonRoundingModeToLLVM(const RoundingMode rounding) {
-    LLVM::RoundingMode roundingMode;
-    switch (rounding) {
-    case RoundingMode::RTNE:
-      return LLVM::RoundingMode::NearestTiesToEven;
-    case RoundingMode::RTZ:
-      return LLVM::RoundingMode::TowardZero;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
-    }
-  }
-
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v, const RoundingMode rounding) {
-    MLIRContext *ctx = rewriter.getContext();
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-        loc, f16_ty, v,
-        LLVM::RoundingModeAttr::get(ctx,
-                                    convertTritonRoundingModeToLLVM(rounding)),
-        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
-  }
-
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
@@ -1005,8 +978,8 @@ struct FpToFpOpConversion
              "rounding mode must be specified for fp32->fp16 conversion");
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
-        outVals.push_back(
-            convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+        outVals.push_back(LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
+                                                         roundingMode.value()));
       }
       return outVals;
     }
@@ -1035,7 +1008,8 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
+        v = LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
+                                           roundingMode.value());
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());

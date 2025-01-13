@@ -598,8 +598,7 @@ public:
     // FIXME: support all possible reduction modes
     TypeSwitch<Operation *>(combine).Case<arith::AddFOp, arith::MaxNumFOp>(
         [&](auto reduce) {
-          rewriter.replaceOpWithNewOp<
-              intel::SPIRVArithmeticGroupOpTy<decltype(reduce)>>(
+          rewriter.replaceOpWithNewOp<intel::SPIRVGroupOpTy<decltype(reduce)>>(
               op, typeConverter->convertType(op.getType(0)),
               spirv::Scope::Subgroup, spirv::GroupOperation::Reduce,
               adaptor.getSrcs()[0], Value());

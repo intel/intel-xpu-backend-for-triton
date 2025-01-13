@@ -88,6 +88,9 @@ static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
   return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
+Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, triton::RoundingMode rounding);
+
 } // namespace mlir::LLVM::intel
 
 using mlir::triton::gpu::intel::DpasEncodingAttr;
@@ -120,7 +123,8 @@ emitOffsetForDpasLayoutPerCTA(const DpasEncodingAttr &dpasLayout,
       sizePerThreads[rank - 2] / repCluster[rank - 2],
       sizePerThreads[rank - 1] / repCluster[rank - 1]};
 
-  unsigned rowsPerElem = dpasLayout.getSubGroupSize() / instShapeC[1];
+  unsigned rowsPerElem =
+      product<unsigned>(dpasLayout.getThreadsPerWarp()) / instShapeC[1];
   unsigned colsPerElem = 1;
 
   unsigned repNumber = product<unsigned>(repCluster);

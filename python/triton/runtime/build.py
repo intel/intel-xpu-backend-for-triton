@@ -1,26 +1,12 @@
-import contextlib
-import sys
-import io
 import sysconfig
 import os
 import shutil
 import subprocess
-import setuptools
 
 
 def is_xpu():
     import torch
     return torch.xpu.is_available()
-
-
-@contextlib.contextmanager
-def quiet():
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
-    try:
-        yield
-    finally:
-        sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
@@ -103,32 +89,5 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
 
-    ret = subprocess.check_call(cc_cmd)
-    if ret == 0:
-        return so
-    # extra arguments
-    extra_link_args = []
-    # create extension module
-    ext = setuptools.Extension(
-        name=name,
-        language='c',
-        sources=[src],
-        include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3' if os.name != "nt" else "/O2"],
-        extra_link_args=extra_link_args,
-        library_dirs=library_dirs,
-        libraries=libraries,
-    )
-    # build extension module
-    args = ['build_ext']
-    args.append('--build-temp=' + srcdir)
-    args.append('--build-lib=' + srcdir)
-    args.append('-q')
-    args = dict(
-        name=name,
-        ext_modules=[ext],
-        script_args=args,
-    )
-    with quiet():
-        setuptools.setup(**args)
+    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     return so

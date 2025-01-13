@@ -131,20 +131,27 @@ public:
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<SharedEncodingAttr>(srcLayout) &&
-        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            dstLayout)) {
-      return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
-                                      rewriter);
-    }
     if (isa<DotOperandEncodingAttr>(dstLayout)) {
-      return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
+      auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
+      if (auto dpasLayout =
+              dyn_cast_or_null<DpasEncodingAttr>(dotLayout.getParent())) {
+        auto sharedLayout =
+            cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
+        int K;
+        if (dotLayout.getOpIdx() == 0) // $a
+          K = op.getType().getShape()[sharedLayout.getOrder()[0]];
+        else // $b
+          K = op.getType().getShape()[sharedLayout.getOrder()[1]];
+        bool isOuter = K == 1;
+        rewriter.replaceOp(op, lowerSharedToDotOperandDPAS(
+                                   op, adaptor, getTypeConverter(), rewriter,
+                                   dpasLayout, dotLayout, isOuter));
+        return success();
+      }
     }
-    return failure();
+    return lowerSharedToDistributed(op, adaptor, getTypeConverter(), rewriter);
   }
 
 private:
@@ -175,52 +182,12 @@ private:
   }
 
   LogicalResult
-  lowerSharedToDotOperand(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
-                          const LLVMTypeConverter *typeConverter,
-                          ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    RankedTensorType dstTy = op.getType();
-    Attribute dstLayout = dstTy.getEncoding();
-    auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
-    auto sharedLayout =
-        cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
-
-    int K;
-    if (dotLayout.getOpIdx() == 0) // $a
-      K = op.getType().getShape()[sharedLayout.getOrder()[0]];
-    else // $b
-      K = op.getType().getShape()[sharedLayout.getOrder()[1]];
-    bool isOuter = K == 1;
-
-    Value res;
-    if (auto dpasLayout =
-            dyn_cast_or_null<DpasEncodingAttr>(dotLayout.getParent())) {
-      res = lowerSharedToDotOperandDPAS(op, adaptor, typeConverter, rewriter,
-                                        dpasLayout, dotLayout, isOuter);
-    } else if (auto blockedLayout = dyn_cast_or_null<BlockedEncodingAttr>(
-                   dotLayout.getParent())) {
-      auto thread = getThreadId(rewriter, loc);
-      res = SharedToDotOperandFMA::convertLayout(
-          dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
-          thread, loc, getTypeConverter(), rewriter);
-    } else {
-      assert(false && "Unsupported dot operand layout found");
-    }
-
-    rewriter.replaceOp(op, res);
-    return success();
-  }
-  LogicalResult
   lowerSharedToDistributed(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto dstShape = dstTy.getShape();
-    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    assert(!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) &&
-           "Unexpected rank of ConvertLayout(shared->blocked)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
