@@ -17,23 +17,27 @@ def _support_elapsed_time():
     import torch
     import triton
 
-    e1 = torch.xpu.Event(enable_timing=True)
-    e1.record()
-    e1.synchronize()
+    support = True
+    for _ in range(5):
+        e1 = torch.xpu.Event(enable_timing=True)
+        e1.record()
+        e1.synchronize()
 
-    e2 = torch.xpu.Event(enable_timing=True)
-    e2.record()
-    e2.synchronize()
+        e2 = torch.xpu.Event(enable_timing=True)
+        e2.record()
+        e2.synchronize()
 
-    try:
-        triton.runtime.driver.active.utils.wait()
-        support = e1.elapsed_time(e2) > 0
-    except Exception:
-        support = False
+        try:
+            triton.runtime.driver.active.utils.wait()
+            support = e1.elapsed_time(e2) > 0
+        except Exception:
+            support = False
+        if not support:
+            break
 
     if not support:
-        logging.warn("Wall time is used instead of elapsed_time (not supported). "
-                     "The timing measurements could be innacurate.")
+        logging.warning("Wall time is used instead of elapsed_time (not supported). "
+                        "The timing measurements could be innacurate.")
 
     return support
 
