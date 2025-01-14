@@ -227,7 +227,8 @@ public:
       return elemType == tt::ScaleDotElemType::E2M1 ||
              elemType == tt::ScaleDotElemType::E4M3 ||
              elemType == tt::ScaleDotElemType::E5M2 ||
-             elemType == tt::ScaleDotElemType::BF16;
+             elemType == tt::ScaleDotElemType::BF16 ||
+             elemType == tt::ScaleDotElemType::FP16;
     };
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
       return rewriter.notifyMatchFailure(scaledDotOp, "NYI: mxfp6 operand");
@@ -263,27 +264,31 @@ private:
     assert((aDesc.scale || bDesc.scale) && "No scale provided");
     assert(!(aDesc.scale && bDesc.scale) && "NYI: Both LHS and RHS scale");
 
+    bool useFp16 = aDesc.elemType == tt::ScaleDotElemType::FP16 ||
+                   bDesc.elemType == tt::ScaleDotElemType::FP16;
+
     if (aDesc.scale) {
       TensorValue newA =
           convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
-              aDesc, fastMath, dpasEnc, newRetType, mod, rewriter);
+              aDesc, useFp16, fastMath, dpasEnc, newRetType, mod, rewriter);
       TensorValue newB =
           convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
-              bDesc, dpasEnc, newRetType, rewriter);
+              bDesc, useFp16, dpasEnc, newRetType, rewriter);
       return {newA, newB};
     }
 
     TensorValue newB =
         convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
-            bDesc, fastMath, dpasEnc, newRetType, mod, rewriter);
+            bDesc, useFp16, fastMath, dpasEnc, newRetType, mod, rewriter);
     TensorValue newA =
         convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
-            aDesc, dpasEnc, newRetType, rewriter);
+            aDesc, useFp16, dpasEnc, newRetType, rewriter);
     return {newA, newB};
   }
 
   template <ttgi::DpasEncodingAttr::OpIdx opIdx>
-  TensorValue convertScaledOperand(OpDescriptor opDesc, bool fastMath,
+  TensorValue convertScaledOperand(OpDescriptor opDesc, bool useFp16,
+                                   bool fastMath,
                                    ttg::intel::DpasEncodingAttr dpasEnc,
                                    RankedTensorType retType, ModuleOp mod,
                                    PatternRewriter &rewriter) const {
@@ -304,7 +309,7 @@ private:
     auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
         ctx, unsigned(opIdx), opEncoding, opEncoding.getOpsPerChannel());
     TensorValue op =
-        createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
+        createArg(opDesc.op, opDesc.elemType, useFp16, newOpEncoding, rewriter);
 
     unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[0];
     SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
@@ -332,7 +337,7 @@ private:
   }
 
   template <ttgi::DpasEncodingAttr::OpIdx opIdx>
-  TensorValue convertUnscaledOperand(OpDescriptor opDesc,
+  TensorValue convertUnscaledOperand(OpDescriptor opDesc, bool useFp16,
                                      ttg::intel::DpasEncodingAttr dpasEnc,
                                      RankedTensorType retType,
                                      PatternRewriter &rewriter) const {
@@ -341,7 +346,8 @@ private:
     auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
         opDesc.op.getContext(), unsigned(opIdx), dpasEnc,
         dpasEnc.getOpsPerChannel());
-    return createArg(opDesc.op, opDesc.elemType, newOpEncoding, rewriter);
+    return createArg(opDesc.op, opDesc.elemType, useFp16, newOpEncoding,
+                     rewriter);
   }
 
   ttg::intel::DpasEncodingAttr
@@ -385,7 +391,7 @@ private:
                                                  oldAcc);
   }
 
-  TensorValue createArg(TensorValue v, tt::ScaleDotElemType type,
+  TensorValue createArg(TensorValue v, tt::ScaleDotElemType type, bool useFp16,
                         Attribute vEncoding, PatternRewriter &rewriter) const {
     RankedTensorType vType = v.getType();
     auto newVType = RankedTensorType::get(vType.getShape(),
@@ -395,13 +401,16 @@ private:
 
     // convert to bf16
     if (type != tt::ScaleDotElemType::E2M1 &&
-        type != tt::ScaleDotElemType::BF16) {
+        type != tt::ScaleDotElemType::BF16 &&
+        type != tt::ScaleDotElemType::FP16) {
       assert(type == tt::ScaleDotElemType::E5M2 ||
              type == tt::ScaleDotElemType::E4M3);
-      auto vTypeBf16 = RankedTensorType::get(
-          newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
+      auto upcastedType = RankedTensorType::get(
+          newVType.getShape(),
+          useFp16 ? rewriter.getF16Type() : rewriter.getBF16Type(),
+          newVType.getEncoding());
       ret = cast<TypedValue<RankedTensorType>>(
-          rewriter.create<tt::FpToFpOp>(v.getLoc(), vTypeBf16, ret)
+          rewriter.create<tt::FpToFpOp>(v.getLoc(), upcastedType, ret)
               .getResult());
     }
     return ret;
@@ -423,8 +432,11 @@ private:
     if (!scale)
       return v;
 
+    Builder b(v.getContext());
+    bool useFp16 = elemType == tt::ScaleDotElemType::FP16;
+    Type outputElemType = useFp16 ? b.getF16Type() : b.getBF16Type();
     auto retTy = triton::gpu::intel::UpcastMXFPOp::deduceOutputType(
-        v, elemType, Builder(v.getContext()).getBF16Type());
+        v, elemType, outputElemType);
     return rewriter.create<ttgi::UpcastMXFPOp>(v.getLoc(), retTy, v, scale,
                                                elemType, fastMath);
   }
