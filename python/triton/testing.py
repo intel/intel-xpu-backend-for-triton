@@ -15,6 +15,7 @@ import logging
 @functools.cache
 def _support_elapsed_time():
     import torch
+    import triton
 
     support = True
     message_unsupported = "Wall time is used instead of elapsed_time (not supported). \
@@ -23,16 +24,18 @@ def _support_elapsed_time():
     message_bug = "Wall time is used instead of elapsed_time because of the bug ('negative timings'). \
         Should be fixed in DLE 2025.1. The timing measurements could be innacurate."
 
+    # FIXME: 5 iterations to detect negative timings bug; 1 should be enough for DLE 2025.1
     for _ in range(5):
         e1 = torch.xpu.Event(enable_timing=True)
         e1.record()
-        e1.synchronize()
 
         e2 = torch.xpu.Event(enable_timing=True)
         e2.record()
-        e2.synchronize()
 
         try:
+            # FIXME: to avoid negative timings before DLE 2025.1;
+            # this workaround doesn't work for BMG.
+            triton.runtime.driver.active.utils.wait()
             if e1.elapsed_time(e2) <= 0:
                 logging.warning(message_bug)
                 support = False
@@ -195,6 +198,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     :type return_mode: str
     """
     assert return_mode in ["min", "max", "mean", "median", "all"]
+    import triton
 
     di = runtime.driver.active.get_device_interface()
 
@@ -217,6 +221,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     end_event.record()
     if not USE_WALL_TIME:
         di.synchronize()
+
+    # FIXME: to avoid negative timings before DLE 2025.1;
+    # this workaround doesn't work for BMG.
+    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # compute number of warmup and repeat
@@ -248,6 +256,10 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     # Record clocks
     if not USE_WALL_TIME:
         di.synchronize()
+
+    # FIXME: to avoid negative timings before DLE 2025.1;
+    # this workaround doesn't work for BMG.
+    triton.runtime.driver.active.utils.wait()
     times = [s.elapsed_time(e) for s, e in zip(start_event, end_event)]
     return _summarize_statistics(times, quantiles, return_mode)
 
