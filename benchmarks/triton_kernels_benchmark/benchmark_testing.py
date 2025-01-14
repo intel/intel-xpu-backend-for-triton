@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import os
+import time
 from typing import Any, Dict, List
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
@@ -161,9 +162,26 @@ else:
 
 
 def make_do_bench_for_autotune():
+    import triton
 
-    def autotuner_do_bench(*args, **kwargs):
-        return do_bench(*args, n_warmup=10, n_repeat=10, **kwargs)
+    def autotuner_do_bench(fn, *args, **kwargs):
+        di = triton.runtime.driver.active.get_device_interface()
+
+        start = time.time_ns() / 1_000_000
+        fn()
+        di.synchronize()
+        end = time.time_ns() / 1_000_000
+        estimate_ms = end - start
+
+        # defaults for `do_bench` in ms
+        warmup_time = 25
+        rep_time = 100
+
+        # compute n_warmup and n_repeat times
+        n_warmup = int(warmup_time // estimate_ms + 1)
+        n_repeat = int(rep_time // estimate_ms + 1)
+
+        return do_bench(fn, *args, n_warmup=n_warmup, n_repeat=n_repeat, **kwargs)
 
     return autotuner_do_bench
 
