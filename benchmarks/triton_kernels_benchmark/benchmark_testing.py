@@ -167,11 +167,13 @@ def make_do_bench_for_autotune():
     def autotuner_do_bench(fn, *args, **kwargs):
         di = triton.runtime.driver.active.get_device_interface()
 
+        count = 3
         start = time.time_ns() / 1_000_000
-        fn()
-        di.synchronize()
+        for _ in range(count):
+            fn()
+            di.synchronize()
         end = time.time_ns() / 1_000_000
-        estimate_ms = end - start
+        estimate_ms = (end - start) / count
 
         # defaults for `do_bench` in ms
         warmup_time = 25
