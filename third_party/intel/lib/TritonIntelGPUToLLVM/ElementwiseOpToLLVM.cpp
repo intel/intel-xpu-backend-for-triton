@@ -1022,16 +1022,6 @@ struct FpToFpOpConversion
   }
 };
 
-template <typename OP>
-Value EmitDualBF16ElementwiseOp(Location loc,
-                                ConversionPatternRewriter &rewriter,
-                                MultipleOperandsRange operands) {
-  auto v0 = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
-  auto v1 = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
-  auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
-  return intel::convertFp32ToBf16(loc, rewriter, result, RoundingMode::RTNE);
-}
-
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
                                          ExternElementwiseOpConversion> {
@@ -1070,6 +1060,9 @@ struct FDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    assert((!getElementType(op.getLhs()).isBF16() &&
+            !getElementType(op.getRhs()).isBF16()) &&
+           "unsupported conversion");
     return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
                                           operands[0][1])};
   }
@@ -1085,14 +1078,9 @@ struct FMulOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
-
+    assert((!getElementType(op.getLhs()).isBF16() &&
+            !getElementType(op.getRhs()).isBF16()) &&
+           "unsupported conversion");
     return {rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0][0],
                                           operands[0][1])};
   }
@@ -1108,13 +1096,9 @@ struct FAddOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands)};
-
+    assert((!getElementType(op.getLhs()).isBF16() &&
+            !getElementType(op.getRhs()).isBF16()) &&
+           "unsupported conversion");
     return {rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0][0],
                                           operands[0][1])};
   }
@@ -1130,13 +1114,9 @@ struct FSubOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands)};
-
+    assert((!getElementType(op.getLhs()).isBF16() &&
+            !getElementType(op.getRhs()).isBF16()) &&
+           "unsupported conversion");
     return {rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0][0],
                                           operands[0][1])};
   }
