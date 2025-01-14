@@ -12,7 +12,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
-using namespace mlir::triton::gpu;
+using namespace mlir::triton::gpu::intel;
 
 namespace {
 
@@ -80,7 +80,7 @@ public:
     // kWidth here is the contiguous number of elements each thread access.
     unsigned kWidth = dpasEnc.getOpsPerChannel() / 2;
     unsigned numMxfp =
-        TritonGPUDialect::TritonGPUDialect::getThreadsPerWarp(mod) / instShapeM;
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod) / instShapeM;
     unsigned mxfpSize = repSize * subTileSize * kWidth;
     constexpr unsigned numScales = 16;
 

@@ -222,7 +222,7 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK: [[C:%.*]] = ttg.convert_layout [[CST]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[DPAS]]>
     // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[ARG0]] : tensor<128x32xi8, [[BLOCKED]]> -> tensor<128x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>
     // CHECK: [[CVT_ARG1:%.*]] = ttg.convert_layout [[ARG1]] : tensor<128x2xi8, [[BLOCKED1]]> -> tensor<128x2xi8, [[BLOCKED3]]>
-    // CHECK: [[UPCAST:%.*]] = ttg.upcast_mxfp [[CVT_ARG0]], [[CVT_ARG1]] fp_type = e2m1 {fastMath = false} : tensor<128x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>, tensor<128x2xi8, [[BLOCKED3]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>>
+    // CHECK: [[UPCAST:%.*]] = triton_intel_gpu.upcast_mxfp [[CVT_ARG0]], [[CVT_ARG1]] fp_type = e2m1 {fastMath = false} : tensor<128x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>, tensor<128x2xi8, [[BLOCKED3]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>>
     // CHECK: [[A:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>
     // CHECK: [[B:%.*]] = ttg.convert_layout [[ARG2]] : tensor<64x128xbf16, [[BLOCKED2]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
     // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>> * tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>> -> tensor<128x128xf32, [[DPAS]]>
@@ -239,7 +239,7 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK: [[C:%.*]] = ttg.convert_layout [[CST]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[DPAS]]>
     // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout %arg0 : tensor<128x32xi8, [[BLOCKED]]> -> tensor<128x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>
     // CHECK: [[CVT_ARG1:%.*]] = ttg.convert_layout %arg1 : tensor<128x2xi8, [[BLOCKED1]]> -> tensor<128x2xi8, [[BLOCKED3]]>
-    // CHECK: [[UPCAST:%.*]] = ttg.upcast_mxfp [[CVT_ARG0]], [[CVT_ARG1]] fp_type = e2m1 {fastMath = true} : tensor<128x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>, tensor<128x2xi8, [[BLOCKED3]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>>
+    // CHECK: [[UPCAST:%.*]] = triton_intel_gpu.upcast_mxfp [[CVT_ARG0]], [[CVT_ARG1]] fp_type = e2m1 {fastMath = true} : tensor<128x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>, tensor<128x2xi8, [[BLOCKED3]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>>
     // CHECK: [[A:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>
     // CHECK: [[CVT_ARG2:%.*]] = ttg.convert_layout [[ARG2]] : tensor<64x128xf8E4M3FN, [[BLOCKED2]]> -> tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
     // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG2]] : tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
@@ -285,7 +285,7 @@ module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps"
       // CHECK: [[C:%.*]] = ttg.convert_layout [[ARG5]] : tensor<32x128xf32, [[BLOCKED4]]> -> tensor<32x128xf32, [[DPAS]]>
       // CHECK: [[CVT_ARG1:%.*]] = ttg.convert_layout [[TRANS_B]] : tensor<32x32xi8, [[BLOCKED4]]> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>
       // CHECK: [[CVT_ARG2:%.*]] = ttg.convert_layout [[ARG2]] : tensor<32x2xi8, [[BLOCKED2]]> -> tensor<32x2xi8, [[BLOCKED6]]>
-      // CHECK: [[UPCAST:%.*]] = ttg.upcast_mxfp [[CVT_ARG1]], [[CVT_ARG2]] fp_type = e2m1  {fastMath = false} : tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>, tensor<32x2xi8, [[BLOCKED6]]> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>>
+      // CHECK: [[UPCAST:%.*]] = triton_intel_gpu.upcast_mxfp [[CVT_ARG1]], [[CVT_ARG2]] fp_type = e2m1  {fastMath = false} : tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>, tensor<32x2xi8, [[BLOCKED6]]> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>>
       // CHECK: [[A:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS1]], kWidth = 4}>> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[DPAS]], kWidth = 2}>>
       // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[TRANS_A]] : tensor<64x128xf8E4M3FN, [[BLOCKED5]]> -> tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
       // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[DPAS]], kWidth = 2}>>
