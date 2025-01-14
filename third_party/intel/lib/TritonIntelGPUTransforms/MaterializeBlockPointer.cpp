@@ -1,3 +1,4 @@
+#include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -20,6 +21,7 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUMATERIALIZEBLOCKPOINTER
+#include "Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
@@ -40,13 +42,49 @@ public:
             ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
       return;
 
+    mlir::triton::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+
     MLIRContext *context = &getContext();
-    mod.walk([context, this](tt::LoadOp loadOp) {
+    mod.walk([context, this, &axisInfoAnalysis](tt::LoadOp loadOp) {
       LDBG("Considering op: " << loadOp);
 
       Value ptr = loadOp.getPtr();
-      if (!tt::isTensorPointerType(ptr.getType()))
+      if (!tt::isTensorPointerType(ptr.getType())) {
+        LDBG("Considering tensor of pointer load op: " << loadOp);
+        auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+        if (!tensorTy)
+          return;
+
+        // The axis info gives the information about the value of the indices
+        // tensor. For example, if the indices tensor is tensor<8x16xi32> and
+        // its value is:
+        //
+        //   [[ 0,  1,  2,  3, ..., 12, 13, 14, 15],
+        //    [16, 17, 18, 19, ..., 28, 29, 30, 31],
+        //    ...
+        //    [ 96,  97,  98,  99, ..., 108, 109, 110, 111],
+        //    [112, 113, 114, 115, ..., 124, 125, 126, 127]]
+        // Then the global memory refer by the tensor pointer is row-major
+        // contiguous. And the axis info will be: Contiguity: [1, 16],
+        // Divisibility: [1, 1], Constancy: [1, 1]
+
+        // As long as we have the information about the memory layout, we can
+        // use the Intel Block IO to dereference the memory if the register
+        // layout matches.
+        auto axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+        unsigned rank = axisInfo->getRank();
+        LDBG("Rank: " << rank);
+        if (rank == 1)
+          return;
+
+        if (axisInfo->getContiguity(0) == tensorTy.getDimSize(0))
+          loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                          StringAttr::get(context, "column_major"));
+        if (axisInfo->getContiguity(1) == tensorTy.getDimSize(1))
+          loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                          StringAttr::get(context, "row_major"));
         return;
+      }
 
       assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
              "Expected 'loadOp' to load a tensor value.");
