@@ -17,10 +17,8 @@ using namespace mlir::triton::gpu;
 namespace {
 
 static Value mxfpScaleBf16(ConversionPatternRewriter &rewriter, Location loc,
-                           Value v, Value scale) {
+                           Value v, Value scale, bool fastMath) {
   Value vBf16 = bitcast(v, bf16_ty);
-  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
 
   Value v0 = mlir::triton::intel::convertBf16ToFp32(loc, rewriter, vBf16);
@@ -29,7 +27,11 @@ static Value mxfpScaleBf16(ConversionPatternRewriter &rewriter, Location loc,
   auto undefRounding = static_cast<mlir::triton::RoundingMode>(-1);
   Value scaledBf16 = mlir::triton::intel::convertFp32ToBf16(
       loc, rewriter, result, undefRounding);
+  if (fastMath)
+    return scaledBf16;
   // Account for NaN in the scale as per the mxfp specification.
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
+  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
   return select(scaleIsNan, nanBf16, scaledBf16);
 };
 
@@ -104,8 +106,8 @@ public:
             for (int k = 0; k < kWidth; ++k) {
               unsigned idx = i * scalingBlockSize + mxfp * mxfpSize +
                              rep * subTileSize * kWidth + subTile * kWidth + k;
-              xVals[idx] =
-                  mxfpScaleBf16(rewriter, loc, xVals[idx], si[subTile]);
+              xVals[idx] = mxfpScaleBf16(rewriter, loc, xVals[idx], si[subTile],
+                                         op.getFastMath());
             }
           }
         }
