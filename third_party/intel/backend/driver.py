@@ -34,8 +34,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
     icpx_path = shutil.which("icpx")
     if icpx_path and os.name != "nt":
         # only `icpx` compiler knows where sycl runtime binaries and header files are
-        icpx_dir = os.path.dirname(icpx_path)
-        compiler_root = os.path.dirname(icpx_dir)
+        compiler_root = os.path.abspath(f"{icpx_path}/../..")
         include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
         sycl_dir = os.path.join(compiler_root, "lib")
         return include_dir, sycl_dir
