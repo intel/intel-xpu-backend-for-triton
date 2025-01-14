@@ -1,5 +1,8 @@
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
+
 #include "passes.h"
+#include "pybind_type_casters.h"
 
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -20,10 +23,6 @@
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
 
@@ -104,10 +103,17 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
 }
 
+void init_triton_intel_passes_arith(py::module &&m) {
+  ADD_PASS_WRAPPER_OPT_2("add_arith_emulate_unsupported_floats",
+                         mlir::arith::createArithEmulateUnsupportedFloats,
+                         llvm::SmallVector<std::string>, std::string);
+}
+
 void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
+  init_triton_intel_passes_arith(passes.def_submodule("arith"));
 
   // cluster info
   py::class_<gpu::intel::ClusterInfo>(m, "ClusterInfo")
