@@ -189,7 +189,7 @@ class XPUBackend(BaseBackend):
     def pack_metadata(self, metadata):
         return metadata
 
-    def get_codegen_implementation(self):
+    def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8

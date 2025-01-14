@@ -43,16 +43,6 @@ struct CanonicalizeConvertFromReshape
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
-    // If the layouts are structurally the same, the convert is trivial
-    auto srcType = convert.getSrc().getType();
-    auto dstType = convert.getType();
-    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
-    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
-    if (srcLL && dstLL && *srcLL == *dstLL) {
-      rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-          op, op.getType(), convert.getSrc(), op.getAllowReorder());
-      return mlir::success();
-    }
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
     if (!op.getAllowReorder() || op.getEfficientLayout())
@@ -402,34 +392,13 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
     return RankedTensorType::get(xShape, outputElemType);
   }
 
-  Attribute newVEncoding = nullptr;
   auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+  auto newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
+                                                  oldEncoding.getParent(),
+                                                  oldEncoding.getKWidth() * 2);
+  // Figure out the K dimension for the input A/B, given that the return
+  // type is upcasted A/B type so we need to update the proper dim size.
   const int opIdx = oldEncoding.getOpIdx();
-  // Note: For Intel the dot operands layout's kWidth parameter must match
-  // the parent's DPAS layout opsPerChannel so we need to materialize a
-  // new DPAS layout.
-  if (auto dpasEncoding =
-          dyn_cast<intel::DpasEncodingAttr>(oldEncoding.getParent())) {
-    unsigned opsPerChannel =
-        intel::DpasEncodingAttr::getOpsPerChannel(outputElemType);
-    // e2m1 is packed 2 elements per int8, we must handle continuous 2
-    // elements when upcasting to bf16
-    if (xTy.getElementType() == IntegerType::get(ctx, 8))
-      opsPerChannel *= 2;
-    auto newDpasEncoding = intel::DpasEncodingAttr::get(
-        ctx, dpasEncoding.getRepeatCount(), dpasEncoding.getSystolicDepth(),
-        dpasEncoding.getExecutionSize(), opsPerChannel,
-        dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
-        product<unsigned>(dpasEncoding.getThreadsPerWarp()));
-    newVEncoding = DotOperandEncodingAttr::get(
-        ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
-  } else {
-    // Figure out the K dimension for the input A/B, given that the return
-    // type is upcasted A/B type so we need to update the proper dim size.
-    newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
-                                               oldEncoding.getParent(),
-                                               oldEncoding.getKWidth() * 2);
-  }
   const bool hasBatch = xShape.size() == 3;
   const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
   newShape[kIdx] *= 2;
