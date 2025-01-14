@@ -14,8 +14,7 @@ namespace detail {
 /// LLVM::SMALLVECTOR BINDING
 ////////////////////////////////////////////////////////////////////////////////
 
-template <>
-struct type_caster<llvm::SmallVector<std::string>> {
+template <> struct type_caster<llvm::SmallVector<std::string>> {
   PYBIND11_TYPE_CASTER(llvm::SmallVector<std::string>, _("List[str]"));
 
   bool load(handle src, bool) {
