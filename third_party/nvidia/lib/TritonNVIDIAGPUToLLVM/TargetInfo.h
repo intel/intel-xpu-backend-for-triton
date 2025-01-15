@@ -61,9 +61,6 @@ public:
 
   int getSharedAddressSpace() const override;
 
-  Value getStackPointer(RewriterBase &rewriter,
-                        FunctionOpInterface funcOp) const override;
-
   int getAddressSpace(Attribute addressSpace) const override;
 
   bool supportVectorizedAtomics() const override;

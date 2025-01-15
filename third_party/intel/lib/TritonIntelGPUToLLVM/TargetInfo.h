@@ -68,9 +68,6 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
-  Value getStackPointer(RewriterBase &rewriter,
-                        FunctionOpInterface funcOp) const override;
-
   int getAddressSpace(Attribute addressSpace) const override;
 
   Value getGlobalStringStart(Location loc, RewriterBase &rewriter,
