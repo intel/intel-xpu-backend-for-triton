@@ -168,9 +168,10 @@ public:
     TensorValue oldAcc = dotOp.getC();
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(oldAcc.getLoc(),
                                                         newRetType, oldAcc);
-
+    // opA are packed to i16 for scalar type < 16 bits. opB are packed to i32.
     auto newAEncoding = ttg::DotOperandEncodingAttr::get(
-        oldAType.getContext(), 0, newRetType.getEncoding(), opsPerChan);
+        oldAType.getContext(), 0, newRetType.getEncoding(),
+        opsPerChan == 1 ? opsPerChan : opsPerChan / 2);
     auto newBEncoding = ttg::DotOperandEncodingAttr::get(
         oldBType.getContext(), 1, newRetType.getEncoding(), opsPerChan);
 
@@ -306,8 +307,13 @@ private:
         dpasEnc.getRepCluster(),
         product<unsigned>(dpasEnc.getThreadsPerWarp()));
 
-    auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
-        ctx, unsigned(opIdx), opEncoding, opEncoding.getOpsPerChannel());
+    int kWidth = dpasEnc.getOpsPerChannel();
+    if constexpr (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA) {
+      // Operand A is packed to i16 for scalar type < 16 bits.
+      kWidth = kWidth == 1 ? 1 : kWidth / 2;
+    }
+    auto newOpEncoding = ttg::DotOperandEncodingAttr::get(ctx, unsigned(opIdx),
+                                                          opEncoding, kWidth);
     TensorValue op =
         createArg(opDesc.op, opDesc.elemType, useFp16, newOpEncoding, rewriter);
 
@@ -342,10 +348,13 @@ private:
                                      RankedTensorType retType,
                                      PatternRewriter &rewriter) const {
     assert(!opDesc.scale && "Scale should be NULL");
-
+    int kWidth = dpasEnc.getOpsPerChannel();
+    if constexpr (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA) {
+      // Operand A is packed to i16 for scalar type < 16 bits.
+      kWidth = kWidth == 1 ? 1 : kWidth / 2;
+    }
     auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
-        opDesc.op.getContext(), unsigned(opIdx), dpasEnc,
-        dpasEnc.getOpsPerChannel());
+        opDesc.op.getContext(), unsigned(opIdx), dpasEnc, kWidth);
     return createArg(opDesc.op, opDesc.elemType, useFp16, newOpEncoding,
                      rewriter);
   }
