@@ -5,7 +5,7 @@ import os
 from triton.testing import assert_close as triton_assert_close, Benchmark
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
-NO_VERIFY = os.getenv("NO_VERIFY", "0") == "1"
+VERIFY = os.getenv("VERIFY", "1") == "1"
 
 
 def synchronize():
@@ -163,9 +163,8 @@ else:
 
 
 def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
-    if NO_VERIFY:
-        return
-    triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
+    if VERIFY:
+        triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
 
 
 def perf_report(benchmarks):
