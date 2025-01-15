@@ -188,8 +188,8 @@ def make_do_bench_for_autotune():
         rep_time = 100
 
         # compute n_warmup and n_repeat times
-        n_warmup = int(warmup_time // estimate_ms + 1)
-        n_repeat = int(rep_time // estimate_ms + 1)
+        n_warmup = max(1, int(warmup_time / estimate_ms))
+        n_repeat = max(1, int(rep_time / estimate_ms))
 
         return do_bench(fn, *args, n_warmup=n_warmup, n_repeat=n_repeat, **kwargs)
 
