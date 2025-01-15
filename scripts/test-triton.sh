@@ -261,7 +261,7 @@ run_benchmark_softmax() {
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  pip install .
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
@@ -270,7 +270,7 @@ run_benchmark_gemm() {
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  pip install .
 
   echo "Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
@@ -287,7 +287,7 @@ run_benchmark_attention() {
   echo "*****            Running ATTENTION             *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  pip install .
 
   echo "Forward - Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
@@ -305,7 +305,7 @@ run_benchmark_attention() {
 
 run_benchmarks() {
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  pip install .
   for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
     benchmark=$(basename -- "$file" .py)
     if [[ $benchmark = @("__init__"|"benchmark_driver"|"benchmark_testing") ]]; then

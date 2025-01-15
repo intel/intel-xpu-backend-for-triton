@@ -324,8 +324,8 @@ private:
                                       newOpEncoding.getCTAOrder(), CTALayout);
     TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
 
-    auto upcastOp =
-        createUpcastMxfpOp(op, scale, opDesc.elemType, fastMath, rewriter);
+    auto upcastOp = createUpcastMxfpOp(op, scale, opDesc.elemType, useFp16,
+                                       fastMath, rewriter);
     if (opDesc.elemType == tt::ScaleDotElemType::E2M1) {
       auto resultType = cast<RankedTensorType>(upcastOp.getType());
       auto newRetType = RankedTensorType::get(
@@ -427,13 +427,13 @@ private:
   }
 
   TensorValue createUpcastMxfpOp(TensorValue v, TensorValue scale,
-                                 tt::ScaleDotElemType elemType, bool fastMath,
+                                 tt::ScaleDotElemType elemType, bool useFp16,
+                                 bool fastMath,
                                  PatternRewriter &rewriter) const {
     if (!scale)
       return v;
 
     Builder b(v.getContext());
-    bool useFp16 = elemType == tt::ScaleDotElemType::FP16;
     Type outputElemType = useFp16 ? b.getF16Type() : b.getBF16Type();
     auto retTy = triton::gpu::intel::UpcastMXFPOp::deduceOutputType(
         v, elemType, outputElemType);

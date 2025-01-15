@@ -131,7 +131,7 @@ def benchmark(M, N, provider):
         out = torch.empty_like(x, device="xpu")
         triton_fn = lambda: softmax(x, out)
         torch_fn = lambda: torch.softmax(x, axis=-1)
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), err_msg="triton to torch")
+        benchmark_suit.assert_close(triton_fn, torch_fn, err_msg="triton to torch")
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, n_warmup=10, n_repeat=10)
 
     elif provider == "torch-jit":
@@ -144,7 +144,7 @@ def benchmark(M, N, provider):
         out = torch.empty_like(x, device="xpu")
         xetla_fn = lambda: func(x, out, 0)
         torch_fn = lambda: torch.softmax(x, axis=-1)
-        # benchmark_suit.assert_close(xetla_fn(), torch_fn(), err_msg="xetla to torch")
+        # benchmark_suit.assert_close(xetla_fn, torch_fn, err_msg="xetla to torch")
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, quantiles=quantiles, n_warmup=10, n_repeat=10)
 
     else:
