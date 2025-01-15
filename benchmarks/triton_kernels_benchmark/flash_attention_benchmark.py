@@ -479,6 +479,9 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
+        # FIXME: There is no certainty as to how much such behavior is expected.
+        # Consider removing `record_function` call from here once
+        # https://github.com/pytorch/pytorch/issues/144778 has more details.
         with record_function(
                 '__profile_kernel_of_func_bwd_fa'
         ) if benchmark_suit.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
