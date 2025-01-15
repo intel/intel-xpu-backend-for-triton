@@ -254,7 +254,7 @@ jobs:
         run: |
           cd benchmarks/triton_kernels_benchmark
           FA_KERNEL_MODE="bwd" \
-          BENCHMARKING_METHOD="ELAPSED_TIME" python flash_attention_benchmark.py --reports $REPORTS
+            python flash_attention_benchmark.py --reports $REPORTS
           mv $REPORTS/attn-performance.csv $REPORTS/attn-bwd-performance.csv
 
           source ../../scripts/capture-hw-details.sh
