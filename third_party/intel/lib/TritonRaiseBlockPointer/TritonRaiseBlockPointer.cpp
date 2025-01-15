@@ -8,9 +8,12 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/TritonRaiseBlockPointer/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Verifier.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <optional>
 #include <set>
 
@@ -75,6 +78,30 @@ Value findOrCreateCast(Location loc, Value val, Type tgtType,
   return (it != insertPoint)
              ? cast<arith::IndexCastOp>(*it)
              : getValueOrCreateCastToIndexLike(builder, loc, tgtType, val);
+}
+
+Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
+                                ValueRange strides, ValueRange offsets,
+                                ArrayRef<int> order, ArrayRef<int> sizes,
+                                OpBuilder &builder) {
+  Block *block = builder.getInsertionBlock();
+  const Block::iterator insertPoint = builder.getInsertionPoint();
+
+  auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
+    if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+      return makeTensorPtrOp.getBase() == source &&
+             makeTensorPtrOp.getShape() == shape &&
+             makeTensorPtrOp.getStrides() == strides &&
+             makeTensorPtrOp.getOffsets() == offsets &&
+             makeTensorPtrOp.getOrder() == order;
+    }
+    return false;
+  });
+
+  return (it != insertPoint)
+             ? cast<tt::MakeTensorPtrOp>(*it)
+             : builder.createOrFold<tt::MakeTensorPtrOp>(
+                   loc, source, shape, strides, offsets, sizes, order);
 }
 
 Value addOrFold(Value lhs, Value rhs, ArithBuilder &abuilder) {
@@ -323,7 +350,6 @@ struct PtrState {
             findOrCreateCast(loc, stride,
                              builder.getIntegerType(offsetBitwidth), builder),
             builder);
-        llvm::dbgs() << "divOffset: " << divOffset << "\n";
         newOffsets.push_back(divOffset);
       }
       newStrides.push_back(findOrCreateCast(
@@ -333,10 +359,8 @@ struct PtrState {
           loc, dim, builder.getIntegerType(shapeAndStridesBitwidth), builder));
     }
 
-    auto op = builder.createOrFold<tt::MakeTensorPtrOp>(
-        loc, source, newShape, newStrides, newOffsets, sizes, order);
-
-    return op;
+    return findOrCreateMakeTensorPtr(loc, source, newShape, newStrides,
+                                     newOffsets, order, sizes, builder);
   }
 };
 
@@ -391,9 +415,10 @@ public:
           .Case([this](tt::AddPtrOp addptr) {
             if (failed(rewriteAddPtrOp(addptr)))
               addptr->emitRemark(
-                  "TritonRaiseToBlockPointer: Failed to rewrite");
+                  "TritonRaiseToBlockPointer: Failed to rewrite AddPtrOp");
             return WalkResult::advance();
           })
+#if 0
           .Case<tt::MakeTensorPtrOp>([&](auto maketptr) {
             if (failed(remapMakeTensorPtrOp(maketptr))) {
               maketptr->emitRemark("TritonRaiseToBlockPointer: Failed to "
@@ -401,10 +426,11 @@ public:
             }
             return WalkResult::advance();
           })
+#endif
           .Case<tt::LoadOp, tt::StoreOp>([this](auto loadstore) {
             if (failed(rewriteLoadStoreOp(loadstore))) {
               loadstore->emitRemark(
-                  "TritonRaiseToBlockPointer: Failed to rewrite");
+                  "TritonRaiseToBlockPointer: Failed to rewrite load/store");
               return WalkResult::advance();
             }
             return WalkResult::skip();
@@ -428,6 +454,8 @@ public:
 
     SmallVector<Value> newInitArgs;
     SmallVector<std::pair<int, PtrState>, 5> initArgIndexState;
+
+    SmallVector<std::pair<int, Value>> initArgIndex;
     OpBuilder builder(op);
 
     // Create a new list of init args
@@ -444,14 +472,12 @@ public:
             return failure();
           }
 
-          PtrState state;
-          if (succeeded(visitOperandMakeTensorPtr(
-                  makeTensorPtrOp, state, op.getLoc(), builder, true))) {
-            newInitArgs.push_back(mappedV);
-            // Record the PtrState for later processing
-            initArgIndexState.push_back(std::make_pair(i, state));
-            continue;
-          }
+          // replace the argument with the mapped value, and register the new
+          // pointer
+          newInitArgs.push_back(mappedV);
+          initArgIndex.push_back(std::make_pair(i, mappedV));
+
+          continue;
         } else if (auto addptrOp = mappedV.getDefiningOp<tt::AddPtrOp>()) {
           // We always use tt.addptr for scalar pointers. If the defininig op
           // is tt.addptr and we have a non-scalar pointer, something must
@@ -474,35 +500,6 @@ public:
       newInitArgs.push_back(arg);
     }
 
-    // For each of the PtrState recorded in the last step, insert new
-    // instructions to describe offset and stride for each dimension and
-    // append them to init args
-    SmallVector<std::pair<int, PtrState>, 5> knownPtrsTmp;
-    for (auto &[i, state] : initArgIndexState) {
-      // For each dimension, if the corresponding offset and stride is an
-      // integer attribute, create a constant value and append them at the
-      // end of init arg list.
-      for (auto [j, s] : llvm::enumerate(state.offsets))
-        newInitArgs.push_back(s);
-      for (auto [j, s] : llvm::enumerate(state.strides))
-        newInitArgs.push_back(s);
-
-      if (state.getRank() == 0) {
-        assert(state.scalar &&
-               "The state must have a scalar if its rank is equal to zero");
-        // for scalar pointers, the scalar contains the offset and is the only
-        // relevant state that could be updated by the loop.
-        newInitArgs.push_back(state.scalar);
-      }
-
-      // Note that we want the knownPtrs to be indexed by block arg, but we
-      // only have index for now. Also, the state we record is the init
-      // arg, but want to use the newly created block arg. These block args
-      // are not created yet. We will translate this mapping later.
-      knownPtrsTmp.push_back(std::make_pair(i, state));
-      levelToBlockArgIndex[level].insert(i);
-    }
-
     // Create a new scf::ForOp that uses updated init args and same loop body
     auto newOp = builder.create<scf::ForOp>(
         op.getLoc(), op.getLowerBound(), op.getUpperBound(), op.getStep(),
@@ -516,65 +513,9 @@ public:
             b.clone(bodyOp, cloneMap);
         });
 
-    // Convert the book-keeping data structure to use the correct key and
-    // value. Key is converted from init arg index to newly created block arg,
-    // and Value's PtrState fields are converted from init arg to newly
-    // created block arg
-    llvm::SmallDenseMap<int, PtrState> initArgIndexMap;
-    int cnt = op.getRegionIterArgs().size();
-    for (auto &[i, state] : knownPtrsTmp) {
-      for (auto it = state.offsets.begin(); it != state.offsets.end(); it++) {
-        *it = newOp.getRegionIterArgs()[cnt];
-        cnt++;
-      }
-      for (auto it = state.strides.begin(); it != state.strides.end(); it++) {
-        *it = newOp.getRegionIterArgs()[cnt];
-        cnt++;
-      }
-      if (state.getRank() == 0) {
-        assert(state.scalar &&
-               "The state must have a scalar if its rank is equal to zero");
-        state.scalar = newOp.getRegionIterArgs()[cnt];
-        cnt++;
-      }
-
-      // Record the PtrState for this pointer
-      BlockArgument key = newOp.getRegionIterArgs()[i];
-      knownPtrs[key] = state;
-      initArgIndexMap[i] = state;
-
-      // For tensors of pointers, create a tt.make_block_ptr at the beginning
-      // of the loop body that correspond to this region iter arg. In case it
-      // is used by tt.load/tt.store in the loop body before pointer updates,
-      // this will make sure rewriteLoadOp/rewriteStoreOp can use the analysis
-      // result. E.g., given the following input (%tensor_of_ptr is a block
-      // arg):
-      // scf.for (%tensor_of_ptr) {
-      //   %data = tt.load %tensor_of_ptr
-      //   // more operations to update %tensor_of_ptr
-      // }
-      // We may produce the following output:
-      // scf.for (%base_ptr, %stride, %offset) {
-      //   %tensor_of_ptr = tt.make_block_ptr(%base_ptr, %stride, %offset)
-      //   %data = tt.load %tensor_of_ptr
-      //   // more operations to update %offset
-      // }
-      // If %tensor_of_ptr is not used (i.e., %tensor_of_ptr is updated before
-      // used in the original IR), it will simply be removed by
-      // canonicalization.
-
-      // For scalar pointers, there is no need to create a tts.addptr at the
-      // beginning of the loop body. We don't lower tt.load and tt.store on
-      // scalars in this pass; pointer arithmetics can also just use the
-      // original pointer.
-      if (state.getRank() != 0) {
-        OpBuilder::InsertionGuard guard(builder);
-        builder.setInsertionPointToStart(&newOp.getRegion().front());
-        Value makePtrOp = state.createTTMakeTensorPtrOp(builder, op.getLoc());
-        ptrMap.map(key, makePtrOp);
-        knownPtrs[makePtrOp] = std::move(state);
-      }
-    }
+    // TODO: is this needed?
+    for (auto [i, mappedV] : initArgIndex)
+      ptrMap.map(newOp.getRegionIterArgs()[i], mappedV);
 
     for (auto &bodyOp : newOp.getRegion().getOps()) {
       if (auto forOp = dyn_cast<scf::ForOp>(bodyOp)) {
@@ -583,6 +524,7 @@ public:
         return failure();
       }
     }
+
     // Update the loop body.
     if (failed(rewriteOp(newOp))) {
       newOp->erase();
@@ -590,12 +532,14 @@ public:
                      "rewriting for op");
       return failure();
     }
+
     if (op.getNumRegionIterArgs()) {
       auto yieldOp = cast<scf::YieldOp>(newOp.getBody()->getTerminator());
-      if (failed(rewriteYieldOp(yieldOp, initArgIndexMap))) {
-        newOp->erase();
-        return failure();
-      };
+      for (auto [i, v] : llvm::enumerate(yieldOp->getOperands())) {
+        if (Value mappedV = ptrMap.lookupOrNull(v)) {
+          yieldOp->replaceUsesOfWith(v, mappedV);
+        }
+      }
     }
 
     levelToBlockArgIndex.erase(level);
@@ -605,17 +549,24 @@ public:
                                      newOp.result_begin() + op.getNumResults());
 
     LLVM_DEBUG({
-      llvm::dbgs() << "new for\n";
+      llvm::dbgs() << "After updating the loop body\n";
+      llvm::dbgs() << "new for:\n";
       newOp->print(llvm::dbgs(), OpPrintingFlags().printGenericOpForm());
       llvm::dbgs() << "\n";
 
-      llvm::dbgs() << "old for\n";
+      llvm::dbgs() << "old for:\n";
       op->print(llvm::dbgs(), OpPrintingFlags().printGenericOpForm());
       llvm::dbgs() << "\n";
     });
 
     op->replaceAllUsesWith(resultsToReplaceWith);
     op->erase();
+
+    LLVM_DEBUG({
+      auto modOp =
+          builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+      llvm::dbgs() << "Module:\n" << modOp << "\n";
+    });
 
     return success();
   }
@@ -698,7 +649,7 @@ public:
     auto newOp = builder.createOrFold<scf::YieldOp>(op->getLoc(), operands);
 
     LLVM_DEBUG({
-      llvm::dbgs() << "new yield:";
+      llvm::dbgs() << "new yield: ";
       newOp.getOperation()->print(llvm::dbgs(),
                                   OpPrintingFlags().printGenericOpForm());
       llvm::dbgs() << "\n";
@@ -708,6 +659,7 @@ public:
     return success();
   }
 
+#if 0
   LogicalResult remapMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
     LLVM_DEBUG(llvm::dbgs() << "Remapping: " << *op << "\n");
     OpBuilder builder(op);
@@ -719,6 +671,7 @@ public:
     knownPtrs[op.getResult()] = std::move(state);
     return success();
   }
+#endif
 
   Value getFinalValue(Value value) const {
     Operation *defOp = value.getDefiningOp();
@@ -837,13 +790,83 @@ public:
 
     OpBuilder builder(op);
     Location loc = op.getLoc();
+    auto ptr = op.getPtr();
+
+    auto fillOffsets = [&](Value offset, unsigned rank,
+                           SmallVector<Value> &offsets) {
+      switch (rank) {
+      case 1:
+        offsets.push_back(offset);
+        break;
+      case 2:
+        offsets.push_back(
+            findOrCreateConstant(loc, 0, offsetBitwidth, builder));
+        offsets.push_back(offset);
+        break;
+      default:
+        llvm_unreachable("unexpected rank");
+      }
+    };
+
+    auto getConstantValue = [](arith::ConstantOp cstOp) {
+      TypedAttr cstVal = cstOp.getValue();
+      APInt val;
+      if (auto attr = dyn_cast<DenseIntElementsAttr>(cstVal))
+        val = attr.getSplatValue<APInt>();
+      else if (auto attr = dyn_cast<IntegerAttr>(cstVal))
+        val = attr.getValue();
+      else
+        assert(false && "unexpected constant type");
+
+      return val;
+    };
+
+    // If the ptr has already been mapped (i.e. rewritten into a block pointer),
+    // rewrite the AddPtrOp using and AdvanceOp.
+    if (Value mappedV = ptrMap.lookupOrNull(ptr)) {
+      if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
+        Value finalVal = getFinalValue(op.getOffset());
+        auto offsetType = cast<RankedTensorType>(op.getOffset().getType());
+        unsigned rank = offsetType.getRank();
+
+        SmallVector<Value> offsets;
+        TypeSwitch<Operation *>(op.getOffset().getDefiningOp())
+            .Case([&](tt::SplatOp splatOp) {
+              fillOffsets(splatOp.getSrc(), rank, offsets);
+            })
+            .Case([&](arith::ConstantOp cstOp) {
+              APInt val = getConstantValue(cstOp);
+
+              fillOffsets(findOrCreateConstant(loc, val.getZExtValue(),
+                                               offsetBitwidth, builder),
+                          rank, offsets);
+            })
+            .Default([](Operation *op) {
+              llvm::errs() << "Operation: " << *op << "\n";
+              llvm_unreachable("Unhandled operation");
+            });
+
+        assert(!offsets.empty() && offsets.size() == rank &&
+               "unexpected number of offsets");
+        auto advanceOp = builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(),
+                                                             ptr, offsets);
+        cleanUp.push_back(op);
+        ptrMap.map(op.getResult(), advanceOp);
+
+        return success();
+      } else {
+        assert(false && "Did not find tt::MakeTensorPtrOp");
+      }
+    }
+
+    // Otherwise, rewrite the AddPtrOp using PtrState.
     PtrState state;
     if (failed(visitOperandAddptr(op, state, loc, builder)))
       return failure();
 
-    knownPtrs[op.getResult()] = state;
-
     Value result = op.getResult();
+    knownPtrs[result] = state;
+
     Value mapped = result;
     if (isa<RankedTensorType>(result.getType())) {
       Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
@@ -856,6 +879,12 @@ public:
     // AddPtrOps that have been rewritten and no longer used in the code must
     // be removed in the pass to avoid type matching issue.
     cleanUp.push_back(op);
+
+    LLVM_DEBUG({
+      auto modOp =
+          builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+      llvm::dbgs() << "Module:\n" << modOp << "\n";
+    });
 
     return success();
   }
@@ -1005,7 +1034,7 @@ public:
           return visitAddPointerOperand(op, state, loc, builder);
         })
         .Default([](Operation *op) {
-          llvm::dbgs() << "TritonRaiseBlockPointer: encountered addptr operand "
+          llvm::errs() << "TritonRaiseBlockPointer: encountered addptr operand "
                           "produced by an unsupported operation\n"
                        << op << "\n";
           return failure();
@@ -1028,20 +1057,23 @@ public:
       std::enable_if_t<llvm::is_one_of<OpTy, tt::LoadOp, tt::StoreOp>::value,
                        bool> = true>
   LogicalResult rewriteLoadStoreOp(OpTy op) {
+    // If the pointer is already a block pointer, there is nothing to do.
+    if (tt::isTensorPointerType(op.getPtr().getType())) {
+      LLVM_DEBUG(llvm::dbgs() << "Ptr is a tensor\n");
+      return success();
+    }
+
+    // If the pointer doesn't have a corresponding block pointer, there is
+    // nothing to do.
+    Value ptr = ptrMap.lookupOrNull(op.getPtr());
+    if (!ptr)
+      return success();
+
     LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
 
     constexpr bool isLoad = std::is_same_v<OpTy, tt::LoadOp>;
     constexpr StringLiteral opName =
         isLoad ? StringLiteral("loadOp") : StringLiteral("storeOp");
-
-    Value ptr = ptrMap.lookupOrNull(op.getPtr());
-
-    if (!ptr) {
-      op->emitRemark("TritonRaiseBlockPointer: pointer is not replaced with "
-                     "tt.make_tensor_ptr so ")
-          << opName << " cannot be rewritten";
-      return failure();
-    }
 
     auto ptrType = dyn_cast<tt::PointerType>(ptr.getType());
     if (ptrType && !isa<ShapedType>(ptrType.getPointeeType())) {
@@ -1082,7 +1114,27 @@ public:
     }
 
     op->erase();
+
+    LLVM_DEBUG({
+      auto modOp =
+          builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+      llvm::dbgs() << "Module:\n" << modOp << "\n";
+    });
+
     return success();
+  }
+
+  static void dump(const IRMapping &map) {
+    for (auto [key, val] : map.getValueMap()) {
+      llvm::dbgs() << "key: " << key << "(0x" << &key << "), value: " << val
+                   << "\n";
+    }
+  }
+
+  static void dump(const llvm::SmallDenseMap<Value, PtrState> &knownPtrs) {
+    for (auto [key, state] : knownPtrs) {
+      llvm::dbgs() << "key: " << key << " state: " << state << "\n";
+    }
   }
 
 private:

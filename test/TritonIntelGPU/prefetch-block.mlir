@@ -78,8 +78,8 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 1 : i32}
       %15 = tt.load %arg8 : !tt.ptr<tensor<256x32xf16, #dot0>, 1>
       %16 = tt.load %arg9 : !tt.ptr<tensor<32x256xf16, #dot1>, 1>
       %17 = tt.dot %15, %16, %arg7 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<256x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<256x256xf32, #blocked>
-      %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<256x32xf16, #dot0>, 1>
-      %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16, #dot1>, 1>
+      %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<256x32xf16, #dot0>, 1>, i32, i32
+      %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16, #dot1>, 1>, i32, i32
       scf.yield %17, %18, %19 : tensor<256x256xf32, #blocked>, !tt.ptr<tensor<256x32xf16, #dot0>, 1>, !tt.ptr<tensor<32x256xf16, #dot1>, 1>
     } {ttg.workload = 3 : i32}
     %14 = tt.make_tensor_ptr %arg2, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%9, %11] {order = array<i32: 1, 0>} : <tensor<256x256xf32, #blocked>, 1>
