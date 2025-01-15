@@ -271,7 +271,7 @@ def benchmark(B, M, N, K, provider):
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.nn.functional.gelu(torch.matmul(a, b).to(torch.float32))
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
     else:
