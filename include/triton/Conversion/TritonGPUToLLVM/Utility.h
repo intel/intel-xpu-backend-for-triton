@@ -643,7 +643,7 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value offVal = b.i32_val(offset);
   Value base =
-      b.gep(ptrTy, i8_ty, target.getStackPointer(rewriter, func), offVal);
+      b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
 
