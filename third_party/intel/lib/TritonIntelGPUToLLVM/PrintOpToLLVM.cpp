@@ -21,7 +21,7 @@ struct PrintOpConversion
                              PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::PrintOp>(typeConverter,
                                                          benefit),
-        targetInfo(targetInfo) {}
+        targetInfo(static_cast<const intel::TargetInfo &>(targetInfo)) {}
   using ConvertTritonGPUOpToLLVMPattern<
       triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -223,9 +223,9 @@ struct PrintOpConversion
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
     msgNewline.push_back('\0');
-    Value msgValue = LLVM::intel::addStringToModule(
-        UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-        msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
+    Value msgValue = targetInfo.getGlobalStringStart(
+        rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
+        /*addressSpace=*/TritonGEN::kUniformConstant);
     targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
     if (formatStrByteCount)
       *formatStrByteCount = msgNewline.size_in_bytes();
@@ -233,7 +233,7 @@ struct PrintOpConversion
   }
 
 protected:
-  const TargetInfoBase &targetInfo;
+  const intel::TargetInfo &targetInfo;
 };
 
 } // namespace
