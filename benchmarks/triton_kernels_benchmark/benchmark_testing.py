@@ -2,9 +2,10 @@ import argparse
 import itertools
 import os
 
-from triton.testing import Benchmark
+from triton.testing import assert_close as triton_assert_close, Benchmark
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
+VERIFY = os.getenv("VERIFY", "1") == "1"
 
 
 def synchronize():
@@ -159,6 +160,11 @@ elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     do_bench = do_bench_upstream_pytorch_profiler
 else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
+
+
+def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
+    if VERIFY:
+        triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
 
 
 def perf_report(benchmarks):
