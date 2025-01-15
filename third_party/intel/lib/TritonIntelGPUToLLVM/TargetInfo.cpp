@@ -311,16 +311,6 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-Value TargetInfo::getStackPointer(RewriterBase &rewriter,
-                                  FunctionOpInterface funcOp) const {
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  LLVM::LLVMPointerType ptrTy = ptr_ty(
-      rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
-  if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0)
-    return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
-  return funcOp.getArgument(funcOp.getNumArguments() - 1);
-}
-
 Value TargetInfo::getGlobalStringStart(Location loc, RewriterBase &rewriter,
                                        StringRef name, StringRef value,
                                        unsigned addressSpace) const {
