@@ -162,7 +162,7 @@ else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
 
-def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=''):
+def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
     if NO_VERIFY:
         return
     triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
