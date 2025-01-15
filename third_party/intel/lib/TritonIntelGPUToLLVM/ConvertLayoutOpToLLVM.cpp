@@ -325,8 +325,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     Type elementType = inVals.front().getType();
     auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
 
-    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                               &*rewriter.getInsertionPoint());
+    Value smemBase = LLVM::getSharedMemoryBase(
+        loc, rewriter, targetInfo, &*rewriter.getInsertionPoint());
     Type ptrType = smemBase.getType();
 
     int numRows = inVals.size();
