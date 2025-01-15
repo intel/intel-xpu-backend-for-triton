@@ -1721,9 +1721,15 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
+<<<<<<< HEAD
         Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
+=======
+        Value atomPtr = LLVM::intel::getSharedMemoryBase(
+            loc, rewriter, targetInfo, op.getOperation());
+        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+>>>>>>> d0485560b (Revert "Fix `test_gather` (#3010)")
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, rmwMask);
         createBarrier(rewriter, loc, numCTAs);
