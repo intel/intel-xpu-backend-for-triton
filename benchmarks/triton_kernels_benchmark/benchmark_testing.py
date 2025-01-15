@@ -168,6 +168,10 @@ def make_do_bench_for_autotune():
 
     def autotuner_do_bench(fn, *args, **kwargs):
         di = triton.runtime.driver.active.get_device_interface()
+
+        fn()
+        di.synchronize()
+
         cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
 
         count = 5
