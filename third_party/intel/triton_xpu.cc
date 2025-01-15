@@ -106,7 +106,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
 void init_triton_intel_passes_arith(py::module &&m) {
   ADD_PASS_WRAPPER_OPT_2("add_arith_emulate_unsupported_floats",
                          mlir::arith::createArithEmulateUnsupportedFloats,
-                         llvm::SmallVector<std::string>, std::string);
+                         const llvm::SmallVector<std::string> &,
+                         const std::string &);
 }
 
 void init_triton_intel(py::module &&m) {
