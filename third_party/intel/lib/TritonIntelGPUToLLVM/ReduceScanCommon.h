@@ -149,8 +149,8 @@ public:
     });
     // Assign base index to each operand in their order in indices
     std::map<unsigned, Value> indexToBase;
-    auto basePtr =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+    auto basePtr = LLVM::intel::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                    op.getOperation());
     indexToBase[indices[0]] = basePtr;
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
       indexToBase[indices[i]] =
