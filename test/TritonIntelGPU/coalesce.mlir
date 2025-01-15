@@ -192,7 +192,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %26 = arith.addi %0, %c1_i32 : i32
     %27 = arith.muli %26, %c8_i32 : i32
     // CHECK: [[ADVANCE1:%.*]] = tt.advance [[PTR2]], {{.*}} : <tensor<64x16xf8E5M2, [[BLOCKED_LAYOUT2]]>>
-    %28 = tt.advance %18, [%c0_i32, %12] : <tensor<64x16xf8E5M2, #dot2>>
+    %28 = tt.advance %18, [%c0_i32, %12] : <tensor<64x16xf8E5M2, #dot2>>, i32, i32
     // CHECK: [[RES:%.*:2]] = scf.for {{.*}} iter_args(%arg22 = %cst_1, %arg23 = [[ADVANCE1]]) -> (tensor<8xf32, #blocked>, !tt.ptr<tensor<64x16xf8E5M2, [[BLOCKED_LAYOUT2]]>>)
     %29:2 = scf.for %arg21 = %12 to %27 step %c16_i32 iter_args(%arg22 = %cst_1, %arg23 = %28) -> (tensor<8xf32, #blocked>, !tt.ptr<tensor<64x16xf8E5M2, #dot2>>)  : i32 {
       // CHECK: [[LOAD2:%.*]] = tt.load %arg23 : !tt.ptr<tensor<64x16xf8E5M2, [[BLOCKED_LAYOUT2]]>>
@@ -210,7 +210,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %42 = ttg.convert_layout %41 : tensor<8xf32, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<8xf32, #blocked>
       // CHECK: [[ADVANCE2:%.*]] = tt.advance %arg23, {{.*}} : <tensor<64x16xf8E5M2, [[BLOCKED_LAYOUT2]]>>
       // CHECK-NEXT: scf.yield {{.*}}, [[ADVANCE2]] : tensor<8xf32, #blocked>, !tt.ptr<tensor<64x16xf8E5M2, [[BLOCKED_LAYOUT2]]>>
-      %43 = tt.advance %arg23, [%c0_i32, %c16_i32] : <tensor<64x16xf8E5M2, #dot2>>
+      %43 = tt.advance %arg23, [%c0_i32, %c16_i32] : <tensor<64x16xf8E5M2, #dot2>>, i32, i32
       scf.yield %42, %43 : tensor<8xf32, #blocked>, !tt.ptr<tensor<64x16xf8E5M2, #dot2>>
     } {tt.divisibility_arg1 = dense<16> : tensor<1xi32>}
     %30 = arith.addf %29#0, %cst_0 : tensor<8xf32, #blocked>
@@ -329,8 +329,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       // CHECK-DAG: [[ADVANCE1:%.*]] = tt.advance [[ARG1]], {{.*}} : <tensor<64x32xf8E5M2, [[BLOCKED_LAYOUT]]>>
       // CHECK-DAG: [[ADVANCE2:%.*]] = tt.advance [[ARG2]], {{.*}} : <tensor<32x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       // CHECK-NEXT: scf.yield [[ADVANCE1]], [[ADVANCE2]] : !tt.ptr<tensor<64x32xf8E5M2, [[BLOCKED_LAYOUT]]>>, !tt.ptr<tensor<32x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %84 = tt.advance %arg26, [%c32_i32, %c0_i32] : <tensor<32x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %85 = tt.advance %arg25, [%c0_i32, %c32_i32] : <tensor<64x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %84 = tt.advance %arg26, [%c32_i32, %c0_i32] : <tensor<32x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, i32, i32
+      %85 = tt.advance %arg25, [%c0_i32, %c32_i32] : <tensor<64x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, i32, i32
       scf.yield %85, %84 : !tt.ptr<tensor<64x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<32x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     }
     tt.return

@@ -42,8 +42,8 @@ module {
       %15 = tt.load %arg8 : !tt.ptr<tensor<256x32xf16>, 1>
       %16 = tt.load %arg9 : !tt.ptr<tensor<32x256xf16>, 1>
       %17 = tt.dot %15, %16, %arg7 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<256x32xf16> * tensor<32x256xf16> -> tensor<256x256xf32>
-      %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<256x32xf16>, 1>
-      %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16>, 1>
+      %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<256x32xf16>, 1>, i32, i32
+      %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16>, 1>, i32, i32
       scf.yield %17, %18, %19 : tensor<256x256xf32>, !tt.ptr<tensor<256x32xf16>, 1>, !tt.ptr<tensor<32x256xf16>, 1>
     // CHECK: {ttg.workload = 3 : i32}
     }
@@ -92,8 +92,8 @@ module {
       %15 = tt.load %arg8 : !tt.ptr<tensor<8x32xf16>, 1>
       %16 = tt.load %arg9 : !tt.ptr<tensor<32x256xf16>, 1>
       %17 = tt.dot %15, %16, %arg7 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<8x32xf16> * tensor<32x256xf16> -> tensor<8x256xf32>
-      %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<8x32xf16>, 1>
-      %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16>, 1>
+      %18 = tt.advance %arg8, [%c0_i32, %c32_i32] : <tensor<8x32xf16>, 1>, i32, i32
+      %19 = tt.advance %arg9, [%c32_i32, %c0_i32] : <tensor<32x256xf16>, 1>, i32, i32
       scf.yield %17, %18, %19 : tensor<8x256xf32>, !tt.ptr<tensor<8x32xf16>, 1>, !tt.ptr<tensor<32x256xf16>, 1>
     // CHECK: {ttg.workload = 3 : i32}
     }
@@ -179,8 +179,8 @@ module {
       %43 = tt.load %arg10 : !tt.ptr<tensor<64x64xf16>>
       %44 = arith.truncf %34 : tensor<128x64xf32> to tensor<128x64xf16>
       %45 = tt.dot %44, %43, %42, inputPrecision = tf32 : tensor<128x64xf16> * tensor<64x64xf16> -> tensor<128x64xf32>
-      %46 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16>>
-      %47 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>
+      %46 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16>>, i32, i32
+      %47 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>, i32, i32
       scf.yield %39, %45, %29, %46, %47 : tensor<128xf32>, tensor<128x64xf32>, tensor<128xf32>, !tt.ptr<tensor<64x64xf16>>, !tt.ptr<tensor<64x64xf16>>
     // CHECK: {ttg.workload = 4 : i32}
     }
@@ -273,8 +273,8 @@ module {
       %57 = tt.load %arg10 : !tt.ptr<tensor<64x64xf16>>
       %58 = arith.truncf %48 : tensor<128x64xf32> to tensor<128x64xf16>
       %59 = tt.dot %58, %57, %56, inputPrecision = tf32 : tensor<128x64xf16> * tensor<64x64xf16> -> tensor<128x64xf32>
-      %60 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16>>
-      %61 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>
+      %60 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16>>, i32, i32
+      %61 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>, i32, i32
       scf.yield %53, %59, %43, %60, %61 : tensor<128xf32>, tensor<128x64xf32>, tensor<128xf32>, !tt.ptr<tensor<64x64xf16>>, !tt.ptr<tensor<64x64xf16>>
       // CHECK1: workload = 4
     }
@@ -282,8 +282,8 @@ module {
     %26 = arith.muli %0, %c128_i32 : i32
     %27 = arith.addi %0, %c1_i32 : i32
     %28 = arith.muli %27, %c128_i32 : i32
-    %29 = tt.advance %14, [%c0_i32, %26] : <tensor<64x64xf16>>
-    %30 = tt.advance %12, [%26, %c0_i32] : <tensor<64x64xf16>>
+    %29 = tt.advance %14, [%c0_i32, %26] : <tensor<64x64xf16>>, i32, i32
+    %30 = tt.advance %12, [%26, %c0_i32] : <tensor<64x64xf16>>, i32, i32
     // CHECK1: [[EXP_DIM1:%.*]] = tt.expand_dims {{%.*}} {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
     // CHECK1: [[EXP_DIM2:%.*]] = tt.expand_dims {{%.*}} {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     %31 = tt.expand_dims %19 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
@@ -329,8 +329,8 @@ module {
       %62 = tt.load %arg10 : !tt.ptr<tensor<64x64xf16>>
       %63 = arith.truncf %53 : tensor<128x64xf32> to tensor<128x64xf16>
       %64 = tt.dot %63, %62, %61, inputPrecision = tf32 : tensor<128x64xf16> * tensor<64x64xf16> -> tensor<128x64xf32>
-      %65 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16>>
-      %66 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>
+      %65 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16>>, i32, i32
+      %66 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16>>, i32, i32
       scf.yield %58, %64, %49, %65, %66 : tensor<128xf32>, tensor<128x64xf32>, tensor<128xf32>, !tt.ptr<tensor<64x64xf16>>, !tt.ptr<tensor<64x64xf16>>
       // CHECK1: workload = 4
     }
