@@ -377,13 +377,9 @@ class Mark:
         y_min = [f'{x}-min' for x in bench.line_names]
         y_max = [f'{x}-max' for x in bench.line_names]
         x_names = list(bench.x_names)
-        if len(x_names) == 1:
-            index = pd.Index(bench.x_vals, name=x_names[0])
-        else:
-            # x can be a single value or a sequence of values.
-            x_vals = [tuple(x for _ in x_names) for x in bench.x_vals if not isinstance(x, (list, tuple))]
-            index = pd.MultiIndex.from_tuples(x_vals, names=x_names)
-        df = pd.DataFrame(index=index, columns=y_mean + y_min + y_max)
+        x_vals = [tuple(x for _ in x_names) if not isinstance(x, (list, tuple)) else x for x in bench.x_vals]
+        index = pd.Index(x_vals, name=tuple(x_names))
+        df = pd.DataFrame(index=index, columns=y_mean + y_min + y_max, dtype="float")
         for x in df.index:
             if len(x) != len(x_names):
                 raise ValueError(f"Expected {len(x_names)} values, got {x}")
@@ -406,10 +402,7 @@ class Mark:
             ax = plt.subplot()
             # Plot first x value on x axis if there are multiple.
             index_name = x_names[0]
-            if len(x_names) == 1:
-                index = df.index
-            else:
-                index = df.index.get_level_values(0)
+            index = df.index.get_level_values(0)
             for i, y in enumerate(bench.line_names):
                 y_min, y_max = df[y + '-min'], df[y + '-max']
                 col = bench.styles[i][0] if bench.styles else None
