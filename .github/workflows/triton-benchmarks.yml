@@ -19,10 +19,10 @@ on:
           - ELAPSED_TIME
           - UPSTREAM_PYTORCH_PROFILER
         default: UPSTREAM_PYTORCH_PROFILER
-      no_verify:
-        description: Skip verification of the benchmark results
+      verify:
+        description: Verify the benchmark results
         type: boolean
-        default: false
+        default: true
       run_name:
         description: Run name
         type: string
@@ -50,7 +50,7 @@ permissions: read-all
 env:
   PYTHON_VERSION: "3.10"
   BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
-  NO_VERIFY: ${{ inputs.no_verify && '1' || '0' }}
+  NO_VERIFY: ${{ inputs.verify && '0' || '1' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
