@@ -1,5 +1,8 @@
 import os
+import contextlib
+
 import torch
+from torch.profiler import record_function
 import triton
 import triton.language as tl
 
@@ -476,43 +479,46 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
-        q, k, v, o, M = ctx.saved_tensors
-        assert do.is_contiguous()
-        assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
-        dq = torch.empty_like(q)
-        dk = torch.empty_like(k)
-        dv = torch.empty_like(v)
-        BATCH, N_HEAD, N_CTX = q.shape[:3]
-        PRE_BLOCK = 128
-        NUM_WARPS, NUM_STAGES = 4, 5
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
-        BLK_SLICE_FACTOR = 2
-        RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
-        arg_k = k
-        arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
-        PRE_BLOCK = 128
-        assert N_CTX % PRE_BLOCK == 0
-        pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        delta = torch.empty_like(M)
-        _attn_bwd_preprocess[pre_grid](
-            o, do,  #
-            delta,  #
-            BATCH, N_HEAD, N_CTX,  #
-            BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
-        )
-        grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
-        _attn_bwd[grid](
-            q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,  #
-            M, delta,  #
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-            N_HEAD, N_CTX,  #
-            BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
-            BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
-            BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
-            HEAD_DIM=ctx.HEAD_DIM,  #
-            num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES  #
-        )
+        with record_function(
+                '__profile_kernel_of_func_bwd_fa'
+        ) if benchmark_suit.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
+            q, k, v, o, M = ctx.saved_tensors
+            assert do.is_contiguous()
+            assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
+            dq = torch.empty_like(q)
+            dk = torch.empty_like(k)
+            dv = torch.empty_like(v)
+            BATCH, N_HEAD, N_CTX = q.shape[:3]
+            PRE_BLOCK = 128
+            NUM_WARPS, NUM_STAGES = 4, 5
+            BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
+            BLK_SLICE_FACTOR = 2
+            RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
+            arg_k = k
+            arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
+            PRE_BLOCK = 128
+            assert N_CTX % PRE_BLOCK == 0
+            pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
+            delta = torch.empty_like(M)
+            _attn_bwd_preprocess[pre_grid](
+                o, do,  #
+                delta,  #
+                BATCH, N_HEAD, N_CTX,  #
+                BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
+            )
+            grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
+            _attn_bwd[grid](
+                q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,  #
+                M, delta,  #
+                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+                N_HEAD, N_CTX,  #
+                BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
+                BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
+                BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
+                HEAD_DIM=ctx.HEAD_DIM,  #
+                num_warps=NUM_WARPS,  #
+                num_stages=NUM_STAGES  #
+            )
 
         return dq, dk, dv, None, None
 
