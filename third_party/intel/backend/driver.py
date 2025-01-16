@@ -544,13 +544,19 @@ def serialize_args(args, constants, signature):
 
     cnt = 0
     args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    # 3: stream
+    # 4: function
+    # 5: packed kernel metadata
+    assert type(args[cnt + 5]).__name__ == "KernelMetadata"
+    serialize_kernel_metadata(args[cnt + 5], args_dict)
+    # 6: launch_metadata
+    # 7: launch_enter_hook
+    # 8: launch_exit_hook
     args_dict['argument_list'] = []
     counts = {"tensors": 0, "scalars": 0, "karg_cnt": 0}
-    cnt = 4
+    cnt += 9
     for arg in args[cnt:]:
-        if type(arg).__name__ == "KernelMetadata":
-            serialize_kernel_metadata(arg, args_dict)
-
+        sig_name = list(signature.keys())[counts['karg_cnt']]
         if isinstance(arg, torch.Tensor):
             cpu_tensor = arg.cpu()
             tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
@@ -558,22 +564,20 @@ def serialize_args(args, constants, signature):
                 torch.save(cpu_tensor, f)
             new_arg = {
                 "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
-                signature[counts['karg_cnt']]
+                signature[sig_name]
             }
             args_dict['argument_list'].append(new_arg)
-            counts['karg_cnt'] += 1
             counts['tensors'] += 1
-
         if isinstance(arg, numbers.Number):
-            if counts['karg_cnt'] not in constants:
+            if (counts['karg_cnt'], ) not in constants.keys():
                 new_arg = {
-                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": args[cnt], "ctype":
-                    signature[counts['karg_cnt']]
+                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": arg, "ctype":
+                    signature[sig_name]
                 }
                 args_dict['argument_list'].append(new_arg)
-            counts['karg_cnt'] += 1
             counts['scalars'] += 1
-        cnt += 1
+        counts['karg_cnt'] += 1
+
     # Dump argument info as a JSON file
     json_path = os.path.join(dir_path, 'args_data.json')
     with open(json_path, 'w') as json_file:
