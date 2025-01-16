@@ -418,15 +418,6 @@ public:
                   "TritonRaiseToBlockPointer: Failed to rewrite AddPtrOp");
             return WalkResult::advance();
           })
-#if 0
-          .Case<tt::MakeTensorPtrOp>([&](auto maketptr) {
-            if (failed(remapMakeTensorPtrOp(maketptr))) {
-              maketptr->emitRemark("TritonRaiseToBlockPointer: Failed to "
-                                   "rewrite MakeTensorPtrOp");
-            }
-            return WalkResult::advance();
-          })
-#endif
           .Case<tt::LoadOp, tt::StoreOp>([this](auto loadstore) {
             if (failed(rewriteLoadStoreOp(loadstore))) {
               loadstore->emitRemark(
@@ -453,8 +444,6 @@ public:
     LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
 
     SmallVector<Value> newInitArgs;
-    SmallVector<std::pair<int, PtrState>, 5> initArgIndexState;
-
     SmallVector<std::pair<int, Value>> initArgIndex;
     OpBuilder builder(op);
 
@@ -478,23 +467,12 @@ public:
           initArgIndex.push_back(std::make_pair(i, mappedV));
 
           continue;
-        } else if (auto addptrOp = mappedV.getDefiningOp<tt::AddPtrOp>()) {
-          // We always use tt.addptr for scalar pointers. If the defininig op
-          // is tt.addptr and we have a non-scalar pointer, something must
-          // have gone wrong with the pass.
-          assert(!isa<RankedTensorType>(addptrOp.getResult().getType()) &&
-                 "Result type of AddPtrOp must be a tensor!");
-
-          PtrState state;
-          if (succeeded(
-                  visitOperandAddptr(addptrOp, state, op.getLoc(), builder))) {
-            newInitArgs.push_back(mappedV);
-            // Record the PtrState for later processing
-            initArgIndexState.push_back(std::make_pair(i, state));
-            continue;
-          }
+        } else {
+          llvm::errs() << "mappedV: " << mappedV << "\n";
+          assert(false && "Unexpected mapped value");
         }
       }
+
       // If any of the analysis failed, or init arg is not pointer related or
       // prior rewrite has failed. Pass as is
       newInitArgs.push_back(arg);
@@ -513,12 +491,12 @@ public:
             b.clone(bodyOp, cloneMap);
         });
 
-    // TODO: is this needed?
     for (auto [i, mappedV] : initArgIndex)
       ptrMap.map(newOp.getRegionIterArgs()[i], mappedV);
 
     for (auto &bodyOp : newOp.getRegion().getOps()) {
       if (auto forOp = dyn_cast<scf::ForOp>(bodyOp)) {
+        newOp.erase();
         forOp->emitRemark("TritonRaiseToBlockPointer: nested loops currently "
                           "not supported");
         return failure();
@@ -533,20 +511,14 @@ public:
       return failure();
     }
 
+    // Rewrite the yield operation.
     if (op.getNumRegionIterArgs()) {
       auto yieldOp = cast<scf::YieldOp>(newOp.getBody()->getTerminator());
       for (auto [i, v] : llvm::enumerate(yieldOp->getOperands())) {
-        if (Value mappedV = ptrMap.lookupOrNull(v)) {
+        if (Value mappedV = ptrMap.lookupOrNull(v))
           yieldOp->replaceUsesOfWith(v, mappedV);
-        }
       }
     }
-
-    levelToBlockArgIndex.erase(level);
-
-    // Replace only the results that correspond to the original scf.for
-    ResultRange resultsToReplaceWith(newOp.result_begin(),
-                                     newOp.result_begin() + op.getNumResults());
 
     LLVM_DEBUG({
       llvm::dbgs() << "After updating the loop body\n";
@@ -559,6 +531,9 @@ public:
       llvm::dbgs() << "\n";
     });
 
+    // Replace the results that correspond to the original scf.for
+    ResultRange resultsToReplaceWith(newOp.result_begin(),
+                                     newOp.result_begin() + op.getNumResults());
     op->replaceAllUsesWith(resultsToReplaceWith);
     op->erase();
 
@@ -570,108 +545,6 @@ public:
 
     return success();
   }
-
-  LogicalResult
-  rewriteYieldOp(scf::YieldOp op,
-                 llvm::SmallDenseMap<int, PtrState> &knownPtrsFor) {
-    if (levelToBlockArgIndex.find(level) == levelToBlockArgIndex.end())
-      return success(); // no need to rewrite this op
-
-    OpBuilder builder(op);
-
-    // For each of the init arg that we added additional Values in for loop,
-    // we need to add corresponding Values as yield operands. The loop below
-    // gathers PtrState for those values.
-    SmallVector<PtrState, 5> initArgState;
-    for (auto [i, v] : llvm::enumerate(op->getOperands())) {
-      // If this operand is not rewritten by forOp, skip
-      auto &thisSet = levelToBlockArgIndex.find(level)->second;
-      if (thisSet.find(i) == thisSet.end())
-        continue;
-
-      Value mappedV = ptrMap.lookupOrNull(v);
-      if (!mappedV) {
-        op->emitRemark("Prior rewrite failure lead to yield rewrite failure");
-        return failure();
-      }
-
-      PtrState state;
-      LogicalResult ret = failure();
-      if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>())
-        ret = visitOperandMakeTensorPtr(makeTPtrOp, state, op.getLoc(), builder,
-                                        true);
-      else if (auto addptrOp = mappedV.getDefiningOp<tt::AddPtrOp>())
-        ret = visitOperandAddptr(addptrOp, state, op.getLoc(), builder);
-
-      if (ret.failed()) {
-        op->emitRemark("Failed to rewrite yield op");
-        return failure();
-      }
-      initArgState.push_back(state);
-
-      // Verify that shape is not updated during the for loop
-      PtrState forState = knownPtrsFor[i];
-      for (int i = 0; i < forState.getRank(); ++i) {
-        if (forState.shape[i] != state.shape[i]) {
-          // Special case, see comments in addState in dealing with
-          // shape/modulo
-          if (i == 0 && forState.getRank() == 2) {
-            if (forState.shape[1] == state.shape[0] &&
-                forState.shape[0] == state.shape[1])
-              break;
-          }
-          op->emitRemark("TritonRaiseToBlockPointer: operand's shape/modulo "
-                         "state changed "
-                         "within loop body");
-          return failure();
-        }
-      }
-    }
-
-    SmallVector<Value> operands;
-    for (Value opnd : op->getOperands()) {
-      Value mappedV = ptrMap.lookupOrNull(opnd);
-      operands.push_back(mappedV ? mappedV : opnd);
-    }
-
-    // For each of the PtrState recorded in the last step, extract value
-    // that correspond to offset and stride for each dimension and append
-    // them to yield operands.
-    for (PtrState state : initArgState) {
-      for (Value s : state.offsets)
-        operands.push_back(s);
-      for (Value s : state.strides)
-        operands.push_back(s);
-      if (state.getRank() == 0)
-        operands.push_back(state.scalar);
-    }
-
-    auto newOp = builder.createOrFold<scf::YieldOp>(op->getLoc(), operands);
-
-    LLVM_DEBUG({
-      llvm::dbgs() << "new yield: ";
-      newOp.getOperation()->print(llvm::dbgs(),
-                                  OpPrintingFlags().printGenericOpForm());
-      llvm::dbgs() << "\n";
-    });
-
-    op->erase();
-    return success();
-  }
-
-#if 0
-  LogicalResult remapMakeTensorPtrOp(tt::MakeTensorPtrOp op) {
-    LLVM_DEBUG(llvm::dbgs() << "Remapping: " << *op << "\n");
-    OpBuilder builder(op);
-
-    PtrState state;
-    if (failed(visitOperandMakeTensorPtr(op, state, op.getLoc(), builder)))
-      return failure();
-
-    knownPtrs[op.getResult()] = std::move(state);
-    return success();
-  }
-#endif
 
   Value getFinalValue(Value value) const {
     Operation *defOp = value.getDefiningOp();
@@ -704,7 +577,7 @@ public:
     return value;
   }
 
-  bool lookForMulitplyingValueInDefiningPath(Value &val, Value &ref) const {
+  bool lookForMultiplyingValueInDefiningPath(Value &val, Value &ref) const {
     if (Operation *defOp = getFinalValue(val).getDefiningOp()) {
       if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
         if ((mulOp.getLhs() == ref) || (mulOp.getRhs() == ref))
@@ -748,7 +621,7 @@ public:
     unsigned axis = 0u;
     for (auto finalStride : finalStrides) {
       // search for a mul to finalStride in the predecessors
-      if (lookForMulitplyingValueInDefiningPath(operand, finalStride))
+      if (lookForMultiplyingValueInDefiningPath(operand, finalStride))
         return axis;
       if (ttgi::isConstant(finalStride, 1))
         return axis;
@@ -1141,8 +1014,6 @@ private:
   SmallVector<Operation *> cleanUp;
   llvm::SmallDenseMap<Value, PtrState> knownPtrs;
   IRMapping ptrMap;
-  IndexMapSet levelToBlockArgIndex;
-  int level = 0;
 };
 
 template <
