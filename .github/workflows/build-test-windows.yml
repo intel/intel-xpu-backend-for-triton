@@ -63,11 +63,13 @@ jobs:
 
       - name: Run core tests
         run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --interpreter
 

@@ -40,7 +40,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
         return include_dir, sycl_dir
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
-    if oneapi_root:
+    if False and oneapi_root:
         include_dir += [
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
@@ -60,9 +60,9 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
-            include_dir += [f.locate().parent.parent.resolve().as_posix()]
-        if f.name == "libsycl.so":
-            sycl_dir = f.locate().parent.resolve().as_posix()
+            include_dir += [str(f.locate().parent.parent.resolve())]
+        if f.name in ["libsycl.so", "sycl8.dll"]:
+            sycl_dir = str(f.locate().parent.resolve())
 
     return include_dir, sycl_dir
 
