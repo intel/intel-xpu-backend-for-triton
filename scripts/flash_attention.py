@@ -19,19 +19,19 @@ def get_options():
     return parser.parse_args()
 
 
-def run(z, h, n_ctx, d_head, causal, backward):
+def run(options):
     """Run the XPU backend FlashAttention benchmark implementation."""
     dtype = torch.float16
-    q = torch.randn((z, h, n_ctx, d_head), device='xpu', dtype=dtype, requires_grad=True)
-    k = torch.randn((z, h, n_ctx, d_head), device='xpu', dtype=dtype, requires_grad=True)
-    v = torch.randn((z, h, n_ctx, d_head), device='xpu', dtype=dtype, requires_grad=True)
+    q = torch.randn((options.Z, options.H, options.N_CTX, options.D_HEAD), device='xpu', dtype=dtype,
+                    requires_grad=True)
+    k = torch.randn_like(q, device='xpu', dtype=dtype, requires_grad=True)
+    v = torch.randn_like(q, device='xpu', dtype=dtype, requires_grad=True)
     sm_scale = 0.125
     attention = _attention.apply
-    triton_o = attention(q, k, v, causal, sm_scale)
-    if backward:
+    triton_o = attention(q, k, v, options.causal, sm_scale)
+    if options.backward:
         triton_o.backward(torch.randn_like(triton_o), retain_graph=True)
 
 
 if __name__ == '__main__':
-    options = get_options()
-    run(options.Z, options.H, options.N_CTX, options.D_HEAD, options.causal, options.backward)
+    run(get_options())
