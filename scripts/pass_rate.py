@@ -38,6 +38,13 @@ class ReportStats:
         return round(100 * self.passed / (self.total - self.xfailed), 2)
 
 
+@dataclasses.dataclass
+class TestWarning:
+    """Test warning."""
+    location: str
+    message: str
+
+
 def create_argument_parser() -> argparse.ArgumentParser:
     """Creates ArgumentParser."""
     argument_parser = argparse.ArgumentParser()
@@ -76,6 +83,16 @@ def get_deselected(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> int
         return len([line for line in f.readlines() if line and not line.startswith('#')])
 
 
+def get_warnings(reports_path: pathlib.Path, suite: str) -> List[TestWarning]:
+    """Returns a list of warnings for the specified suite."""
+    path = reports_path / f'{suite}-warnings.json'
+    if not path.exists():
+        return []
+    with path.open(encoding='utf-8') as warnings_file:
+        warnings_data = json.load(warnings_file)
+    return [TestWarning(location=next(iter(w.keys())), message=next(iter(w.values()))) for w in warnings_data]
+
+
 def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
@@ -92,15 +109,9 @@ def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> Repor
             stats.failed += 1
         for _ in testsuite.iter('error'):
             stats.failed += 1
-        try:
-            warnings_file_name = f'{report_path.parent}/{report_path.stem}-warnings.json'
-            with open(warnings_file_name, encoding='utf-8') as testsuite_warnings_file:
-                testsuite_warnings = json.load(testsuite_warnings_file)
-                for w in testsuite_warnings:
-                    if 'FIXME' in list(w.values())[0]:
-                        testsuite_fixme_tests.add(list(w.keys())[0])
-        except FileNotFoundError:
-            pass
+        for warning in get_warnings(report_path.parent, report_path.stem):
+            if 'FIXME' in warning.message:
+                testsuite_fixme_tests.add(warning.location)
         stats.fixme += len(testsuite_fixme_tests)
 
     test_unskip = os.getenv('TEST_UNSKIP', 'false')
