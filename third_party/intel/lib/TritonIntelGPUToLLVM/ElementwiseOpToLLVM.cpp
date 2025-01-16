@@ -881,33 +881,6 @@ struct FpToFpOpConversion
     return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
-  static LLVM::RoundingMode
-  convertTritonRoundingModeToLLVM(const RoundingMode rounding) {
-    LLVM::RoundingMode roundingMode;
-    switch (rounding) {
-    case RoundingMode::RTNE:
-      return LLVM::RoundingMode::NearestTiesToEven;
-    case RoundingMode::RTZ:
-      return LLVM::RoundingMode::TowardZero;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
-    }
-  }
-
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v, const RoundingMode rounding) {
-    MLIRContext *ctx = rewriter.getContext();
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-        loc, f16_ty, v,
-        LLVM::RoundingModeAttr::get(ctx,
-                                    convertTritonRoundingModeToLLVM(rounding)),
-        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
-  }
-
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
@@ -1005,8 +978,8 @@ struct FpToFpOpConversion
              "rounding mode must be specified for fp32->fp16 conversion");
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
-        outVals.push_back(
-            convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+        outVals.push_back(LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
+                                                         roundingMode.value()));
       }
       return outVals;
     }
@@ -1035,7 +1008,8 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
+        v = LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
+                                           roundingMode.value());
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
@@ -1047,16 +1021,6 @@ struct FpToFpOpConversion
     return outVals;
   }
 };
-
-template <typename OP>
-Value EmitDualBF16ElementwiseOp(Location loc,
-                                ConversionPatternRewriter &rewriter,
-                                MultipleOperandsRange operands) {
-  auto v0 = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
-  auto v1 = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
-  auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
-  return intel::convertFp32ToBf16(loc, rewriter, result, RoundingMode::RTNE);
-}
 
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
@@ -1086,85 +1050,25 @@ struct ExternElementwiseOpConversion
   }
 };
 
-struct FDivOpConversion
-    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion>;
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
   using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+  using OpAdaptor = typename Base::OpAdaptor;
 
-  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
-  }
-};
-
-struct FMulOpConversion
-    : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::MulFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
-
-    return {rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
-  }
-};
-
-struct FAddOpConversion
-    : ElementwiseOpConversionBase<arith::AddFOp, FAddOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::AddFOp, FAddOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::AddFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands)};
-
-    return {rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
-  }
-};
-
-struct FSubOpConversion
-    : ElementwiseOpConversionBase<arith::SubFOp, FSubOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::SubFOp, FSubOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::SubFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands)};
-
-    return {rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    assert((!getElementType(op.getLhs()).isBF16() &&
+            !getElementType(op.getRhs()).isBF16()) &&
+           "unsupported conversion");
+    return {
+        rewriter.create<DestOp>(loc, elemTy, operands[0][0], operands[0][1])};
   }
 };
 
@@ -1437,10 +1341,14 @@ void populateElementwiseOpToLLVMPatterns(
                                               benefit);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::AddFOp, LLVM::FAddOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::SubFOp, LLVM::FSubOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);

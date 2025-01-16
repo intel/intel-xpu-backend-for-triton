@@ -95,9 +95,9 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
     // CHECK: [[oldOffset:%.*]] = llvm.extractelement {{.*}} : vector<2xi32>
     // CHECK-NEXT: [[newOffset:%.*]] = llvm.add [[oldOffset]], {{.*}}  : i32
     // CHECK-NEXT: llvm.insertelement [[newOffset]], {{.*}} : vector<2xi32>
-    %115 = tt.advance %57, [%c0_i32, %c32_i32] : <tensor<32x32xf16>, 1>, i32, i32
-    %117 = tt.advance %58, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>, i32, i32
-    %118 = tt.advance %59, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>, i32, i32
+    %115 = tt.advance %57, [%c0_i32, %c32_i32] : <tensor<32x32xf16>, 1>
+    %117 = tt.advance %58, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>
+    %118 = tt.advance %59, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>
     %119 = arith.addi %40, %c32_i32 : i32
     cf.br ^bb1(%119, %71, %115, %117, %118 : i32, tensor<8x16xf32>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>)
   ^bb3:
@@ -245,7 +245,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: Checks tt.load lowering for SLM
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK: llvm.func spir_funccc @_Z30intel_sub_group_block_read_us8PU3AS3t(!llvm.ptr<3>) -> vector<8xi16>
   // CHECK-LABEL: @slm_load
@@ -289,7 +289,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 // COM: Checks tt.store lowering for SLM
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK: llvm.func spir_funccc @_Z31intel_sub_group_block_write_us8PU3AS3tDv8_t(!llvm.ptr<3>, vector<8xi16>)
   // CHECK-LABEL: @slm_store

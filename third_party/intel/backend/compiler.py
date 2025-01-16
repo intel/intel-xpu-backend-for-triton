@@ -189,7 +189,7 @@ class XPUBackend(BaseBackend):
     def pack_metadata(self, metadata):
         return metadata
 
-    def get_codegen_implementation(self):
+    def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
@@ -276,6 +276,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
+        intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
@@ -326,8 +327,7 @@ class XPUBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
         intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
-        if os.getenv("TRITON_INTEL_ENABLE_POST_PROCESS_LLIR", "0") == "1":
-            intel.post_process_llir(llvm_mod)
+        intel.post_process_llir(llvm_mod)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")

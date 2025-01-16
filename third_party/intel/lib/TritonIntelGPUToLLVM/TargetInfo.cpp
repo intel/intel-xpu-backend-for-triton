@@ -133,25 +133,23 @@ Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
                        Operation *reduceOp, unsigned numLanesToReduce,
                        unsigned warpSize) {
   auto resultType = reduceOp->getResult(0).getType();
-  Value warpReduce =
-      TypeSwitch<mlir::Operation *, Value>(reduceOp)
-          .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
-                arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
-                arith::MaxNumFOp, arith::MinNumFOp>([&](auto groupOp) {
-            return createSPIRVGroupOp<
-                SPIRVArithmeticGroupOpTy<decltype(groupOp)>>(
-                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-          })
-          .Case<arith::AndIOp, arith::OrIOp, arith::XOrIOp>([&](auto groupOp) {
-            if (resultType.isInteger(1)) {
-              return createSPIRVGroupOp<
-                  SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
-                  rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-            }
-            return createSPIRVGroupOp<SPIRVBitwiseGroupOpTy<decltype(groupOp)>>(
-                rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-          });
-  return warpReduce;
+  // Use bit-equivalent logical operation for Boolean values.
+  if (resultType.isInteger(1))
+    return TypeSwitch<mlir::Operation *, Value>(reduceOp)
+        .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
+              arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
+              arith::XOrIOp>([&](auto groupOp) {
+          return createSPIRVGroupOp<SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
+              rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+        });
+  return TypeSwitch<mlir::Operation *, Value>(reduceOp)
+      .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+            arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+            arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+            arith::XOrIOp>([&](auto groupOp) {
+        return createSPIRVGroupOp<SPIRVGroupOpTy<decltype(groupOp)>>(
+            rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+      });
 }
 
 } // namespace
@@ -231,9 +229,9 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
   msgNewline.push_back('\0');
-  Value msgValue = LLVM::intel::addStringToModule(
-      UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-      msgNewline, /*AddressSpace*/ TritonGEN::kUniformConstant);
+  Value msgValue = getGlobalStringStart(
+      rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
+      /*addressSpace=*/TritonGEN::kUniformConstant);
   printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
 }
 
@@ -273,12 +271,15 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   messageString.push_back('\0');
   fileString.push_back('\0');
   funcString.push_back('\0');
-  Value messageStringVal = LLVM::intel::addStringToModule(
-      loc, rewriter, "assertMessage_", messageString, addrSpace);
-  Value fileStringVal = LLVM::intel::addStringToModule(
-      loc, rewriter, "assertFile_", fileString, addrSpace);
-  Value funcStringVal = LLVM::intel::addStringToModule(
-      loc, rewriter, "assertFunc_", funcString, addrSpace);
+  Value messageStringVal =
+      getGlobalStringStart(loc, rewriter, "assertMessage_", messageString,
+                           /*addressSpace=*/TritonGEN::kCrossWorkgroup);
+  Value fileStringVal =
+      getGlobalStringStart(loc, rewriter, "assertFile_", fileString,
+                           /*addressSpace=*/TritonGEN::kCrossWorkgroup);
+  Value funcStringVal =
+      getGlobalStringStart(loc, rewriter, "assertFunc_", funcString,
+                           /*addressSpace=*/TritonGEN::kCrossWorkgroup);
   Value lineNumber = i32_val(line);
 
   auto *ctx = rewriter.getContext();
@@ -312,6 +313,51 @@ Value TargetInfo::getStackPointer(RewriterBase &rewriter,
   if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0)
     return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
   return funcOp.getArgument(funcOp.getNumArguments() - 1);
+}
+
+Value TargetInfo::getGlobalStringStart(Location loc, RewriterBase &rewriter,
+                                       StringRef name, StringRef value,
+                                       unsigned addressSpace) const {
+  LLVM::GlobalOp global =
+      getGlobalString(loc, rewriter, name, value, addressSpace);
+  MLIRContext *ctx = rewriter.getContext();
+  Type globalPtrType = ptr_ty(ctx, addressSpace);
+  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(loc, global);
+  return gep(globalPtrType, i8_ty, globalPtr, LLVM::GEPArg{0});
+}
+
+LLVM::GlobalOp TargetInfo::getGlobalString(Location loc, RewriterBase &rewriter,
+                                           StringRef name, StringRef value,
+                                           unsigned addressSpace) const {
+  StringAttr valueAttr = rewriter.getStringAttr(value);
+  std::pair<unsigned, StringAttr> cacheKey{addressSpace, valueAttr};
+  auto pos = globals.find(cacheKey);
+  if (pos != globals.end())
+    return pos->second;
+
+  ModuleOp moduleOp = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
+
+  llvm::SmallString<64> contentStr(value);
+  size_t contentSize = contentStr.size_in_bytes();
+  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
+
+  auto createGlobal = [&](StringRef name) {
+    RewriterBase::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    return rewriter.create<LLVM::GlobalOp>(
+        rewriter.getUnknownLoc(), globalType,
+        /*isConstant=*/true, LLVM::Linkage::Internal, name, valueAttr,
+        /*alignment=*/0, addressSpace);
+  };
+
+  LLVM::GlobalOp global =
+      moduleOp.lookupSymbol(name)
+          ? createGlobal(Twine{name}.concat(Twine{globals.size()}).str())
+          : createGlobal(name);
+
+  globals.try_emplace(cacheKey, global);
+
+  return global;
 }
 
 } // namespace mlir::triton::intel
