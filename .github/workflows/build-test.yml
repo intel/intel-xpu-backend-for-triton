@@ -85,7 +85,7 @@ jobs:
 
       - name: Run unit tests for scripts
         run: |
-          pip install pytest defusedxml
+          pip install pytest pytest-xdist defusedxml
           cd scripts
           pytest -n 4 test_*.py
 
