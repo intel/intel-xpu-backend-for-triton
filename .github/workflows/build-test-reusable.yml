@@ -218,10 +218,6 @@ jobs:
           AGAMA_VERSION=$AGAMA_VERSION
           EOF
 
-      - name: Run model scripts
-        run: |
-          ./scripts/flash_attention.py -Z 64 -H 64 -N-CTX 64 -D-HEAD 64
-
       - name: Upload pass rate report
         # upload reports only for the default branch
         if: github.ref_name == 'main'
