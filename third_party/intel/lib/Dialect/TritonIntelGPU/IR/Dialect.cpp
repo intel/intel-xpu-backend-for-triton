@@ -641,15 +641,49 @@ struct TritonIntelGPUInferLayoutInterface
     // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
-    if (aEncoding.getKWidth() != bEncoding.getKWidth())
-      return op->emitError("mismatching kWidth between A and B operands");
+
+    auto dpasEncoding = dyn_cast<DpasEncodingAttr>(aEncoding.getParent());
+    if (dpasEncoding) {
+      if (dpasEncoding != bEncoding.getParent())
+        return op->emitError(
+            "mismatching parent encoding between A and B operands");
+
+      auto opsPerChannel = dpasEncoding.getOpsPerChannel();
+      if (opsPerChannel == 1) {
+        if (aEncoding.getKWidth() != opsPerChannel)
+          return op->emitError("mismatching kWidth of A operands");
+      } else {
+        if (aEncoding.getKWidth() != opsPerChannel / 2)
+          return op->emitError("mismatching kWidth of A operands");
+      }
+
+      if (opsPerChannel != bEncoding.getKWidth())
+        return op->emitError("mismatching kWidth of B operands");
+    }
+
+    return success();
+  }
+
+  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
+                                      Attribute expected, Attribute got,
+                                      Location loc) const override {
+    if (expected == got) {
+      return success();
+    }
+    // Check whether the encodings are structurally the same.
+    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
+    auto gotLL = triton::gpu::toLinearLayout(shape, got);
+    if (expectedLL != gotLL) {
+      return emitError(loc, "Expected result encoding ")
+             << expected << " but was " << got;
+    }
     return success();
   }
 
   LogicalResult
-  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                                  std::optional<Location> loc) const override {
+  inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                         std::optional<Location> loc) const override {
     // TODO
     return failure();
   }

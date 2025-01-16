@@ -299,8 +299,7 @@ run_benchmark_attention() {
 
   echo "Backward - Default path:"
   FA_KERNEL_MODE="bwd" \
-  BENCHMARKING_METHOD="ELAPSED_TIME" \
-  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
 
 run_benchmarks() {

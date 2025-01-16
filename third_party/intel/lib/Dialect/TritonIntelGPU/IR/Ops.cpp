@@ -320,8 +320,13 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
       dpasEncoding.getExecutionSize(), opsPerChannel,
       dpasEncoding.getWarpsPerCTA(), dpasEncoding.getRepCluster(),
       product<unsigned>(dpasEncoding.getThreadsPerWarp()));
-  Attribute newVEncoding = DotOperandEncodingAttr::get(
-      ctx, opIdx, newDpasEncoding, newDpasEncoding.getOpsPerChannel());
+
+  // Operand A is packed to i16 for scalar type < 16 bits.
+  int kWidth =
+      (opIdx == 0) && (opsPerChannel != 1) ? opsPerChannel / 2 : opsPerChannel;
+
+  Attribute newVEncoding =
+      DotOperandEncodingAttr::get(ctx, opIdx, newDpasEncoding, kWidth);
 
   const bool hasBatch = xShape.size() == 3;
   const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
