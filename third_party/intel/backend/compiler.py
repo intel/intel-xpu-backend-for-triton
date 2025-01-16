@@ -255,6 +255,7 @@ class XPUBackend(BaseBackend):
         # optimize TTGIR
         intel.passes.ttgpuir.add_coalesce(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)

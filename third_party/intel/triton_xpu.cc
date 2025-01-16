@@ -1,8 +1,6 @@
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
-
 #include "passes.h"
-#include "pybind_type_casters.h"
 
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -23,6 +21,10 @@
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/stl_bind.h>
 
 namespace py = pybind11;
 
@@ -104,10 +106,15 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
 }
 
 void init_triton_intel_passes_arith(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_2("add_arith_emulate_unsupported_floats",
-                         mlir::arith::createArithEmulateUnsupportedFloats,
-                         const llvm::SmallVector<std::string> &,
-                         const std::string &);
+  m.def("add_arith_emulate_unsupported_floats",
+        [](mlir::PassManager &pm,
+           const std::vector<std::string> &sourceTypeStrs,
+           const std::string &targetTypeStr) {
+          pm.addPass(mlir::arith::createArithEmulateUnsupportedFloats(
+              {llvm::SmallVector<std::string>{sourceTypeStrs.begin(),
+                                              sourceTypeStrs.end()},
+               targetTypeStr}));
+        });
 }
 
 void init_triton_intel(py::module &&m) {
