@@ -179,7 +179,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         return _summarize_statistics(ret, quantiles, return_mode)
 
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench(fn, warmup=10, rep=10, grad_to_none=None, quantiles=None, return_mode="mean"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -207,31 +207,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
 
     cache = runtime.driver.active.get_empty_cache_for_benchmark()
 
-    # Estimate the runtime of the function
-    start_event = Event(enable_timing=True)
-    end_event = Event(enable_timing=True)
-    USE_WALL_TIME = isinstance(start_event, WallEvent)
-
-    start_event.record()
-    for _ in range(5):
-        runtime.driver.active.clear_cache(cache)
-        fn()
-        if USE_WALL_TIME:
-            di.synchronize()
-    end_event.record()
-    if not USE_WALL_TIME:
-        di.synchronize()
-
-    # FIXME: to avoid negative timings before DLE 2025.1;
-    # this workaround doesn't work for BMG.
-    triton.runtime.driver.active.utils.wait()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
-
-    # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
+    n_warmup = warmup
+    n_repeat = rep
     start_event = [Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [Event(enable_timing=True) for i in range(n_repeat)]
+    USE_WALL_TIME = isinstance(start_event[0], WallEvent)
     # Warm-up
     for _ in range(n_warmup):
         fn()
