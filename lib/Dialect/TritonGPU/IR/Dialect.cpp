@@ -1198,7 +1198,6 @@ LogicalResult DotOperandEncodingAttr::verify(
         if (kWidth != opsPerChannel / 2)
           return emitError() << "ttg.dot_op kWidth parameter must match the "
                                 "parent's opsPerChannel";
-        ;
       }
     } else {
       // operand B
