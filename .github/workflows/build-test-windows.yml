@@ -2,6 +2,15 @@ name: Build and test on Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      pytorch_mode:
+        description: PyTorch mode, source or wheels
+        type: choice
+        options:
+          - source
+          - wheels
+        default: source
+
   schedule:
     - cron: "1 5 * * *"
 
@@ -34,6 +43,17 @@ jobs:
       - name: Copy workspace
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
+
+      # FIXME: the runner has PyTorch wheels pre-compiled from sources in a specific location
+      - name: Install PyTorch (source)
+        if: ${{ (inputs.pytorch_mode || 'source') == 'source' }}
+        run: |
+          pip install (Get-Item C:\pytorch\dist\*.whl)
+
+      - name: Install PyTorch (wheels)
+        if: ${{ (inputs.pytorch_mode || 'source') == 'wheels' }}
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
       - name: PyTorch version
         run: |
