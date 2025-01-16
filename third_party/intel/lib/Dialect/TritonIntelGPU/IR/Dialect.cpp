@@ -641,8 +641,26 @@ struct TritonIntelGPUInferLayoutInterface
     // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
-    if (aEncoding.getKWidth() != bEncoding.getKWidth())
-      return op->emitError("mismatching kWidth between A and B operands");
+
+    auto dpasEncoding = dyn_cast<DpasEncodingAttr>(aEncoding.getParent());
+    if (dpasEncoding) {
+      if (dpasEncoding != bEncoding.getParent())
+        return op->emitError(
+            "mismatching parent encoding between A and B operands");
+
+      auto opsPerChannel = dpasEncoding.getOpsPerChannel();
+      if (opsPerChannel == 1) {
+        if (aEncoding.getKWidth() != opsPerChannel)
+          return op->emitError("mismatching kWidth of A operands");
+      } else {
+        if (aEncoding.getKWidth() != opsPerChannel / 2)
+          return op->emitError("mismatching kWidth of A operands");
+      }
+
+      if (opsPerChannel != bEncoding.getKWidth())
+        return op->emitError("mismatching kWidth of B operands");
+    }
+
     return success();
   }
 

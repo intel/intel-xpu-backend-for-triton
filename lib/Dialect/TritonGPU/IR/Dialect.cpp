@@ -1165,9 +1165,25 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::DpasEncodingAttr>(parent)) {
-    if (kWidth != parentAttr.getOpsPerChannel())
-      return emitError() << "ttg.dot_op kWidth parameter must match the "
-                            "parent's opsPerChannel";
+    int opsPerChannel = parentAttr.getOpsPerChannel();
+    if (opIdx == 0) {
+      // operand A
+      if (opsPerChannel == 1) {
+        if (kWidth != opsPerChannel)
+          return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                "parent's opsPerChannel";
+      } else {
+        if (kWidth != opsPerChannel / 2)
+          return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                "parent's opsPerChannel";
+      }
+    } else {
+      // operand B
+      if (kWidth != parentAttr.getOpsPerChannel())
+        return emitError() << "ttg.dot_op kWidth parameter must match the "
+                              "parent's opsPerChannel";
+    }
+
     return success();
   }
 

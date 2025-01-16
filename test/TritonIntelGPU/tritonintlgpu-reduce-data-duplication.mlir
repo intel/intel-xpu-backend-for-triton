@@ -9,7 +9,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     %cst2 = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dpas2>
     // CHECK-NOT: ttg.local_alloc
     // CHECK-NOT: ttg.local_load
-    %108 = ttg.convert_layout %cst1 : tensor<64x32xf16, #dpas1> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas1, kWidth = 2}>>
+    %108 = ttg.convert_layout %cst1 : tensor<64x32xf16, #dpas1> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas1, kWidth = 1}>>
     %109 = ttg.convert_layout %cst2 : tensor<64x32xf16, #dpas2> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas2, kWidth = 2}>>
     tt.return
   }
@@ -28,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     // CHECK: ttg.local_load
     // CHECK-NOT: ttg.convert_layout
     %108 = ttg.convert_layout %cst1 : tensor<64x32xf16, #dpas1> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas1, kWidth = 2}>>
-    %109 = ttg.convert_layout %cst2 : tensor<64x32xf16, #dpas2> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas2, kWidth = 2}>>
+    %109 = ttg.convert_layout %cst2 : tensor<64x32xf16, #dpas2> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas2, kWidth = 1}>>
     tt.return
   }
 }
