@@ -54,6 +54,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     """
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
+    import triton
     from triton.testing import do_bench as triton_do_bench
 
     # We maintain a buffer of 256 MB that we clear
@@ -71,6 +72,9 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
         fn()
     end_event.record()
     synchronize()
+    # FIXME: to avoid negative timings before DLE 2025.1;
+    # this workaround doesn't work for BMG.
+    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # The cache is also maintained in `triton_do_bench` function,
@@ -149,6 +153,12 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         return kernels
 
     kernels = [extract_kernels(func.cpu_children) for func in functions]
+    # For example, for backward FA, kernels can be empty for one of the threads.
+    # Keep in mind that `backward` function is launched in another thread and
+    # requires the use of `record_function` function additionally in its thread
+    # for correct registration of kernels.
+    # For details: https://github.com/pytorch/pytorch/issues/144778
+    kernels = [kernel for kernel in kernels if kernel != []]
     assert len(kernels) == n_repeat, "the profiling number not match"
     # Make the time to the milliseconds.
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)

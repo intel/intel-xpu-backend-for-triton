@@ -8,7 +8,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     // COM: The repetitions order of dot layout and dpas layout are same when the GEMM tiling is clustered as repCluster [1, 2].
     // CHECK-NO: llvm.insertvalue
     // CHECK-NO: llvm.extractvalue
-    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }
@@ -153,7 +153,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     // CHECK:           %[[VAL_127:.*]] = llvm.insertvalue %[[VAL_62]], %[[VAL_126]][61]
     // CHECK:           %[[VAL_128:.*]] = llvm.insertvalue %[[VAL_63]], %[[VAL_127]][62]
     // CHECK:           %[[VAL_129:.*]] = llvm.insertvalue %[[VAL_64]], %[[VAL_128]][63]
-    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }
@@ -298,7 +298,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     // CHECK:           %[[VAL_127:.*]] = llvm.insertvalue %[[VAL_62]], %[[VAL_126]][61]
     // CHECK:           %[[VAL_128:.*]] = llvm.insertvalue %[[VAL_63]], %[[VAL_127]][62]
     // CHECK:           %[[VAL_129:.*]] = llvm.insertvalue %[[VAL_64]], %[[VAL_128]][63]
-    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }
