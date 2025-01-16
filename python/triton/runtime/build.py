@@ -67,6 +67,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
             gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
             cxx = icpx if os.name == "nt" else icpx or clangpp or gxx
+            if os.name == "nt":
+                cxx = shutil.which("cl")
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx
@@ -86,8 +88,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
     cc_cmd += extra_compile_args
 
-    if os.getenv("VERBOSE"):
-        print(" ".join(cc_cmd))
+    print(" ".join(cc_cmd))
 
     subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     return so
