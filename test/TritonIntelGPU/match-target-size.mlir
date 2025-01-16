@@ -71,8 +71,8 @@ module {
       // CHECK: [[subA1:%.*]] = triton_intel_gpu.extract [[A]][4] : tensor<32x32xf16> -> tensor<8x16xf16>
       // CHECK: [[subB1:%.*]] = triton_intel_gpu.extract [[B0]][1] : tensor<32x16xf16> -> tensor<16x16xf16>
       // CHECK: [[subC1:%.*]] = tt.dot [[subA1]], [[subB1]], [[subC0]], {{.*}} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>>, i32, i32
-      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>>, i32, i32
+      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>>
+      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>>
       scf.yield %39, %40, %41 : tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>>, !tt.ptr<tensor<32x64xf16, #dot1_>>
     } {ttg.workload = 4 : i32}
     %34 = arith.truncf %33#0 : tensor<32x64xf32, #warp> to tensor<32x64xf16, #warp>
@@ -152,8 +152,8 @@ module {
       // CHECK: [[subA1:%.*]] = triton_intel_gpu.extract [[A]][4] : tensor<32x32xf16> -> tensor<8x16xf16>
       // CHECK: [[subB1:%.*]] = triton_intel_gpu.extract [[B0]][1] : tensor<32x32xf16> -> tensor<16x16xf16>
       // CHECK: [[subC1:%.*]] = tt.dot [[subA1]], [[subB1]], [[subC0]], {{.*}} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>>, i32, i32
-      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>>, i32, i32
+      %40 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<32x32xf16, #dot0_>>
+      %41 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x64xf16, #dot1_>>
       scf.yield %39, %40, %41 : tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x32xf16, #dot0_>>, !tt.ptr<tensor<32x64xf16, #dot1_>>
     } {ttg.workload = 3 : i32}
     %34 = arith.truncf %33#0 : tensor<32x64xf32, #warp> to tensor<32x64xf16, #warp>
@@ -312,8 +312,8 @@ tt.func public @matmul_kernel_with_block_pointers_int8(%arg0: !tt.ptr<i8> {tt.di
     // CHECK: [[ADV_A:%.*]] = tt.advance [[TPTR_A_ITER]],
     // CHECK: [[ADV_B1:%.*]] = tt.advance [[TPTR_B1_ITER]],
     // CHECK: [[ADV_B2:%.*]] = tt.advance [[TPTR_B2_ITER]],
-    %49 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<8x64xi8, #ttg.dot_op<{opIdx = 0, parent = #warp}>>>, i32, i32
-    %50 = tt.advance %arg12, [%c64_i32, %c0_i32] : <tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, i32, i32
+    %49 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<8x64xi8, #ttg.dot_op<{opIdx = 0, parent = #warp}>>>
+    %50 = tt.advance %arg12, [%c64_i32, %c0_i32] : <tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
     // CHECK: scf.yield [[DOT_2]], [[DOT_4]], [[ADV_A]], [[ADV_B1]], [[ADV_B2]]
     scf.yield %48, %49, %50 : tensor<8x32xi32, #warp>, !tt.ptr<tensor<8x64xi8, #ttg.dot_op<{opIdx = 0, parent = #warp}>>>, !tt.ptr<tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
   } {ttg.workload = 3 : i32}
@@ -369,8 +369,8 @@ tt.func public @matmul_kernel_with_block_pointers_tf32(%arg0: !tt.ptr<f32> {tt.d
     // CHECK: [[DOT_8:%.*]] = tt.dot [[LD_A4]], [[LD_B8]], [[DOT_7]], inputPrecision = tf32 : tensor<8x8xf32> * tensor<8x16xf32> -> tensor<8x16xf32>
     %48 = tt.dot %46, %47, %arg10, inputPrecision = tf32 : tensor<8x32xf32, #ttg.dot_op<{opIdx = 0, parent = #warp}>> * tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<8x32xf32, #warp>
     // CHECK-COUNT-12: {{.*}} = tt.advance
-    %49 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<8x32xf32, #ttg.dot_op<{opIdx = 0, parent = #warp}>>>, i32, i32
-    %50 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, i32, i32
+    %49 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<8x32xf32, #ttg.dot_op<{opIdx = 0, parent = #warp}>>>
+    %50 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
     scf.yield %48, %49, %50 : tensor<8x32xf32, #warp>, !tt.ptr<tensor<8x32xf32, #ttg.dot_op<{opIdx = 0, parent = #warp}>>>, !tt.ptr<tensor<32x32xf32, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
   } {ttg.workload = 3 : i32}
   // CHECK: [[TPTR_C1:%.*]] = tt.make_tensor_ptr %arg2,
@@ -495,8 +495,8 @@ tt.func public @attn_fwd(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.pt
     // CHECK-COUNT-16: tt.advance {{.*}} : <tensor<16x16xf16>>
     // CHECK: scf.yield
     %50 = tt.dot %49, %47, %46, inputPrecision = tf32 : tensor<16x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<16x64xf32, #warp>
-    %51 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, i32, i32
-    %52 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, i32, i32
+    %51 = tt.advance %arg10, [%c64_i32, %c0_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
+    %52 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
     scf.yield %43, %50, %33, %51, %52 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>>, tensor<16x64xf32, #warp>, tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>>, !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
   } {ttg.workload = 4 : i32, tt.divisibility_arg1 = dense<64> : tensor<1xi32>}
   %26 = tt.expand_dims %25#0 {axis = 1 : i32} : tensor<16xf32, #ttg.slice<{dim = 1, parent = #warp}>> -> tensor<16x1xf32, #warp>
@@ -609,7 +609,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
       %60 = tt.load %arg11 : !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
       %61 = tt.dot %44, %60, %cst_0, inputPrecision = tf32 : tensor<16x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<16x64xf32, #warp>
       // CHECK-COUNT-16: tt.advance {{%.*}}, [%c0_i32, %c64_i32] {DotIdx = 1 : i32} : <tensor<16x16xf16>>
-      %85 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, i32, i32
+      %85 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
       scf.yield %61, %85 : tensor<16x64xf32, #warp>, !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
     } {ttg.workload = 4 : i32, tt.divisibility_arg1 = dense<64> : tensor<1xi32>}
     // CHECK: gpu.barrier
@@ -617,13 +617,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %48 = arith.muli %2, %c128_i32 {tt.divisibility = dense<128> : tensor<1xi32>} : i32
     %49 = arith.addi %2, %c1_i32 : i32
     %50 = arith.muli %49, %c128_i32 : i32
-    %51 = tt.advance %34, [%c0_i32, %48] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, i32, i32
+    %51 = tt.advance %34, [%c0_i32, %48] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
     %56:2 = scf.for %arg6 = %48 to %50 step %c64_i32 iter_args(%arg7 = %47#0, %arg11 = %51) -> (tensor<16x64xf32, #warp>, !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>)  : i32 {
       // CHECK-COUNT-16: tt.load {{%.*}} {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       %60 = tt.load %arg11 : !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
       %61 = tt.dot %44, %60, %cst_0, inputPrecision = tf32 : tensor<16x64xf16, #ttg.dot_op<{opIdx = 0, parent = #warp}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>> -> tensor<16x64xf32, #warp>
       // CHECK-COUNT-16: tt.advance {{%.*}}, [%c0_i32, %c64_i32] {DotIdx = 1 : i32} : <tensor<16x16xf16>>
-      %88 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>, i32, i32
+      %88 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
       scf.yield %61, %88 : tensor<16x64xf32, #warp>, !tt.ptr<tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #warp}>>>
     } {ttg.workload = 4 : i32}
     tt.store %36, %56#0 : !tt.ptr<tensor<16x64xf32, #warp>>

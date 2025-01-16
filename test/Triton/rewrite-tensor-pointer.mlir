@@ -109,7 +109,7 @@ tt.func public @rewrite_for(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>) {
   %1:2 = scf.for %arg2 = %c0 to %c32 step %c1 iter_args(%arg3 = %cst, %arg4 = %0) -> (tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>) {
     %3 = tt.load %arg4 {boundaryCheck = array<i32: 1>, padding = 2 : i32} : !tt.ptr<tensor<128x32xf16>>
     %4 = arith.addf %arg3, %3 : tensor<128x32xf16>
-    %5 = tt.advance %arg4, [%c32_i32, %c0_i32] : !tt.ptr<tensor<128x32xf16>>, i32, i32
+    %5 = tt.advance %arg4, [%c32_i32, %c0_i32] : !tt.ptr<tensor<128x32xf16>>
     scf.yield %4, %5 : tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>
   } {tt.num_stages = 3 : i32}
   %2 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>>
@@ -149,7 +149,7 @@ tt.func public @rewrite_if(%arg0: !tt.ptr<f16>, %arg1: i1, %arg2: tensor<128x32x
   %c128_i64 = arith.constant 128 : i64
   %0 = tt.make_tensor_ptr %arg0, [%c128_i64, %c32_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
   %1:2 = scf.if %arg1 -> (tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>) {
-    %2 = tt.advance %0, [%c32_i32, %c0_i32] : !tt.ptr<tensor<128x32xf16>>, i32, i32
+    %2 = tt.advance %0, [%c32_i32, %c0_i32] : !tt.ptr<tensor<128x32xf16>>
     %3 = arith.truncf %arg2 : tensor<128x32xf32> to tensor<128x32xf16>
     scf.yield %3, %2 : tensor<128x32xf16>, !tt.ptr<tensor<128x32xf16>>
   } else {
@@ -198,7 +198,7 @@ tt.func public @asm_in_loop(%arg0: !tt.ptr<bf16>) {
   %1 = tt.make_tensor_ptr %arg0, [%c128_i64, %c128_i64], [%c128_i64, %c0_i64], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : !tt.ptr<tensor<128x128xbf16>>
   %2:1 = scf.for %arg1 = %c0_i32 to %c1_i32 step %c1_i32 iter_args(%arg2 = %1) -> (!tt.ptr<tensor<128x128xbf16>>)  : i32 {
     %3:2 = tt.elementwise_inline_asm "asm_multiple_results" {constraints = "=r,=r,r", packed_element = 1 : i32, pure = true} %0 : tensor<16xi32> -> tensor<16xi16>, tensor<16xi16>
-    %4 = tt.advance %arg2, [%c0_i32, %c0_i32] : !tt.ptr<tensor<128x128xbf16>>, i32, i32
+    %4 = tt.advance %arg2, [%c0_i32, %c0_i32] : !tt.ptr<tensor<128x128xbf16>>
     scf.yield %4 : !tt.ptr<tensor<128x128xbf16>>
   }
   tt.return

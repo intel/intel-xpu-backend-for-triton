@@ -51,8 +51,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
       // CHECK: [[dot1:%.*]] = tt.dot [[extractDotA]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %25 = tt.load %arg11 : !tt.ptr<tensor<64x64xf16, #dot1>>
       %26 = tt.dot %18, %25, %cst_1, inputPrecision = tf32 : tensor<32x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<32x64xf32, #warp>
-      %27 = tt.advance %arg10, [%c128_i32, %c0_i32] : <tensor<32x64xf16, #dot0>>, i32, i32
-      %28 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #dot1>>, i32, i32
+      %27 = tt.advance %arg10, [%c128_i32, %c0_i32] : <tensor<32x64xf16, #dot0>>
+      %28 = tt.advance %arg11, [%c0_i32, %c64_i32] : <tensor<64x64xf16, #dot1>>
       scf.yield %26, %27, %28 : tensor<32x64xf32, #warp>, !tt.ptr<tensor<32x64xf16, #dot0>>, !tt.ptr<tensor<64x64xf16, #dot1>>
     }
     tt.store %16, %21#0 : !tt.ptr<tensor<32x64xf32, #warp>>

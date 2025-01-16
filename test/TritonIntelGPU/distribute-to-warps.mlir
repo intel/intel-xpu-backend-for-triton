@@ -84,8 +84,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 1 : i32} 
       %30 = ttg.convert_layout %28 : tensor<128x32xf16, #blocked1> -> tensor<128x32xf16, #blockedA>
       %31 = ttg.convert_layout %29 : tensor<32x128xf16, #blocked2> -> tensor<32x128xf16, #blockedB>
       %32 = tt.dot %30, %31, %arg10 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
-      %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blocked1>, 1>, i32, i32
-      %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blocked2>, 1>, i32, i32
+      %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blocked1>, 1>
+      %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blocked2>, 1>
       scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blocked1>, 1>, !tt.ptr<tensor<32x128xf16, #blocked2>, 1>
     }
     tt.return
@@ -153,8 +153,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 1 : i32} 
       %28 = tt.load %arg11 : !tt.ptr<tensor<128x32xf16, #blockedA>, 1>
       %29 = tt.load %arg12 : !tt.ptr<tensor<32x128xf16, #blockedB>, 1>
       %32 = tt.dot %28, %29, %arg10 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<128x32xf16, #blockedA> * tensor<32x128xf16, #blockedB> -> tensor<128x128xf32, #blockedC>
-      %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blockedA>, 1>, i32, i32
-      %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blockedB>, 1>, i32, i32
+      %33 = tt.advance %arg11, [%c0_i32, %c32_i32] : <tensor<128x32xf16, #blockedA>, 1>
+      %34 = tt.advance %arg12, [%c32_i32, %c0_i32] : <tensor<32x128xf16, #blockedB>, 1>
       scf.yield %32, %33, %34 : tensor<128x128xf32, #blockedC>, !tt.ptr<tensor<128x32xf16, #blockedA>, 1>, !tt.ptr<tensor<32x128xf16, #blockedB>, 1>
     }
     tt.return
