@@ -10,7 +10,7 @@ def is_xpu():
 
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
-    if cc in ["cl", "clang-cl"]:
+    if "cl" in cc or "clang-cl" in cc:
         cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
@@ -75,7 +75,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         import numpy as np
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
-        if icpx is not None:
+        if cxx is icpx:
             extra_compile_args += ["-fsycl"]
         else:
             extra_compile_args += ["--std=c++17"]
