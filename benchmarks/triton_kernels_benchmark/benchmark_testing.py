@@ -53,6 +53,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     """
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
+    import triton
     from triton.testing import do_bench as triton_do_bench
 
     # We maintain a buffer of 256 MB that we clear
@@ -70,6 +71,9 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
         fn()
     end_event.record()
     synchronize()
+    # FIXME: to avoid negative timings before DLE 2025.1;
+    # this workaround doesn't work for BMG.
+    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # The cache is also maintained in `triton_do_bench` function,
