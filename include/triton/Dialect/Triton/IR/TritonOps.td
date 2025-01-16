@@ -212,11 +212,11 @@ def TT_AdvanceOp : TT_Op<"advance",
                                          "result", "ptr", "$_self">]> {
     let summary = "Advance a tensor pointer by offsets";
 
-    let arguments = (ins TT_TensorPtr:$ptr, Variadic<I32>:$offsets);
+    let arguments = (ins TT_TensorPtr:$ptr, Variadic<TT_Int>:$offsets);
 
     let results = (outs TT_TensorPtr:$result);
 
-    let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result)";
+    let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result) `,` type($offsets)";
 
     let hasFolder = 1;
 }

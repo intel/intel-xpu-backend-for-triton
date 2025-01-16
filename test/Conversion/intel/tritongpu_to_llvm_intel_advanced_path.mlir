@@ -95,9 +95,9 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
     // CHECK: [[oldOffset:%.*]] = llvm.extractelement {{.*}} : vector<2xi32>
     // CHECK-NEXT: [[newOffset:%.*]] = llvm.add [[oldOffset]], {{.*}}  : i32
     // CHECK-NEXT: llvm.insertelement [[newOffset]], {{.*}} : vector<2xi32>
-    %115 = tt.advance %57, [%c0_i32, %c32_i32] : <tensor<32x32xf16>, 1>
-    %117 = tt.advance %58, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>
-    %118 = tt.advance %59, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>
+    %115 = tt.advance %57, [%c0_i32, %c32_i32] : <tensor<32x32xf16>, 1>, i32, i32
+    %117 = tt.advance %58, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>, i32, i32
+    %118 = tt.advance %59, [%c32_i32, %c0_i32] : <tensor<32x32xf16>, 1>, i32, i32
     %119 = arith.addi %40, %c32_i32 : i32
     cf.br ^bb1(%119, %71, %115, %117, %118 : i32, tensor<8x16xf32>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>, !tt.ptr<tensor<32x32xf16>, 1>)
   ^bb3:

@@ -129,22 +129,22 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       %128 = tt.dot %101, %88, %127, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %129 = tt.dot %103, %89, %128, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %130 = tt.dot %105, %90, %129, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
-      %321 = tt.advance %arg21, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %322 = tt.advance %arg22, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %323 = tt.advance %arg23, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %324 = tt.advance %arg24, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %325 = tt.advance %arg25, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %326 = tt.advance %arg26, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %327 = tt.advance %arg27, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %328 = tt.advance %arg28, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %329 = tt.advance %arg29, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %330 = tt.advance %arg30, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %331 = tt.advance %arg31, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %332 = tt.advance %arg32, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %333 = tt.advance %arg33, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %334 = tt.advance %arg34, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %335 = tt.advance %arg35, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
-      %336 = tt.advance %arg36, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
+      %321 = tt.advance %arg21, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %322 = tt.advance %arg22, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %323 = tt.advance %arg23, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %324 = tt.advance %arg24, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %325 = tt.advance %arg25, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %326 = tt.advance %arg26, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %327 = tt.advance %arg27, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %328 = tt.advance %arg28, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %329 = tt.advance %arg29, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %330 = tt.advance %arg30, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %331 = tt.advance %arg31, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %332 = tt.advance %arg32, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %333 = tt.advance %arg33, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %334 = tt.advance %arg34, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %335 = tt.advance %arg35, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
+      %336 = tt.advance %arg36, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>, i32, i32
       scf.yield %98, %106, %110, %114, %118, %122, %126, %130, %321, %322, %323, %324, %325, %326, %327, %328, %329, %330, %331, %332, %333, %334, %335, %336 : tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>
     }
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<8x16xf32>
@@ -198,9 +198,9 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     %13 = arith.addi %12, %11 : i32
     %14 = tt.make_tensor_ptr %arg0, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%13, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x32xbf16>>
     triton_intel_gpu.prefetch %14 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<8x32xbf16>>
-    %15 = tt.advance %14, [%c0_i32, %c32_i32] : <tensor<8x32xbf16>>
+    %15 = tt.advance %14, [%c0_i32, %c32_i32] : <tensor<8x32xbf16>>, i32, i32
     triton_intel_gpu.prefetch %15 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<8x32xbf16>>
-    %16 = tt.advance %15, [%c0_i32, %c32_i32] : <tensor<8x32xbf16>>
+    %16 = tt.advance %15, [%c0_i32, %c32_i32] : <tensor<8x32xbf16>>, i32, i32
     %17 = arith.divsi %1, %c4_i32 : i32
     %18 = arith.andi %17, %c7_i32 : i32
     %19 = arith.muli %18, %c32_i32 : i32
@@ -215,9 +215,9 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     %28 = arith.addi %27, %22 : i32
     %29 = tt.make_tensor_ptr %arg1, [%c4096_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%25, %28] {order = array<i32: 1, 0>} : <tensor<8x32xbf16>>
     triton_intel_gpu.prefetch %29 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<8x32xbf16>>
-    %30 = tt.advance %29, [%c32_i32, %c0_i32] : <tensor<8x32xbf16>>
+    %30 = tt.advance %29, [%c32_i32, %c0_i32] : <tensor<8x32xbf16>>, i32, i32
     triton_intel_gpu.prefetch %30 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<8x32xbf16>>
-    %31 = tt.advance %30, [%c32_i32, %c0_i32] : <tensor<8x32xbf16>>
+    %31 = tt.advance %30, [%c32_i32, %c0_i32] : <tensor<8x32xbf16>>, i32, i32
     %32 = arith.andi %1, %c3_i32 : i32
     %33 = arith.muli %32, %c64_i32 : i32
     %34 = arith.addi %33, %22 : i32
@@ -292,11 +292,11 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
       %108 = tt.dot %75, %103, %107, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xbf16> * tensor<16x16xbf16> -> tensor<8x16xf32>
       %109 = tt.dot %77, %101, %arg19, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xbf16> * tensor<16x16xbf16> -> tensor<8x16xf32>
       %110 = tt.dot %79, %103, %109, inputPrecision = tf32 {"schedule-group" = 3 : i32} : tensor<8x16xbf16> * tensor<16x16xbf16> -> tensor<8x16xf32>
-      %111 = tt.advance %arg23, [%c0_i32, %c32_i32] : <tensor<8x32xbf16>>
-      %112 = tt.advance %arg20, [%c0_i32, %c32_i32] {DotIdx = 0 : i32} : <tensor<32x32xbf16>>
-      %113 = tt.advance %arg24, [%c32_i32, %c0_i32] : <tensor<8x32xbf16>>
-      %114 = tt.advance %arg21, [%c32_i32, %c0_i32] {DotIdx = 1 : i32} : <tensor<32x32xbf16>>
-      %115 = tt.advance %arg22, [%c32_i32, %c0_i32] {DotIdx = 1 : i32} : <tensor<32x32xbf16>>
+      %111 = tt.advance %arg23, [%c0_i32, %c32_i32] : <tensor<8x32xbf16>>, i32, i32
+      %112 = tt.advance %arg20, [%c0_i32, %c32_i32] {DotIdx = 0 : i32} : <tensor<32x32xbf16>>, i32, i32
+      %113 = tt.advance %arg24, [%c32_i32, %c0_i32] : <tensor<8x32xbf16>>, i32, i32
+      %114 = tt.advance %arg21, [%c32_i32, %c0_i32] {DotIdx = 1 : i32} : <tensor<32x32xbf16>>, i32, i32
+      %115 = tt.advance %arg22, [%c32_i32, %c0_i32] {DotIdx = 1 : i32} : <tensor<32x32xbf16>>, i32, i32
       scf.yield %68, %72, %76, %80, %84, %86, %88, %90, %94, %96, %98, %100, %104, %106, %108, %110, %112, %114, %115, %111, %113 : tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<32x32xbf16>>, !tt.ptr<tensor<32x32xbf16>>, !tt.ptr<tensor<32x32xbf16>>, !tt.ptr<tensor<8x32xbf16>>, !tt.ptr<tensor<8x32xbf16>>
     }
     tt.return

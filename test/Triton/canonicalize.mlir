@@ -56,7 +56,7 @@ tt.func @fold_addptr_scalar(%arg: !tt.ptr<f16>) -> (!tt.ptr<f16>) {
 // CHECK-LABEL: fold_advance
 tt.func @fold_advance(%arg: !tt.ptr<tensor<64x64xf16>>) -> (!tt.ptr<tensor<64x64xf16>>) {
   %c0_i32 = arith.constant 0 : i32
-  %0 = tt.advance %arg, [%c0_i32, %c0_i32] : <tensor<64x64xf16>>
+  %0 = tt.advance %arg, [%c0_i32, %c0_i32] : <tensor<64x64xf16>>, i32, i32
   // CHECK-NOT: tt.advance
   //     CHECK: tt.return %arg
   tt.return %0 : !tt.ptr<tensor<64x64xf16>>
