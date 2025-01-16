@@ -2,10 +2,13 @@
 
 import argparse
 
-from triton_kernels_benchmark.flash_attention_benchmark import benchmark
+import torch
+
+from triton_kernels_benchmark.flash_attention_benchmark import _attention
 
 
 def get_options():
+    """Gather CL options."""
     parser = argparse.ArgumentParser(prog='flash-attention', description='Run Intel XPU Flash-Attention implementation')
     parser.add_argument('-Z', type=int, required=True, help='Batch size')
     parser.add_argument('-H', type=int, required=True, help='Head count')
@@ -16,8 +19,19 @@ def get_options():
     return parser.parse_args()
 
 
+def run(z, h, n_ctx, d_head, causal, backward):
+    """Run the XPU backend FlashAttention benchmark implementation."""
+    dtype = torch.float16
+    q = torch.randn((z, h, n_ctx, d_head), device='xpu', dtype=dtype, requires_grad=True)
+    k = torch.randn((z, h, n_ctx, d_head), device='xpu', dtype=dtype, requires_grad=True)
+    v = torch.randn((z, h, n_ctx, d_head), device='xpu', dtype=dtype, requires_grad=True)
+    sm_scale = 0.125
+    attention = _attention.apply
+    triton_o = attention(q, k, v, causal, sm_scale)
+    if backward:
+        triton_o.backward(torch.randn_like(triton_o), retain_graph=True)
+
+
 if __name__ == '__main__':
     options = get_options()
-    PROVIDER = 'triton'
-    MODE = 'bwd' if options.backward else 'fwd'
-    benchmark.fn(options.Z, options.H, options.N_CTX, options.D_HEAD, options.causal, MODE, PROVIDER)
+    run(options.Z, options.H, options.N_CTX, options.D_HEAD, options.causal, options.backward)
