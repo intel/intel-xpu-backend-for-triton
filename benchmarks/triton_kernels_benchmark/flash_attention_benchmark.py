@@ -1,5 +1,8 @@
 import os
+import contextlib
+
 import torch
+from torch.profiler import record_function
 import triton
 import triton.language as tl
 
@@ -476,43 +479,49 @@ class _attention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do):
-        q, k, v, o, M = ctx.saved_tensors
-        assert do.is_contiguous()
-        assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
-        dq = torch.empty_like(q)
-        dk = torch.empty_like(k)
-        dv = torch.empty_like(v)
-        BATCH, N_HEAD, N_CTX = q.shape[:3]
-        PRE_BLOCK = 128
-        NUM_WARPS, NUM_STAGES = 4, 5
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
-        BLK_SLICE_FACTOR = 2
-        RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
-        arg_k = k
-        arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
-        PRE_BLOCK = 128
-        assert N_CTX % PRE_BLOCK == 0
-        pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-        delta = torch.empty_like(M)
-        _attn_bwd_preprocess[pre_grid](
-            o, do,  #
-            delta,  #
-            BATCH, N_HEAD, N_CTX,  #
-            BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
-        )
-        grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
-        _attn_bwd[grid](
-            q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,  #
-            M, delta,  #
-            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-            N_HEAD, N_CTX,  #
-            BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
-            BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
-            BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
-            HEAD_DIM=ctx.HEAD_DIM,  #
-            num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES  #
-        )
+        # FIXME: There is no certainty as to how much such behavior is expected.
+        # Consider removing `record_function` call from here once
+        # https://github.com/pytorch/pytorch/issues/144778 has more details.
+        with record_function(
+                '__profile_kernel_of_func_bwd_fa'
+        ) if benchmark_suit.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
+            q, k, v, o, M = ctx.saved_tensors
+            assert do.is_contiguous()
+            assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
+            dq = torch.empty_like(q)
+            dk = torch.empty_like(k)
+            dv = torch.empty_like(v)
+            BATCH, N_HEAD, N_CTX = q.shape[:3]
+            PRE_BLOCK = 128
+            NUM_WARPS, NUM_STAGES = 4, 5
+            BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
+            BLK_SLICE_FACTOR = 2
+            RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
+            arg_k = k
+            arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
+            PRE_BLOCK = 128
+            assert N_CTX % PRE_BLOCK == 0
+            pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
+            delta = torch.empty_like(M)
+            _attn_bwd_preprocess[pre_grid](
+                o, do,  #
+                delta,  #
+                BATCH, N_HEAD, N_CTX,  #
+                BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
+            )
+            grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
+            _attn_bwd[grid](
+                q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,  #
+                M, delta,  #
+                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+                N_HEAD, N_CTX,  #
+                BLOCK_M1=BLOCK_M1, BLOCK_N1=BLOCK_N1,  #
+                BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
+                BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
+                HEAD_DIM=ctx.HEAD_DIM,  #
+                num_warps=NUM_WARPS,  #
+                num_stages=NUM_STAGES  #
+            )
 
         return dq, dk, dv, None, None
 
@@ -576,9 +585,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
         if MODE == 'fwd':
             atol = 1e-1 if N_CTX == 16384 else 1e-2
-            benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=atol, rtol=1e-3, err_msg='triton to torch')
+            benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
         else:
-            benchmark_suit.assert_close(triton_o, torch_o, atol=1e-2, rtol=0, err_msg='triton to torch')
+            benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=1e-2, rtol=0, err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'xetla':

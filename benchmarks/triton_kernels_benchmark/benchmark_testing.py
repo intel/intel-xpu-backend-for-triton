@@ -2,9 +2,10 @@ import argparse
 import itertools
 import os
 
-from triton.testing import Benchmark
+from triton.testing import assert_close as triton_assert_close, Benchmark
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
+VERIFY = os.getenv("VERIFY", "1") == "1"
 
 
 def synchronize():
@@ -147,6 +148,12 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         return kernels
 
     kernels = [extract_kernels(func.cpu_children) for func in functions]
+    # For example, for backward FA, kernels can be empty for one of the threads.
+    # Keep in mind that `backward` function is launched in another thread and
+    # requires the use of `record_function` function additionally in its thread
+    # for correct registration of kernels.
+    # For details: https://github.com/pytorch/pytorch/issues/144778
+    kernels = [kernel for kernel in kernels if kernel != []]
     assert len(kernels) == n_repeat, "the profiling number not match"
     # Make the time to the milliseconds.
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
@@ -159,6 +166,11 @@ elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     do_bench = do_bench_upstream_pytorch_profiler
 else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
+
+
+def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
+    if VERIFY:
+        triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
 
 
 def perf_report(benchmarks):
