@@ -1,7 +1,8 @@
 import argparse
 import itertools
 import os
-from typing import Any, Dict, List
+
+from triton.testing import Benchmark
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 
@@ -160,43 +161,6 @@ else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
 
-def assert_close(x, y, atol=None, rtol=None, err_msg=""):
-    import numpy as np
-    import torch
-
-    # canonicalize arguments to be tensors
-    if not isinstance(x, torch.Tensor):
-        x = torch.tensor(x)
-    if not isinstance(y, torch.Tensor):
-        y = torch.tensor(y)
-    # absolute tolerance
-    if atol is None:
-        atol = 1e-2
-    atol = atol(x.dtype) if callable(atol) else atol
-    # relative tolerance hook
-    if rtol is None:
-        rtol = 0.
-    rtol = rtol(x.dtype) if callable(rtol) else rtol
-    # we use numpy instead of pytorch
-    # as it seems more memory efficient
-    # pytorch tends to oom on large tensors
-    if isinstance(x, torch.Tensor):
-        if x.dtype == torch.bfloat16:
-            x = x.float()
-        x = x.cpu().detach().numpy()
-    if isinstance(y, torch.Tensor):
-        if y.dtype == torch.bfloat16:
-            y = y.float()
-        y = y.cpu().detach().numpy()
-    # we handle size==1 case separately as we can
-    # provide better error message there
-    if x.size > 1 or y.size > 1:
-        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
-        return
-    if not np.allclose(x, y, atol=atol, rtol=rtol):
-        raise AssertionError(f"{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})")
-
-
 def perf_report(benchmarks):
     """
     Mark a function for benchmarking. The benchmark can then be executed by using the :code:`.run` method on the return value.
@@ -206,73 +170,6 @@ def perf_report(benchmarks):
     """
     wrapper = lambda fn: Mark(fn, benchmarks)
     return wrapper
-
-
-# # pylint: disable=too-many-instance-attributes
-class Benchmark:
-    """
-    This class is used by the :code:`perf_report` function to generate line plots with a concise API.
-    """
-
-    def __init__(
-        self,
-        x_names: List[str],
-        x_vals: List[Any],
-        line_arg: str,
-        line_vals: List[Any],
-        line_names: List[str],
-        plot_name: str,
-        args: Dict[str, Any],
-        xlabel: str = "",
-        ylabel: str = "",
-        x_log: bool = False,
-        y_log: bool = False,
-        color=None,  # pylint: disable=unused-argument
-        styles=None,
-    ):
-        """
-        Constructor.
-        x_vals can be a list of scalars or a list of tuples/lists. If x_vals is a list
-        of scalars and there are multiple x_names, all arguments will have the same value.
-        If x_vals is a list of tuples/lists, each element should have the same length as
-        x_names.
-
-        :param x_names: Name of the arguments that should appear on the x axis of the plot.
-        :type x_names: List[str]
-        :param x_vals: List of values to use for the arguments in :code:`x_names`.
-        :type x_vals: List[Any]
-        :param line_arg: Argument name for which different values correspond to different lines in the plot.
-        :type line_arg: str
-        :param line_vals: List of values to use for the arguments in :code:`line_arg`.
-        :type line_vals: List[Any]
-        :param line_names: Label names for the different lines.
-        :type line_names: List[str]
-        :param plot_name: Name of the plot.
-        :type plot_name: str
-        :param args: Dictionary of keyword arguments to remain fixed throughout the benchmark.
-        :type args: Dict[str, Any]
-        :param xlabel: Label for the x axis of the plot.
-        :type xlabel: str, optional
-        :param ylabel: Label for the y axis of the plot.
-        :type ylabel: str, optional
-        :param x_log: Whether the x axis should be log scale.
-        :type x_log: bool, optional
-        :param y_log: Whether the y axis should be log scale.
-        :type y_log: bool, optional
-        """
-        self.x_names = x_names
-        self.x_vals = x_vals
-        self.x_log = x_log
-        self.line_arg = line_arg
-        self.line_vals = line_vals
-        self.line_names = line_names
-        self.y_log = y_log
-        self.styles = styles
-        # plot info
-        self.xlabel = xlabel
-        self.ylabel = ylabel
-        self.plot_name = plot_name
-        self.args = args
 
 
 class Mark:
