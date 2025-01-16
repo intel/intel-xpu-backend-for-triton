@@ -78,7 +78,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         if cxx is icpx:
             extra_compile_args += ["-fsycl"]
         else:
-            extra_compile_args += ["--std=c++17"]
+            extra_compile_args += ["--std=c++17"] if os.name != "nt" else ["/std:c++17"]
         if os.name == "nt":
             library_dirs = library_dirs + [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
     else:
@@ -90,5 +90,5 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
 
     print(" ".join(cc_cmd))
 
-    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+    subprocess.check_call(cc_cmd)
     return so

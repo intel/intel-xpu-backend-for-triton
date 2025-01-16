@@ -145,7 +145,11 @@ def compile_module_from_src(src, name):
                 f.write(src)
             extra_compiler_args = []
             if COMPILATION_HELPER.libsycl_dir:
-                extra_compiler_args += ['-Wl,-rpath,' + COMPILATION_HELPER.libsycl_dir]
+                if os.name == "nt":
+                    extra_compiler_args += ["/LIBPATH:" + COMPILATION_HELPER.libsycl_dir]
+                else:
+                    extra_compiler_args += ["-Wl,-rpath," + COMPILATION_HELPER.libsycl_dir]
+
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
                         COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
