@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
@@ -104,10 +105,23 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
 }
 
+void init_triton_intel_passes_arith(py::module &&m) {
+  m.def("add_arith_emulate_unsupported_floats",
+        [](mlir::PassManager &pm,
+           const std::vector<std::string> &sourceTypeStrs,
+           const std::string &targetTypeStr) {
+          pm.addPass(mlir::arith::createArithEmulateUnsupportedFloats(
+              {llvm::SmallVector<std::string>{sourceTypeStrs.begin(),
+                                              sourceTypeStrs.end()},
+               targetTypeStr}));
+        });
+}
+
 void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
+  init_triton_intel_passes_arith(passes.def_submodule("arith"));
 
   // cluster info
   py::class_<gpu::intel::ClusterInfo>(m, "ClusterInfo")

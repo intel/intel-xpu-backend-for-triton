@@ -518,6 +518,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
+      if (auto decomposedCvt =
+              getWarpLayoutConvertDecomposition(srcTy, dstTy)) {
+        transferWithinWarp(op, *decomposedCvt, adaptor, rewriter);
+        return success();
+      }
       // TODO(jlebar): Implement me.
       return failure();
     } else if (llvm::is_contained(dims, kRegister)) {
@@ -552,6 +557,80 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                   op.getType());
     rewriter.replaceOp(op, result);
     return success();
+  }
+
+  // Use warp shuffles to implement a layout conversion where data only needs to
+  // be moved within warps.
+  void transferWithinWarp(ConvertLayoutOp op,
+                          DecomposedWarpConversion decomposed,
+                          OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = op.getContext();
+    Location loc = op.getLoc();
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+    auto [P1, Cp, P2inv, reducedP1, reducedP2] = std::move(decomposed);
+
+    // Grab the source elements and prepare the outputs of just the shuffles.
+    SmallVector<Value> srcValues =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    SmallVector<Value> shflOuts(Cp.getInDimSize(kRegister));
+
+    Value threadId = getThreadId(rewriter, loc);
+    Value threadsPerWarp = i32_val(Cp.getInDimSize(kLane));
+    Value laneId = urem(threadId, threadsPerWarp);
+
+    // Emit one shuffle per destination register.
+    for (int i : llvm::seq(shflOuts.size())) {
+      // 'Cp' maps a (dst_lane, dst_reg) -> (src_lane, src_reg), and we know
+      // that for a register, it does not map to different registers in the same
+      // lane. At the same time, for each register, P1 returns the source value
+      // index to provide as the shuffle value.
+      auto out = applyLinearLayout(loc, rewriter, P1,
+                                   {{kLane, laneId}, {kRegister, i32_val(i)}});
+      assert(out.size() == 1);
+      Value srcRegIdx = out.front().second;
+      // The size of the input lane dimension is the number of selects to emit.
+      // TODO(jeff): For dtypes smaller than i32, we can use byte permutes and
+      // shuffle multiple values at a time.
+      Value shflSrc = undef(srcValues.front().getType());
+      for (int j : llvm::seq(reducedP1.getInDimSize(kLane))) {
+        int32_t check =
+            reducedP1.apply({{kLane, j}, {kRegister, i}}).front().second;
+        shflSrc = select(icmp_eq(srcRegIdx, i32_val(check)), srcValues[check],
+                         shflSrc);
+      }
+
+      out = applyLinearLayout(loc, rewriter, Cp,
+                              {{kLane, laneId}, {kRegister, i32_val(i)}});
+      assert(out.size() == 1);
+      Value shflIdx = out.front().second;
+      shflOuts[i] = targetInfo.shuffleIdx(rewriter, loc, shflSrc, shflIdx);
+    }
+
+    // Finally, we just need to apply P2 to the shflOuts to permute the
+    // registers into their final form. Use the same trick to reduce the number
+    // of emitted selects.
+    SmallVector<Value> results(shflOuts.size());
+    for (int i : llvm::seq(results.size())) {
+      Value result = undef(srcValues.front().getType());
+
+      auto out = applyLinearLayout(loc, rewriter, P2inv,
+                                   {{kLane, laneId}, {kRegister, i32_val(i)}});
+      Value resultIdx = out.front().second;
+      for (int j : llvm::seq(reducedP2.getInDimSize(kLane))) {
+        int32_t check =
+            reducedP2.apply({{kLane, j}, {kRegister, i}}).front().second;
+        result =
+            select(icmp_eq(resultIdx, i32_val(check)), shflOuts[check], result);
+      }
+      results[i] = result;
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
   }
 
   int getNumContiguousRowsForShuffle(const LinearLayout &srcLayout,
