@@ -30,8 +30,8 @@ static Type findShuffleType(RewriterBase &rewriter, Type valType) {
   return valType;
 }
 
-static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
-                           Value i, mlir::gpu::ShuffleMode mode) {
+static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
+                               Value i, mlir::gpu::ShuffleMode mode) {
   Type valType = val.getType();
   Type shuffleType = findShuffleType(rewriter, valType);
 
@@ -62,6 +62,18 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
     }
   }
 
+  return result;
+}
+
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, mlir::gpu::ShuffleMode mode) {
+  // To shuffle pointers, convert them to i64.
+  Type valTy = val.getType();
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    val = ptrtoint(i64_ty, val);
+  Value result = shuffleCommonImpl(loc, rewriter, val, i, mode);
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    result = inttoptr(valTy, result);
   return result;
 }
 
