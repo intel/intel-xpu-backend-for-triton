@@ -67,6 +67,11 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import torch;print(torch.__version__)'
 
+      - name: Clean up Triton cache
+        shell: bash
+        run: |
+          rm -rf ~/.tiron/cache
+
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
       # runner.
@@ -126,3 +131,8 @@ jobs:
         if: ${{ always() }}
         run: |
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
+
+      - name: Clean up temporary files
+        shell: bash
+        run: |
+          rm -rf rm -rf /tmp/triton-* /tmp/tmp*
