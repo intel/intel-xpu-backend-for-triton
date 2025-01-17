@@ -91,7 +91,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     cc_cmd += extra_compile_args
 
     if os.getenv("VERBOSE"):
-        print(" ".join(cc_cmd), stdout=subprocess.DEVNULL)
+        print(" ".join(cc_cmd))
 
-    subprocess.check_call(cc_cmd)
+    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     return so
