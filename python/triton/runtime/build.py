@@ -66,9 +66,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
-            cxx = icpx if os.name == "nt" else icpx or clangpp or gxx
-            if os.name == "nt":
-                cxx = shutil.which("cl")
+            cl = shutil.which("cl")
+            cxx = icpx or cl if os.name == "nt" else icpx or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx

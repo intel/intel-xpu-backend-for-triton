@@ -40,7 +40,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
         return include_dir, sycl_dir
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
-    if False and oneapi_root:
+    if oneapi_root:
         include_dir += [
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
