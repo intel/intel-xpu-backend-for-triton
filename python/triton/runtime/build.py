@@ -11,7 +11,7 @@ def is_xpu():
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     if "cl.EXE" in cc or "clang-cl" in cc:
-        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD", "/MD"]
+        cc_cmd = [cc, "/Zc:__cplusplus", src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
@@ -78,8 +78,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         if cxx is icpx:
             extra_compile_args += ["-fsycl"]
         else:
-            if os.name != "nt":
-                extra_compile_args += ["--std=c++17"]
+            extra_compile_args += ["--std=c++17"]
         if os.name == "nt":
             library_dirs = library_dirs + [
                 os.path.abspath(os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs"))
@@ -91,7 +90,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
     cc_cmd += extra_compile_args
 
-    print(" ".join(cc_cmd))
+    if os.getenv("VERBOSE"):
+        print(" ".join(cc_cmd), stdout=subprocess.DEVNULL)
 
     subprocess.check_call(cc_cmd)
     return so
