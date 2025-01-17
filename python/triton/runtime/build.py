@@ -10,8 +10,8 @@ def is_xpu():
 
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
-    if cc in ["cl", "clang-cl"]:
-        cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
+    if "cl.EXE" in cc or "clang-cl" in cc:
+        cc_cmd = [cc, "/Zc:__cplusplus", src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
@@ -66,19 +66,22 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
-            cxx = icpx if os.name == "nt" else icpx or clangpp or gxx
+            cl = shutil.which("cl")
+            cxx = icpx or cl if os.name == "nt" else icpx or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx
         import numpy as np
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
-        if icpx is not None:
+        if cxx is icpx:
             extra_compile_args += ["-fsycl"]
         else:
             extra_compile_args += ["--std=c++17"]
         if os.name == "nt":
-            library_dirs = library_dirs + [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
+            library_dirs = library_dirs + [
+                os.path.abspath(os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs"))
+            ]
     else:
         cc_cmd = [cc]
 
