@@ -1,4 +1,4 @@
-# flake8: noqa: F821,F841
+# ruff: noqa: F821,F841
 import contextlib
 import itertools
 import re
@@ -4810,6 +4810,34 @@ def test_reshape_err(device):
         kernel[(1, )]()
 
     assert "reshape" in str(exc_info.value)
+
+
+def test_tma_load_block_shape_err(device):
+
+    @triton.jit
+    def kernel(ptr):
+        desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
+        desc.load([0, 0])
+
+    input = torch.empty((128, 128), dtype=torch.int32, device=device)
+    with pytest.raises(triton.CompilationError) as e:
+        kernel[(1, )](input)
+
+    assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
+
+
+def test_tma_store_block_shape_err(device):
+
+    @triton.jit
+    def kernel(ptr):
+        desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
+        desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
+
+    input = torch.empty((128, 128), dtype=torch.int16, device=device)
+    with pytest.raises(triton.CompilationError) as e:
+        kernel[(1, )](input)
+
+    assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
 
 
 def test_trans_reshape(device):
