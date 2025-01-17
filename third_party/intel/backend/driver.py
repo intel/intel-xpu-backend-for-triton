@@ -45,7 +45,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
-        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib"),
+        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
         return include_dir, sycl_dir
 
     try:
