@@ -25,7 +25,7 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors --venv
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
 
 jobs:
   build:
@@ -100,23 +100,26 @@ jobs:
 
       - name: Run core tests
         run: |
+          .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
+          .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Pass rate
-        shell: bash
         run: |
-          source .venv/Scripts/activate
-          source ./scripts/capture-hw-details.sh
+          .venv\Scripts\activate.ps1
           pip install defusedxml
-          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
-          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
+          bash -c "\
+            source ./scripts/capture-hw-details.sh; \
+            python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
+            python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json; \
+            python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \
+          "
 
       - name: Upload pass rate report
         # upload reports only for the default branch

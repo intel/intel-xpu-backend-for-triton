@@ -49,7 +49,7 @@ pytest() {
     fi
 
     export TEST_UNSKIP
-    python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
+    python -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
 
 run_tutorial_test() {
@@ -66,9 +66,9 @@ run_tutorial_test() {
     fi
 
     if [[ $TRITON_TEST_REPORTS = true ]]; then
-        RUN_TUTORIAL="python3 -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
+        RUN_TUTORIAL="python -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
     else
-        RUN_TUTORIAL="python3 -u $1.py"
+        RUN_TUTORIAL="python -u $1.py"
     fi
 
     if [[ $TUTORIAL_RESULT = TODO ]]; then

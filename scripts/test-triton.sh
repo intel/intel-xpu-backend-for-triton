@@ -356,11 +356,6 @@ run_inductor_tests() {
 }
 
 test_triton() {
-
-  # FIXME: remove me
-  pip list -v
-  env
-
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi

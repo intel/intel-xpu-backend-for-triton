@@ -12,7 +12,7 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors --venv
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
 
 jobs:
   build:
@@ -82,21 +82,24 @@ jobs:
 
       - name: Run core tests
         run: |
+          .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
+          .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Pass rate
         run: |
+          .venv\Scripts\activate.ps1
+          # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          pip install defusedxml
           bash -c "\
-            source .venv/Scripts/activate; \
             source ./scripts/capture-hw-details.sh; \
-            pip install defusedxml; \
             python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
             python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json; \
             python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \
