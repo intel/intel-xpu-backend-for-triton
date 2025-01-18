@@ -43,12 +43,12 @@ jobs:
       # FIXME: the runner has PyTorch wheels pre-compiled from sources in a specific location
       - name: Install PyTorch (source)
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           pip install (Get-Item C:\pytorch\dist\*.whl)
 
       - name: PyTorch version
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import torch;print(torch.__version__)'
 
@@ -62,7 +62,7 @@ jobs:
       # runner.
       - name: Setup Triton
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           cd python
@@ -71,30 +71,30 @@ jobs:
 
       - name: Triton version
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import triton; print(triton.__version__)'
 
       - name: Install test dependencies
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
 
       - name: Run core tests
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Pass rate
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           pip install defusedxml
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           bash -c "\
