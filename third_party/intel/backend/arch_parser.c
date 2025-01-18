@@ -32,6 +32,9 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_lnl_m:
     arch = "lnl";
     break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_dg2_g10:
+    arch = "dg2";
+    break;
   default:
     std::cerr << "sycl_arch not recognized: " << (int)sycl_arch << std::endl;
   }
