@@ -102,9 +102,7 @@ def get_missing_tests(warnings: List[TestWarning]) -> List[str]:
             continue
         for line in warning.message.splitlines():
             if line.startswith('  - '):
-                cleared_line = line.removeprefix('  - ').strip()
-                if cleared_line:
-                    tests.add(cleared_line)
+                tests.add(line.removeprefix('  - '))
     return sorted(list(tests))
 
 
