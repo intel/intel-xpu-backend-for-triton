@@ -61,6 +61,7 @@ jobs:
       - name: PyTorch version
         run: |
           ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           python -c 'import torch;print(torch.__version__)'
 
       - name: Clean up Triton cache
@@ -74,8 +75,8 @@ jobs:
       - name: Setup Triton
         run: |
           ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
-          cd ${{ env.NEW_WORKSPACE }}
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
           pip install -v --no-build-isolation '.[build,tests,tutorials]'
