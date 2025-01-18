@@ -75,8 +75,8 @@ jobs:
       # runner.
       - name: Setup Triton
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
@@ -94,21 +94,21 @@ jobs:
 
       - name: Run core tests
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Pass rate
         run: |
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           pip install defusedxml
-          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
             python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
