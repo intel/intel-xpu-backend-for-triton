@@ -374,7 +374,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
     if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_hip_mi300()):
-        pytest.xfail(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
+        pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
 
     if dst_dtype == 'float8e4nv' and is_hip():
         pytest.skip(f"{dst_dtype} downcast not supported in HIP")

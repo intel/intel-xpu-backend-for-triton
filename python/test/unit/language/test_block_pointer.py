@@ -45,7 +45,7 @@ def test_block_copy(dtypes_str, n, padding_option, boundary_check, device):
     check_type_supported(dst_dtype, device)
     if src_dtype_str in ("bool", "int16", "int32"):
         if padding_option == "nan":
-            pytest.xfail("Padding with NaN is not supported for integer types")
+            pytest.skip("Padding with NaN is not supported for integer types")
         a = torch.randint(0, 2, (n, ), device=device, dtype=src_dtype)
     else:
         a = torch.randn((n, ), device=device, dtype=src_dtype)
