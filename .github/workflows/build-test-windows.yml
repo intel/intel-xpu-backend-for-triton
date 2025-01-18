@@ -12,7 +12,7 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors --venv
 
 jobs:
   build:
@@ -38,18 +38,18 @@ jobs:
 
       - name: Create venv
         run:
-          python -m venv ${{ env.NEW_WORKSPACE }}\venv
+          python -m venv .venv
 
       # FIXME: the runner has PyTorch wheels pre-compiled from sources in a specific location
       - name: Install PyTorch (source)
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           pip install (Get-Item C:\pytorch\dist\*.whl)
 
       - name: PyTorch version
         run: |
+          .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           python -c 'import torch;print(torch.__version__)'
 
       - name: Clean up Triton cache
@@ -62,8 +62,8 @@ jobs:
       # runner.
       - name: Setup Triton
         run: |
+          .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
@@ -71,34 +71,32 @@ jobs:
 
       - name: Triton version
         run: |
+          .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           python -c 'import triton; print(triton.__version__)'
 
       - name: Install test dependencies
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
 
       - name: Run core tests
         run: |
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Pass rate
         run: |
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
-          pip install defusedxml
           bash -c "\
+            source .venv/Scripts/activate; \
             source ./scripts/capture-hw-details.sh; \
+            pip install defusedxml; \
             python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
             python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json; \
             python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \

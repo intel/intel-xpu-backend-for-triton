@@ -131,7 +131,11 @@ if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER"
 fi
 
 if [ "$VENV" = true ]; then
-  source .venv/bin/activate
+  if [[ $OSTYPE = msys ]]; then
+    source .venv/Scripts/activate
+  else
+    source .venv/bin/activate
+  fi
 fi
 
 
