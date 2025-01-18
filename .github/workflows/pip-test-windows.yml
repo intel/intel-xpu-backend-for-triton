@@ -25,7 +25,7 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  TRITON_TEST_CMD: bash -e -c "source /c/gh${{ github.run_id }}/venv/Scripts/activate && ./scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors"
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors --venv
 
 jobs:
   build:
@@ -51,18 +51,18 @@ jobs:
 
       - name: Create venv
         run:
-          python -m venv ${{ env.NEW_WORKSPACE }}\venv
+          python -m venv .venv
 
       - name: Install PyTorch (wheels)
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           # The latest wheel does not work, see https://github.com/intel/intel-xpu-backend-for-triton/issues/3177#issuecomment-2599817729
           # Use the latest good one
           pip install torch==2.7.0.dev20250110+xpu --index-url https://download.pytorch.org/whl/nightly/xpu
 
       - name: PyTorch version
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           python -c 'import torch;print(torch.__version__)'
 
       - name: Clean up Triton cache
@@ -76,7 +76,7 @@ jobs:
       - name: Setup Triton
         run: |
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
@@ -85,17 +85,17 @@ jobs:
 
       - name: Triton version
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           python -c 'import triton; print(triton.__version__)'
 
       - name: Install test dependencies
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
 
       - name: Show installed pip packages
         run: |
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           pip list -v
 
       - name: Run core tests
@@ -111,7 +111,7 @@ jobs:
       - name: Pass rate
         run: |
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-          ${{ env.NEW_WORKSPACE }}\venv\Scripts\activate.ps1
+          .venv\Scripts\activate.ps1
           pip install defusedxml
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
