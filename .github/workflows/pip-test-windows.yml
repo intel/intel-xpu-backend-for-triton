@@ -56,12 +56,13 @@ jobs:
       - name: Install PyTorch (wheels)
         run: |
           ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
-          pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
+          # The latest wheel does not work, see https://github.com/intel/intel-xpu-backend-for-triton/issues/3177#issuecomment-2599817729
+          # Use the latest good one
+          pip install torch==2.7.0.dev20250110+xpu --index-url https://download.pytorch.org/whl/nightly/xpu
 
       - name: PyTorch version
         run: |
           ${{ env.NEW_WORKSPACE }}\venv\Scripts\Activate.ps1
-          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           python -c 'import torch;print(torch.__version__)'
 
       - name: Clean up Triton cache
