@@ -248,9 +248,9 @@ def main():
     missing_tests = get_all_missing_tests(args.report_path)
     if missing_tests:
         for suite, tests in missing_tests.items():
-            print(f'Missing tests in {suite}:')
+            print(f'# Missing tests in {suite}:')
             for test in tests:
-                print(f' - {test}')
+                print(test)
         sys.exit(1)
 
     stats = parse_reports(args)
