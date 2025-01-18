@@ -7,9 +7,8 @@ on:
   pull_request:
     branches:
       - main
-#    FIXME: uncomment before merging
-#    paths:
-#      - third_party/intel/backend/driver.py
+    paths:
+      - third_party/intel/backend/driver.py
   push:
     branches:
       - main
