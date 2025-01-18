@@ -70,7 +70,7 @@ jobs:
       - name: Clean up Triton cache
         shell: bash
         run: |
-          rm -rf ~/.tiron/cache
+          rm -rf ~/.triton/cache
 
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
