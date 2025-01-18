@@ -25,7 +25,7 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  TRITON_TEST_CMD: bash -e -c "source /c/gh${{ github.run_id }}/Scripts/activate && ./scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors"
+  TRITON_TEST_CMD: bash -e -c "source /c/gh${{ github.run_id }}/venv/Scripts/activate && ./scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors"
 
 jobs:
   build:
