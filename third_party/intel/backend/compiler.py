@@ -155,7 +155,7 @@ class XPUBackend(BaseBackend):
 
         mod = compile_module_from_src(Path(os.path.join(self._dirname, "arch_parser.c")).read_text(), "arch_utils")
         device_arch = mod.parse_device_arch(tgt_prop.get('architecture', 0))
-        if device_arch:
+        if device_arch and shutil.which('ocloc'):
             if device_arch in self.device_props:
                 dev_prop.update(self.device_props[device_arch])
                 return dev_prop
