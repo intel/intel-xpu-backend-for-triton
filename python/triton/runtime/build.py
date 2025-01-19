@@ -11,7 +11,7 @@ def is_xpu():
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     if "cl.EXE" in cc or "clang-cl" in cc:
-        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD"]
+        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD", "/MD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
