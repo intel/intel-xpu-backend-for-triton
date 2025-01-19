@@ -63,6 +63,9 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
             include_dir += [str(f.locate().parent.parent.resolve())]
         if f.name in ["libsycl.so", "sycl8.dll"]:
             sycl_dir = str(f.locate().parent.resolve())
+            if f.name in "sycl8.dll":
+                dirname = os.path.dirname(os.path.realpath(__file__))
+                shutil.move(f"{dirname}/sycl8.lib", sycl_dir)
             # should we handle `_` somehow?
             if os.name == "nt":
                 _ = os.add_dll_directory(sycl_dir)
