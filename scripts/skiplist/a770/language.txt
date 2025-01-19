@@ -352,7 +352,7 @@ test/unit/language/test_core.py::test_dot[1-128-128-64-2-False-False-none-tf32-f
 test/unit/language/test_core.py::test_dot[1-128-128-64-2-False-False-none-tf32-float32-float32-1-None0]
 test/unit/language/test_core.py::test_dot[1-128-128-64-2-False-False-none-tf32-float32-float32-1-None1]
 
-# test test_dot_max_num_imprecise_acc
+# test_dot_max_num_imprecise_acc
 test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[0-float8e4nv-128-256-128-128-256-256]
 test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[64-float8e5-128-256-128-128-256-256]
 test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[64-float8e4nv-128-256-128-128-256-256]
