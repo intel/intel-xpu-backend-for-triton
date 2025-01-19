@@ -1,10 +1,22 @@
-name: Build and test on Windows
+name: Test with pip on Windows
 
 on:
   workflow_dispatch:
 
+  # run workflow on changes to the driver, which handles the libraries logic
+  pull_request:
+    branches:
+      - main
+    paths:
+      - third_party/intel/backend/driver.py
+  push:
+    branches:
+      - main
+    paths:
+      - third_party/intel/backend/driver.py
+
   schedule:
-    - cron: "1 5 * * *"
+    - cron: "3 5 * * *"
 
 permissions: read-all
 
@@ -40,16 +52,16 @@ jobs:
         run:
           python -m venv .venv
 
-      # FIXME: the runner has PyTorch wheels pre-compiled from sources in a specific location
-      - name: Install PyTorch (source)
+      - name: Install PyTorch (wheels)
         run: |
           .venv\Scripts\activate.ps1
-          pip install (Get-Item C:\pytorch\dist\*.whl)
+          # The latest wheel does not work, see https://github.com/intel/intel-xpu-backend-for-triton/issues/3177#issuecomment-2599817729
+          # Use the latest good one
+          pip install torch==2.7.0.dev20250110+xpu --index-url https://download.pytorch.org/whl/nightly/xpu
 
       - name: PyTorch version
         run: |
           .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import torch;print(torch.__version__)'
 
       - name: Clean up Triton cache
@@ -67,12 +79,12 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
-          pip install -v --no-build-isolation '.[build,tests,tutorials]'
+          python setup.py -v bdist_wheel
+          pip install (Get-Item ${{ env.NEW_WORKSPACE }}\python\dist\*.whl)
 
       - name: Triton version
         run: |
           .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           python -c 'import triton; print(triton.__version__)'
 
       - name: Install test dependencies
@@ -80,23 +92,26 @@ jobs:
           .venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
 
+      - name: Show installed pip packages
+        run: |
+          .venv\Scripts\activate.ps1
+          pip list -v
+
       - name: Run core tests
         run: |
           .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
           .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Pass rate
         run: |
           .venv\Scripts\activate.ps1
-          # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           pip install defusedxml
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
