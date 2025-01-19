@@ -79,7 +79,11 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader', 'sycl']
+        self.libraries = ['ze_loader']
+        if os.name != "nt":
+            self.libraries += ["sycl"]
+        else:
+            self.libraries += ['sycl8']
 
     @property
     def inject_pytorch_dep(self):
