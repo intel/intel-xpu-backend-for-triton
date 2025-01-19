@@ -591,6 +591,7 @@ struct TritonIntelGPUInferLayoutInterface
   }
 
   LogicalResult inferTransOpEncoding(Attribute operandEncoding,
+                                     ArrayRef<int64_t> shape,
                                      ArrayRef<int32_t> order, // trans order
                                      Attribute &resultEncoding) const override {
     // Not support TransOp on DPAS layout.
@@ -663,9 +664,10 @@ struct TritonIntelGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
-                                      Attribute expected, Attribute got,
-                                      Location loc) const override {
+  LogicalResult
+  verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
+                        Attribute got,
+                        std::optional<Location> loc) const override {
     if (expected == got) {
       return success();
     }
@@ -673,8 +675,8 @@ struct TritonIntelGPUInferLayoutInterface
     auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
     auto gotLL = triton::gpu::toLinearLayout(shape, got);
     if (expectedLL != gotLL) {
-      return emitError(loc, "Expected result encoding ")
-             << expected << " but was " << got;
+      return emitOptionalError(loc, "Expected result encoding ", expected,
+                               " but was ", got);
     }
     return success();
   }
