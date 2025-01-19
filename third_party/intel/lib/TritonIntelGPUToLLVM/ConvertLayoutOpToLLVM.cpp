@@ -13,7 +13,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::linearize;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
