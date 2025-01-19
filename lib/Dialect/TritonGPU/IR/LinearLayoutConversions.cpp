@@ -799,12 +799,12 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     return mfmaDotToLinearLayout(*this, shape);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     return wmmaDotOperandToLinearLayout(*this, shape);
-  } else {
-    auto mma = mlir::cast<NvidiaMmaEncodingAttr>(parent);
-    return nvidiaDotToLinearLayout(shape, *this);
   } else if (auto dpasLayout =
                  llvm::dyn_cast<intel::DpasEncodingAttr>(parent)) {
     return dotOperandDpasToLinearLayout(*this, shape);
+  } else {
+    auto mma = mlir::cast<NvidiaMmaEncodingAttr>(parent);
+    return nvidiaDotToLinearLayout(shape, *this);
   }
 }
 
@@ -860,7 +860,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // all zeros aggressively.
   auto sizePerThreads = triton::gpu::getSizePerThread(getParent());
   unsigned expectedNumRegisters =
-      parentLL->getInDimSize(S("register")) / sizePerThreads[getDim()];
+      parentLL.getInDimSize(S("register")) / sizePerThreads[getDim()];
   if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
     int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
     // Our use of "dim0" here is arbitrary; because we're adding zeros, any

@@ -601,9 +601,8 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                                 CTALayoutAttr::getDefault(ctx, rank), shape);
 }
 
-std::optional<LinearLayout>
-dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
-                             ArrayRef<int64_t> shape) {
+LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
+                                          ArrayRef<int64_t> shape) {
   auto dpasLayout = cast<intel::DpasEncodingAttr>(dotDpasLayout.getParent());
 
   return DPAStoLinearLayout(shape, dpasLayout, dotDpasLayout.getOpIdx());

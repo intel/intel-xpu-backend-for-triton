@@ -500,8 +500,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
           << "B = [" << rB << "], " << "C = [" << rC << "]" << "}>";
 }
 
-std::optional<LinearLayout>
-DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return DPAStoLinearLayout(shape, *this);
 }
 
