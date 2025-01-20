@@ -757,6 +757,9 @@ struct LoadOpConversion
           isOperandA ? repCluster[dimOuter] : numReps[unsigned(opIdx) ? 1 : 2];
       numOperandsPer2DloadN =
           isOperandA ? numReps[unsigned(opIdx) ? 1 : 2] : repCluster[dimOuter];
+      const unsigned originalElemBits = elemSizeInBits;
+      if (usePackedType && !isOperandA && originalElemBits != 32)
+        numOperandsPer2DloadN = 1;
     } else {
       if (isOperandA)
         return failure();

@@ -292,18 +292,19 @@ run_benchmark_attention() {
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
   pip install .
+  rm -rf ~/.triton/cache
 
   echo "Forward - Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Forward - Advanced path:"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+  #echo "Forward - Advanced path:"
+  #TRITON_INTEL_ADVANCED_PATH=1 \
+    #IGC_VISAOptions=" -enableBCR" \
+    #python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Backward - Default path:"
-  FA_KERNEL_MODE="bwd" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+  #echo "Backward - Default path:"
+  #FA_KERNEL_MODE="bwd" \
+    #python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
 
 run_benchmarks() {

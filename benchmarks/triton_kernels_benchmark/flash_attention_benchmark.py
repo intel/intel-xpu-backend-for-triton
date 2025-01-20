@@ -438,37 +438,23 @@ class _attention(torch.autograd.Function):
             grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0] * q.shape[1])
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
-        if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
-            # default pipeline
-            tune_attn_fwd[grid](
-                q, k, v, sm_scale, M, o,  #
-                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-                k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-                v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-                o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-                q.shape[0], q.shape[1],  #
-                N_CTX=q.shape[2],  #
-                BLOCK_DMODEL=Lk,  #
-                STAGE=stage,  #
-            )
-        else:
-            _attn_fwd[grid](
-                q, k, v, sm_scale, M, o,  #
-                q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
-                k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
-                v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
-                o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
-                q.shape[0], q.shape[1],  #
-                N_CTX=q.shape[2],  #
-                BLOCK_M=BLOCK_M,  #
-                BLOCK_N=BLOCK_N,  #
-                BLOCK_DMODEL=Lk,  #
-                STAGE=stage,  #
-                num_warps=num_warps,  #
-                num_stages=num_stages,  #
-                grf_mode='large',  #
-                advanced_path=True,  #
-            )
+        _attn_fwd[grid](
+            q, k, v, sm_scale, M, o,  #
+            q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
+            k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
+            v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
+            o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
+            q.shape[0], q.shape[1],  #
+            N_CTX=q.shape[2],  #
+            BLOCK_M=BLOCK_M,  #
+            BLOCK_N=BLOCK_N,  #
+            BLOCK_DMODEL=Lk,  #
+            STAGE=stage,  #
+            num_warps=num_warps,  #
+            num_stages=num_stages,  #
+            grf_mode='large',  #
+            one_matrix_per_load_for_bt=True, #
+        )
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -533,13 +519,8 @@ attention = _attention.apply
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
-        x_vals=[[z, h, 16384 // z, dhead, causal, mode]
-                for z in [1, 2, 4, 8, 16, 32]
-                for (h, dhead) in [(16, 128), (32, 64)]
-                for causal in [False, True]
-                for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
-        + [[4, 48, 1024, 64, causal, mode]
-           for causal in [False, True]
+        x_vals=[[4, 48, 1024, 64, causal, mode]
+           for causal in [True]
            for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
