@@ -469,7 +469,7 @@ public:
           continue;
         } else {
           llvm::errs() << "mappedV: " << mappedV << "\n";
-          assert(false && "Unexpected mapped value");
+          llvm_unreachable("Unexpected mapped value");
         }
       }
 
@@ -728,7 +728,7 @@ public:
 
         return success();
       } else {
-        assert(false && "Did not find tt::MakeTensorPtrOp");
+        llvm_unreachable("Did not find tt::MakeTensorPtrOp");
       }
     }
 
