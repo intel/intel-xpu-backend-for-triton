@@ -11,6 +11,7 @@ import re
 import tempfile
 import signal
 import os
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -135,6 +136,12 @@ class XPUBackend(BaseBackend):
         self.device_arch = mod.parse_device_arch(target.arch.get('architecture', 0))
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
+
+    def __del__(self):
+        print("XPUBackend destructor")
+        if "arch_utils" in sys.modules:
+            print("XPUBackend: arch_utils will be deleted")
+            del sys.modules["arch_utils"]
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
