@@ -89,7 +89,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for o in out_dtypes])
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, w_dtype, x_dtype, out_dtype, device):
     if x_dtype == w_dtype:
-        pytest.xfail("skip the same input dtype")
+        pytest.skip("skip the same input dtype")
     if device == "xpu" and "float64" in (w_dtype,
                                          x_dtype) and not tr.driver.active.get_current_target().arch['has_fp64']:
         pytest.xfail("float64 not supported on current xpu hardware")
