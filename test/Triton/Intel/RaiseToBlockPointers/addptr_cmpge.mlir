@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -triton-raise-block-pointer --split-input-file -canonicalize | FileCheck %s
-// XFAIL: *
 
 // These tests check that loads/stores that exhibit a cmp ge against 0 work
 // correctly with the pointer analysis pass
@@ -45,7 +44,10 @@ tt.func public @test_masked_load(%arg0: !tt.ptr<f16>) -> tensor<16x16xf16> {
 }
 
 // CHECK:         tt.func public @test_masked_load([[arg0:%.+]]: !tt.ptr<f16>) -> tensor<16x16xf16> {
-// CHECK:           [[VAR_0:%.+]] = tt.make_tensor_ptr [[arg0]], {{.*}} {order = array<i32>} : <tensor<16x16xf16>>
+// CHECK-DAG:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
+// CHECK-DAG:       [[CST_1_i64:%.+]] = arith.constant 1 : i64
+// CHECK-DAG:       [[CST_0_i32:%.+]] = arith.constant 0 : i32
+// CHECK:           [[VAR_0:%.+]] = tt.make_tensor_ptr [[arg0]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[CST_1_i64]], [[CST_0_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x16xf16>>
 // CHECK:           [[VAR_1:%.+]] = tt.load [[VAR_0]] evictionPolicy = evict_last : !tt.ptr<tensor<16x16xf16>>
 // CHECK:           tt.return [[VAR_1]] : tensor<16x16xf16>
 // CHECK:         }
@@ -71,6 +73,9 @@ tt.func public @test_masked_store(%arg0: !tt.ptr<f16>) {
 
 // CHECK:         tt.func public @test_masked_store([[arg0:%.+]]: !tt.ptr<f16>) {
 // CHECK-DAG:       [[VAR_cst:%.+]] = arith.constant dense<1.500000e+01> : tensor<16x16xf16>
-// CHECK-DAG:       [[VAR_0:%.+]] = tt.make_tensor_ptr [[arg0]], {{.*}} {order = array<i32>} : <tensor<16x16xf16>>
+// CHECK-DAG:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
+// CHECK-DAG:       [[CST_1_i64:%.+]] = arith.constant 1 : i64
+// CHECK-DAG:       [[CST_0_i32:%.+]] = arith.constant 0 : i32
+// CHECK:           [[VAR_0:%.+]] = tt.make_tensor_ptr [[arg0]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[CST_1_i64]], [[CST_0_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x16xf16>>
 // CHECK:           tt.store [[VAR_0]], [[VAR_cst]] : !tt.ptr<tensor<16x16xf16>>
 // CHECK:         }

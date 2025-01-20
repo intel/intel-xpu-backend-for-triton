@@ -902,10 +902,11 @@ public:
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
         .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp, arith::RemUIOp,
-              arith::RemSIOp, tt::BroadcastOp, tt::MakeRangeOp, tt::SplatOp,
-              tt::ExpandDimsOp>([this, &state, loc, &builder](auto op) {
-          return visitAddPointerOperand(op, state, loc, builder);
-        })
+              arith::RemSIOp, arith::ExtSIOp, arith::ExtUIOp, tt::BroadcastOp,
+              tt::MakeRangeOp, tt::SplatOp, tt::ExpandDimsOp>(
+            [this, &state, loc, &builder](auto op) {
+              return visitAddPointerOperand(op, state, loc, builder);
+            })
         .Default([](Operation *op) {
           llvm::errs() << "TritonRaiseBlockPointer: encountered addptr operand "
                           "produced by an unsupported operation\n"
@@ -923,6 +924,13 @@ public:
                 llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value,
                 bool> = true>
   LogicalResult visitAddPointerRemOperand(OpTy remOp, PtrState &state,
+                                          Location loc, OpBuilder &builder);
+
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, arith::ExtSIOp, arith::ExtUIOp>::value,
+                bool> = true>
+  LogicalResult visitAddPointerExtOperand(OpTy extOp, PtrState &state,
                                           Location loc, OpBuilder &builder);
 
   template <
@@ -1093,6 +1101,28 @@ template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::RemUIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
   return visitAddPointerRemOperand(remOp, state, loc, builder);
+}
+
+template <
+    typename OpTy,
+    std::enable_if_t<
+        llvm::is_one_of<OpTy, arith::ExtSIOp, arith::ExtUIOp>::value, bool>>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerExtOperand(
+    OpTy extOp, PtrState &state, Location loc, OpBuilder &builder) {
+  assert(state.isEmpty() && "state is a return argument");
+  return visitOperand(extOp.getIn(), state, loc, builder);
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::ExtSIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerExtOperand(remOp, state, loc, builder);
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::ExtUIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerExtOperand(remOp, state, loc, builder);
 }
 
 template <>
