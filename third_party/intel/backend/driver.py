@@ -288,6 +288,10 @@ def make_launcher(constants, signature):
         if ty[0] == "*"
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
+    num_params = len(params)
+    params_decl = ""
+    if num_params:
+        params_decl = f"void *params[] = {{ {', '.join(params)} }};"
     src = f"""
 #include <cstddef>
 #include <string>
@@ -392,8 +396,8 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
   { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
-  void *params[] = {{ {', '.join(params)} }};
-  uint32_t num_params = sizeof(params)/sizeof(params[0]);
+  {params_decl};
+  uint32_t num_params = {num_params};
   uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
   size_t global_range_x = gridX*threads_per_warp*num_warps;
   size_t global_range_y = gridY;
