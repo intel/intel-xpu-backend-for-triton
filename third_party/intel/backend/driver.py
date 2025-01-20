@@ -79,6 +79,10 @@ class CompilationHelper:
         self.libraries = ['ze_loader']
         if os.name != "nt":
             self.libraries += ["sycl"]
+    
+    @property
+    def debug(self):
+        return os.environ.get("ENABLE_DRIVER_DEBUG", "False") == "True"
 
     @property
     def inject_pytorch_dep(self):
@@ -144,6 +148,8 @@ def compile_module_from_src(src, name):
             with open(src_path, "w") as f:
                 f.write(src)
             extra_compiler_args = []
+            if COMPILATION_HELPER.debug:
+                extra_compiler_args += ['-g']
             if COMPILATION_HELPER.libsycl_dir:
                 extra_compiler_args += ['-Wl,-rpath,' + COMPILATION_HELPER.libsycl_dir]
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
@@ -475,6 +481,13 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
   sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
+  std::cout << "Retrieved capsuled pointer: " << reinterpret_cast<void *>(kernel_ptr) << std::endl;
+  std::string kernel_name = kernel_ptr->get_info<sycl::info::kernel::function_name>();
+  auto bundle = kernel_ptr->get_kernel_bundle();
+  std::cout << "Got a bundle" << std::endl;
+  sycl::kernel from_bundle = bundle.ext_oneapi_get_kernel("add_kernel");
+  std::cout << "Retrieved kernel name: " << kernel_name << std::endl;
+  assert(kernel_ptr && "kernel is null!");
   if(kernel_ptr == nullptr) return NULL;
   sycl::kernel kernel = *kernel_ptr;
 

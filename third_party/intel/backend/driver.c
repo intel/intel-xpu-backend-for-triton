@@ -92,10 +92,12 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
                        "sub_group_sizes", subgroup_sizes);
 }
 void freeKernel(PyObject *p) {
+  std::cerr << "kernel destructor called" << std::endl;
   delete reinterpret_cast<sycl::kernel *>(PyCapsule_GetPointer(p, "kernel"));
 }
 
 void freeKernelBundle(PyObject *p) {
+  std::cerr << "kernel bundle destructor called" << std::endl;
   delete reinterpret_cast<
       sycl::kernel_bundle<sycl::bundle_state::executable> *>(
       PyCapsule_GetPointer(p, "kernel_bundle"));
@@ -186,6 +188,18 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #endif
 }
 
+static std::vector<std::byte> toBytes(uint8_t* ptr, size_t size) {
+    std::vector<std::byte> bytes(size);
+    std::transform(ptr, ptr+size, bytes.begin(),
+                   [](uint8_t c) { return std::byte(c); });
+    return bytes;
+}
+
+static void foo(sycl::kernel& kernel_ptr) {
+  std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+  std::cout << "Kernel name in foo: " << kernel_name << std::endl;
+}
+
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
@@ -223,61 +237,84 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     const auto use_native_code =
         isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
     const bool is_spv = use_native_code ? !(*use_native_code) : true;
+    assert(is_spv && "native codegen is disabled in this build");
 
-    auto [l0_module, l0_kernel, n_spills] =
-        compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
-                                l0_context, build_flags(), is_spv);
+    namespace syclex = sycl::ext::oneapi::experimental;
+    std::vector<std::byte> spv = toBytes(binary_ptr, binary_size);
+    sycl::kernel_bundle<sycl::bundle_state::ext_oneapi_source> kb_src =
+      syclex::create_kernel_bundle_from_source(
+          ctx, syclex::source_language::spirv, spv); 
 
-    if (is_spv) {
-      constexpr int32_t max_reg_spill = 1000;
-      const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
+    // auto [l0_module, l0_kernel, n_spills] =
+    //     compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
+    //                             l0_context, build_flags(), is_spv);
+  
 
-      // If the register mode isn't set, and the number of spills is greater
-      // than the threshold, recompile the kernel using large GRF mode.
-      if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-        const std::optional<bool> debugEnabled =
-            isEnvValueBool(getStrEnv("TRITON_DEBUG"));
-        if (debugEnabled)
-          std::cout << "(I): Detected " << n_spills
-                    << " spills, recompiling the kernel using large GRF mode"
-                    << std::endl;
+    // if (is_spv) {
+    //   constexpr int32_t max_reg_spill = 1000;
+    //   const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
 
-        build_flags.addLargeGRFSizeFlag();
+    //   // If the register mode isn't set, and the number of spills is greater
+    //   // than the threshold, recompile the kernel using large GRF mode.
+    //   if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
+    //     const std::optional<bool> debugEnabled =
+    //         isEnvValueBool(getStrEnv("TRITON_DEBUG"));
+    //     if (debugEnabled)
+    //       std::cout << "(I): Detected " << n_spills
+    //                 << " spills, recompiling the kernel using large GRF mode"
+    //                 << std::endl;
 
-        try {
-          auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
-              binary_ptr, binary_size, kernel_name, l0_device, l0_context,
-              build_flags(), is_spv);
+    //     build_flags.addLargeGRFSizeFlag();
 
-          if (debugEnabled)
-            std::cout << "(I): Kernel has now " << n_spills << " spills"
-                      << std::endl;
-        } catch (const std::exception &e) {
-          std::cerr << "[Ignoring] Error during Intel loadBinary with large "
-                       "registers: "
-                    << e.what() << std::endl;
-          // construct previous working version
-          build_flags = BuildFlags(build_flags_ptr);
-        }
-      }
-    }
+    //     try {
+    //       auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
+    //           binary_ptr, binary_size, kernel_name, l0_device, l0_context,
+    //           build_flags(), is_spv);
+
+    //       if (debugEnabled)
+    //         std::cout << "(I): Kernel has now " << n_spills << " spills"
+    //                   << std::endl;
+    //     } catch (const std::exception &e) {
+    //       std::cerr << "[Ignoring] Error during Intel loadBinary with large "
+    //                    "registers: "
+    //                 << e.what() << std::endl;
+    //       // construct previous working version
+    //       build_flags = BuildFlags(build_flags_ptr);
+    //     }
+    //   }
+    // }
 
     auto n_regs = build_flags.n_regs();
 
-    auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
-        sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
-                                 sycl::bundle_state::executable>(
-            {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer},
-            ctx));
-    sycl::kernel *fun = new sycl::kernel(
-        sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
-            {*mod, l0_kernel,
-             sycl::ext::oneapi::level_zero::ownership::transfer},
-            ctx));
+    sycl::kernel_bundle<sycl::bundle_state::executable>* mod = 
+      new sycl::kernel_bundle<sycl::bundle_state::executable>(syclex::build(kb_src));
+    // auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
+    //     sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
+    //                              sycl::bundle_state::executable>(
+    //         {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer},
+    //         ctx));
+    sycl::kernel fun = mod->ext_oneapi_get_kernel(kernel_name);
+    std::string kernel_name_1 = fun.get_info<sycl::info::kernel::function_name>();
+    std::cout << "Kernel name right after compilation: " << kernel_name_1 << std::endl;
+    // sycl::kernel *fun = new sycl::kernel(
+    //     sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
+    //         {*mod, l0_kernel,
+    //          sycl::ext::oneapi::level_zero::ownership::transfer},
+    //         ctx));
     auto kernel_py =
-        PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
+        PyCapsule_New(reinterpret_cast<void *>(&fun), "kernel", freeKernel);
+    std::cout << "Capsuled kernel pointer: " << reinterpret_cast<void *>(&fun) << std::endl;
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
+    Spills n_spills{};
+
+    sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(kernel_py, "kernel"));
+    assert(kernel_ptr && "kernel is null!");
+    std::string kernel_name_2 = kernel_ptr->get_info<sycl::info::kernel::function_name>();
+    std::cout << "Kernel name after roundtrip: " << kernel_name_2 << std::endl;
+
+    sycl::kernel kernel_no_ptr = *kernel_ptr;
+    foo(kernel_no_ptr);
 
     return Py_BuildValue("(OOii)", kernel_bundle_py, kernel_py, n_regs,
                          n_spills);

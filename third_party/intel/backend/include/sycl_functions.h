@@ -14,6 +14,7 @@
 
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
+#include <sycl/kernel_bundle.hpp>
 
 typedef struct l0_resc_handles {
   ze_context_handle_t context;
