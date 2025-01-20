@@ -287,9 +287,10 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &smemObj, &shapePerWarp, &multiDimWarpId,
                &vals](int batch, int outer, int inner) {
-    DpasMatmulLoader<opIdx> loader(
-        dpasLayout, descTy, warpsPerTile, smemObj.strides, shapePerWarp,
-        multiDimWarpId, rewriter, typeConverter, loc);
+    auto smemStrides = smemObj.getStrides(descTy, loc, rewriter);
+    DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
+                                   smemStrides, shapePerWarp, multiDimWarpId,
+                                   rewriter, typeConverter, loc);
 
     // Offset of a slice within the original tensor in shared memory.
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);

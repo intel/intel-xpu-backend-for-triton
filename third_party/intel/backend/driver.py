@@ -45,7 +45,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
-        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib"),
+        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
         return include_dir, sycl_dir
 
     try:
@@ -60,9 +60,12 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
-            include_dir += [f.locate().parent.parent.resolve().as_posix()]
-        if f.name == "libsycl.so":
-            sycl_dir = f.locate().parent.resolve().as_posix()
+            include_dir += [str(f.locate().parent.parent.resolve())]
+        if f.name in ["libsycl.so", "sycl8.dll"]:
+            sycl_dir = str(f.locate().parent.resolve())
+            # should we handle `_` somehow?
+            if os.name == "nt":
+                _ = os.add_dll_directory(sycl_dir)
 
     return include_dir, sycl_dir
 
@@ -76,9 +79,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader']
-        if os.name != "nt":
-            self.libraries += ["sycl"]
+        self.libraries = ['ze_loader', 'sycl']
 
     @property
     def inject_pytorch_dep(self):
@@ -145,7 +146,11 @@ def compile_module_from_src(src, name):
                 f.write(src)
             extra_compiler_args = []
             if COMPILATION_HELPER.libsycl_dir:
-                extra_compiler_args += ['-Wl,-rpath,' + COMPILATION_HELPER.libsycl_dir]
+                if os.name == "nt":
+                    extra_compiler_args += ["/LIBPATH:" + COMPILATION_HELPER.libsycl_dir]
+                else:
+                    extra_compiler_args += ["-Wl,-rpath," + COMPILATION_HELPER.libsycl_dir]
+
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
                         COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
