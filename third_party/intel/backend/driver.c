@@ -14,6 +14,8 @@
 #include <variant>
 #include <vector>
 
+#include <fstream>
+
 #include "sycl_functions.h"
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -189,9 +191,14 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 }
 
 static std::vector<std::byte> toBytes(uint8_t* ptr, size_t size) {
+    std::vector<unsigned char> chars(ptr, ptr+size);
+    std::ofstream out1("original.spv", std::ios::out | std::ios::binary);
+    out1.write(reinterpret_cast<const char*>(chars.data()), chars.size());
     std::vector<std::byte> bytes(size);
     std::transform(ptr, ptr+size, bytes.begin(),
                    [](uint8_t c) { return std::byte(c); });
+    std::ofstream out("test.spv", std::ios::out | std::ios::binary);
+    out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return bytes;
 }
 
@@ -244,6 +251,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     sycl::kernel_bundle<sycl::bundle_state::ext_oneapi_source> kb_src =
       syclex::create_kernel_bundle_from_source(
           ctx, syclex::source_language::spirv, spv); 
+    std::cout << "Context for kernel bundle: " << &ctx << std::endl;
 
     // auto [l0_module, l0_kernel, n_spills] =
     //     compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,

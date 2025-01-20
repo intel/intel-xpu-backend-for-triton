@@ -480,6 +480,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   if(pStream == nullptr || py_kernel == nullptr) return NULL;
 
   sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
+  sycl::context context = stream.get_context();
+  std::cout << "Launch context: " << &context << std::endl;
   sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
   std::cout << "Retrieved capsuled pointer: " << reinterpret_cast<void *>(kernel_ptr) << std::endl;
   std::string kernel_name = kernel_ptr->get_info<sycl::info::kernel::function_name>();
