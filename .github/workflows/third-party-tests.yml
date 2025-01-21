@@ -96,6 +96,19 @@ jobs:
 
           pytest Liger-Kernel/test/
 
+      - name: Run SGLANG tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          pip install transformers pandas pytest openai
+
+          SGLANG_PIN="$(<.github/pins/sglang.txt)"
+          pip install datasets decord sglang==$SGLANG_PIN
+          git clone https://github.com/sgl-project/sglang.git --branch $SGLANG_PIN --single-branch
+
+          cd sglang
+          git apply ../benchmarks/third_party/sglang/sglang.patch
+          pytest sglang/test/srt/test_triton_attention_kernels.py
+
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v4
