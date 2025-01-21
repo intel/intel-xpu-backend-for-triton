@@ -1121,7 +1121,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
 
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
-    arith::ExtUIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
+    arith::ExtUIOp extOp, PtrState &state, Location loc, OpBuilder &builder) {
   return visitAddPointerExtOperand(extOp, state, loc, builder);
 }
 
