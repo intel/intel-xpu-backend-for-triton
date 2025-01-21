@@ -253,11 +253,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
           ctx, syclex::source_language::spirv, spv); 
     std::cout << "Context for kernel bundle: " << &ctx << std::endl;
 
-    // auto [l0_module, l0_kernel, n_spills] =
-    //     compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
-    //                             l0_context, build_flags(), is_spv);
-  
-
     // if (is_spv) {
     //   constexpr int32_t max_reg_spill = 1000;
     //   const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
@@ -296,22 +291,14 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
     sycl::kernel_bundle<sycl::bundle_state::executable>* mod = 
       new sycl::kernel_bundle<sycl::bundle_state::executable>(syclex::build(kb_src));
-    // auto mod = new sycl::kernel_bundle<sycl::bundle_state::executable>(
-    //     sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
-    //                              sycl::bundle_state::executable>(
-    //         {l0_module, sycl::ext::oneapi::level_zero::ownership::transfer},
-    //         ctx));
-    sycl::kernel fun = mod->ext_oneapi_get_kernel(kernel_name);
-    std::string kernel_name_1 = fun.get_info<sycl::info::kernel::function_name>();
+    
+    auto fun = new sycl::kernel(mod->ext_oneapi_get_kernel(kernel_name));
+    std::string kernel_name_1 = fun->get_info<sycl::info::kernel::function_name>();
     std::cout << "Kernel name right after compilation: " << kernel_name_1 << std::endl;
-    // sycl::kernel *fun = new sycl::kernel(
-    //     sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
-    //         {*mod, l0_kernel,
-    //          sycl::ext::oneapi::level_zero::ownership::transfer},
-    //         ctx));
+    
     auto kernel_py =
-        PyCapsule_New(reinterpret_cast<void *>(&fun), "kernel", freeKernel);
-    std::cout << "Capsuled kernel pointer: " << reinterpret_cast<void *>(&fun) << std::endl;
+        PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
+    std::cout << "Capsuled kernel pointer: " << reinterpret_cast<void *>(fun) << std::endl;
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
     Spills n_spills{};

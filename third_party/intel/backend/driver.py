@@ -392,6 +392,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
 
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
   { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
+  std::cout << "In sycl_kernel_launch, kernel name is " << kernel_name << std::endl;
 
   void *params[] = {{ {', '.join(params)} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
@@ -485,10 +486,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
   std::cout << "Retrieved capsuled pointer: " << reinterpret_cast<void *>(kernel_ptr) << std::endl;
   std::string kernel_name = kernel_ptr->get_info<sycl::info::kernel::function_name>();
-  auto bundle = kernel_ptr->get_kernel_bundle();
-  std::cout << "Got a bundle" << std::endl;
-  sycl::kernel from_bundle = bundle.ext_oneapi_get_kernel("add_kernel");
   std::cout << "Retrieved kernel name: " << kernel_name << std::endl;
+  //auto bundle = kernel_ptr->get_kernel_bundle();
+  //std::cout << "Got a bundle" << std::endl;
+  //sycl::kernel from_bundle = bundle.ext_oneapi_get_kernel("add_kernel");
   assert(kernel_ptr && "kernel is null!");
   if(kernel_ptr == nullptr) return NULL;
   sycl::kernel kernel = *kernel_ptr;
