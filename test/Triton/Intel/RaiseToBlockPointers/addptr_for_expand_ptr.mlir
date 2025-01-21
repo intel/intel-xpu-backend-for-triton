@@ -1,5 +1,6 @@
-// RUN: triton-shared-opt --triton-to-structured --remove-dead-values --canonicalize %s | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 // XFAIL: *
+// TODO: add support for tt.expand_dims in loops
 
 module {
   tt.func @kernel(

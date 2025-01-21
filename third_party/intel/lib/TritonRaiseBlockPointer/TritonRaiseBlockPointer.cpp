@@ -888,28 +888,39 @@ public:
           llvm_unreachable(
               "Unexpected operand defining operation tt.make_tensor_ptr");
         llvm_unreachable("Unexpected operand defining operation");
+      } else {
+        state.source = operand;
+        return success();
       }
-      state.source = operand;
-      return success();
     }
 
     Operation *definingOp = operand.getDefiningOp();
     if (!definingOp) {
-      llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
-                      "argument operand\n"
-                   << operand << "\n";
+      if (!knownPtrs.contains(operand)) {
+        llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
+                        "argument operand\n"
+                     << operand << "\n";
+        return failure();
+      }
+
+      // This operand must be an iter-arg of an inner-loop in a multiple-level
+      // nested loop, which means its PtrState must have already been populated
+      // during rewriteForOp of the parent loop.
+      state = knownPtrs[operand];
+      return success();
     }
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
         .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp, arith::RemUIOp,
-              arith::RemSIOp, tt::BroadcastOp, tt::MakeRangeOp, tt::SplatOp,
-              tt::ExpandDimsOp>([this, &state, loc, &builder](auto op) {
-          return visitAddPointerOperand(op, state, loc, builder);
-        })
+              arith::RemSIOp, arith::ExtSIOp, arith::ExtUIOp, tt::BroadcastOp,
+              tt::MakeRangeOp, tt::SplatOp, tt::ExpandDimsOp>(
+            [this, &state, loc, &builder](auto op) {
+              return visitAddPointerOperand(op, state, loc, builder);
+            })
         .Default([](Operation *op) {
           llvm::errs() << "TritonRaiseBlockPointer: encountered addptr operand "
-                          "produced by an unsupported operation\n"
-                       << op << "\n";
+                          "produced by unsupported operation: "
+                       << *op << "\n";
           return failure();
         });
   }
@@ -923,6 +934,13 @@ public:
                 llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value,
                 bool> = true>
   LogicalResult visitAddPointerRemOperand(OpTy remOp, PtrState &state,
+                                          Location loc, OpBuilder &builder);
+
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, arith::ExtSIOp, arith::ExtUIOp>::value,
+                bool> = true>
+  LogicalResult visitAddPointerExtOperand(OpTy extOp, PtrState &state,
                                           Location loc, OpBuilder &builder);
 
   template <
@@ -1093,6 +1111,28 @@ template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::RemUIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
   return visitAddPointerRemOperand(remOp, state, loc, builder);
+}
+
+template <
+    typename OpTy,
+    std::enable_if_t<
+        llvm::is_one_of<OpTy, arith::ExtSIOp, arith::ExtUIOp>::value, bool>>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerExtOperand(
+    OpTy extOp, PtrState &state, Location loc, OpBuilder &builder) {
+  assert(state.isEmpty() && "state is a return argument");
+  return visitOperand(extOp.getIn(), state, loc, builder);
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::ExtSIOp extOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerExtOperand(extOp, state, loc, builder);
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::ExtUIOp extOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerExtOperand(extOp, state, loc, builder);
 }
 
 template <>
