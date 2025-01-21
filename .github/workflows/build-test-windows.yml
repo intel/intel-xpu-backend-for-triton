@@ -94,6 +94,12 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
+      - name: Run tutorials
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          ${{ env.TRITON_TEST_CMD }} --tutorial
+
       - name: Pass rate
         run: |
           .venv\Scripts\activate.ps1

@@ -111,6 +111,12 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
+      - name: Run tutorials
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          ${{ env.TRITON_TEST_CMD }} --tutorial
+
       - name: Pass rate
         run: |
           .venv\Scripts\activate.ps1
