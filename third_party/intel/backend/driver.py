@@ -133,9 +133,24 @@ class CompilationHelper:
 
 COMPILATION_HELPER = CompilationHelper()
 
+REGISTERED_DIRS_FOR_CLEANUP_AT_EXIT = set()
+
+
+def cleanup_folders_with_pyd_files_on_exit():
+    import atexit
+    from python.triton.runtime.cache import default_cache_dir
+
+    # get cache_dir as cache_manager does
+    cache_dir = os.getenv("TRITON_CACHE_DIR", "").strip() or default_cache_dir()
+    if cache_dir and cache_dir not in REGISTERED_DIRS_FOR_CLEANUP_AT_EXIT:
+        atexit.register(lambda: shutil.rmtree(cache_dir))
+        REGISTERED_DIRS_FOR_CLEANUP_AT_EXIT.update(cache_dir)
+
 
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    if os.name == "nt":
+        cleanup_folders_with_pyd_files_on_exit()
     cache = get_cache_manager(key)
     file_name = f"{name}.{sysconfig.get_config_var('EXT_SUFFIX').split('.')[-1]}"
     cache_path = cache.get_file(file_name)
