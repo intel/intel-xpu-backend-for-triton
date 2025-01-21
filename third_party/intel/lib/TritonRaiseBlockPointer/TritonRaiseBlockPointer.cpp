@@ -888,16 +888,26 @@ public:
           llvm_unreachable(
               "Unexpected operand defining operation tt.make_tensor_ptr");
         llvm_unreachable("Unexpected operand defining operation");
+      } else {
+        state.source = operand;
+        return success();
       }
-      state.source = operand;
-      return success();
     }
 
     Operation *definingOp = operand.getDefiningOp();
     if (!definingOp) {
-      llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
-                      "argument operand\n"
-                   << operand << "\n";
+      if (!knownPtrs.contains(operand)) {
+        llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
+                        "argument operand\n"
+                     << operand << "\n";
+        return failure();
+      }
+
+      // This operand must be an iter-arg of an inner-loop in a multiple-level
+      // nested loop, which means its PtrState must have already been populated
+      // during rewriteForOp of the parent loop.
+      state = knownPtrs[operand];
+      return success();
     }
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
@@ -909,8 +919,8 @@ public:
             })
         .Default([](Operation *op) {
           llvm::errs() << "TritonRaiseBlockPointer: encountered addptr operand "
-                          "produced by an unsupported operation\n"
-                       << op << "\n";
+                          "produced by unsupported operation: "
+                       << *op << "\n";
           return failure();
         });
   }
