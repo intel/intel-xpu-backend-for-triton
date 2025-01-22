@@ -11,6 +11,83 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
+
+#if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
+namespace llvm {
+
+using namespace llvm;
+using namespace SPIRV;
+
+extern "C" bool
+SPIRVTranslateModule(Module *M, std::string &SpirvObj, std::string &ErrMsg,
+                     const std::vector<std::string> &AllowExtNames,
+                     const std::vector<std::string> &Opts);
+
+static inline Triple::SubArchType
+spirvVersionToSubArch(SPIRV::VersionNumber VN) {
+  switch (VN) {
+  case SPIRV::VersionNumber::SPIRV_1_0:
+    return Triple::SPIRVSubArch_v10;
+  case VersionNumber::SPIRV_1_1:
+    return Triple::SPIRVSubArch_v11;
+  case VersionNumber::SPIRV_1_2:
+    return Triple::SPIRVSubArch_v12;
+  case VersionNumber::SPIRV_1_3:
+    return Triple::SPIRVSubArch_v13;
+  case VersionNumber::SPIRV_1_4:
+    return Triple::SPIRVSubArch_v14;
+  case VersionNumber::SPIRV_1_5:
+    return Triple::SPIRVSubArch_v15;
+  case VersionNumber::SPIRV_1_6:
+    return Triple::SPIRVSubArch_v16;
+  }
+  return Triple::NoSubArch;
+}
+
+bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
+                     const SPIRV::TranslatorOpts &TranslatorOpts) {
+  static const std::string DefaultTriple = "spirv64v1.6-unknown-unknown";
+  static const std::vector<std::string> Opts{
+      "--avoid-spirv-capabilities", "Shader", "--translator-compatibility-mode",
+      "--spirv-ext=all"};
+  static const std::vector<std::string> AllowExtNames;
+
+  // Correct the Triple value if needed
+  Triple TargetTriple(M->getTargetTriple());
+  if (TargetTriple.isSPIR()) {
+    TargetTriple.setArch(TargetTriple.getArch() == Triple::spir64
+                             ? Triple::spirv64
+                             : Triple::spirv32,
+                         TargetTriple.getSubArch());
+    M->setTargetTriple(TargetTriple.str());
+    // We need to reset Data Layout to conform with the TargetMachine
+    M->setDataLayout("");
+  }
+  if (TranslatorOpts.getMaxVersion() != VersionNumber::MaximumVersion) {
+    if (TargetTriple.getTriple().empty())
+      TargetTriple.setTriple(DefaultTriple);
+    TargetTriple.setArch(TargetTriple.getArch(),
+                         spirvVersionToSubArch(TranslatorOpts.getMaxVersion()));
+    M->setTargetTriple(TargetTriple.str());
+  }
+
+  // Translate the Module into SPIR-V
+  return SPIRVTranslateModule(M, Result, ErrMsg, AllowExtNames, Opts);
+}
+
+bool runSpirvBackend(Module *M, std::ostream *OS, std::string &ErrMsg,
+                     const SPIRV::TranslatorOpts &TranslatorOpts) {
+  std::string Result;
+  bool Status = runSpirvBackend(M, Result, ErrMsg, TranslatorOpts);
+  if (Status && OS)
+    *OS << Result;
+  return Status;
+}
+
+} // namespace llvm
+
+#endif // LLVM_SPIRV_BACKEND_TARGET_PRESENT
 
 namespace triton {
 
@@ -63,7 +140,17 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
   SPIRVOpts.setPreserveAuxData(false);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
+
+#if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
+  int SpvTranslateMode = 0;
+  if (const char *EnvIsBackend = std::getenv("TRITON_USE_SPIRV_BACKEND"))
+    llvm::StringRef(EnvIsBackend).getAsInteger(10, SpvTranslateMode);
+  auto success = SpvTranslateMode
+                     ? llvm::runSpirvBackend(&module, &OS, Err, SPIRVOpts)
+                     : llvm::writeSpirv(&module, SPIRVOpts, OS, Err);
+#else
   auto success = llvm::writeSpirv(&module, SPIRVOpts, OS, Err);
+#endif // LLVM_SPIRV_BACKEND_TARGET_PRESENT
 
   if (!success) {
     llvm::errs() << "SPIRVTranslation: SPIRV translation failed with"
