@@ -2672,7 +2672,7 @@ def test_histogram(M, N, device):
 
 
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
-def test_scan_1d(M, N):
+def test_scan_1d(M, N, device):
 
     @triton.jit
     def scan_kernel(out_ptr, in_ptr, M: tl.constexpr, N: tl.constexpr):
@@ -2680,8 +2680,8 @@ def test_scan_1d(M, N):
         output = tl.cumsum(input).reshape([1, M]).broadcast_to([N, M])
         tl.store(out_ptr + tl.arange(0, M * N), output.reshape([M * N]))
 
-    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device='cuda')
-    output = torch.empty(M * N, dtype=torch.int32, device='cuda')
+    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device=device)
+    output = torch.empty(M * N, dtype=torch.int32, device=device)
 
     scan_kernel[(1, )](output, x, M, N)
 
