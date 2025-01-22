@@ -154,7 +154,6 @@ class ArchParser:
 
         return super().__getattribute__(name)
 
-
     if os.name != 'nt':
 
         def __del__(self):
