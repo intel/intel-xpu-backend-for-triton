@@ -10,18 +10,17 @@
 
 #include <sycl/sycl.hpp>
 
-#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
-#include <Python.h>
-#include <numpy/arrayobject.h>
+#if defined(_WIN32)
+#define EXPORT_FUNC __declspec(dllexport)
+#else
+#define EXPORT_FUNC __attribute__((visibility("default")))
+#endif
 
-static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
-  uint64_t dev_arch;
-  assert(PyArg_ParseTuple(args, "K", &dev_arch) && "Expected an integer");
-
+extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
   sycl::ext::oneapi::experimental::architecture sycl_arch =
       static_cast<sycl::ext::oneapi::experimental::architecture>(dev_arch);
   // FIXME: Add support for more architectures.
-  std::string arch = "";
+  const char *arch = "";
   switch (sycl_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
     arch = "pvc";
@@ -39,24 +38,5 @@ static PyObject *parseDeviceArch(PyObject *self, PyObject *args) {
     std::cerr << "sycl_arch not recognized: " << (int)sycl_arch << std::endl;
   }
 
-  return Py_BuildValue("s", arch.c_str());
-}
-
-static PyMethodDef ModuleMethods[] = {
-    {"parse_device_arch", parseDeviceArch, METH_VARARGS,
-     "parse device architecture"},
-    {NULL, NULL, 0, NULL} // sentinel
-};
-
-static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "arch_utils",
-                                       NULL, // documentation
-                                       -1,   // size
-                                       ModuleMethods};
-
-PyMODINIT_FUNC PyInit_arch_utils(void) {
-  if (PyObject *m = PyModule_Create(&ModuleDef)) {
-    PyModule_AddFunctions(m, ModuleMethods);
-    return m;
-  }
-  return NULL;
+  return arch;
 }
