@@ -250,7 +250,7 @@ void set_argument(sycl::handler &cgh, int index, ordered_json &item) {
   } else if (type == "u64") {
     auto val = item.at("value").get<uint64_t>();
     set_scalar_arg<uint64_t>(cgh, index, &val);
-  } else if (type == "fp32" || type == "fp32" || type == "f32") {
+  } else if (type == "fp32" || type == "f32") {
     auto val = item.at("value").get<float>();
     set_scalar_arg<float>(cgh, index, &val);
   } else if (type == "fp64") {
