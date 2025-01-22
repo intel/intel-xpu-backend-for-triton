@@ -160,7 +160,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     kernels = [kernel for kernel in kernels if kernel != []]
     # FIXME: relaxation for new agama release
     assert len(kernels) >= n_repeat - 1, (
-        f"the profiling number not match; {n_repeat=}, '{kernels=}', " +
+        f"the profiling number not match; {n_repeat=}, {kernels=}, " +
         f"top functions by xpu_time: {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
     # Make the time to the milliseconds.
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
