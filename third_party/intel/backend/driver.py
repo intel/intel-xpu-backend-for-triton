@@ -138,7 +138,7 @@ REGISTERED_DIRS_FOR_CLEANUP_AT_EXIT = set()
 
 def cleanup_folders_with_pyd_files_on_exit():
     import atexit
-    from python.triton.runtime.cache import default_cache_dir
+    from triton.runtime.cache import default_cache_dir
 
     # get cache_dir as cache_manager does
     cache_dir = os.getenv("TRITON_CACHE_DIR", "").strip() or default_cache_dir()
