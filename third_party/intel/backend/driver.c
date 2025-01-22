@@ -22,32 +22,19 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
-static SyclQueueMap g_sycl_queue_map;
-
-static std::vector<ze_device_handle_t> g_devices;
-static std::vector<std::pair<sycl::device, ze_device_handle_t>>
-    g_sycl_l0_device_list;
-
-template <typename T>
-static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
-  const auto code = std::get<1>(tuple);
-  if (code != ZE_RESULT_SUCCESS) {
-    throw std::runtime_error(parseZeResultCode(code));
-  }
-  return std::get<0>(tuple);
-}
+static std::vector<sycl::device> g_sycl_device_list;
 
 static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   int device_id;
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  if (device_id > g_sycl_l0_device_list.size()) {
+  if (device_id > g_sycl_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
-  const auto device = g_sycl_l0_device_list[device_id];
-  auto sycl_device = device.first;
+
+  const auto sycl_device = g_sycl_device_list[device_id];
   int sycl_max_shared_mem = sycl_device.get_info<sycl::info::device::local_mem_size>();
   int num_slices = sycl_device.get_info<sycl::ext::intel::info::device::gpu_slices>();
   int num_subslices_per_slice = sycl_device.get_info<sycl::ext::intel::info::device::gpu_subslices_per_slice>();
@@ -72,42 +59,16 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
                        "sub_group_sizes", subgroup_sizes);
 }
 void freeKernel(PyObject *p) {
-  std::cerr << "kernel destructor called" << std::endl;
   delete reinterpret_cast<sycl::kernel *>(PyCapsule_GetPointer(p, "kernel"));
 }
 
 void freeKernelBundle(PyObject *p) {
-  std::cerr << "kernel bundle destructor called" << std::endl;
   delete reinterpret_cast<
       sycl::kernel_bundle<sycl::bundle_state::executable> *>(
       PyCapsule_GetPointer(p, "kernel_bundle"));
 }
 
 using Spills = int32_t;
-
-template <typename L0_DEVICE, typename L0_CONTEXT>
-std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
-compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
-                        const std::string &kernel_name, L0_DEVICE l0_device,
-                        L0_CONTEXT l0_context, const std::string &build_flags,
-                        const bool is_spv) {
-  auto l0_module =
-      checkSyclErrors(create_module(l0_context, l0_device, binary_ptr,
-                                    binary_size, build_flags.data(), is_spv));
-
-  // Retrieve the kernel properties (e.g. register spills).
-  auto l0_kernel = checkSyclErrors(create_function(l0_module, kernel_name));
-
-  ze_kernel_properties_t props;
-  props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
-  props.pNext = nullptr;
-  checkSyclErrors(
-      std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)));
-
-  const int32_t n_spills = props.spillMemSize;
-
-  return std::make_tuple(l0_module, l0_kernel, n_spills);
-}
 
 struct BuildFlags {
   std::string build_flags_str;
@@ -193,7 +154,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  if (devId > g_sycl_l0_device_list.size()) {
+  if (devId > g_sycl_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
@@ -202,8 +163,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
   try {
 
-    const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
-    const sycl::device sycl_device = sycl_l0_device_pair.first;
+    const auto &sycl_l0_device_pair = g_sycl_device_list[devId];
+    const sycl::device sycl_device = sycl_l0_device_pair;
 
     const std::string kernel_name = name;
     const size_t binary_size = PyBytes_Size(py_bytes);
@@ -277,7 +238,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(kernel_py, "kernel"));
     assert(kernel_ptr && "kernel is null!");
     std::string kernel_name_2 = kernel_ptr->get_info<sycl::info::kernel::function_name>();
-    // std::cout << "Kernel name after roundtrip: " << kernel_name_2 << std::endl;
 
     return Py_BuildValue("(OOii)", kernel_bundle_py, kernel_py, n_regs,
                          n_spills);
@@ -303,20 +263,8 @@ static PyObject *initContext(PyObject *self, PyObject *args) {
   if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
-  if (g_sycl_queue_map.find(*sycl_queue) == g_sycl_queue_map.end()) {
-    const auto updated_sycl_devices = update(*sycl_queue, g_sycl_queue_map);
-    if (!updated_sycl_devices.empty()) {
-      // Update global data
-      const uint32_t deviceCount =
-          std::min(updated_sycl_devices.size(), g_devices.size());
-      for (uint32_t i = 0; i < deviceCount; ++i) {
-        g_devices[i] = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-            updated_sycl_devices[i]);
-      }
-    }
-  }
-  auto context = g_sycl_queue_map[*sycl_queue].context;
-  return Py_BuildValue("(K)", (uint64_t)context);
+  sycl::context context = sycl_queue->get_context();
+  return Py_BuildValue("(K)", (uint64_t)(&context));
 }
 
 static PyObject *initDevices(PyObject *self, PyObject *args) {
@@ -331,17 +279,8 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   auto sycl_context = sycl_queue->get_context();
 
   // Get sycl-device
-  const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
-
-  // Retrieve l0 devices
-  const uint32_t deviceCount = sycl_devices.size();
-  for (uint32_t i = 0; i < deviceCount; ++i) {
-    g_sycl_l0_device_list.push_back(std::make_pair(
-        sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-                             sycl_devices[i])));
-    g_devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-        sycl_devices[i]));
-  }
+  g_sycl_device_list = sycl_context.get_devices();
+  const uint32_t deviceCount = g_sycl_device_list.size();
 
   return Py_BuildValue("(i)", deviceCount);
 }

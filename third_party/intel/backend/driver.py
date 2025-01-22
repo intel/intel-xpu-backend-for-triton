@@ -294,7 +294,6 @@ def make_launcher(constants, signature):
 #include <string>
 #include <iostream>
 #include <iomanip>
-#include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 { "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
@@ -302,21 +301,6 @@ def make_launcher(constants, signature):
 #include <Python.h>
 #include <stdio.h>
 #include <numpy/arrayobject.h>
-
-static inline void gpuAssert(ze_result_t code, const char *file, int line)
-{{
-  if (code != ZE_RESULT_SUCCESS)
-  {{
-    const char* prefix = "Triton Error [ZE]: ";
-    std::string str = std::to_string(code);
-    char err[1024] = {{0}};
-    strcat(err, prefix);
-    strcat(err, str.c_str());
-    PyErr_SetString(PyExc_RuntimeError, err);
-  }}
-}}
-
-#define ZE_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 typedef struct _DevicePtrInfo {{
   void* dev_ptr;
@@ -328,17 +312,7 @@ static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sy
     return;
   }}
   auto context = queue.get_context();
-  auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
-  ze_memory_allocation_properties_t prop;
-  prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
-  prop.pNext = nullptr;
-  ze_device_handle_t device;
-  auto res = zeMemGetAllocProperties((ze_context_handle_t)handle, ptr_info->dev_ptr, &prop, &device);
-  if (res != ZE_RESULT_SUCCESS) {{
-    PyErr_Format(PyExc_ValueError,
-                 "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
-    ptr_info->valid = false;
-  }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
+  if (sycl::get_pointer_type(ptr_info->dev_ptr, context) != sycl::usm::alloc::device)  {{
     PyErr_Format(PyExc_ValueError,
                  "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
     ptr_info->valid = false;
@@ -482,11 +456,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
   sycl::context context = stream.get_context();
-  //std::cout << "Launch context: " << &context << std::endl;
   sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
-  //std::cout << "Retrieved capsuled pointer: " << reinterpret_cast<void *>(kernel_ptr) << std::endl;
-  //std::string kernel_name = kernel_ptr->get_info<sycl::info::kernel::function_name>();
-  //std::cout << "Retrieved kernel name: " << kernel_name << std::endl;
   if(kernel_ptr == nullptr) return NULL;
   sycl::kernel kernel = *kernel_ptr;
 
