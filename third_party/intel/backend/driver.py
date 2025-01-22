@@ -1,6 +1,5 @@
 import importlib.metadata
 import os
-import sys
 import hashlib
 import shutil
 import ctypes
@@ -645,12 +644,6 @@ class XPULauncher(object):
         if serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
         self.launch(*args, **kwargs)
-
-    def __del__(self):
-        print("XPULauncher destructor")
-        if "__triton_launcher" in sys.modules:
-            print("XPULauncher: __triton_launcher will be deleted")
-            del sys.modules["__triton_launcher"]
 
 
 class XPUDriver(DriverBase):
