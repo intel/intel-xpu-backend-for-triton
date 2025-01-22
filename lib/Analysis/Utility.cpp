@@ -296,7 +296,7 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
 bool ScanLoweringHelper::isSupported() {
   // TODO: Support the following cases:
   // 1. Scan on non-blocking encodings
-  if (!isa<BlockedEncodingAttr>(getEncoding()))
+  if (!isa<BlockedEncodingAttr>(srcEncoding))
     return false;
   return true;
 }
@@ -312,6 +312,10 @@ unsigned ScanLoweringHelper::getScratchSizeInElems() {
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
+  // Lowering will fail later if the layout is not supported.
+  if (!isSupported())
+    return 0;
+
   unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
   if (axisNumWarps == 1)
     return 0;
