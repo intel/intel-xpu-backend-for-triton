@@ -47,50 +47,28 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
     return NULL;
   }
   const auto device = g_sycl_l0_device_list[device_id];
+  auto sycl_device = device.first;
+  int sycl_max_shared_mem = sycl_device.get_info<sycl::info::device::local_mem_size>();
+  int num_slices = sycl_device.get_info<sycl::ext::intel::info::device::gpu_slices>();
+  int num_subslices_per_slice = sycl_device.get_info<sycl::ext::intel::info::device::gpu_subslices_per_slice>();
+  int max_compute_units = num_slices * num_subslices_per_slice;
+  int sycl_mem_clock_rate = sycl_device.get_info<sycl::ext::intel::info::device::memory_clock_rate>();
+  int sycl_mem_bus_width = sycl_device.get_info<sycl::ext::intel::info::device::memory_bus_width>();
+  int sycl_max_wg_size = sycl_device.get_info<sycl::info::device::max_work_group_size>();
+  auto sg_sizes = sycl_device.get_info<sycl::info::device::sub_group_sizes>();
+  int sycl_max_clock_freq = sycl_device.get_info<sycl::info::device::max_clock_frequency>();
 
-  // Get device handle
-  ze_device_handle_t phDevice = device.second;
-
-  // create a struct to hold device properties
-  ze_device_properties_t device_properties = {};
-  device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
-  zeDeviceGetProperties(phDevice, &device_properties);
-
-  int multiprocessor_count =
-      device_properties.numSlices * device_properties.numSubslicesPerSlice;
-  int sm_clock_rate = device_properties.coreClockRate;
-
-  ze_device_compute_properties_t compute_properties = {};
-  compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
-  zeDeviceGetComputeProperties(phDevice, &compute_properties);
-  int max_shared_mem = compute_properties.maxSharedLocalMemory;
-  int max_group_size = compute_properties.maxTotalGroupSize;
-  int num_subgroup_sizes = compute_properties.numSubGroupSizes;
-  PyObject *subgroup_sizes = PyTuple_New(num_subgroup_sizes);
-  for (int i = 0; i < num_subgroup_sizes; i++) {
+  PyObject *subgroup_sizes = PyTuple_New(sg_sizes.size());
+  for (int i = 0; i < sg_sizes.size(); i++) {
     PyTuple_SetItem(subgroup_sizes, i,
-                    PyLong_FromLong(compute_properties.subGroupSizes[i]));
+                    PyLong_FromLong(sg_sizes[i]));
   }
-
-  uint32_t memoryCount = 0;
-  zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr);
-  auto pMemoryProperties = new ze_device_memory_properties_t[memoryCount];
-  for (uint32_t mem = 0; mem < memoryCount; ++mem) {
-    pMemoryProperties[mem].stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
-    pMemoryProperties[mem].pNext = nullptr;
-  }
-  zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties);
-
-  int mem_clock_rate = pMemoryProperties[0].maxClockRate;
-  int mem_bus_width = pMemoryProperties[0].maxBusWidth;
-
-  delete[] pMemoryProperties;
 
   return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:N}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
-                       multiprocessor_count, "sm_clock_rate", sm_clock_rate,
-                       "mem_clock_rate", mem_clock_rate, "mem_bus_width",
-                       mem_bus_width, "max_work_group_size", max_group_size,
+                       sycl_max_shared_mem, "multiprocessor_count",
+                       max_compute_units, "sm_clock_rate", sycl_max_clock_freq,
+                       "mem_clock_rate", sycl_mem_clock_rate, "mem_bus_width",
+                       sycl_mem_bus_width, "max_work_group_size", sycl_max_wg_size,
                        "sub_group_sizes", subgroup_sizes);
 }
 void freeKernel(PyObject *p) {
@@ -191,21 +169,17 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 }
 
 static std::vector<std::byte> toBytes(uint8_t* ptr, size_t size) {
-    std::vector<unsigned char> chars(ptr, ptr+size);
-    std::ofstream out1("original.spv", std::ios::out | std::ios::binary);
-    out1.write(reinterpret_cast<const char*>(chars.data()), chars.size());
+    // std::vector<unsigned char> chars(ptr, ptr+size);
+    // std::ofstream out1("original.spv", std::ios::out | std::ios::binary);
+    // out1.write(reinterpret_cast<const char*>(chars.data()), chars.size());
     std::vector<std::byte> bytes(size);
     std::transform(ptr, ptr+size, bytes.begin(),
                    [](uint8_t c) { return std::byte(c); });
-    std::ofstream out("test.spv", std::ios::out | std::ios::binary);
-    out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    // std::ofstream out("test.spv", std::ios::out | std::ios::binary);
+    // out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return bytes;
 }
 
-static void foo(sycl::kernel& kernel_ptr) {
-  std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  std::cout << "Kernel name in foo: " << kernel_name << std::endl;
-}
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
   const char *name, *build_flags_ptr;
@@ -236,10 +210,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
     uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
     const auto &ctx = get_default_context(sycl_device);
-    const auto l0_device =
-        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
-    const auto l0_context =
-        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
     const auto use_native_code =
         isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
@@ -251,8 +221,9 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     sycl::kernel_bundle<sycl::bundle_state::ext_oneapi_source> kb_src =
       syclex::create_kernel_bundle_from_source(
           ctx, syclex::source_language::spirv, spv); 
-    std::cout << "Context for kernel bundle: " << &ctx << std::endl;
+    // std::cout << "Context for kernel bundle: " << &ctx << std::endl;
 
+    // TODO: add build args
     // if (is_spv) {
     //   constexpr int32_t max_reg_spill = 1000;
     //   const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
@@ -294,11 +265,11 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     
     auto fun = new sycl::kernel(mod->ext_oneapi_get_kernel(kernel_name));
     std::string kernel_name_1 = fun->get_info<sycl::info::kernel::function_name>();
-    std::cout << "Kernel name right after compilation: " << kernel_name_1 << std::endl;
+    // std::cout << "Kernel name right after compilation: " << kernel_name_1 << std::endl;
     
     auto kernel_py =
         PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
-    std::cout << "Capsuled kernel pointer: " << reinterpret_cast<void *>(fun) << std::endl;
+    // std::cout << "Capsuled kernel pointer: " << reinterpret_cast<void *>(fun) << std::endl;
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
     Spills n_spills{};
@@ -306,10 +277,7 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(kernel_py, "kernel"));
     assert(kernel_ptr && "kernel is null!");
     std::string kernel_name_2 = kernel_ptr->get_info<sycl::info::kernel::function_name>();
-    std::cout << "Kernel name after roundtrip: " << kernel_name_2 << std::endl;
-
-    sycl::kernel kernel_no_ptr = *kernel_ptr;
-    foo(kernel_no_ptr);
+    // std::cout << "Kernel name after roundtrip: " << kernel_name_2 << std::endl;
 
     return Py_BuildValue("(OOii)", kernel_bundle_py, kernel_py, n_regs,
                          n_spills);
