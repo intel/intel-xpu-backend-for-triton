@@ -91,6 +91,7 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
+          pip uninstall pytest_forked
 
       - name: Show installed pip packages
         run: |

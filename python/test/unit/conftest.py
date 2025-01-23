@@ -5,6 +5,9 @@ import tempfile
 
 def pytest_addoption(parser):
     parser.addoption("--device", action="store", default="cuda")
+    if os.name == "nt":
+        # stub, as pytest_forked doesn't work on windows
+        parser.addoption("--forked", action="store_true")
 
 
 @pytest.fixture
