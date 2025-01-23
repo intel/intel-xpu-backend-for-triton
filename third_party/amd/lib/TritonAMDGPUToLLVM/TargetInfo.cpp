@@ -442,4 +442,12 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
+Value TargetInfo::getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
+                                     Location loc, RewriterBase &rewriter,
+                                     Operation *op, Value allocOffset,
+                                     bool getstackptr) const {
+  return LLVM::getScrathMemoryPtr(addressSpace, loc, rewriter, op, allocOffset,
+                                  getstackptr);
+}
+
 } // namespace mlir::triton::AMD

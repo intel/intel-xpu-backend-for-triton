@@ -219,8 +219,8 @@ struct LocalAllocOpConversion
     MemDescType memDescType = op.getType();
     RankedTensorType srcTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
-    Value smemBase =
-        LLVM::getSharedMemoryBase(op.getLoc(), rewriter, targetInfo, op);
+    Value smemBase = targetInfo.getScrathMemoryPtr(
+        ::mlir::gpu::AddressSpace::Workgroup, op.getLoc(), rewriter, op);
 
     if (lowerDistributedToSharedStmatrix(op.getLoc(), op.getSrc(), memDescType,
                                          adaptor.getSrc(), smemBase,

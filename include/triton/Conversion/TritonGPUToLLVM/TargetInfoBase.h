@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 #define TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOBASE_H
 
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "triton/Conversion/MLIRTypes.h"
 
 namespace mlir::triton {
@@ -90,6 +91,11 @@ public:
   virtual int getSharedAddressSpace() const = 0;
 
   virtual bool supportVectorizedAtomics() const = 0;
+
+  virtual Value getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
+                                   Location loc, RewriterBase &rewriter,
+                                   Operation *op, Value allocOffset = {},
+                                   bool getstackptr = false) const = 0;
 
   virtual ~TargetInfoBase() {}
 };

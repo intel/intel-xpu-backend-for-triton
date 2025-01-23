@@ -1536,8 +1536,9 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
+        Value atomPtr =
+            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
+                                          loc, rewriter, op.getOperation());
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, mask);
         createBarrier(rewriter, loc, numCTAs);
@@ -1722,12 +1723,18 @@ struct AtomicRMWOpConversion
           return success();
         }
 <<<<<<< HEAD
+<<<<<<< HEAD
         Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
 =======
         Value atomPtr = LLVM::intel::getSharedMemoryBase(
             loc, rewriter, targetInfo, op.getOperation());
+=======
+        Value atomPtr =
+            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
+                                          loc, rewriter, op.getOperation());
+>>>>>>> f34ecebaf (Add getScrathMemoryPtr for SLM and GLM)
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
 >>>>>>> d0485560b (Revert "Fix `test_gather` (#3010)")
         // Only threads with rmwMask = True store the result
