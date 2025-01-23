@@ -389,7 +389,7 @@ def sycl_include_from_sycl_rt() -> Optional[str]:
 
 def sycl_include_from_oneapi() -> Optional[str]:
     """Get path for sycl headers from 'ONEAPI_ROOT' variable if available."""
-    oneapi_root = os.getenv("ONEAPI_ROOT")
+    oneapi_root = os.getenv("ONEAPI_ROOT", "/opt/intel/oneapi" if os.name != "nt" else None)
     if not oneapi_root:
         return None
 
