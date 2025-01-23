@@ -672,8 +672,8 @@ struct TritonIntelGPUInferLayoutInterface
       return success();
     }
     // Check whether the encodings are structurally the same.
-    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
-    auto gotLL = triton::gpu::toLinearLayout(shape, got);
+    const auto &expectedLL = triton::gpu::toLinearLayout(shape, expected);
+    const auto &gotLL = triton::gpu::toLinearLayout(shape, got);
     if (expectedLL != gotLL) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);

@@ -72,7 +72,7 @@ module {
 
 // CHECK:         tt.func @kernel([[PARAM_0_:%.+]]: !tt.ptr<bf16>, [[PARAM_1_:%.+]]: i32) {
 // CHECK-DAG:       [[CST_:%.+]] = arith.constant dense<256> : tensor<1x256xi32>
-// CHECK-DAG:       [[CST_0_:%.+]] = arith.constant dense<0.000000e+00> : tensor<4x256xbf16>  
+// CHECK-DAG:       [[CST_0_:%.+]] = arith.constant dense<0.000000e+00> : tensor<4x256xbf16>
 // CHECK-DAG:       [[CST_0_i32:%.+]] = arith.constant 0 : i32
 // CHECK-DAG:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
 // CHECK-DAG:       [[CST_1_i64:%.+]] = arith.constant 1 : i64
