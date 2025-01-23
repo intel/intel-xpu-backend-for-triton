@@ -345,7 +345,9 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
     else:
         shutil.copy(src_path, dst_path)
 
+
 # ---- populate 'third_party/intel/backend/include' ----
+
 
 def sycl_include_from_conda() -> Optional[str]:
     """Get path for sycl headers from 'CONDA_PREFIX' if available."""
@@ -360,6 +362,7 @@ def sycl_include_from_conda() -> Optional[str]:
         return sycl_incl
 
     return None
+
 
 def sycl_include_from_sycl_rt() -> Optional[str]:
     """Get path for sycl headers from 'intel-sycl-rt' package if available."""
@@ -383,6 +386,7 @@ def sycl_include_from_sycl_rt() -> Optional[str]:
 
     return None
 
+
 def sycl_include_from_oneapi() -> Optional[str]:
     """Get path for sycl headers from 'ONEAPI_ROOT' variable if available."""
     oneapi_root = os.getenv("ONEAPI_ROOT")
@@ -394,6 +398,7 @@ def sycl_include_from_oneapi() -> Optional[str]:
         return sycl_incl
 
     return None
+
 
 def sycl_include_from_web() -> Optional[str]:
     """Download `intel-rt-sycl` package from conda-forge and return path to the sycl headers from there."""
@@ -407,10 +412,7 @@ def sycl_include_from_web() -> Optional[str]:
         arch = platform.machine()
 
     # Build hashes are taken from: https://anaconda.org/conda-forge/intel-sycl-rt/files
-    oneapi_versions = {
-        "win": ("2025.0.4", "he0c23c2_1521"),
-        "linux": ("2025.0.4", "h7a4b287_1519")
-    }
+    oneapi_versions = {"win": ("2025.0.4", "he0c23c2_1521"), "linux": ("2025.0.4", "h7a4b287_1519")}
 
     version, version_hash = oneapi_versions[system]
 
@@ -453,6 +455,7 @@ def sycl_include_from_web() -> Optional[str]:
                         tar.extract(member, tmp_path)
     return include_path
 
+
 def populate_sycl_incl():
     """
     Populate `third_party/intel/backend/include` folder with sycl headers.
@@ -479,11 +482,12 @@ def populate_sycl_incl():
 
     if not sycl_incl:
         sycl_incl = sycl_include_from_web()
-    
+
     if not sycl_incl:
         raise Exception("Couldn't position SYCL headers.")
 
     shutil.copytree(sycl_incl, include_path, dirs_exist_ok=True)
+
 
 populate_sycl_incl()
 

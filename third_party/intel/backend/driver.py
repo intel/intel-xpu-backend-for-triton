@@ -1,7 +1,6 @@
 import importlib.metadata
 import os
 import hashlib
-import shutil
 import subprocess
 import sysconfig
 import tempfile
@@ -114,7 +113,7 @@ class CompilationHelper:
             library_dir += [os.path.join(ze_root, "lib")]
 
         dirname = os.path.dirname(os.path.realpath(__file__))
-        include_dir += [os.path.join(dirname, "include")]
+        include_dir += [os.path.join(dirname, "include"), os.path.join(dirname, "include", "sycl")]
         library_dir += [os.path.join(dirname, "lib")]
 
         if self.inject_pytorch_dep:
