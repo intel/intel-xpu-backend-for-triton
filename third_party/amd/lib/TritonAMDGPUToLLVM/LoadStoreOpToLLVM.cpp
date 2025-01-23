@@ -19,7 +19,6 @@ using namespace mlir;
 using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
@@ -1078,8 +1077,9 @@ struct AtomicCASOpConversion
         if (atomicNeedsSharedMemory(op.getResult())) {
           // Extract the new_loaded value from the pair.
           Value newLoaded = b.extract_val(valueElemTy, cmpxchg, 0);
-          Value atomPtr =
-              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+          Value atomPtr = targetInfo.getScrathMemoryPtr(
+              ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter,
+              op.getOperation());
           b.store(newLoaded, atomPtr);
         }
 
@@ -1098,7 +1098,8 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         b.barrier();
         Value atomPtr =
-            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
+                                          loc, rewriter, op.getOperation());
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
@@ -1408,8 +1409,9 @@ struct AtomicRMWOpConversion
 
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
-          Value atomPtr =
-              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+          Value atomPtr = targetInfo.getScrathMemoryPtr(
+              ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter,
+              op.getOperation());
           b.store(atom, atomPtr);
         }
       }
@@ -1445,7 +1447,8 @@ struct AtomicRMWOpConversion
           return success();
         }
         Value atomPtr =
-            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
+                                          loc, rewriter, op.getOperation());
         b.barrier();
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});

@@ -87,12 +87,14 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
-      auto base = LLVM::intel::getStackPointer(rewriter, caller);
+      auto base = targetInfo.getScrathMemoryPtr(
+          ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp, {},
+          /*getstackptr=*/true);
       promotedOperands.push_back(base);
       return promotedOperands;
     }
-    promotedOperands.push_back(LLVM::intel::getSharedMemoryBase(
-        callOp->getLoc(), rewriter, targetInfo, callOp));
+    promotedOperands.push_back(targetInfo.getScrathMemoryPtr(
+        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp));
     return promotedOperands;
   }
 

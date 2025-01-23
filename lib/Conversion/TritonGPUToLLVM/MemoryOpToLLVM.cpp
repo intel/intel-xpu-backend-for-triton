@@ -32,8 +32,9 @@ void lowerDistributedToShared(
 struct GlobalScratchAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
   GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit) {}
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
@@ -51,11 +52,14 @@ struct GlobalScratchAllocOpConversion
       return failure();
     }
     Value ptr =
-        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, b.i32_val(opOffset));
-
+        targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Global, loc,
+                                      rewriter, funcOp, b.i32_val(opOffset));
     rewriter.replaceOp(op, ptr);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct LocalAllocOpConversion
@@ -72,8 +76,9 @@ struct LocalAllocOpConversion
     if (!op.isSharedMemoryAlloc())
       return failure();
     Location loc = op->getLoc();
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+    Value smemBase = targetInfo.getScrathMemoryPtr(
+        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op.getOperation());
+
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
 
@@ -190,7 +195,8 @@ private:
 void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
+                                               benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
