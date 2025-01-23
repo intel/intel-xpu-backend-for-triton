@@ -422,7 +422,9 @@ def sycl_include_from_web() -> Optional[str]:
 
     triton_cache_path = get_triton_cache_path()
     tmp_path = os.path.join(triton_cache_path, "intel")  # path to cache the download
-    include_path = os.path.join(tmp_path, "include", "sycl")
+    sycl_headers_prefix = ("include", "sycl") if os.name != "nt" else ("Library", "include", "sycl")
+    include_path = os.path.join(tmp_path, *sycl_headers_prefix)
+    sycl_headers_prefix = "/".join(sycl_headers_prefix)
 
     if os.path.exists(include_path):
         return include_path
@@ -450,7 +452,7 @@ def sycl_include_from_web() -> Optional[str]:
                 # Extract the .tar file directly from memory
                 with tarfile.open(fileobj=io.BytesIO(tar_data)) as tar:
                     for member in tar.getmembers():
-                        if not member.name.startswith("include/sycl"):
+                        if not member.name.startswith(sycl_headers_prefix):
                             continue
                         tar.extract(member, tmp_path)
     return include_path
