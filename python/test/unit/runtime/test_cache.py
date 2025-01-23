@@ -164,6 +164,7 @@ def test_reuse(device, fresh_triton_cache):
     for i in range(10):
         kernel[(1, )](x, 1, BLOCK=1024)
     assert counter == 1
+    getattr(torch, device).synchronize()
 
 
 @pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
@@ -181,6 +182,7 @@ def test_specialize(mode, device, fresh_triton_cache):
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
+    getattr(torch, device).synchronize()
 
 
 def test_annotation(device):
