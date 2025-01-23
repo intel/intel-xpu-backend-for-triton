@@ -68,7 +68,6 @@ jobs:
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
           pip install -v --no-build-isolation '.[build,tests,tutorials]'
-          pip uninstall pytest_forked -y
 
       - name: Triton version
         run: |
@@ -80,6 +79,7 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
+          pip uninstall pytest_forked -y
 
       - name: Run core tests
         run: |
