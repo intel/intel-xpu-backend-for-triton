@@ -379,6 +379,11 @@ static llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
 
 static llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
                                      const PtrState &state) {
+  if (state.source)
+    os << "<source=" << state.source << "> ";
+  if (state.scalar)
+    os << " <scalar=" << state.scalar << "> ";
+
   return os << "<offsets=" << state.offsets << "> <sizes=" << state.sizes
             << "> <strides=" << state.strides << "> <shape=" << state.shape
             << "> <order=" << state.order << ">";
@@ -732,22 +737,23 @@ public:
       }
     }
 
+    // If the addptr operation increments a scalar pointer, give up.
+    Value result = op.getResult();
+    if (!isa<RankedTensorType>(result.getType()))
+      return failure();
+
     // Otherwise, rewrite the AddPtrOp using PtrState.
     PtrState state;
     if (failed(visitOperandAddptr(op, state, loc, builder)))
       return failure();
 
-    Value result = op.getResult();
     knownPtrs[result] = state;
 
-    Value mapped = result;
-    if (isa<RankedTensorType>(result.getType())) {
-      Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
-      knownPtrs[makePtrOp] = std::move(state);
-      mapped = makePtrOp;
-    }
+    assert(isa<RankedTensorType>(result.getType()));
+    Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
+    knownPtrs[makePtrOp] = std::move(state);
 
-    ptrMap.map(result, mapped);
+    ptrMap.map(result, makePtrOp);
 
     // AddPtrOps that have been rewritten and no longer used in the code must
     // be removed in the pass to avoid type matching issue.
@@ -889,6 +895,10 @@ public:
               "Unexpected operand defining operation tt.make_tensor_ptr");
         llvm_unreachable("Unexpected operand defining operation");
       } else {
+        // If the operand is an iter-arg of an for loop, give up.
+        if (isa<scf::ForOp>(operand.getParentBlock()->getParentOp()))
+          return failure();
+
         state.source = operand;
         return success();
       }
