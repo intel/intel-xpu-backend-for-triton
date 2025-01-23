@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, intel
+from triton.backends.intel.driver import compile_module_from_src
 
 from dataclasses import dataclass
 import functools
@@ -43,6 +44,7 @@ class XPUOptions:
     threads_per_warp: int = 32
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
+    launch_cooperative_grid: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -96,6 +98,7 @@ def min_dot_size(device_props: dict):
 
 
 class XPUBackend(BaseBackend):
+    device_props: dict = {}
 
     # AdvancedPath pass pipeline for kernels using block pointers.
     class AdvancedPath:
@@ -127,6 +130,9 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         if not isinstance(target.arch, dict):
             raise TypeError("target.arch is not a dict")
+        dirname = os.path.dirname(os.path.realpath(__file__))
+        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
+        self.device_arch = mod.parse_device_arch(target.arch.get('architecture', 0))
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -142,30 +148,36 @@ class XPUBackend(BaseBackend):
         dev_prop['max_num_sub_groups'] = tgt_prop.get('max_num_sub_groups', None)
         dev_prop['sub_group_sizes'] = tgt_prop.get('sub_group_sizes', None)
         dev_prop['has_fp64'] = tgt_prop.get('has_fp64', None)
-        if os.getenv("TRITON_INTEL_QUERY_DEVICE_EXTENSIONS", "0") == "1":
+        dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
+                                                                           False)
+        dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
+            'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
+        dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
+        dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+
+        if self.device_arch and shutil.which('ocloc'):
+            if self.device_arch in self.device_props:
+                dev_prop.update(self.device_props[self.device_arch])
+                return dev_prop
             try:
-                # FIXME: Add support for other devices.
-                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', 'pvc']
-                result = subprocess.run(ocloc_cmd, check=True, capture_output=True, text=True)
-                output = result.stdout
+                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', self.device_arch]
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    output = subprocess.check_output(ocloc_cmd, text=True, cwd=temp_dir)
                 supported_extensions = set()
                 for extension in output.split(' '):
                     supported_extensions.add(extension)
-                dev_prop[
+                ocloc_dev_prop = {}
+                ocloc_dev_prop[
                     'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extensions
-                dev_prop[
+                ocloc_dev_prop[
                     'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
-                dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
-                dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f'`ocloc` failed with error code {e.returncode}')
-        else:
-            dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get(
-                'has_subgroup_matrix_multiply_accumulate', False)
-            dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = tgt_prop.get(
-                'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
-            dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
-            dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
+                ocloc_dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
+                ocloc_dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
+                self.device_props[self.device_arch] = ocloc_dev_prop
+                dev_prop.update(ocloc_dev_prop)
+            except subprocess.CalledProcessError:
+                # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.
+                pass
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -176,7 +188,7 @@ class XPUBackend(BaseBackend):
     def pack_metadata(self, metadata):
         return metadata
 
-    def get_codegen_implementation(self):
+    def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
         codegen_fns = {}
         codegen_fns["convert_custom_types"] = convert_custom_float8
@@ -228,7 +240,7 @@ class XPUBackend(BaseBackend):
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
-        opt.threads_per_warp = ir.ttgpuir.get_threads_per_warp(mod)
+        opt.threads_per_warp = intel.get_threads_per_warp(mod)
 
         # Run the TTIR -> TTGIR pass pipeline.
         pm = ir.pass_manager(mod.context)
@@ -239,6 +251,10 @@ class XPUBackend(BaseBackend):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
+        # optimize TTGIR
+        intel.passes.ttgpuir.add_coalesce(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
@@ -246,8 +262,6 @@ class XPUBackend(BaseBackend):
             intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
-        intel.passes.ttgpuir.add_coalesce(pm)
-        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
@@ -261,6 +275,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
+        intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
@@ -271,7 +286,7 @@ class XPUBackend(BaseBackend):
         num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
-        threads_per_warp = ir.ttgpuir.get_threads_per_warp(src)
+        threads_per_warp = intel.get_threads_per_warp(src)
         metadata["threads_per_warp"] = threads_per_warp
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -311,8 +326,7 @@ class XPUBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
         intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
-        if os.getenv("TRITON_INTEL_ENABLE_POST_PROCESS_LLIR", "0") == "1":
-            intel.post_process_llir(llvm_mod)
+        intel.post_process_llir(llvm_mod)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")

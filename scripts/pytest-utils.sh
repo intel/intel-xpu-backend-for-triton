@@ -35,7 +35,7 @@ pytest() {
     if [[ -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
         mkdir -p "$CURRENT_SKIPLIST_DIR"
         # skip comments in the skiplist
-        sed -e '/^#/d' "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" > "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+        sed -e '/^#/d' -e '/^\s*$/d' "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" > "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
         if [[ $TEST_UNSKIP = false ]]; then
             pytest_extra_args+=(
                 "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
@@ -49,7 +49,7 @@ pytest() {
     fi
 
     export TEST_UNSKIP
-    python3 -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
+    python -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
 
 run_tutorial_test() {
@@ -66,9 +66,9 @@ run_tutorial_test() {
     fi
 
     if [[ $TRITON_TEST_REPORTS = true ]]; then
-        RUN_TUTORIAL="python3 -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
+        RUN_TUTORIAL="python -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
     else
-        RUN_TUTORIAL="python3 -u $1.py"
+        RUN_TUTORIAL="python -u $1.py"
     fi
 
     if [[ $TUTORIAL_RESULT = TODO ]]; then
@@ -136,10 +136,13 @@ capture_runtime_env() {
     python -c 'import platform; print(platform.python_version())' > $TRITON_TEST_REPORTS_DIR/triton_version.txt
     python -c 'import triton; print(triton.__version__)' >  $TRITON_TEST_REPORTS_DIR/triton_version.txt
     python -c 'import torch; print(torch.__version__)' > $TRITON_TEST_REPORTS_DIR/pytorch_version.txt
-    python -c 'import intel_extension_for_pytorch as ipex; print(ipex.__version__)' > $TRITON_TEST_REPORTS_DIR/IPEX_version.txt || true
 }
 
 ensure_spirv_dis() {
+    # Does not work on Windows
+    if [[ $OSTYPE = msys ]]; then
+        return
+    fi
     export PATH="$HOME/.local/bin:$PATH"
     local spirv_dis="$(which spirv-dis || true)"
     if [[ $spirv_dis ]]; then

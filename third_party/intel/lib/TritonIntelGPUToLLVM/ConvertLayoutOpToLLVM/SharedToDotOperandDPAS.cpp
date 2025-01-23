@@ -12,7 +12,7 @@ using mlir::triton::gpu::intel::DpasEncodingAttr;
 namespace {
 
 // Data loader for DPAS instruction.
-template <unsigned opIdx> class DpasMatmulLoader {
+template <DpasEncodingAttr::OpIdx opIdx> class DpasMatmulLoader {
 public:
   DpasMatmulLoader(DpasEncodingAttr dpasLayout, MemDescType descTy,
                    unsigned warpsPerTile, ArrayRef<Value> smemStrides,
@@ -23,12 +23,10 @@ public:
       : dpasLayout(dpasLayout), descTy(descTy), smemStrides(smemStrides),
         multiDimWarpId(std::move(multiDimWarpId)), rewriter(rewriter),
         loc(loc) {
-    static_assert(opIdx == 0 || opIdx == 1);
-
     size_t rank = warpShape.size();
-    unsigned kDim = opIdx ? rank - 2 : rank - 1;
-    unsigned nonKDim = opIdx ? rank - 1 : rank - 2;
-    // Assume that smem is create with layout offset {2, 1, 0}
+    unsigned kDim = bool(opIdx) ? rank - 2 : rank - 1;
+    unsigned nonKDim = bool(opIdx) ? rank - 1 : rank - 2;
+    // Assume that smem is created with layout offset {2, 1, 0}
     repBatchDimStride = smemStrides[0];
     repKDimStride = mul(i32_val(warpShape[kDim]), smemStrides[kDim]);
     repNonKDimStride =
@@ -77,7 +75,7 @@ private:
   Location loc;
 };
 
-template <unsigned opIdx>
+template <DpasEncodingAttr::OpIdx opIdx>
 SmallVector<Value>
 DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
                                            Value cSwizzleOffset) {
@@ -91,7 +89,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   Value laneRowIndex, laneColIndex;
   unsigned rowsPerInst = 0u, rowsPerWarp = 0u, packedOpsPerLane = 0u;
   switch (opIdx) {
-  case 0: {
+  case DpasEncodingAttr::OpIdx::OperandA: {
     assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
            "invalid opsPerChannel number.");
     SmallVector<unsigned> shapeA = dpasLayout.getShapeA();
@@ -107,7 +105,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     laneColIndex = urem(laneId, i32_val(packedColNum));
     laneColIndex = mul(laneColIndex, i32_val(packedOpsPerLane));
   } break;
-  case 1: {
+  case DpasEncodingAttr::OpIdx::OperandB: {
     assert(threadsPerWarp >= executionSize &&
            "DpasEncodingAttr sub-group size could not "
            "be smaller than the execution size for B operand.");
@@ -135,17 +133,18 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   Value perPhaseVal = i32_val(perPhase);
   Value maxPhaseVal = i32_val(maxPhase);
   Value vecVal = i32_val(vec);
-  SmallVector<unsigned> instShape = opIdx == 0 ? dpasLayout.getDPASInstShapeA()
-                                               : dpasLayout.getDPASInstShapeB();
+  SmallVector<unsigned> instShape = (opIdx == DpasEncodingAttr::OpIdx::OperandA)
+                                        ? dpasLayout.getDPASInstShapeA()
+                                        : dpasLayout.getDPASInstShapeB();
   ArrayRef<int64_t> shareMemoryShape = descTy.getShape();
   SmallVector<int64_t> shapePerCTA = getShapePerCTA(descTy);
 
   SmallVector<Value> offs(numPtrs);
   const unsigned repClusterSize =
-      dpasLayout.getRepCluster()[opIdx ? rank - 1 : rank - 2];
+      dpasLayout.getRepCluster()[bool(opIdx) ? rank - 1 : rank - 2];
   unsigned index = 0u;
   for (unsigned repIdx = 0; repIdx < repClusterSize; ++repIdx) {
-    unsigned repIndex = repIdx * instShape[opIdx];
+    unsigned repIndex = repIdx * instShape[unsigned(opIdx)];
     for (int rowIdx = 0; rowIdx < rowsPerInst; ++rowIdx) {
       Value rowIndex = mul(i32_val(rowIdx), rowsPerWarpVal);
       for (unsigned opsIdx = 0; opsIdx < packedOpsPerLane; ++opsIdx) {
@@ -154,11 +153,11 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
         // outer index base
         Value iBase = add(rowIndex, laneRowIndex);
         switch (opIdx) {
-        case 0:
+        case DpasEncodingAttr::OpIdx::OperandA:
           iBase = add(iBase, i32_val(repIndex));
           jBase = add(jBase, i32_val(opsIdx));
           break;
-        case 1:
+        case DpasEncodingAttr::OpIdx::OperandB:
           iBase = add(iBase, i32_val(opsIdx));
           jBase = add(jBase, i32_val(repIndex));
           break;
@@ -194,7 +193,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   return offs;
 }
 
-template <unsigned opIdx>
+template <DpasEncodingAttr::OpIdx opIdx>
 Value DpasMatmulLoader<opIdx>::loadMatrix(
     int repBatch, int repOuter, int repInner, const ArrayRef<Value> ptrs,
     LLVM::LLVMStructType structTy, Type smemTy, Value cSwizzleOffset) const {
@@ -269,7 +268,7 @@ Type getSharedMemTy(Type argType) {
   llvm::report_fatal_error("unsupported data type for the dot layout of DPAS");
 }
 
-template <unsigned opIdx>
+template <DpasEncodingAttr::OpIdx opIdx>
 std::function<void(int, int, int)>
 getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
                 DpasEncodingAttr dpasLayout, unsigned warpsPerTile,
@@ -278,9 +277,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
                 Value outerWarpDim, Value laneId, ValueTable &vals,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
-  static_assert(opIdx == 0 || opIdx == 1);
-
-  auto shapePerCTA = getShapePerCTA(descTy);
+  SmallVector<int64_t> shapePerCTA = getShapePerCTA(descTy);
   Type eltTy = descTy.getElementType();
 
   auto sharedLayout = cast<SharedEncodingAttr>(descTy.getEncoding());
@@ -290,9 +287,10 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &smemObj, &shapePerWarp, &multiDimWarpId,
                &vals](int batch, int outer, int inner) {
-    DpasMatmulLoader<opIdx> loader(
-        dpasLayout, descTy, warpsPerTile, smemObj.strides, shapePerWarp,
-        multiDimWarpId, rewriter, typeConverter, loc);
+    auto smemStrides = smemObj.getStrides(descTy, loc, rewriter);
+    DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
+                                   smemStrides, shapePerWarp, multiDimWarpId,
+                                   rewriter, typeConverter, loc);
 
     // Offset of a slice within the original tensor in shared memory.
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
@@ -324,21 +322,19 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   return load;
 }
 
-template <unsigned opIdx>
+template <DpasEncodingAttr::OpIdx opIdx>
 Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
                   MemDescType descTy, DotOperandEncodingAttr encoding,
                   const SharedMemoryObject &smemObj,
                   const LLVMTypeConverter *typeConverter, Value threadId) {
-  static_assert(opIdx == 0 || opIdx == 1);
-
-  auto shapePerCTA = getShapePerCTA(descTy);
+  SmallVector<int64_t> shapePerCTA = getShapePerCTA(descTy);
   auto dpasLayout = cast<DpasEncodingAttr>(encoding.getParent());
   const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
 
   SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
 
   SmallVector<unsigned> shape;
-  if constexpr (opIdx == 0)
+  if constexpr (opIdx == DpasEncodingAttr::OpIdx::OperandA)
     shape = dpasLayout.getShapeA();
   else
     shape = dpasLayout.getShapeB();
@@ -354,7 +350,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
       LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
 
   unsigned rank = shape.size();
-  unsigned dimOuter = opIdx ? (rank - 1) : (rank - 2);
+  unsigned dimOuter = bool(opIdx) ? (rank - 1) : (rank - 2);
   unsigned ceilRes =
       mlir::ceil<unsigned>(shapePerCTA[dimOuter], shape[dimOuter]);
   Value outerWarpDim = urem(multiDimWarpId[dimOuter], i32_val(ceilRes));
@@ -369,8 +365,8 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
 
   // Load the operand.
   int64_t numRepBatch = numReps[0];
-  int64_t numRepOuter = numReps[opIdx ? 2 : 1];
-  int64_t numRepK = numReps[opIdx ? 1 : 2];
+  int64_t numRepOuter = numReps[unsigned(opIdx) ? 2 : 1];
+  int64_t numRepK = numReps[unsigned(opIdx) ? 1 : 2];
 
   for (int b = 0; b < numRepBatch; ++b)
     for (int m = 0; m < numRepOuter; ++m)
@@ -384,26 +380,25 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
 
 } // namespace
 
-namespace SharedToDotOperandDPAS {
-namespace intel {
+namespace SharedToDotOperandDPAS::intel {
 
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value threadId) {
   auto descTy = cast<MemDescType>(tensor.getType());
+
   switch (opIdx) {
   case 0:
-    return loadOperand<0>(rewriter, loc, descTy, encoding, smemObj,
-                          typeConverter, threadId);
+    return loadOperand<DpasEncodingAttr::OpIdx::OperandA>(
+        rewriter, loc, descTy, encoding, smemObj, typeConverter, threadId);
   case 1:
-    return loadOperand<1>(rewriter, loc, descTy, encoding, smemObj,
-                          typeConverter, threadId);
+    return loadOperand<DpasEncodingAttr::OpIdx::OperandB>(
+        rewriter, loc, descTy, encoding, smemObj, typeConverter, threadId);
   default:
     llvm_unreachable("unexpected operand idx");
   }
   return Value();
 }
 
-} // namespace intel
-} // namespace SharedToDotOperandDPAS
+} // namespace SharedToDotOperandDPAS::intel

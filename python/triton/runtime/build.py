@@ -1,13 +1,7 @@
-import contextlib
-import sys
-import io
 import sysconfig
 import os
 import shutil
 import subprocess
-import setuptools
-import platform
-from .CLFinder import initialize_visual_studio_env
 
 
 def is_xpu():
@@ -15,19 +9,9 @@ def is_xpu():
     return torch.xpu.is_available()
 
 
-@contextlib.contextmanager
-def quiet():
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
-    try:
-        yield
-    finally:
-        sys.stdout, sys.stderr = old_stdout, old_stderr
-
-
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
-    if cc in ["cl", "clang-cl"]:
-        cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
+    if "cl.EXE" in cc or "clang-cl" in cc:
+        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
@@ -58,9 +42,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
-        if platform.system() == "Windows":
-            cc = "cl"
-            initialize_visual_studio_env(["[17.0,18.0)", "[16.0,17.0)"])
+        if os.name == "nt":
+            cc = shutil.which("cl")
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10
@@ -83,19 +66,23 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
             icpx = shutil.which("icpx")
-            cxx = icpx if os.name == "nt" else icpx or clangpp or gxx
+            cl = shutil.which("cl")
+            cxx = icpx or cl if os.name == "nt" else icpx or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx
         import numpy as np
         numpy_include_dir = np.get_include()
         include_dirs = include_dirs + [numpy_include_dir]
-        if icpx is not None:
+        if cxx is icpx:
             extra_compile_args += ["-fsycl"]
         else:
-            extra_compile_args += ["--std=c++17"]
+            if os.name != "nt":
+                extra_compile_args += ["--std=c++17"]
         if os.name == "nt":
-            library_dirs += [os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs")]
+            library_dirs = library_dirs + [
+                os.path.abspath(os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs"))
+            ]
     else:
         cc_cmd = [cc]
 
@@ -106,32 +93,5 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
 
-    ret = subprocess.check_call(cc_cmd)
-    if ret == 0:
-        return so
-    # extra arguments
-    extra_link_args = []
-    # create extension module
-    ext = setuptools.Extension(
-        name=name,
-        language='c',
-        sources=[src],
-        include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3' if "-O3" in cc_cmd else "/O2"],
-        extra_link_args=extra_link_args,
-        library_dirs=library_dirs,
-        libraries=libraries,
-    )
-    # build extension module
-    args = ['build_ext']
-    args.append('--build-temp=' + srcdir)
-    args.append('--build-lib=' + srcdir)
-    args.append('-q')
-    args = dict(
-        name=name,
-        ext_modules=[ext],
-        script_args=args,
-    )
-    with quiet():
-        setuptools.setup(**args)
+    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     return so

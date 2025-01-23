@@ -13,7 +13,6 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttng = mlir::triton::nvidia_gpu;
 
 void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
                                         tt::CoarseSchedule::Cluster cluster,
@@ -114,10 +113,11 @@ void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
   }
 }
 
+// TODO: Should this be moved somewhere else?
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
-void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule,
-                              int numStages) {
+void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
+  int numStages = schedule.numStages;
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
       opsInOrder = schedule.getOpsInOrder(forOp);
   // Schedule dependencies stage by stage.

@@ -3,7 +3,7 @@
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked
 // CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
-#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: decompose_dpas_2_dot

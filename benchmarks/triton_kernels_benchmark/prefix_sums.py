@@ -4,9 +4,6 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 
-if benchmark_suit.USE_IPEX_OPTION:
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 
 @triton.jit
 def scan_kernel(x_ptr, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,  #
@@ -44,8 +41,7 @@ def benchmark(M, N, AXIS, provider):
 
     if provider == 'triton':
         triton_fn = lambda: scan_kernel[(1, )](x, BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, AXIS=AXIS)
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles,
-                                                                 kernel_name='scan_kernel')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

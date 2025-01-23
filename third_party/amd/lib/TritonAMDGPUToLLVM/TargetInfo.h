@@ -3,6 +3,7 @@
 
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "llvm/TargetParser/TargetParser.h"
 #include <string>
 
 namespace mlir::triton::AMD {
@@ -11,6 +12,8 @@ public:
   explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
 
   ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+
+  llvm::AMDGPU::GPUKind getGPUKind() const;
 
   int getSharedMemorySize() const;
 
@@ -64,6 +67,9 @@ public:
   int getSharedAddressSpace() const override;
 
   bool supportVectorizedAtomics() const override;
+
+  Value getStackPointer(RewriterBase &rewriter,
+                        FunctionOpInterface funcOp) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,

@@ -13,6 +13,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <optional>
 
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
 #define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
@@ -20,6 +21,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUACCELERATEMATMUL
@@ -29,8 +31,7 @@ namespace mlir::triton::gpu::intel {
 namespace {
 
 SmallVector<unsigned>
-getWarpsPerTile(tt::DotOp dotOp,
-                ttg::intel::DpasEncodingAttr::DPASCapability dpasCap,
+getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
                 const ArrayRef<int64_t> shape, unsigned numWarps) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -94,7 +95,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
-        isa<ttg::intel::DpasEncodingAttr>(oldRetType.getEncoding()))
+        isa<ttgi::DpasEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
     auto funcOp = dotOp->getParentOfType<FunctionOpInterface>();
@@ -112,17 +113,16 @@ public:
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
 
-    auto dpasCap = ttg::intel::DpasEncodingAttr::getDPASCapability(mod);
+    auto dpasCap = ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
-    unsigned opsPerChan =
-        ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
+    unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    auto dpasEnc = ttg::intel::DpasEncodingAttr::get(
+    auto dpasEnc = ttgi::DpasEncodingAttr::get(
         oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
@@ -155,7 +155,7 @@ public:
       repCluster[rank - 2] = repClusterDimM;
       repCluster[rank - 1] = repClusterDimN;
 
-      dpasEnc = ttg::intel::DpasEncodingAttr::get(
+      dpasEnc = ttgi::DpasEncodingAttr::get(
           oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
           dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
           threadsPerWarp);
@@ -168,9 +168,10 @@ public:
     TensorValue oldAcc = dotOp.getC();
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(oldAcc.getLoc(),
                                                         newRetType, oldAcc);
-
+    // opA are packed to i16 for scalar type < 16 bits. opB are packed to i32.
     auto newAEncoding = ttg::DotOperandEncodingAttr::get(
-        oldAType.getContext(), 0, newRetType.getEncoding(), opsPerChan);
+        oldAType.getContext(), 0, newRetType.getEncoding(),
+        opsPerChan == 1 ? opsPerChan : opsPerChan / 2);
     auto newBEncoding = ttg::DotOperandEncodingAttr::get(
         oldBType.getContext(), 1, newRetType.getEncoding(), opsPerChan);
 
@@ -217,88 +218,159 @@ public:
     TensorValue b = scaledDotOp.getRhs();
     TensorValue aScale = scaledDotOp.getLhsScale();
     TensorValue bScale = scaledDotOp.getRhsScale();
-    if (bScale)
-      return rewriter.notifyMatchFailure(scaledDotOp, "NYI: RHS scale");
     if (aScale && bScale)
       return rewriter.notifyMatchFailure(scaledDotOp,
                                          "NYI: both LHS and RHS scale");
-    assert(aScale && "LHS scale missing");
 
     tt::ScaleDotElemType aElemType = scaledDotOp.getLhsType();
     tt::ScaleDotElemType bElemType = scaledDotOp.getRhsType();
-
     auto supportsTypes = [](tt::ScaleDotElemType elemType) {
       return elemType == tt::ScaleDotElemType::E2M1 ||
              elemType == tt::ScaleDotElemType::E4M3 ||
              elemType == tt::ScaleDotElemType::E5M2 ||
-             elemType == tt::ScaleDotElemType::BF16;
+             elemType == tt::ScaleDotElemType::BF16 ||
+             elemType == tt::ScaleDotElemType::FP16;
     };
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
       return rewriter.notifyMatchFailure(scaledDotOp, "NYI: mxfp6 operand");
 
-    MLIRContext *ctx = scaledDotOp.getContext();
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+    ttgi::DpasEncodingAttr dpasEnc = getDPASEncoding(scaledDotOp, rewriter);
 
-    // Convert accumulator.
-    ttg::intel::DpasEncodingAttr dpasEnc =
-        getDPASEncoding(rewriter, scaledDotOp);
-    llvm::errs() << "dpasEnc: " << dpasEnc << "\n";
+    TensorValue newAcc = convertAccumulator(scaledDotOp, dpasEnc, rewriter);
+    RankedTensorType newRetType = newAcc.getType();
 
-    auto newRetType = RankedTensorType::get(
-        oldRetType.getShape(), oldRetType.getElementType(), dpasEnc);
-    TensorValue oldAcc = scaledDotOp.getC();
-    TensorValue newAcc = rewriter.create<ttg::ConvertLayoutOp>(
-        oldAcc.getLoc(), newRetType, oldAcc);
-
-    unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
-    if (aElemType == tt::ScaleDotElemType::E2M1)
-      opsPerChannel *= 2;
-
-    // Upcast A operand.
-    auto dpasEncForA = ttg::intel::DpasEncodingAttr::get(
-        ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
-        dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
-        dpasEnc.getRepCluster(), dpasEnc.getSubGroupSize());
-    auto newAEncoding = ttg::DotOperandEncodingAttr::get(
-        ctx, 0, dpasEncForA, dpasEncForA.getOpsPerChannel());
-    a = createArg(rewriter, a, aElemType, newAEncoding);
-
-    unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[1];
-    SmallVector<unsigned> threadsPerWarp{instrShapeM, warpSize / instrShapeM};
-    auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
-    auto newScaleEncoding = ttg::BlockedEncodingAttr::get(
-        ctx, {1, 1}, threadsPerWarp, newAEncoding.getWarpsPerCTA(),
-        newAEncoding.getCTAOrder(), CTALayout);
-    aScale = createScale(rewriter, aScale, newScaleEncoding);
-
-    auto retTypeEncoding = ttg::DotOperandEncodingAttr::get(
-        ctx, 0, dpasEnc, dpasEnc.getOpsPerChannel());
-    Value scaledA =
-        createUpcastMxfpOp(rewriter, a, aScale, aElemType, retTypeEncoding);
-
-    // Create B operand.
-    assert(bElemType != tt::ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
-    auto newBEncoding = ttg::DotOperandEncodingAttr::get(
-        ctx, 1, dpasEnc, dpasEnc.getOpsPerChannel());
-    b = createArg(rewriter, b, bElemType, newBEncoding);
+    std::tie(a, b) =
+        convertOperands({a, aElemType, aScale}, {b, bElemType, bScale},
+                        scaledDotOp.getFastMath(), dpasEnc, newRetType,
+                        scaledDotOp->getParentOfType<ModuleOp>(), rewriter);
 
     auto newDot = rewriter.create<tt::DotOp>(scaledDotOp.getLoc(), newRetType,
-                                             scaledA, b, newAcc);
+                                             a, b, newAcc);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(scaledDotOp, oldRetType,
                                                       newDot);
     return success();
   }
 
 private:
-  // TODO: this works only when the operand to scale is on the LHS, extend to
-  // support scaling the RHS operand.
+  struct OpDescriptor {
+    TensorValue op;
+    triton::ScaleDotElemType elemType;
+    TensorValue scale;
+  };
+
+  std::pair<TensorValue, TensorValue>
+  convertOperands(OpDescriptor aDesc, OpDescriptor bDesc, bool fastMath,
+                  ttgi::DpasEncodingAttr dpasEnc, RankedTensorType newRetType,
+                  ModuleOp mod, PatternRewriter &rewriter) const {
+    assert((aDesc.scale || bDesc.scale) && "No scale provided");
+    assert(!(aDesc.scale && bDesc.scale) && "NYI: Both LHS and RHS scale");
+
+    bool useFp16 = aDesc.elemType == tt::ScaleDotElemType::FP16 ||
+                   bDesc.elemType == tt::ScaleDotElemType::FP16;
+
+    if (aDesc.scale) {
+      TensorValue newA =
+          convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
+              aDesc, useFp16, fastMath, dpasEnc, newRetType, mod, rewriter);
+      TensorValue newB =
+          convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
+              bDesc, useFp16, dpasEnc, newRetType, rewriter);
+      return {newA, newB};
+    }
+
+    TensorValue newB =
+        convertScaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandB>(
+            bDesc, useFp16, fastMath, dpasEnc, newRetType, mod, rewriter);
+    TensorValue newA =
+        convertUnscaledOperand<ttgi::DpasEncodingAttr::OpIdx::OperandA>(
+            aDesc, useFp16, dpasEnc, newRetType, rewriter);
+    return {newA, newB};
+  }
+
+  template <ttgi::DpasEncodingAttr::OpIdx opIdx>
+  TensorValue convertScaledOperand(OpDescriptor opDesc, bool useFp16,
+                                   bool fastMath,
+                                   ttg::intel::DpasEncodingAttr dpasEnc,
+                                   RankedTensorType retType, ModuleOp mod,
+                                   PatternRewriter &rewriter) const {
+    assert(opDesc.scale && "Expecting valid operand & scale");
+
+    MLIRContext *ctx = opDesc.op.getContext();
+    unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
+    unsigned rank = retType.getRank();
+
+    auto opEncoding = ttg::intel::DpasEncodingAttr::get(
+        ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
+        dpasEnc.getExecutionSize(), opsPerChannel, dpasEnc.getWarpsPerCTA(),
+        dpasEnc.getRepCluster(),
+        product<unsigned>(dpasEnc.getThreadsPerWarp()));
+
+    int kWidth = dpasEnc.getOpsPerChannel();
+    if constexpr (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA) {
+      // Operand A is packed to i16 for scalar type < 16 bits.
+      kWidth = kWidth == 1 ? 1 : kWidth / 2;
+    }
+    auto newOpEncoding = ttg::DotOperandEncodingAttr::get(ctx, unsigned(opIdx),
+                                                          opEncoding, kWidth);
+    TensorValue op =
+        createArg(opDesc.op, opDesc.elemType, useFp16, newOpEncoding, rewriter);
+
+    unsigned instrShapeM = dpasEnc.getDPASInstShapeA()[0];
+    SmallVector<unsigned, 2> threadsPerWarp{instrShapeM,
+                                            warpSize / instrShapeM};
+
+    SmallVector<unsigned, 2> warpsPerCTA(rank, 1);
+    warpsPerCTA[0] = numWarps;
+    auto CTALayout = ttg::getCTALayout(retType.getEncoding());
+
+    auto newScaleEncoding =
+        ttg::BlockedEncodingAttr::get(ctx, {1, 1}, threadsPerWarp, warpsPerCTA,
+                                      newOpEncoding.getCTAOrder(), CTALayout);
+    TensorValue scale = createScale(opDesc.scale, newScaleEncoding, rewriter);
+
+    auto upcastOp = createUpcastMxfpOp(op, scale, opDesc.elemType, useFp16,
+                                       fastMath, rewriter);
+    if (opDesc.elemType == tt::ScaleDotElemType::E2M1) {
+      auto resultType = cast<RankedTensorType>(upcastOp.getType());
+      auto newRetType = RankedTensorType::get(
+          resultType.getShape(), resultType.getElementType(), newOpEncoding);
+      upcastOp = rewriter.create<ttg::ConvertLayoutOp>(opDesc.op.getLoc(),
+                                                       newRetType, upcastOp);
+    }
+    return upcastOp;
+  }
+
+  template <ttgi::DpasEncodingAttr::OpIdx opIdx>
+  TensorValue convertUnscaledOperand(OpDescriptor opDesc, bool useFp16,
+                                     ttg::intel::DpasEncodingAttr dpasEnc,
+                                     RankedTensorType retType,
+                                     PatternRewriter &rewriter) const {
+    assert(!opDesc.scale && "Scale should be NULL");
+    int kWidth = dpasEnc.getOpsPerChannel();
+    if constexpr (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA) {
+      // Operand A is packed to i16 for scalar type < 16 bits.
+      kWidth = kWidth == 1 ? 1 : kWidth / 2;
+    }
+    auto newOpEncoding = ttg::DotOperandEncodingAttr::get(
+        opDesc.op.getContext(), unsigned(opIdx), dpasEnc, kWidth);
+    return createArg(opDesc.op, opDesc.elemType, useFp16, newOpEncoding,
+                     rewriter);
+  }
+
   ttg::intel::DpasEncodingAttr
-  getDPASEncoding(PatternRewriter &rewriter,
-                  tt::DotScaledOp scaledDotOp) const {
+  getDPASEncoding(tt::DotScaledOp scaledDotOp,
+                  PatternRewriter &rewriter) const {
     auto mod = scaledDotOp->getParentOfType<ModuleOp>();
-    auto dpasCap = ttg::intel::DpasEncodingAttr::getDPASCapability(mod);
-    Type elemType = scaledDotOp.getRhs().getType().getElementType();
+    TensorValue a = scaledDotOp.getLhs();
+    TensorValue b = scaledDotOp.getRhs();
+    TensorValue aScale = scaledDotOp.getLhsScale();
+    TensorValue bScale = scaledDotOp.getRhsScale();
+    assert((!aScale || !bScale) && "NYI: both LHS and RHS scale");
+
+    Type elemType =
+        aScale ? b.getType().getElementType() : a.getType().getElementType();
     unsigned opsPerChan =
         ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
     unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
@@ -309,6 +381,7 @@ private:
     SmallVector<unsigned> repCluster(rank, 1);
 
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+    auto dpasCap = ttg::intel::DpasEncodingAttr::getDPASCapability(mod);
 
     return ttg::intel::DpasEncodingAttr::get(
         rewriter.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
@@ -316,8 +389,19 @@ private:
         threadsPerWarp);
   }
 
-  TensorValue createArg(PatternRewriter &rewriter, TensorValue v,
-                        tt::ScaleDotElemType type, Attribute vEncoding) const {
+  TensorValue convertAccumulator(tt::DotScaledOp scaledDotOp,
+                                 ttg::intel::DpasEncodingAttr &dpasEnc,
+                                 PatternRewriter &rewriter) const {
+    RankedTensorType retType = scaledDotOp.getType();
+    auto newRetType = RankedTensorType::get(retType.getShape(),
+                                            retType.getElementType(), dpasEnc);
+    TensorValue oldAcc = scaledDotOp.getC();
+    return rewriter.create<ttg::ConvertLayoutOp>(oldAcc.getLoc(), newRetType,
+                                                 oldAcc);
+  }
+
+  TensorValue createArg(TensorValue v, tt::ScaleDotElemType type, bool useFp16,
+                        Attribute vEncoding, PatternRewriter &rewriter) const {
     RankedTensorType vType = v.getType();
     auto newVType = RankedTensorType::get(vType.getShape(),
                                           vType.getElementType(), vEncoding);
@@ -326,43 +410,44 @@ private:
 
     // convert to bf16
     if (type != tt::ScaleDotElemType::E2M1 &&
-        type != tt::ScaleDotElemType::BF16) {
+        type != tt::ScaleDotElemType::BF16 &&
+        type != tt::ScaleDotElemType::FP16) {
       assert(type == tt::ScaleDotElemType::E5M2 ||
              type == tt::ScaleDotElemType::E4M3);
-      auto vTypeBf16 = RankedTensorType::get(
-          newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
+      auto upcastedType = RankedTensorType::get(
+          newVType.getShape(),
+          useFp16 ? rewriter.getF16Type() : rewriter.getBF16Type(),
+          newVType.getEncoding());
       ret = cast<TypedValue<RankedTensorType>>(
-          rewriter.create<tt::FpToFpOp>(v.getLoc(), vTypeBf16, ret)
+          rewriter.create<tt::FpToFpOp>(v.getLoc(), upcastedType, ret)
               .getResult());
     }
     return ret;
   }
 
-  TensorValue createScale(PatternRewriter &rewriter, TensorValue scale,
-                          Attribute scaleEncoding) const {
+  TensorValue createScale(TensorValue scale, Attribute scaleEncoding,
+                          PatternRewriter &rewriter) const {
+    assert(scale && scaleEncoding && "Expecting valid scale and encoding");
     RankedTensorType scaleType = scale.getType();
-    auto newScaleDotElemType = RankedTensorType::get(
+    auto newScaleType = RankedTensorType::get(
         scaleType.getShape(), scaleType.getElementType(), scaleEncoding);
-    return rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(),
-                                                 newScaleDotElemType, scale);
+    return rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(), newScaleType,
+                                                 scale);
   }
 
-  TensorValue createUpcastMxfpOp(PatternRewriter &rewriter, TensorValue a,
-                                 TensorValue scale, tt::ScaleDotElemType type,
-                                 Attribute retTypeEncoding) const {
-    auto aType = cast<RankedTensorType>(a.getType());
-    auto retType = RankedTensorType::get(
-        aType.getShape(), aType.getElementType(), retTypeEncoding);
-    if (type == tt::ScaleDotElemType::E2M1) {
-      RankedTensorType retTy;
-      SmallVector<int64_t> newShape(aType.getShape());
-      newShape.back() *= 2;
-      retType = RankedTensorType::get(
-          newShape, FloatType::getBF16(rewriter.getContext()), retTypeEncoding);
-    }
-    // TODO: Check whether constructing without explicit retType works.
-    return rewriter.create<ttg::UpcastMXFPOp>(a.getLoc(), retType, a, scale,
-                                              type);
+  TensorValue createUpcastMxfpOp(TensorValue v, TensorValue scale,
+                                 tt::ScaleDotElemType elemType, bool useFp16,
+                                 bool fastMath,
+                                 PatternRewriter &rewriter) const {
+    if (!scale)
+      return v;
+
+    Builder b(v.getContext());
+    Type outputElemType = useFp16 ? b.getF16Type() : b.getBF16Type();
+    auto retTy = triton::gpu::intel::UpcastMXFPOp::deduceOutputType(
+        v, elemType, outputElemType);
+    return rewriter.create<ttgi::UpcastMXFPOp>(v.getLoc(), retTy, v, scale,
+                                               elemType, fastMath);
   }
 };
 
@@ -425,6 +510,149 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
   });
 }
 
+static void updateValueType(Value v, Attribute encoding,
+                            ArrayRef<int64_t> shape) {
+  auto tensorType = cast<RankedTensorType>(v.getType());
+  auto newType =
+      RankedTensorType::get(shape, tensorType.getElementType(), encoding);
+  v.setType(newType);
+}
+
+static std::optional<tt::TransOp>
+updateUsers(Value result, const SetVector<Operation *> &slice) {
+  if (llvm::any_of(result.getUsers(),
+                   [&](Operation *user) { return slice.count(user) == 0; })) {
+    OpBuilder builder(result.getContext());
+    builder.setInsertionPointAfterValue(result);
+    auto transOp =
+        builder.create<tt::TransOp>(result.getLoc(), result, ArrayRef({1, 0}));
+    result.replaceUsesWithIf(transOp.getResult(), [&](OpOperand &operand) {
+      return operand.getOwner() != transOp.getOperation() &&
+             slice.count(operand.getOwner()) == 0;
+    });
+    return transOp;
+  }
+  return std::nullopt;
+}
+
+// TODO: Sync the transpose in the IR, this is done to avoid generating convert
+// layout when we have a transpose right after a dot as mma layout cannot be
+// propagated through transpose op. Once we have layouts that can represent
+// transposed MMA we can remove this transformation.
+static void sinkTransposeOp(tt::TransOp input) {
+  SmallVector<tt::TransOp> queue = {input};
+  while (!queue.empty()) {
+    tt::TransOp transOp = queue.back();
+    Value currentValue = transOp.getResult();
+    queue.pop_back();
+    mlir::ForwardSliceOptions options;
+    options.filter = [](Operation *op) {
+      if (op->hasTrait<OpTrait::Elementwise>() && op->getNumOperands() == 1)
+        return true;
+      if (isa<scf::YieldOp>(op))
+        return isa<scf::ForOp>(op->getParentOp());
+      return isa<ttg::ConvertLayoutOp>(op);
+    };
+    SetVector<Operation *> slice;
+    mlir::getForwardSlice(currentValue, &slice, options);
+    for (Operation *op : slice) {
+      if (op->hasTrait<OpTrait::Elementwise>()) {
+        // Update users of transpose op.
+        if (op->getOperand(0) == transOp.getResult())
+          op->setOperand(0, transOp.getOperand());
+        // Update the type of the result.
+        for (Value result : op->getResults()) {
+          auto srcType = cast<RankedTensorType>(op->getOperand(0).getType());
+          updateValueType(result, srcType.getEncoding(), srcType.getShape());
+          updateUsers(result, slice);
+        }
+        continue;
+      }
+      if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+        // Update users of transpose op.
+        if (op->getOperand(0) == transOp.getResult())
+          op->setOperand(0, transOp.getOperand());
+        auto resultEncoding = cvtOp.getType().getEncoding();
+        auto newDstEncoding = ttgi::inferSrcEncoding(transOp, resultEncoding);
+        assert(newDstEncoding && "Expecting valid result encoding");
+        auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
+        updateValueType(cvtOp.getResult(), newDstEncoding, srcType.getShape());
+        updateUsers(cvtOp.getResult(), slice);
+        continue;
+      }
+      assert(isa<scf::YieldOp>(op) &&
+             "Transpose forward slice should contain "
+             "only elementwise, convert layout and yield ops.");
+      auto forOp = cast<scf::ForOp>(op->getParentOp());
+      for (OpOperand &operand : op->getOpOperands()) {
+        Operation *def = operand.get().getDefiningOp();
+        if (def && (slice.count(def)) || def == transOp.getOperation()) {
+          if (def == transOp.getOperation())
+            operand.set(transOp.getOperand());
+          Type newType = operand.get().getType();
+          forOp.getResult(operand.getOperandNumber()).setType(newType);
+          std::optional<tt::TransOp> retTrans =
+              updateUsers(forOp.getResult(operand.getOperandNumber()), slice);
+          // Recursively try to propagate the new transpose inserted.
+          if (retTrans.has_value())
+            queue.push_back(retTrans.value());
+          forOp.getRegionIterArg(operand.getOperandNumber()).setType(newType);
+          std::optional<tt::TransOp> argTrans = updateUsers(
+              forOp.getRegionIterArg(operand.getOperandNumber()), slice);
+          if (argTrans.has_value())
+            queue.push_back(argTrans.value());
+          OpBuilder builder(forOp);
+          OpOperand &init = forOp.getInitsMutable()[operand.getOperandNumber()];
+          auto initTranspose = builder.create<tt::TransOp>(
+              forOp.getLoc(), init.get(), ArrayRef({1, 0}));
+          init.set(initTranspose);
+        }
+      }
+    }
+  }
+}
+
+static tt::TransOp transposeDotOp(tt::DotScaledOp dotOp) {
+  assert(dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr &&
+         "Transpose DotOp expects scale on RHS");
+  OpBuilder builder(dotOp);
+  Value lhs = dotOp.getLhs();
+  std::array<int, 2> transOrder = {1, 0};
+  auto lhsTransposed =
+      builder.create<tt::TransOp>(lhs.getLoc(), lhs, transOrder);
+  Value rhs = dotOp.getRhs();
+  auto rhsTransposed =
+      builder.create<tt::TransOp>(rhs.getLoc(), rhs, transOrder);
+  Value c = dotOp.getC();
+  auto cTransposed = builder.create<tt::TransOp>(c.getLoc(), c, transOrder);
+  auto result = builder.create<tt::DotScaledOp>(
+      dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
+      cTransposed, dotOp.getRhsScale(), dotOp.getLhsScale(), dotOp.getRhsType(),
+      dotOp.getLhsType(), dotOp.getFastMath());
+  auto transOp =
+      builder.create<tt::TransOp>(result.getLoc(), result, transOrder);
+  dotOp.replaceAllUsesWith(transOp.getOperation());
+  dotOp.erase();
+  return transOp;
+}
+
+static void transposeDots(ModuleOp m) {
+  SmallVector<tt::DotScaledOp> toTranspose;
+  m.walk([&](tt::DotScaledOp dotOp) -> void {
+    if (dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr)
+      toTranspose.push_back(dotOp);
+  });
+  SmallVector<tt::TransOp> transposes;
+  for (tt::DotScaledOp &dotOp : toTranspose) {
+    tt::TransOp transpose = transposeDotOp(dotOp);
+    transposes.push_back(transpose);
+  }
+
+  for (tt::TransOp transpose : transposes) {
+    sinkTransposeOp(transpose);
+  }
+}
+
 class TritonIntelGPUAccelerateMatmulPass
     : public triton::gpu::intel::impl::TritonIntelGPUAccelerateMatmulBase<
           TritonIntelGPUAccelerateMatmulPass> {
@@ -436,6 +664,9 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     auto &dpasAnalysis = getAnalysis<ttg::intel::DPASAnalysis>();
+
+    // Transpose dotOp operations that have a scale on the RHS.
+    transposeDots(m);
 
     RewritePatternSet patterns(context);
     patterns.add<BlockedToDPAS, DecomposeScaledBlocked>(context, dpasAnalysis);

@@ -72,7 +72,7 @@ bool isDivisible(Value value, unsigned divisor) {
   return false;
 }
 
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
     return encoding;
   if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
@@ -212,7 +212,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        enqueue(operand, *srcEncoding);
+        enqueue(operand, srcEncoding);
       }
       continue;
     }

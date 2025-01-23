@@ -112,6 +112,33 @@ triton::DotOp getSingleDotOpIfExists(scf::ForOp forOp) {
 
   return (dotCounter == 1) ? dotOp : nullptr;
 }
+
+// The AMDGPU compiler backend can fold consecutive `ds_read/ds_write`
+// instructions into wider variants as a part of its load/store optimization
+// during the instruction selection pass. If it happens, then it means that
+// we are overestimated these types of instructions at the current level of
+// the IR. In this scenario, the inserted `sched.group.barriers` will result
+// in "fooling" the scheduling solver which can mess up the final assembly.
+// To avoid this, we switch off the backend load/store folding optimization
+// which is going to prevent instructions folding. In this case, the
+// instruction widths of `ds_read/ds_write` instructions are going to match
+// their LLVM representations. This is implemented as follows.
+// TODO: The current implementation disables `ds_read/ds_write` folding for
+// all basic blocks in the currently processed function. We should try to
+// avoid it. The compiler backend team proposed to play we the load/store
+// alignment values within the currently processed basic block as an
+// alternative solution.
+void disableInstructionFolding(triton::amdgpu::InstructionSchedHint schedHint) {
+  auto funcOp = schedHint->getParentOfType<LLVM::LLVMFuncOp>();
+  MLIRContext *ctx = schedHint->getContext();
+  llvm::SmallVector<StringAttr> targetFeatures;
+  if (auto attr = funcOp.getTargetFeatures()) {
+    llvm::copy(attr->getFeatures(), std::back_inserter(targetFeatures));
+  }
+  targetFeatures.push_back(str_attr("-load-store-opt"));
+  funcOp.setTargetFeaturesAttr(
+      ::mlir::LLVM::TargetFeaturesAttr::get(ctx, targetFeatures));
+}
 } // namespace mlir::triton
 
 namespace {
@@ -121,6 +148,8 @@ namespace {
 void createSchedGroupBarrier(PatternRewriter &rewriter, Location loc,
                              mlir::amdgpu::sched_barrier_opt_enum maskValue,
                              int sizeValue, int groupIdValue) {
+  if (sizeValue < 1)
+    return;
   IntegerAttr mask =
       rewriter.getI32IntegerAttr(static_cast<int32_t>(maskValue));
   IntegerAttr size =
@@ -217,31 +246,22 @@ struct InstructionSchedHintsRewriter
       : OpRewritePattern(ctx), numStages(numStages) {
 
     this->machineDescr = MachineDescr::get(arch);
-    std::transform(variant.begin(), variant.end(), variant.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
 
-    this->schedulingType =
-        llvm::StringSwitch<SchedulingType>(variant)
-            .Case("none", SchedulingType::NONE)
-            .Case("llvm-iglp-0", SchedulingType::LLVM_IGLP_0)
-            .Case("llvm-iglp-1", SchedulingType::LLVM_IGLP_1)
-            .Case("local-prefetch", SchedulingType::LOCAL_PREFETCH)
-            .Default(SchedulingType::UNKNOWN);
-
+    this->schedHint = mlir::triton::amdgpu::SchedHint::none;
     if (this->numStages < 2) {
-      this->schedulingType = SchedulingType::NONE;
       LDBG("ignoring instruction scheduling due to a very low num. "
            "stages value. Must be >= 2");
+      return;
     }
-  }
 
-  enum class SchedulingType : uint32_t {
-    NONE = 0,
-    LLVM_IGLP_0,
-    LLVM_IGLP_1,
-    LOCAL_PREFETCH,
-    UNKNOWN
-  };
+    std::transform(variant.begin(), variant.end(), variant.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (auto maybeSchedHint = triton::amdgpu::symbolizeSchedHint(variant))
+      this->schedHint = maybeSchedHint.value();
+    else
+      LDBG("ignoring instruction scheduling because "
+           "unknown instruction scheduling variant has been provided");
+  }
 
   // The following is inspired by ROCm Composable Kernel library's V3 pipelining
   // (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
@@ -250,13 +270,6 @@ struct InstructionSchedHintsRewriter
   void createLocalPrefetchSchedule(
       PatternRewriter &rewriter, Location loc,
       triton::amdgpu::InstructionSchedHint schedHint) const {
-
-    if (!(schedHint.getIsBufferLoadsAEnabled() &&
-          schedHint.getIsBufferLoadsBEnabled())) {
-      LDBG("skipping `local-prefetch` scheduling given it needs `buffer_load` "
-           "instructions");
-      return;
-    }
 
     if (!machineDescr) {
       schedHint.emitError("unknown target architecture detected");
@@ -275,12 +288,14 @@ struct InstructionSchedHintsRewriter
         schedHint.getNumGlobalLoadsB().getValue();
 
     if (numBufferLoadInstA == 0) {
-      schedHint.emitError("buffer load count for tile A must be initialized");
+      schedHint.emitError(
+          "global/buffer load count for tile A must be initialized");
       return;
     }
 
     if (numBufferLoadInstB == 0) {
-      schedHint.emitError("buffer load count for tile B must be initialized");
+      schedHint.emitError(
+          "global/buffer load count for tile B must be initialized");
       return;
     }
 
@@ -305,24 +320,39 @@ struct InstructionSchedHintsRewriter
     const uint32_t mmaIssueCycle = this->machineDescr->getMmaIssueCycle();
     const uint32_t numLdsDataPaths = this->machineDescr->getNumLdsDataPaths();
 
+    // Compute how many ds_reads from tile A we can put between to adjacent
+    // MFMAs
     const auto dsReadAMmaRate = (mmaExecCycle - mmaIssueCycle +
                                  numLdsDataPaths * dsReadAIssueCycle - 1) /
                                 (numLdsDataPaths * dsReadAIssueCycle);
+
+    // Compute how many ds_reads from tile B we can put between to adjacent
+    // MFMAs
     const auto dsReadBMmaRate = (mmaExecCycle - mmaIssueCycle +
                                  numLdsDataPaths * dsReadBIssueCycle - 1) /
                                 (numLdsDataPaths * dsReadBIssueCycle);
 
+    // Compute how many (MFMA [ds_read]+) clusters we can get from tile A
     const auto numDsreadAMma =
         (numDsReadInstA + dsReadAMmaRate - 1) / dsReadAMmaRate;
+
+    // Compute how many (MFMA [ds_read]+) clusters we can get from tile B
     const auto numDsreadBMma =
         (numDsReadInstB + dsReadBMmaRate - 1) / dsReadBMmaRate;
 
-    // stage 1
+    // Stage 1
+    // Compute how many MFMAs we have left for stage 1 - i.e., clusters with
+    // ds_writes, global/buffer_loads, MFMAs
     const auto numMmaStage1 = numMmaInst - (numDsreadAMma + numDsreadBMma);
     const auto numMmaPerIssue =
         numMmaStage1 / (numBufferLoadInstA + numBufferLoadInstB);
 
+    // Compute how many ds_writes we have per global/buffer load resulting from
+    // tile A
     const auto numDswritePerIssueA = numDsWriteInstA / numBufferLoadInstA;
+
+    // Compute how many ds_writes we have per global/buffer load resulting from
+    // tile B
     const auto numDswritePerIssueB = numDsWriteInstB / numBufferLoadInstB;
 
     for (size_t i = 0; i < numBufferLoadInstA; ++i) {
@@ -386,45 +416,15 @@ struct InstructionSchedHintsRewriter
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma, 1, 0);
     }
 
-    // The AMDGPU compiler backend can fold consecutive `ds_read/ds_write`
-    // instructions into wider variants as a part of its load/store optimization
-    // during the instruction selection pass. If it happens, then it means that
-    // we are overestimated these types of instructions at the current level of
-    // the IR. In this scenario, the inserted `sched.group.barriers` will result
-    // in "fooling" the scheduling solver which can mess up the final assembly.
-    // To avoid this, we switch off the backend load/store folding optimization
-    // which is going to prevent instructions folding. In this case, the
-    // instruction widths of `ds_read/ds_write` instructions are going to match
-    // their LLVM representations. This is implemented as follows.
-
-    // TODO: The current implementation disables `ds_read/ds_write` folding for
-    // all basic blocks in the currently processed function. We should try to
-    // avoid it. The compiler backend team proposed to play we the load/store
-    // alignment values within the currently processed basic block as an
-    // alternative solution.
-    auto funcOp = schedHint->getParentOfType<LLVM::LLVMFuncOp>();
-    MLIRContext *ctx = schedHint->getContext();
-    llvm::SmallVector<StringAttr> targetFeatures;
-    if (auto attr = funcOp.getTargetFeatures()) {
-      llvm::copy(attr->getFeatures(), std::back_inserter(targetFeatures));
-    }
-    targetFeatures.push_back(str_attr("-load-store-opt"));
-    funcOp.setTargetFeaturesAttr(
-        ::mlir::LLVM::TargetFeaturesAttr::get(ctx, targetFeatures));
+    disableInstructionFolding(schedHint);
   }
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
                   PatternRewriter &rewriter) const override {
-    if (this->schedulingType == SchedulingType::NONE) {
+    if (this->schedHint == mlir::triton::amdgpu::SchedHint::none) {
       rewriter.eraseOp(instructionSchedHint);
       return success();
-    }
-
-    if (this->schedulingType == SchedulingType::UNKNOWN) {
-      instructionSchedHint.emitError(
-          "unknown instruction scheduling variant has been provided");
-      return failure();
     }
 
     // The switch controls whether instructions are allowed to cross the basic
@@ -432,9 +432,8 @@ struct InstructionSchedHintsRewriter
     // not supposed to be used together with IGLP OPT according to the AMDGPU
     // backend documentation.
     const bool limitSchedulingRange =
-        !(schedulingType == SchedulingType::NONE ||
-          schedulingType == SchedulingType::LLVM_IGLP_0 ||
-          schedulingType == SchedulingType::LLVM_IGLP_1);
+        this->schedHint == mlir::triton::amdgpu::SchedHint::local_prefetch;
+    ;
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
     if (limitSchedulingRange) {
@@ -445,15 +444,15 @@ struct InstructionSchedHintsRewriter
 
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
-    switch (schedulingType) {
-    case SchedulingType::LLVM_IGLP_0:
-    case SchedulingType::LLVM_IGLP_1:
-      createIglpOpt(rewriter, loc, static_cast<int>(schedulingType) - 1);
+    switch (this->schedHint) {
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_0:
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_1:
+      createIglpOpt(rewriter, loc, static_cast<int>(this->schedHint) - 1);
       break;
-    case SchedulingType::LOCAL_PREFETCH:
+    case mlir::triton::amdgpu::SchedHint::local_prefetch:
       createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
       break;
-    case SchedulingType::NONE:
+    case mlir::triton::amdgpu::SchedHint::none:
     default:
       break;
     }
@@ -468,7 +467,7 @@ struct InstructionSchedHintsRewriter
 
 private:
   int32_t numStages;
-  SchedulingType schedulingType;
+  mlir::triton::amdgpu::SchedHint schedHint;
   std::unique_ptr<MachineDescr> machineDescr;
 };
 

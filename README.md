@@ -130,36 +130,15 @@ There currently isn't a turnkey way to run all the Triton tests, but you can
 follow the following recipe.
 
 ```shell
-# One-time setup.  Note we have to reinstall local Triton because torch
+# One-time setup.  Note this will reinstall local Triton because torch
 # overwrites it with the public version.
-$ pip install scipy numpy torch pytest lit pandas matplotlib && pip install -e python
+$ make dev-install
 
-# Run Python tests using your local GPU.
-$ python3 -m pytest python/test/unit
+# To run all tests (requires a GPU)
+$ make test
 
-# Move to builddir.  Fill in <...> with the full path, e.g.
-# `cmake.linux-x86_64-cpython-3.11`.
-$ cd python/build/cmake<...>
-
-# Run C++ unit tests.
-$ ctest -j32
-
-# Run lit tests.
-$ lit test
-```
-
-You may find it helpful to make a symlink to the builddir and tell your local
-git to ignore it.
-
-```shell
-$ ln -s python/build/cmake<...> build
-$ echo build >> .git/info/exclude
-```
-
-Then you can e.g. rebuild and run lit with the following command.
-
-```shell
-$ ninja -C build && ( cd build ; lit test )
+# Or, to run tests without a gpu
+$ make test-cpp test-lit
 ```
 
 # Tips for hacking
@@ -171,6 +150,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
+- `MLIR_DUMP_PATH` specifies where `MLIR_ENABLE_DUMP` will dump to. If unset will dump to stderr.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
   at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
@@ -191,8 +171,16 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
   be less noisy. `TRITON_LLVM_DEBUG_ONLY` allows for one or more comma
   separated values to be specified (eg
-  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions"` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
+- `TRITON_ENABLE_ASAN=1` invokes the LLVM address sanitizer for
+  memory leak and out of bounds access detection. Currently only supported on the AMD
+  backend. This must be run using the ASAN libraries documented [here](https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html).
+
+  When enabling the address sanitizer it is recommended to disable various memory caching strategies
+  both within the ROCm stack and PyTorch. This will give the address sanitizer the best chance at finding the
+  memory fault where it originates. See this [test](https://github.com/triton-lang/triton/blob/main/third_party/amd/python/test/test_address_sanitizer.py) for more details.
+
 - `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
   will be the line number of the IR file with that particular extension,
   instead of line number of the python file. This can provide a direct mapping
@@ -210,11 +198,12 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `MLIR_ENABLE_DIAGNOSTICS` enables dumping the stack trace and the related IR operation of diagnostics (e.g., errors and warnings).
 - `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
-- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx.
-- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx when `TRITON_KERNEL_DUMP` is set to 1.
-- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx at the beginning of each compilation stage.
-- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx files when `TRITON_KERNEL_OVERRIDE` is set to 1.
+- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx/amdgcn.
+- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx/amdgcn when `TRITON_KERNEL_DUMP` is set to 1.
+- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx/amdgcn at the beginning of each compilation stage.
+- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx/amdgcn files when `TRITON_KERNEL_OVERRIDE` is set to 1.
 
 **Kernel Override Steps**
 
@@ -224,7 +213,7 @@ export TRITON_KERNEL_DUMP=1
 export TRITON_DUMP_DIR=<dump_dir>
 export TRITON_KERNEL_OVERRIDE=1
 export TRITON_OVERRIDE_DIR=<override_dir>
-# Step 1: Run the kernel once to dump kernel's IRs and ptx in $TRITON_DUMP_DIR
+# Step 1: Run the kernel once to dump kernel's IRs and ptx/amdgcn in $TRITON_DUMP_DIR
 # Step 2: Copy $TRITON_DUMP_DIR/<kernel_hash> to $TRITON_OVERRIDE_DIR
 # Step 3: Delete the stages that you do not want to override and modify the stage you do want to override
 # Step 4: Run the kernel again to see the overridden result
@@ -253,5 +242,5 @@ Supported Platforms:
 Supported Hardware:
 
 - NVIDIA GPUs (Compute Capability 8.0+)
-- AMD GPUs (ROCm 5.2+)
+- AMD GPUs (ROCm 6.2+)
 - Under development: CPUs

@@ -598,12 +598,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 #shared0 = #ttg.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_alloc_tensor(%arg0: !llvm.ptr<3>)
   tt.func @basic_alloc_tensor() {
     // CHECK-NEXT: llvm.mlir.constant
     // CHECK-NEXT: llvm.getelementptr
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory, mutable>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -611,6 +612,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 #shared0 = #ttg.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_subview(%arg0: !llvm.ptr<3>)
   tt.func @basic_subview() {
@@ -618,9 +620,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.extractvalue
-    // CHECK-NEXT: llvm.extractvalue
+    // CHECK-NEXT: llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: llvm.mlir.constant(32 : i32) : i32
+    // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add
@@ -631,8 +633,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.getelementptr
     %index = arith.constant 1 : i32
     %zero = arith.constant 0 : i32
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #ttg.shared_memory, mutable>
-    %1 = ttg.memdesc_subview %0[%index, %zero, %zero] : !ttg.memdesc<128x16x32xf32, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #ttg.shared_memory, mutable>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable>
+    %1 = ttg.memdesc_subview %0[%index, %zero, %zero] : !ttg.memdesc<128x16x32xf32, #shared0, #smem, mutable> -> !ttg.memdesc<16x32xf32, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -697,12 +699,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked({{.*}}%arg1: !llvm.ptr<3>)
-  tt.func @convert_layout_blocked_blocked(%arg0: tensor<16x16xf32, #blocked0>) {
+  tt.func @convert_layout_blocked_blocked(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
@@ -737,19 +739,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK-SAME: !llvm.ptr<3>
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3>
-    %0 = ttg.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }
 }
 
 // -----
 
-#blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
   // CHECK-LABEL: convert_layout_blocked_blocked_vec({{.*}}%arg1: !llvm.ptr<3>)
-  tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xf32, #blocked0>) {
+  tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
@@ -760,7 +762,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
     // CHECK: llvm.load
     // CHECK-SAME: !llvm.ptr<3> -> vector<4xf32>
-    %0 = ttg.convert_layout %arg0 : tensor<16x16xf32, #blocked0> -> tensor<16x16xf32, #blocked1>
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
     tt.return
   }
 }
@@ -799,15 +801,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 2], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #shared0 = #ttg.shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dpas0 = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
-#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas0, kWidth=2}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas0, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas0, kWidth=2}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: convert_dot
   tt.func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
-    %AA = ttg.local_alloc %A : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory>
-    %BB = ttg.local_alloc %B : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory>
-    %AA_DOT = ttg.local_load %AA : !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory> -> tensor<16x16xf16, #dot_operand_a>
-    %BB_DOT = ttg.local_load %BB : !ttg.memdesc<16x16xf16, #shared0, #ttg.shared_memory> -> tensor<16x16xf16, #dot_operand_b>
+    %AA = ttg.local_alloc %A : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
+    %BB = ttg.local_alloc %B : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
+    %AA_DOT = ttg.local_load %AA : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_a>
+    %BB_DOT = ttg.local_load %BB : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #dpas0>
 
     // CHECK-COUNT-2: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
@@ -888,6 +891,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 // -----
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #shared0 = #ttg.shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_layout_blocked_shared
   tt.func @convert_layout_blocked_shared(%arg0: tensor<128x32xf32, #blocked0>) {
@@ -895,7 +899,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     // CHECK-SAME: vector<8xf32>, !llvm.ptr<3>
     // CHECK: llvm.store
     // CHECK-SAME: vector<8xf32>, !llvm.ptr<3>
-    %0 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #ttg.shared_memory>
+    %0 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #smem>
     tt.return
   }
 }
@@ -949,14 +953,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
-#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @matmul_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
-  %a:!ttg.memdesc<128x32xf16, #shared>, %b:!ttg.memdesc<32x256xf16, #shared>) {
+  %a:!ttg.memdesc<128x32xf16, #shared, #smem>, %b:!ttg.memdesc<32x256xf16, #shared, #smem>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
-    %a_mat = ttg.local_load %a : !ttg.memdesc<128x32xf16, #shared> -> tensor<128x32xf16, #dot_operand_a>
-    %b_mat = ttg.local_load %b : !ttg.memdesc<32x256xf16, #shared> -> tensor<32x256xf16, #dot_operand_b>
+    %a_mat = ttg.local_load %a : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #dot_operand_a>
+    %b_mat = ttg.local_load %b : !ttg.memdesc<32x256xf16, #shared, #smem> -> tensor<32x256xf16, #dot_operand_b>
 
     // CHECK-COUNT-128: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
     %28 = tt.dot %a_mat, %b_mat, %cst : tensor<128x32xf16, #dot_operand_a> * tensor<32x256xf16, #dot_operand_b> -> tensor<128x256xf32, #dpas>
@@ -975,14 +980,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared0 = #ttg.shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
-#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @matmul884_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
-  %a:!ttg.memdesc<32x64xf16, #shared0>, %b:!ttg.memdesc<64x64xf16, #shared1>) {
+  %a:!ttg.memdesc<32x64xf16, #shared0, #smem>, %b:!ttg.memdesc<64x64xf16, #shared1, #smem>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x64xf32, #dpas>
-    %a_mat = ttg.local_load %a : !ttg.memdesc<32x64xf16, #shared0> -> tensor<32x64xf16, #dot_operand_a>
-    %b_mat = ttg.local_load %b : !ttg.memdesc<64x64xf16, #shared1> -> tensor<64x64xf16, #dot_operand_b>
+    %a_mat = ttg.local_load %a : !ttg.memdesc<32x64xf16, #shared0, #smem> -> tensor<32x64xf16, #dot_operand_a>
+    %b_mat = ttg.local_load %b : !ttg.memdesc<64x64xf16, #shared1, #smem> -> tensor<64x64xf16, #dot_operand_b>
 
     // CHECK-COUNT-16: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
     %28 = tt.dot %a_mat, %b_mat, %cst : tensor<32x64xf16, #dot_operand_a> * tensor<64x64xf16, #dot_operand_b> -> tensor<32x64xf32, #dpas>
@@ -1000,13 +1006,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#blocked}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @matmul_fmadot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
-  %a:!ttg.memdesc<32x16xf32, #shared, #ttg.shared_memory>, %b:!ttg.memdesc<16x32xf32, #shared, #ttg.shared_memory>) {
+  %a:!ttg.memdesc<32x16xf32, #shared, #smem>, %b:!ttg.memdesc<16x32xf32, #shared, #smem>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
     // CHECK: llvm.intr.fmuladd
-    %a_mat = ttg.local_load %a : !ttg.memdesc<32x16xf32, #shared, #ttg.shared_memory> -> tensor<32x16xf32, #dot_operand_a>
-    %b_mat = ttg.local_load %b : !ttg.memdesc<16x32xf32, #shared, #ttg.shared_memory> -> tensor<16x32xf32, #dot_operand_b>
+    %a_mat = ttg.local_load %a : !ttg.memdesc<32x16xf32, #shared, #smem> -> tensor<32x16xf32, #dot_operand_a>
+    %b_mat = ttg.local_load %b : !ttg.memdesc<16x32xf32, #shared, #smem> -> tensor<16x32xf32, #dot_operand_b>
 
     %28 = tt.dot %a_mat, %b_mat, %cst, inputPrecision = ieee : tensor<32x16xf32, #dot_operand_a> * tensor<16x32xf32, #dot_operand_b> -> tensor<32x32xf32, #blocked>
     %30 = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x1x!tt.ptr<f32>, #blocked>
@@ -1021,15 +1028,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: matmul_tf32dot
   tt.func @matmul_tf32dot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
-  %a:!ttg.memdesc<32x16xf32, #shared>, %b:!ttg.memdesc<16x32xf32, #shared>) {
+  %a:!ttg.memdesc<32x16xf32, #shared, #smem>, %b:!ttg.memdesc<16x32xf32, #shared, #smem>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
-    %a_mat = ttg.local_load %a : !ttg.memdesc<32x16xf32, #shared> -> tensor<32x16xf32, #dot_operand_a>
-    %b_mat = ttg.local_load %b : !ttg.memdesc<16x32xf32, #shared> -> tensor<16x32xf32, #dot_operand_b>
+    %a_mat = ttg.local_load %a : !ttg.memdesc<32x16xf32, #shared, #smem> -> tensor<32x16xf32, #dot_operand_a>
+    %b_mat = ttg.local_load %b : !ttg.memdesc<16x32xf32, #shared, #smem> -> tensor<16x32xf32, #dot_operand_b>
 
     // CHECK-COUNT-2: llvm.call spir_funccc @_Z39intel_sub_group_tf32_tf32_matrix_mad_k8Dv8_fS_S_(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32>
     %28 = tt.dot %a_mat, %b_mat, %cst, inputPrecision = tf32 : tensor<32x16xf32, #dot_operand_a> * tensor<16x32xf32, #dot_operand_b> -> tensor<32x32xf32, #dpas>
@@ -1374,6 +1382,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #shared0 = #ttg.shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: test_base_index_cache
   tt.func @test_base_index_cache(%arg0: tensor<128x32xf32, #blocked0>) {
@@ -1381,8 +1390,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     // CHECK:      llvm.mlir.constant(0 : i32) : i32
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
-    %0 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #ttg.shared_memory>
-    %1 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #ttg.shared_memory>
+    %0 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #smem>
+    %1 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #smem>
     tt.return
   }
 }
@@ -1390,6 +1399,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 // -----
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #shared0 = #ttg.shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: test_index_cache_different_block
   tt.func @test_index_cache_different_block(%arg0: tensor<128x32xf32, #blocked0>, %arg1: i1) {
@@ -1397,10 +1407,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     // CHECK:      llvm.mlir.constant(0 : i32) : i32
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
-    %0 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #ttg.shared_memory>
+    %0 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #smem>
     cf.cond_br %arg1, ^bb1, ^bb2
     ^bb1:  // pred: ^bb0
-      %1 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #ttg.shared_memory>
+      %1 = ttg.local_alloc %arg0 : (tensor<128x32xf32, #blocked0>) -> !ttg.memdesc<128x32xf32, #shared0, #smem>
       cf.br ^bb2
     ^bb2:  // 2 preds: ^bb0, ^bb1
       tt.return
@@ -1412,7 +1422,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1]}>
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
+#dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: matmul_tf32_cst_b
@@ -1444,10 +1454,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: %[[Cf16:.+]] = llvm.bitcast %[[C1f]] : f16 to f16
   // CHECK: %[[U:.+]] = llvm.mlir.undef : !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>
   // CHECK: llvm.insertvalue %[[Cf16]], %[[U]][0]
-    %cst_0 = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>>
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>>
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>>
     %cst_2 = arith.constant dense<32> : tensor<32x1xi32, #blocked>
-    %0 = tt.dot %cst_0, %cst_1, %cst : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>> * tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>> -> tensor<32x32xf32, #dpas>
+    %0 = tt.dot %cst_0, %cst_1, %cst : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>> * tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>> -> tensor<32x32xf32, #dpas>
     %1 = ttg.convert_layout %0 : tensor<32x32xf32, #dpas> -> tensor<32x32xf32, #blocked>
     %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32x1xi32, #blocked>
@@ -1479,7 +1489,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
-#dot = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=4}>
+#dot = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "triton_intel_gpu.support_bf16_conversion"} {
   // CHECK-LABEL: test_s8_to_bf16_vectorized_conversion
   tt.func @test_s8_to_bf16_vectorized_conversion(%in: tensor<16x16xi8, #dpas>) {
@@ -1498,7 +1508,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "triton_
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #slice = #ttg.slice<{dim = 0, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @reduce_all(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>) {
+  tt.func public @reduce_all(%arg: tensor<256x1xi32, #blocked>, %arg_0: tensor<256x1xf32, #blocked>, %arg_1: tensor<256x1xi1, #blocked>) {
 
     // CHECK: @_Z27__spirv_GroupNonUniformFAddiif
     %0 = "tt.reduce"(%arg_0) <{axis = 0 : i32}> ({
@@ -1562,6 +1572,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
       %48 = arith.xori %arg4, %arg5 : i32
       tt.reduce.return %48 : i32
     }) : (tensor<256x1xi32, #blocked>) -> tensor<1xi32, #slice>
+
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    %10 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.addi %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    %11 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.muli %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    %12 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.maxsi %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z32__spirv_GroupNonUniformLogicalOriib
+    %13 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.maxui %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    %14 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.minsi %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
+
+    // CHECK: @_Z33__spirv_GroupNonUniformLogicalAndiib
+    %15 = "tt.reduce"(%arg_1) <{axis = 0 : i32}> ({
+    ^bb0(%arg4: i1, %arg5: i1):
+      %48 = arith.minui %arg4, %arg5 : i1
+      tt.reduce.return %48 : i1
+    }) : (tensor<256x1xi1, #blocked>) -> tensor<1xi1, #slice>
 
     tt.return
   }
@@ -1741,10 +1793,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @volta_dot() {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
-    %a = arith.constant dense<0.000000e+00> : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>>
+    %a = arith.constant dense<0.000000e+00> : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>>
     %b = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>>
 
-    %87 = tt.dot %a, %b, %cst : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>> -> tensor<32x32xf32, #dpas>
+    %87 = tt.dot %a, %b, %cst : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>> * tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>> -> tensor<32x32xf32, #dpas>
     tt.return
   }
 }
@@ -1788,13 +1840,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @vectorize_shmem_load
   // CHECK: llvm.load
   // CHECK-SAME: {alignment = 8 : i64} : !llvm.ptr<3> -> vector<8xi8>
   // CHECK-NOT: llvm.load
-  tt.func public @vectorize_shmem_load(%shmem : !ttg.memdesc<16x16xi8, #shared, #ttg.shared_memory>) {
-    %0 = ttg.local_load %shmem : !ttg.memdesc<16x16xi8, #shared, #ttg.shared_memory> -> tensor<16x16xi8, #blocked>
+  tt.func public @vectorize_shmem_load(%shmem : !ttg.memdesc<16x16xi8, #shared, #smem>) {
+    %0 = ttg.local_load %shmem : !ttg.memdesc<16x16xi8, #shared, #smem> -> tensor<16x16xi8, #blocked>
     tt.return
   }
 }
@@ -1803,13 +1856,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @vectorize_shmem_store
   // CHECK: llvm.store
   // CHECK-SAME: {alignment = 64 : i64} : vector<16xi32>, !llvm.ptr<3>
   // CHECK-NOT: llvm.store
   tt.func public @vectorize_shmem_store(%block : tensor<64x64xi32, #blocked>) {
-    %0 = ttg.local_alloc %block : (tensor<64x64xi32, #blocked>) -> !ttg.memdesc<64x64xi32, #shared, #ttg.shared_memory>
+    %0 = ttg.local_alloc %block : (tensor<64x64xi32, #blocked>) -> !ttg.memdesc<64x64xi32, #shared, #smem>
     tt.return
   }
 }
@@ -1829,12 +1883,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: test_local_load_bf16
   // CHECK: llvm.extractelement {{.*}} : vector<8xbf16>
   tt.func public @test_local_load_bf16() {
     %c0_i32 = arith.constant 0 : i32
-    %19 = ttg.local_alloc  : () -> !ttg.memdesc<1x1x2048xbf16, #shared, #ttg.shared_memory, mutable>
+    %19 = ttg.local_alloc  : () -> !ttg.memdesc<1x1x2048xbf16, #shared, #smem, mutable>
     %22 = ttg.memdesc_subview %19[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x1x2048xbf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<1x2048xbf16, #shared, #ttg.shared_memory, mutable>
     %39 = ttg.local_load %22 : !ttg.memdesc<1x2048xbf16, #shared, #ttg.shared_memory, mutable> -> tensor<1x2048xbf16, #blocked>
     %40 = arith.extf %39 : tensor<1x2048xbf16, #blocked> to tensor<1x2048xf32, #blocked>
@@ -1845,13 +1900,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: test_local_store
   // CHECK: llvm.store
   tt.func public @test_local_store(%arg0: tensor<1xf32, #blocked>) {
     %c0_i32 = arith.constant 0 : i32
-    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #ttg.shared_memory, mutable>
-    ttg.local_store %arg0, %0 : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #ttg.shared_memory, mutable>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    ttg.local_store %arg0, %0 : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -1859,14 +1915,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], hasLeadingOffset = false}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: test_local_store_subview
   // CHECK: llvm.store
   tt.func public @test_local_store_subview(%arg0: tensor<1xf32, #blocked>) {
     %c0_i32 = arith.constant 0 : i32
-    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #ttg.shared_memory, mutable>
-    %sv = ttg.memdesc_subview %0[%c0_i32] : !ttg.memdesc<1xf32, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<1xf32, #shared, #ttg.shared_memory, mutable>
-    ttg.local_store %arg0, %sv : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #ttg.shared_memory, mutable>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    %sv = ttg.memdesc_subview %0[%c0_i32] : !ttg.memdesc<1xf32, #shared, #smem, mutable> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    ttg.local_store %arg0, %sv : tensor<1xf32, #blocked> -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -1888,7 +1945,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // Test that %u format specifier is used if isSigned is false
-  // CHECK: llvm.mlir.global internal constant @printfFormat_0("pid (%u, %u, %u) idx ()int32 tensor: %u\0A\00") {addr_space = 2 : i32}
+  // CHECK: llvm.mlir.global internal constant @printfFormat_("pid (%u, %u, %u) idx ()int32 tensor: %u\0A\00") {addr_space = 2 : i32}
   // CHECK-LABEL: print_int32_tensor_issigned_off
   // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32) -> i32
   tt.func @print_int32_tensor_issigned_off(%arg0 : i32) {
@@ -1901,7 +1958,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // Test that %i format specifier is used if isSigned is true
-  // CHECK: llvm.mlir.global internal constant @printfFormat_0("pid (%u, %u, %u) idx ()int32 tensor: %i\0A\00") {addr_space = 2 : i32}
+  // CHECK: llvm.mlir.global internal constant @printfFormat_("pid (%u, %u, %u) idx ()int32 tensor: %i\0A\00") {addr_space = 2 : i32}
   // CHECK-LABEL: print_int32_tensor_issigned_on
   // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32) -> i32
   tt.func @print_int32_tensor_issigned_on(%arg0 : i32) {

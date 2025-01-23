@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
@@ -16,9 +17,9 @@
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
-#include "intel/lib/LLVMIR/LLVMPasses.h"
+#include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
-#include "triton/Target/SPIRV/SPIRVTranslation.h"
+#include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 #include <pybind11/pybind11.h>
@@ -104,10 +105,23 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
 }
 
+void init_triton_intel_passes_arith(py::module &&m) {
+  m.def("add_arith_emulate_unsupported_floats",
+        [](mlir::PassManager &pm,
+           const std::vector<std::string> &sourceTypeStrs,
+           const std::string &targetTypeStr) {
+          pm.addPass(mlir::arith::createArithEmulateUnsupportedFloats(
+              {llvm::SmallVector<std::string>{sourceTypeStrs.begin(),
+                                              sourceTypeStrs.end()},
+               targetTypeStr}));
+        });
+}
+
 void init_triton_intel(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
+  init_triton_intel_passes_arith(passes.def_submodule("arith"));
 
   // cluster info
   py::class_<gpu::intel::ClusterInfo>(m, "ClusterInfo")
@@ -232,6 +246,11 @@ void init_triton_intel(py::module &&m) {
     mlir::registerTritonGENDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
+  });
+
+  m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
+    auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    return py::int_(ret);
   });
 
   // May do this after llvm ir according to user fmath flag.

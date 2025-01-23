@@ -6,6 +6,7 @@
 
 #include "PatternTritonGPUOpToLLVM.h"
 
+#include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -18,6 +19,121 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+
+// Convert 8 fp4 elements packed into a 32bit reg into 8 bf16 elements packed
+// into 4 32bits regs.
+static constexpr const char *FP4ToBF16Ptx =
+    "{\n"
+    ".reg .b32 a<14>;\n"
+    "and.b32  	a0, $4, -2004318072;\n\t"
+    "shr.u32 	a1, a0, 3;\n\t"
+    "and.b32  	a2, $4, 2004318071;\n\t"
+    "shr.u32 	a3, a2, 16;\n\t"
+    "shr.u32 	a4, a0, 19;\n\t"
+    "prmt.b32 a5, -1065353216, -1065336832, a2;\n\t"
+    "prmt.b32 a6, -1065353216, -1065336832, a3;\n\t"
+    "prmt.b32 a7, 1061109504, 1077952576, a2;\n\t"
+    "prmt.b32 a8, 1061109504, 1077952576, a3;\n\t"
+    "prmt.b32 a9, 32768, 0, a1;\n\t"
+    "prmt.b32 a10, 32768, 0, a4;\n\t"
+    "or.b32  	a11, a7, a9;\n\t"
+    "or.b32  	a12, a8, a10;\n\t"
+    "prmt.b32 $0, a5, a11, 20800;\n\t"
+    "prmt.b32 $1, a5, a11, 29538;\n\t"
+    "prmt.b32 $2, a6, a12, 20800;\n\t"
+    "prmt.b32 $3, a6, a12, 29538;\n\t"
+    "}";
+
+static constexpr const char *FP4ToFP16Ptx =
+    "{\n"
+    ".reg .b32           a<11>;\n"
+    ".reg .b16           t<4>;\n"
+    "and.b32             a0, $4, 0x77777777;\n\t"
+    "and.b32             a1, $4, 0x88888888;\n\t"
+    "shr.u32             a2, a1, 3;\n\t"
+    "shr.u32             a3, a0, 16;\n\t"
+    "shr.u32             a4, a2, 16;\n\t"
+    "prmt.b32            a5, 0x3C383000, 0x4C484440, a0;\n"
+    "prmt.b32            a6, 0x3C383000, 0x4C484440, a3;\n"
+    "prmt.b32            a7, 0x00008000, 0x0, a2;\n"
+    "prmt.b32            a8, 0x00008000, 0x0, a4;\n"
+    "or.b32              a9, a5, a7;\n\t"
+    "or.b32              a10, a6, a8;\n\t"
+    "mov.b32             {t0, t1}, a9;\n"
+    "mov.b32             {t2, t3}, a10;\n"
+    "cvt.rn.f16x2.e4m3x2 $0, t0;\n"
+    "cvt.rn.f16x2.e4m3x2 $1, t1;\n"
+    "cvt.rn.f16x2.e4m3x2 $2, t2;\n"
+    "cvt.rn.f16x2.e4m3x2 $3, t3;\n"
+    "}";
+
+static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
+                                   Type retType, Value packedVec,
+                                   const char *ptxAsm) {
+  PTXBuilder builder;
+  SmallVector<PTXBuilder::Operand *> operands;
+  for (int i = 0; i < 4; i++) {
+    operands.push_back(builder.newOperand("=r"));
+  }
+  operands.push_back(builder.newOperand(packedVec, "r"));
+  auto &ptxOp = *builder.create(ptxAsm);
+  ptxOp(operands, /*onlyAttachMLIRArgs=*/true);
+  Value result = builder.launch(rewriter, loc, retType, false);
+  return result;
+}
+
+static SmallVector<Value> convertFP4x2To16x2(RewriterBase &rewriter,
+                                             Location loc, Type targetTy,
+                                             ArrayRef<Value> values) {
+  SmallVector<Value> results;
+  MLIRContext *ctx = rewriter.getContext();
+  bool isFP16 = targetTy == f16_ty;
+  bool isBF16 = targetTy == bf16_ty;
+  assert(isFP16 || isBF16);
+  assert(values.size() % 4 == 0);
+  for (int i = 0; i < values.size(); i += 4) {
+    Value v0 = values[i];
+    Value v1 = values[i + 1];
+    Value v2 = values[i + 2];
+    Value v3 = values[i + 3];
+    Value packedVec = undef(vec_ty(i8_ty, 4));
+    packedVec = insert_element(packedVec, v0, i32_val(0));
+    packedVec = insert_element(packedVec, v1, i32_val(1));
+    packedVec = insert_element(packedVec, v2, i32_val(2));
+    packedVec = insert_element(packedVec, v3, i32_val(3));
+    SmallVector<Type> rets(4, i32_ty);
+    Type retType = struct_ty(rets);
+    const char *upcastPtx = isFP16 ? FP4ToFP16Ptx : FP4ToBF16Ptx;
+    Value ret =
+        createInlineAsmUpcast(loc, rewriter, retType, packedVec, upcastPtx);
+    for (int i = 0; i < 4; i++) {
+      Value extractI32 = extract_val(ret, i);
+      Value vecbf16 = bitcast(extractI32, vec_ty(targetTy, 2));
+      results.push_back(extract_element(vecbf16, i32_val(0)));
+      results.push_back(extract_element(vecbf16, i32_val(1)));
+    }
+  }
+  return results;
+}
+
+Value mxfpScale(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                Type fp_ty, bool fastMath) {
+  Value scaleFP;
+  if (fp_ty == bf16_ty) {
+    scaleFP = bitcast(shl(zext(i16_ty, scale), i16_val(7)), fp_ty);
+  } else {
+    assert(fp_ty == f16_ty);
+    scaleFP =
+        bitcast(shl(zext(i32_ty, scale), i32_val(23)), rewriter.getF32Type());
+    scaleFP = fptrunc(fp_ty, scaleFP);
+  }
+  Value scaledV = fmul(bitcast(v, fp_ty), scaleFP);
+  if (fastMath)
+    return scaledV;
+  // Account for NaN in the scale as per the mxfp specification.
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
+  return select(scaleIsNan, bitcast(i16_val(0x7fff), fp_ty), scaledV);
+};
 
 namespace {
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
@@ -41,6 +157,7 @@ public:
     auto xVals = unpackLLElements(loc, operands[0], rewriter);
     auto scaleVals = unpackLLElements(loc, operands[1], rewriter);
     auto fpType = op.getFpType();
+    auto outType = op.getType().getElementType();
 
     Value tid = tid_val();
     auto mod = op->getParentOfType<ModuleOp>();
@@ -53,7 +170,7 @@ public:
         cast<DotOperandEncodingAttr>(op.getType().getEncoding()).getKWidth();
 
     if (fpType == ScaleDotElemType::E2M1)
-      xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
+      xVals = convertFP4x2To16x2(rewriter, loc, outType, xVals);
 
     // Each thread owns elements of 4 mxfp vectors so we need 4 scales
     // Since we go from a threadShape of 8x4 to 16x2, we let c = tid / 4 * 2
@@ -81,8 +198,8 @@ public:
             for (int k = 0; k < kWidth; ++k) {
               auto idx =
                   32 * i + 16 * mxfp + rep * 2 * kWidth + subTile * kWidth + k;
-              xVals[idx] =
-                  LLVM::mxfpScaleBf16(rewriter, loc, xVals[idx], si[subTile]);
+              xVals[idx] = mxfpScale(rewriter, loc, xVals[idx], si[subTile],
+                                     outType, op.getFastMath());
             }
           }
         }

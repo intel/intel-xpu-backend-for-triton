@@ -1,4 +1,4 @@
-#include <optional>
+﻿#include <optional>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -29,13 +29,32 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
+
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
 namespace {
 
 namespace py = pybind11;
 using namespace mlir;
 using namespace triton;
+
+llvm::raw_fd_ostream &mlir_dumps() {
+  std::error_code EC;
+  static llvm::raw_fd_ostream S(::triton::tools::getStrEnv("MLIR_DUMP_PATH"),
+                                EC, llvm::sys::fs::CD_CreateAlways);
+  assert(!EC);
+  return S;
+}
+
+llvm::raw_ostream &mlir_dumps_or_dbgs() {
+  if (!::triton::tools::getStrEnv("MLIR_DUMP_PATH").empty()) {
+    return mlir_dumps();
+  } else {
+    return llvm::dbgs();
+  }
+}
 
 // A custom op builder that keeps track of the last location
 class TritonOpBuilder {
@@ -139,17 +158,6 @@ void outputWarning(Location loc, const std::string &msg) {
 } // anonymous namespace
 
 /*****************************************************************************/
-/* Python bindings for triton::ir::ttgir                                     */
-/*****************************************************************************/
-
-void init_triton_ttgpuir(py::module &&m) {
-  m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
-    auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    return py::int_(ret);
-  });
-}
-
-/*****************************************************************************/
 /* Python bindings for ir                                                    */
 /*****************************************************************************/
 
@@ -224,6 +232,7 @@ void init_triton_ir(py::module &&m) {
       .value("E3M2", ScaleDotElemType::E3M2)
       .value("E2M1", ScaleDotElemType::E2M1)
       .value("BF16", ScaleDotElemType::BF16)
+      .value("FP16", ScaleDotElemType::FP16)
       .export_values();
 
   py::class_<MLIRContext>(m, "context", py::module_local())
@@ -246,7 +255,8 @@ void init_triton_ir(py::module &&m) {
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    LLVM::LLVMDialect, mlir::ub::UBDialect>();
+                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
+                    mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -616,6 +626,7 @@ void init_triton_ir(py::module &&m) {
                    "Function argument index out of range");
              return self.getArgument(idx);
            })
+      .def("get_num_args", &FuncOp::getNumArguments)
       .def(
           "add_entry_block",
           [](FuncOp &self) -> Block * { return self.addEntryBlock(); },
@@ -817,11 +828,6 @@ void init_triton_ir(py::module &&m) {
       .def("get_fp8e4b15_ty",
            [](TritonOpBuilder &self) -> Type {
              return self.getBuilder().getI8Type();
-           })
-      .def("get_fp8e4m3b11fnuz_ty",
-           [](TritonOpBuilder &self) -> Type {
-             // TODO: align with upstream code to use i8
-             return self.getBuilder().getType<Float8E4M3B11FNUZType>();
            })
       .def("get_fp8e5_ty",
            [](TritonOpBuilder &self) -> Type {
@@ -1026,16 +1032,6 @@ void init_triton_ir(py::module &&m) {
                return self.create<arith::ExtSIOp>(dstType, src);
              else
                return self.create<arith::ExtUIOp>(dstType, src);
-           })
-      .def("create_to_index",
-           [](TritonOpBuilder &self, Value &input) -> Value {
-             return self.create<arith::IndexCastOp>(
-                 self.getBuilder().getIndexType(), input);
-           })
-      .def("create_index_to_si",
-           [](TritonOpBuilder &self, Value &input) -> Value {
-             return self.create<arith::IndexCastOp>(
-                 self.getBuilder().getI64Type(), input);
            })
       .def("create_fmul",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
@@ -1507,10 +1503,12 @@ void init_triton_ir(py::module &&m) {
               std::optional<mlir::Value> &lhs_scale,
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
-              ScaleDotElemType rhs_format, mlir::Value &c) -> mlir::Value {
-             return self.create<DotScaledOp>(
-                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
-                 rhs_scale.value_or(Value()), lhs_format, rhs_format);
+              ScaleDotElemType rhs_format, bool fast_math,
+              mlir::Value &c) -> mlir::Value {
+             return self.create<DotScaledOp>(c.getType(), lhs, rhs, c,
+                                             lhs_scale.value_or(Value()),
+                                             rhs_scale.value_or(Value()),
+                                             lhs_format, rhs_format, fast_math);
            })
       .def("create_floor",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1669,6 +1667,11 @@ void init_triton_ir(py::module &&m) {
               std::vector<int32_t> &tensorShape) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape);
+           })
+      // Proton Ops
+      .def("create_proton_record",
+           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
+             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
@@ -1691,11 +1694,11 @@ void init_triton_ir(py::module &&m) {
              if (haveDiagnostics) {
                context->printOpOnDiagnostic(true);
                context->printStackTraceOnDiagnostic(true);
+               context->getDiagEngine().registerHandler([](Diagnostic &diag) {
+                 llvm::outs() << diag << "\n";
+                 return success();
+               });
              }
-             context->getDiagEngine().registerHandler([](Diagnostic &diag) {
-               llvm::outs() << diag << "\n";
-               return success();
-             });
              if (haveDump) {
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
@@ -1718,7 +1721,7 @@ void init_triton_ir(py::module &&m) {
                    /*shouldPrintAfterPass=*/printAlways,
                    /*printModuleScope=*/true,
                    /*printAfterOnlyOnChange=*/false,
-                   /*printAfterOnlyOnFailure*/ true, llvm::dbgs(),
+                   /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
                    printingFlags);
              }
            })
@@ -1794,9 +1797,6 @@ void init_triton_ir(py::module &&m) {
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });
-
-  // ttgpu dialect bindings.
-  init_triton_ttgpuir(m.def_submodule("ttgpuir"));
 }
 
 void init_triton_env_vars(py::module &m) {

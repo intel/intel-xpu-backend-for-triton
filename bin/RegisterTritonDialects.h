@@ -68,7 +68,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonGPUGlobalScratchAllocationPass();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
-  mlir::triton::registerDecomposeUnsupportedNVIDIAConversions();
   mlir::registerLLVMDIScope();
   mlir::triton::gpu::intel::registerTritonAnnotateModulePass();
   mlir::triton::gpu::intel::registerTritonIntelGPUPasses();
@@ -87,6 +86,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPUReorderInstructions();
+  mlir::registerTritonAMDGPUBlockPingpong();
   mlir::registerTritonAMDGPUStreamPipeline();
   mlir::registerTritonAMDGPUCanonicalizePointers();
   mlir::registerTritonAMDGPUConvertToBufferOps();

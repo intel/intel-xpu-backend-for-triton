@@ -33,30 +33,6 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUPIPELINE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-// Return true if the preconditions for pipelining the loop are met.
-static bool preCondition(scf::ForOp forOp) {
-  // Skip loop with distance > 1 for now.
-  // TODO: relax the constraint in the expander.
-  if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
-                   [](Value operand) {
-                     Operation *def = operand.getDefiningOp();
-                     return !def;
-                   }))
-    return false;
-  // Don't pipeline outer loops.
-  if (forOp
-          ->walk([&](Operation *op) {
-            if (forOp.getOperation() == op)
-              return WalkResult::advance();
-            if (isa<scf::ForOp, scf::WhileOp>(op))
-              return WalkResult::interrupt();
-            return WalkResult::advance();
-          })
-          .wasInterrupted())
-    return false;
-  return true;
-}
-
 static void tryAndPipelineOuterLoop(scf::ForOp forOp) {
   mlir::triton::PipeliningOption options;
   bool foundSchedule = false;
@@ -72,8 +48,6 @@ static void tryAndPipelineOuterLoop(scf::ForOp forOp) {
 
 static bool pipelineLoop(scf::ForOp forOp, int numStages) {
   mlir::triton::PipeliningOption options;
-  if (!preCondition(forOp))
-    return false;
 
   bool foundSchedule = false;
   foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
