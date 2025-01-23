@@ -2,6 +2,7 @@ import importlib.metadata
 import os
 import hashlib
 import subprocess
+import ctypes
 import sysconfig
 import tempfile
 from pathlib import Path
@@ -149,6 +150,39 @@ class CompilationHelper:
 COMPILATION_HELPER = CompilationHelper()
 
 
+class ArchParser:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.CDLL(cache_path)
+        self.shared_library.parse_device_arch.restype = ctypes.c_char_p
+        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
+
+    def __getattribute__(self, name):
+        if name == "parse_device_arch":
+            shared_library = super().__getattribute__("shared_library")
+            attr = getattr(shared_library, name)
+
+            def wrapper(*args, **kwargs):
+                return attr(*args, **kwargs).decode("utf-8")
+
+            return wrapper
+
+        return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
+
+
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
@@ -170,6 +204,10 @@ def compile_module_from_src(src, name):
                         COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), file_name, binary=True)
+
+    if name == 'arch_utils':
+        return ArchParser(cache_path)
+
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)

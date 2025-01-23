@@ -158,7 +158,8 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # for correct registration of kernels.
     # For details: https://github.com/pytorch/pytorch/issues/144778
     kernels = [kernel for kernel in kernels if kernel != []]
-    assert len(kernels) == n_repeat, "the profiling number not match"
+    # FIXME: relaxation for new agama release
+    assert len(kernels) >= n_repeat - 1, "the profiling number not match"
     # Make the time to the milliseconds.
     times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
