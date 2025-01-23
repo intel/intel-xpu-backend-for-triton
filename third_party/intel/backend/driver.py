@@ -2,10 +2,11 @@ import importlib.metadata
 import os
 import hashlib
 import shutil
+import subprocess
 import sysconfig
 import tempfile
 from pathlib import Path
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -13,61 +14,76 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
+@lru_cache()
+def find_sycl() -> str:
     """
-    Looks for the sycl library in known places.
-
-    Arguments:
-      include_dir: list of include directories to pass to compiler.
+    Looks for the `libsycl.so` in known places.
 
     Returns:
-      enriched include_dir and libsycl.so location.
-
-    Raises:
-      AssertionError: if library was not found.
+      Folder path that contains `libsycl.so`. If not found — returns
+      an empty string (with an assumption that `icpx` will be used).
     """
-    include_dir = include_dir.copy()
-    sycl_dir = None
-    assertion_message = ("sycl headers not found, please install `icpx` compiler, "
-                         "or provide `ONEAPI_ROOT` environment "
-                         "or install `intel-sycl-rt>=2025.0.0` wheel")
-    icpx_path = shutil.which("icpx")
-    if icpx_path and os.name != "nt":
-        # only `icpx` compiler knows where sycl runtime binaries and header files are
-        compiler_root = os.path.abspath(f"{icpx_path}/../..")
-        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
-        sycl_dir = os.path.join(compiler_root, "lib")
-        return include_dir, sycl_dir
+    env_libsycl_path = os.getenv("TRITON_SYCL_PATH")
+    if env_libsycl_path:
+        return env_libsycl_path
 
+    # 1. Try to find sycl using 'ldconfig -p'
+    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode()
+    # each line looks like the following:
+    # libsycl.so (libc6,x86-64) => /lib/x86_64-linux-gnu/libsycl.so
+    locs = [line.split()[-1] for line in libs.splitlines() if "libsycl.so" in line]
+    dirs = [os.path.dirname(loc) for loc in locs]
+    if dirs:
+        return dirs[0]
+
+    # 2. Try to find sycl in 'LD_LIBRARY_PATH'
+    env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
+    if env_ld_library_path:
+        dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libsycl.so"))]
+    if dirs:
+        return dirs[0]
+
+    # 3. Try to find sycl using 'ONEAPI_ROOT'
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
-        include_dir += [
-            os.path.join(oneapi_root, "compiler/latest/include"),
-            os.path.join(oneapi_root, "compiler/latest/include/sycl")
-        ]
-        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
-        return include_dir, sycl_dir
+        sycl_lib = os.path.join(oneapi_root, "compiler/latest/lib")
+        dirs = [sycl_lib] if os.path.exists(os.path.join(sycl_lib, "libsycl.so")) else []
 
+    if dirs:
+        return dirs[0]
+
+    # 4. Try to find sycl using 'intel-sycl-rt' package
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
-    except importlib.metadata.PackageNotFoundError:
-        raise AssertionError(assertion_message)
+        if sycl_rt.get("version", "0.0.0").startswith("2024"):
+            return dirs[0]
 
-    if sycl_rt.get("version", "0.0.0").startswith("2024"):
-        raise AssertionError(assertion_message)
-
-    for f in importlib.metadata.files("intel-sycl-rt"):
-        # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
-        # being add: include and include/sycl.
-        if f.name == "sycl.hpp":
-            include_dir += [str(f.locate().parent.parent.resolve())]
-        if f.name in ["libsycl.so", "sycl8.dll"]:
-            sycl_dir = str(f.locate().parent.resolve())
+        for f in importlib.metadata.files("intel-sycl-rt"):
+            if f.name not in ["libsycl.so", "sycl8.dll"]:
+                continue
+            dirs += str(f.locate().parent.resolve())
             # should we handle `_` somehow?
             if os.name == "nt":
-                _ = os.add_dll_directory(sycl_dir)
+                _ = os.add_dll_directory(dirs[0])
+            break
+    except importlib.metadata.PackageNotFoundError:
+        pass
 
-    return include_dir, sycl_dir
+    if dirs:
+        return dirs[0]
+
+    # 5. Try to find sycl using 'CONDA_PREFIX'
+
+    conda_prefix = os.getenv("CONDA_PREFIX")
+    if conda_prefix:
+        sycl_lib = os.path.join(conda_prefix, "lib")
+        dirs = [sycl_lib] if os.path.exists(os.path.join(sycl_lib, "libsycl.so")) else []
+
+    if dirs:
+        return dirs[0]
+
+    # 6. Give up and hope that 'icpx' will be used instead of 'g++'
+    return ""
 
 
 class CompilationHelper:
@@ -91,7 +107,7 @@ class CompilationHelper:
         include_dir = [os.path.join(ze_root, "include")]
 
         library_dir = []
-        include_dir, self._libsycl_dir = find_sycl(include_dir)
+        self._libsycl_dir = find_sycl()
         if self._libsycl_dir:
             library_dir += [self._libsycl_dir]
         if os.name == "nt":

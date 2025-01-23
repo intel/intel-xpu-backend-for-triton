@@ -1,4 +1,6 @@
+import importlib.metadata
 import os
+import io
 import platform
 import re
 import contextlib
@@ -343,6 +345,147 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
     else:
         shutil.copy(src_path, dst_path)
 
+# ---- populate 'third_party/intel/backend/include' ----
+
+def sycl_include_from_conda() -> Optional[str]:
+    """Get path for sycl headers from 'CONDA_PREFIX' if available."""
+    conda_prefix = os.getenv("CONDA_PREFIX")
+
+    if not conda_prefix:
+        return None
+
+    sycl_incl = os.path.join(conda_prefix, "include", "sycl")
+
+    if os.path.exists(sycl_incl):
+        return sycl_incl
+
+    return None
+
+def sycl_include_from_sycl_rt() -> Optional[str]:
+    """Get path for sycl headers from 'intel-sycl-rt' package if available."""
+    try:
+        sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+    if sycl_rt.get("version", "0.0.0").startswith("2024"):
+        return None
+
+    meta_files = importlib.metadata.files("intel-sycl-rt")
+    if meta_files is None:
+        return None
+
+    for f in meta_files:
+        # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
+        # being add: include and include/sycl.
+        if f.name == "sycl.hpp":
+            return str(f.locate().parent.parent.resolve())
+
+    return None
+
+def sycl_include_from_oneapi() -> Optional[str]:
+    """Get path for sycl headers from 'ONEAPI_ROOT' variable if available."""
+    oneapi_root = os.getenv("ONEAPI_ROOT")
+    if not oneapi_root:
+        return None
+
+    sycl_incl = os.path.join(oneapi_root, "compiler/latest/include/sycl")
+    if os.path.exists(sycl_incl):
+        return sycl_incl
+
+    return None
+
+def sycl_include_from_web() -> Optional[str]:
+    """Download `intel-rt-sycl` package from conda-forge and return path to the sycl headers from there."""
+    try:
+        system = {"Linux": "linux", "Darwin": "linux", "Windows": "win"}[platform.system()]
+    except KeyError:
+        raise RuntimeError(f"Unsupported plaftorm name: {platform.system()}")
+    try:
+        arch = {"x86_64": "64", "AMD64": "64"}[platform.machine()]
+    except KeyError:
+        arch = platform.machine()
+
+    # Build hashes are taken from: https://anaconda.org/conda-forge/intel-sycl-rt/files
+    oneapi_versions = {
+        "win": ("2025.0.4", "he0c23c2_1521"),
+        "linux": ("2025.0.4", "h7a4b287_1519")
+    }
+
+    version, version_hash = oneapi_versions[system]
+
+    url = (
+        f"https://anaconda.org/conda-forge/intel-sycl-rt/{version}/download/{system}-{arch}/intel-sycl-rt-{version}-{version_hash}.conda"
+    )
+
+    triton_cache_path = get_triton_cache_path()
+    tmp_path = os.path.join(triton_cache_path, "intel")  # path to cache the download
+    include_path = os.path.join(tmp_path, "include", "sycl")
+
+    if os.path.exists(include_path):
+        return include_path
+
+    import zstandard as zstd
+
+    print(f'downloading and extracting {url} ...')
+    conda_file = io.BytesIO(open_url(url).read())
+    # Reading '.conda' file and extracting headers from it
+    # https://docs.conda.io/projects/conda/en/stable/user-guide/concepts/packages.html#conda-file-format
+    with zipfile.ZipFile(conda_file, "r") as zip_ref:
+        files_in_conda = zip_ref.namelist()
+
+        for file_name in files_in_conda:
+            # looking for a 'pkg' archive that contains the lib and the headers
+            if not file_name.endswith(".zst") or not file_name.startswith("pkg-"):
+                continue
+            # Read .zst content into memory
+            with zip_ref.open(file_name) as zst_stream:
+                zst_data = zst_stream.read()
+
+                # Decompress .zst to .tar in memory
+                decompressor = zstd.ZstdDecompressor()
+                tar_data = decompressor.decompress(zst_data)
+                # Extract the .tar file directly from memory
+                with tarfile.open(fileobj=io.BytesIO(tar_data)) as tar:
+                    for member in tar.getmembers():
+                        if not member.name.startswith("include/sycl"):
+                            continue
+                        tar.extract(member, tmp_path)
+    return include_path
+
+def populate_sycl_incl():
+    """
+    Populate `third_party/intel/backend/include` folder with sycl headers.
+
+    The function looks for sycl headers in the system and copies them to the
+    backend folder. If the headers weren't found anywhere — downloads `intel-sycl-rt`
+    conda package and extract headers from there.
+    """
+
+    base_dir = os.path.dirname(__file__)
+    include_path = os.path.join(base_dir, os.pardir, "third_party", "intel", "backend", "include", "sycl")
+
+    if os.path.exists(include_path):
+        # headers are already in place
+        return
+
+    sycl_incl = sycl_include_from_oneapi()
+
+    if not sycl_incl:
+        sycl_incl = sycl_include_from_sycl_rt()
+
+    if not sycl_incl:
+        sycl_incl = sycl_include_from_conda()
+
+    if not sycl_incl:
+        sycl_incl = sycl_include_from_web()
+    
+    if not sycl_incl:
+        raise Exception("Couldn't position SYCL headers.")
+
+    shutil.copytree(sycl_incl, include_path, dirs_exist_ok=True)
+
+populate_sycl_incl()
 
 # ---- cmake extension ----
 
