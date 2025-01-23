@@ -670,7 +670,7 @@ public:
 
     RewritePatternSet patterns(context);
     patterns.add<BlockedToDPAS, DecomposeScaledBlocked>(context, dpasAnalysis);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
 
     decomposeMixedModeDotOp(m);

@@ -92,7 +92,7 @@ struct GPUToTritonGENPass
     {
       RewritePatternSet patterns(ctx);
       populateGpuRewritePatterns(patterns);
-      if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
+      if (failed(applyPatternsGreedily(m, std::move(patterns))))
         return signalPassFailure();
     }
 

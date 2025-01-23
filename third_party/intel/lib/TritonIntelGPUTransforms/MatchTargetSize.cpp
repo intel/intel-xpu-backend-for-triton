@@ -653,7 +653,7 @@ void MatchTargetSizePass::canonicalize() {
   patterns.add<ScfPattern>(ctx);
   patterns.add<ArithRemPattern>(ctx); // FIXME: upstream to arith dialect.
 
-  if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
+  if (failed(applyPatternsGreedily(m, std::move(patterns))))
     signalPassFailure();
 }
 
