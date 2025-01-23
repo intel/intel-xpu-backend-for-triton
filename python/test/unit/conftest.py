@@ -31,3 +31,5 @@ def pytest_configure(config):
     # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
     if os.name == "nt" and worker_id:
         os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
+    if os.name == "nt":
+        pytest.mark.forked = pytest.mark.skip(reason="Windows doesn't fork")
