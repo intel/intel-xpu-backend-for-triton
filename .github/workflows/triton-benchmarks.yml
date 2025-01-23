@@ -91,7 +91,7 @@ jobs:
 
       - name: Install Python build dependencies
         run: |
-          pip install wheel cmake
+          pip install wheel cmake zstandard
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch

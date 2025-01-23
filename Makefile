@@ -32,7 +32,7 @@ test: test-lit test-cpp test-python
 .PHONY: dev-install
 dev-install:
 	# build-time dependencies
-	$(PYTHON) -m pip install ninja cmake wheel pybind11
+	$(PYTHON) -m pip install ninja cmake wheel pybind11 zstandard
 	# test dependencies
 	$(PYTHON) -m pip install scipy numpy torch pytest lit pandas matplotlib
 	$(PYTHON) -m pip install -e python --no-build-isolation -v

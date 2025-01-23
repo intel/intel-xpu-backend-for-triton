@@ -78,7 +78,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           cd python
-          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
+          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1' zstandard
           python setup.py -v bdist_wheel
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\python\dist\*.whl)
 
