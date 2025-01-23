@@ -185,8 +185,9 @@ public:
     // TODO: we could skip this for cases with num_warps=1 as long as we can
     // generate the right layout. Currently the warp level histogram generates
     // data in the default blocked layout.
-    Value baseSharedMemPtr =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+
+    Value baseSharedMemPtr = targetInfo.getScrathMemoryPtr(
+        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op.getOperation());
     auto dstType = op.getType();
     Attribute dstEncoding = dstType.getEncoding();
     auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstEncoding,

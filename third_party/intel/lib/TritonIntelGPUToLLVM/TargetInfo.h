@@ -72,6 +72,11 @@ public:
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
 
+  Value getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace, Location loc,
+                           RewriterBase &rewriter, Operation *op,
+                           Value allocOffset = {},
+                           bool getstackptr = false) const override;
+
 private:
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
                                  StringRef name, StringRef value,

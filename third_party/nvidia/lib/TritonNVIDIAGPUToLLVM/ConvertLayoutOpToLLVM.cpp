@@ -68,8 +68,8 @@ private:
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
-    Value smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+    Value smemBase = targetInfo.getScrathMemoryPtr(
+        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op.getOperation());
     smemBase = b.bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 

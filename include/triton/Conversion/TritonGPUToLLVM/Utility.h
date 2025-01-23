@@ -563,88 +563,96 @@ inline bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
-inline Value getStackPointer(RewriterBase &rewriter,
-                             FunctionOpInterface funcOp) {
-  // See NOTE: [Additional Function Arguments]
-  if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+// Return ScrathMemoryPtr from shared or global memory
+// This function rewritten by targetInfo to deal with different impl of targets.
+inline Value getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
+                                Location loc, RewriterBase &rewriter,
+                                Operation *op, Value allocOffset,
+                                bool getstackptr) {
+  FunctionOpInterface funcOp = op->getParentOfType<FunctionOpInterface>();
+  switch (addressSpace) {
+  case ::mlir::gpu::AddressSpace::Workgroup: {
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
+    auto mod = funcOp->getParentOfType<ModuleOp>();
+    Value stackPtr, offVal;
+    if (!isKernel(funcOp)) {
+      stackPtr = funcOp.getArgument(funcOp.getNumArguments() - 2);
+    } else {
+      auto globalBase =
+          dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+      assert(globalBase);
+      stackPtr =
+          rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+    }
+    if (getstackptr) {
+      return stackPtr;
+    }
+    assert(op->hasAttr("allocation.offset"));
+    size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
+                        .getValue()
+                        .getZExtValue();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    offVal = b.i32_val(offset);
+    return b.gep(ptrTy, i8_ty, stackPtr, offVal);
+    break;
   }
+  case ::mlir::gpu::AddressSpace::Global: {
+    // See NOTE: [Additional Function Arguments]
+    if (!isKernel(funcOp)) {
+      // Base for this function
+      auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+      if (!allocOffset) {
+        return gmemBase;
+      }
 
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
-  assert(globalBase);
-  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-}
+      auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
+    }
 
-inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
-                                 FunctionOpInterface funcOp,
-                                 Value allocOffset = {}) {
-  // See NOTE: [Additional Function Arguments]
-  if (!isKernel(funcOp)) {
-    // Base for this function
+    // Base for entire kernel
     auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-    if (!allocOffset) {
+
+    ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
+    auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+        "ttg.global_scratch_memory_size");
+    if (!allocSizeAttr) {
       return gmemBase;
     }
 
-    auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
+    Value gridIdx[3];
+    Value gridDim[2];
+    for (int k = 0; k < 3; ++k) {
+      gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
+    }
+    for (int k = 0; k < 2; ++k) {
+      gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
+    }
+
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
+    Value linearId = gridIdx[2];
+    for (int k = 0; k < 2; ++k) {
+      linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
+    }
+
+    auto allocSize = allocSizeAttr.getValue().getZExtValue();
+
+    Value offset = b.mul(linearId, b.i32_val(allocSize));
+    if (allocOffset) {
+      offset = b.add(offset, allocOffset);
+    }
+
+    auto *ctx = rewriter.getContext();
+    auto res = b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase,
+                     offset);
+    return res;
+    break;
   }
-
-  // Base for entire kernel
-  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-
-  ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
-  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-      "ttg.global_scratch_memory_size");
-  if (!allocSizeAttr) {
-    return gmemBase;
+  default: {
+    llvm_unreachable("not avaiable addspace type in getScrathMemoryPtr");
+    break;
   }
-
-  Value gridIdx[3];
-  Value gridDim[2];
-  for (int k = 0; k < 3; ++k) {
-    gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
   }
-  for (int k = 0; k < 2; ++k) {
-    gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
-  }
-
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value linearId = gridIdx[2];
-  for (int k = 0; k < 2; ++k) {
-    linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
-  }
-
-  auto allocSize = allocSizeAttr.getValue().getZExtValue();
-
-  Value offset = b.mul(linearId, b.i32_val(allocSize));
-  if (allocOffset) {
-    offset = b.add(offset, allocOffset);
-  }
-
-  auto *ctx = rewriter.getContext();
-  auto res =
-      b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
-  return res;
-}
-
-inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
-                                 const TargetInfoBase &target, Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
-                                          target.getSharedAddressSpace());
-  FunctionOpInterface func =
-      op->template getParentOfType<FunctionOpInterface>();
-  assert(op->hasAttr("allocation.offset"));
-  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
-                      .getValue()
-                      .getZExtValue();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value offVal = b.i32_val(offset);
-  Value base =
-      b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
-  return base;
 }
 
 // -----------------------------------------------------------------------
