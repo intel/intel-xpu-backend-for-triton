@@ -397,6 +397,9 @@ private:
       repInner = repetitions[1];
       repClusterOuter = repCluster[rank - 1];
     } break;
+    case DpasEncodingAttr::OpIdx::OperandC: {
+      llvm_unreachable("unexpected OpIdx::OperandC");
+    } break;
     }
 
     // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].

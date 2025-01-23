@@ -861,6 +861,9 @@ struct LoadOpConversion
                           i32_val(outer * repOuterStride + rep * repStride));
             offsetY = i32_val(k * repKStride);
           } break;
+          case DpasEncodingAttr::OpIdx::OperandC: {
+            llvm_unreachable("unexpected OpIdx::OperandC");
+          } break;
           }
 
           offsetX = add(offsetX, offsetBaseX);
@@ -941,6 +944,9 @@ struct LoadOpConversion
                                 vblk * packedColNumPerVBlock + col,
                             k + row}] =
                       bitcast(loadVal, unpackedDPASOperandType);
+                } break;
+                case DpasEncodingAttr::OpIdx::OperandC: {
+                  llvm_unreachable("unexpected OpIdx::OperandC");
                 } break;
                 }
               }
