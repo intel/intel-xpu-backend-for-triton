@@ -187,18 +187,26 @@ def context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_input_len, is_
         Lk=Lk,
     )
 
+    return o
+
 
 # pylint: disable=unused-argument
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['BATCH', 'SEQ_LENS', 'Q_HEAD_NUM', 'KV_HEAD_NUM', 'HEAD_DIM', 'CAUSAL', 'MODE'],
+        x_names=['BATCH', 'SEQ_LENS', 'Q_HEAD_NUM', 'KV_HEAD_NUM', 'HEAD_DIM', 'CAUSAL', 'MODE', 'VALIDATE'],
         x_vals=[  #
-            [bs, [1024], 32, 8, 128, causal, 'fwd'] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
+            [bs, [1024], 32, 8, 128, causal, 'fwd', False] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
         ] + [  # noqa
-            [bs, [1024], 32, 32, 96, causal, 'fwd'] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
+            [bs, [1024], 32, 32, 96, causal, 'fwd', False] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
         ] + [  # noqa
-            [bs, [1024], 28, 4, 128, causal, 'fwd'] for causal in [True, False] for bs in [1, 16, 32, 64, 128]  # noqa
+            [bs, [1024], 28, 4, 128, causal, 'fwd', False]
+            for causal in [True, False]
+            for bs in [1, 16, 32, 64, 128]  # noqa
+        ] + [
+            # [4, [1024], 48, 48, 64, causal, 'fwd', True] for causal in [True, False]
+            # ] + [
+            # [bs, [16384 // bs], h, h, dhead, causal, 'fwd', True] for bs in [1, 2, 4, 8, 16, 32] for (h, dhead) in [(16, 128), (32, 64)] for causal in [False, True]
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
@@ -217,8 +225,8 @@ def context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_input_len, is_
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, CAUSAL, MODE, provider):
-    dtype = torch.float16
+def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, CAUSAL, MODE, VALIDATE, provider):
+    dtype = torch.bfloat16
     device = 'xpu'
     N_CTX = sum(SEQ_LENS)
     max_seq_len = max(SEQ_LENS)
@@ -237,10 +245,14 @@ def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, CAUSAL, MODE, 
     if provider == 'triton':
         triton_fn = lambda: context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_seq_len, is_causal=CAUSAL)
 
-        # torch SDPA dose not support Q and KV with different head number
-        # triton_fn()
-        # o_torch = torch.nn.functional.scaled_dot_product_attention(q.permute(1, 0, 2), k.permute(1, 0, 2), v.permute(1, 0, 2), is_causal=CAUSAL).permute(1, 0, 2)
-        # torch.allclose(o, o_torch, atol=1e-2)
+        if VALIDATE:
+            # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
+            atol = 1e-1 if N_CTX == 16384 else 1e-2
+            torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
+                q.cpu().permute(1, 0, 2),
+                k.cpu().permute(1, 0, 2),
+                v.cpu().permute(1, 0, 2), is_causal=CAUSAL).permute(1, 0, 2).to(torch.float32)
+            benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
 
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
