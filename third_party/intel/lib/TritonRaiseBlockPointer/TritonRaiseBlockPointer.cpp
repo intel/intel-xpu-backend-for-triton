@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -435,7 +436,7 @@ public:
             if (failed(rewriteForOp(forOp))) {
               forOp->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite ForOp");
-              return WalkResult::interrupt();
+              return WalkResult::advance();
             }
             return WalkResult::skip();
           })
@@ -452,17 +453,24 @@ public:
     SmallVector<std::pair<int, Value>> initArgIndex;
     OpBuilder builder(op);
 
+    auto canBeRewrittenUsingBlockPtr = [&](Operation *op) {
+      return TypeSwitch<Operation *, bool>(op)
+          .Case<tt::AddPtrOp, tt::LoadOp, tt::StoreOp>(
+              [](auto) { return true; })
+          .Default([](auto) { return false; });
+    };
+
     // Create a new list of init args
     for (auto [i, arg] : llvm::enumerate(op.getInitArgs())) {
       if (Value mappedV = ptrMap.lookupOrNull(arg)) {
         if (auto makeTensorPtrOp =
                 mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
           if (llvm::any_of(op.getRegionIterArgs()[i].getUsers(),
-                           [](Operation *user) {
-                             return isa<tt::ExpandDimsOp>(user);
+                           [&](Operation *user) {
+                             return !canBeRewrittenUsingBlockPtr(user);
                            })) {
-            op->emitRemark("TritonRaiseToBlockPointer: ExpandDims Ops in loops "
-                           "are currently not supported");
+            op->emitRemark("TritonRaiseToBlockPointer: Loop contains ops that "
+                           "cannot be rewritten using a block ptr");
             return failure();
           }
 
@@ -668,7 +676,7 @@ public:
 
     OpBuilder builder(op);
     Location loc = op.getLoc();
-    auto ptr = op.getPtr();
+    Value ptr = op.getPtr();
 
     auto fillOffsets = [&](Value offset, unsigned rank,
                            SmallVector<Value> &offsets) {
@@ -726,11 +734,16 @@ public:
 
         assert(!offsets.empty() && offsets.size() == rank &&
                "unexpected number of offsets");
-        auto advanceOp = builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(),
-                                                             ptr, offsets);
-        cleanUp.push_back(op);
+
+        Value basePtr = tt::isTensorPointerType(ptr.getType()) ? ptr : mappedV;
+        auto advanceOp = builder.createOrFold<tt::AdvanceOp>(
+            loc, basePtr.getType(), basePtr, offsets);
+
+        cleanUp.insert(op);
         ptrMap.map(op.getResult(), advanceOp);
 
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Rewrote:\n\t" << op << "to:\n\t" << advanceOp << "\n");
         return success();
       } else {
         llvm_unreachable("Did not find tt::MakeTensorPtrOp");
@@ -755,9 +768,12 @@ public:
 
     ptrMap.map(result, makePtrOp);
 
+    LLVM_DEBUG(llvm::dbgs()
+               << "Rewrote:\n\t" << op << "\nto:\n\t" << makePtrOp << "\n");
+
     // AddPtrOps that have been rewritten and no longer used in the code must
     // be removed in the pass to avoid type matching issue.
-    cleanUp.push_back(op);
+    cleanUp.insert(op);
 
     LLVM_DEBUG({
       auto modOp =
@@ -1039,7 +1055,7 @@ public:
   }
 
 private:
-  SmallVector<Operation *> cleanUp;
+  SmallPtrSet<Operation *, 8> cleanUp;
   llvm::SmallDenseMap<Value, PtrState> knownPtrs;
   IRMapping ptrMap;
 };
