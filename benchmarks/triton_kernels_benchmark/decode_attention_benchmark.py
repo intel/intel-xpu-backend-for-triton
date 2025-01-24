@@ -602,19 +602,24 @@ def decode_attention_fwd(
             logit_cap,
         )
 
+    return o
+
 
 # pylint: disable=unused-argument
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['BATCH', 'SEQ_LENS', 'Q_HEAD_NUM', 'KV_HEAD_NUM', 'HEAD_DIM', 'MODE'],
+        x_names=['BATCH', 'SEQ_LENS', 'Q_HEAD_NUM', 'KV_HEAD_NUM', 'HEAD_DIM', 'MODE', 'VALIDATE'],
         x_vals=[  #
-            # Latency mode: Decode
-            [bs, [1024, 64], 32, 8, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
+            [bs, [1024, 64], 32, 8, 128, 'fwd', False] for bs in [1, 16, 32, 64, 128]
         ] + [  #
-            [bs, [1024, 64], 32, 32, 96, 'fwd'] for bs in [1, 16, 32, 64, 128]
+            [bs, [1024, 64], 32, 32, 96, 'fwd', False] for bs in [1, 16, 32, 64, 128]
         ] + [  #
-            [bs, [1024, 64], 28, 4, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]  #
+            [bs, [1024, 64], 28, 4, 128, 'fwd', False] for bs in [1, 16, 32, 64, 128]  #
+            # ] + [
+            # [4, [1024], 48, 48, 64, 'fwd', True]
+            # ] + [
+            # [bs, [16384 // bs], h, h, dhead, 'fwd', True] for bs in [1, 2, 4, 8, 16, 32] for (h, dhead) in [(16, 128), (32, 64)]
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
@@ -633,7 +638,7 @@ def decode_attention_fwd(
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, MODE, provider):
+def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, MODE, VALIDATE, provider):
     dtype = torch.bfloat16
     N_CTX = sum(SEQ_LENS)
     total_tokens = BATCH * N_CTX
@@ -666,10 +671,14 @@ def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, MODE, provider
         triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, req_to_token, b_req_idx, b_seq_len,
                                                  attn_logits, num_kv_splits, sm_scale)
 
-        # torch SDPA dose not support Q and KV with different head number
-        # triton_fn()
-        # o_torch = torch.nn.functional.scaled_dot_product_attention(q.permute(1, 0, 2), k.permute(1, 0, 2), v.permute(1, 0, 2), is_causal=CAUSAL).permute(1, 0, 2)
-        # torch.allclose(o, o_torch, atol=1e-2)
+        # decode attention do not have validation function
+        if VALIDATE:
+            atol = 1e-1 if N_CTX == 16384 else 1e-2
+            torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu().permute(1, 0, 2),
+                                                                                k_buffer.cpu().permute(1, 0, 2),
+                                                                                v_buffer.cpu().permute(1, 0, 2)
+                                                                                ).permute(1, 0, 2).to(torch.float32)
+            benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
 
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
