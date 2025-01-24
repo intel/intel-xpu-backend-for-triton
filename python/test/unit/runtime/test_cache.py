@@ -155,6 +155,12 @@ def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
 def test_reuse(device, fresh_triton_cache):
     counter = 0
 
+    @triton.jit
+    def kernel(X, i, BLOCK: tl.constexpr):
+        i = i + 1
+        i = function_1(i)
+        tl.store(X, i)
+
     def inc_counter(*args, **kwargs):
         nonlocal counter
         counter += 1
@@ -164,7 +170,6 @@ def test_reuse(device, fresh_triton_cache):
     for i in range(10):
         kernel[(1, )](x, 1, BLOCK=1024)
     assert counter == 1
-    getattr(torch, device).synchronize()
 
 
 @pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
