@@ -257,8 +257,9 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
 }
 
 static std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
-  if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
-    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
+  if (auto attr = dyn_cast<Attribute>(ofr))
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+      return intAttr.getInt();
   return std::nullopt;
 }
 
