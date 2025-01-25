@@ -12,6 +12,10 @@
 #include <memory>
 #include <stdexcept>
 
+#ifdef WIN32
+#define aligned_alloc _aligned_malloc
+#endif
+
 namespace proton {
 
 template <>
@@ -257,7 +261,11 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     }
   } while (true);
 
+#ifdef WIN32
+  _aligned_free(buffer);
+#else
   std::free(buffer);
+#endif
 
   profiler.correlation.complete(maxCorrelationId);
 }
