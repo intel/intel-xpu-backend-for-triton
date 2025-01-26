@@ -2315,7 +2315,13 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
                       threads_per_warp=threads_per_warp)
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
+    triton.runtime.driver.active.utils.wait()
     print(f"after kernel: {z_tri=}")
+    print(f"{kernel.device_caches=}")
+    print("\n\n")
+    for key in list(kernel.device_caches[0][0].values())[0].asm.keys:
+        print(f"{key=}\n")
+        print(list(kernel.device_caches[0][0].values())[0].asm.keys()[key])
     z_tri = to_numpy(z_tri)
     print(f"after to_numpy: {z_tri=}")
     # compare
