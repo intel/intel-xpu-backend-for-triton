@@ -2279,6 +2279,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
     rs = RandomState(17)
     # limit the range of integers so that the sum does not overflow
     x = numpy_random((shape, ), dtype_str=dtype_str, rs=rs)
+    print(f"1: {x=}")
     numpy_op = {
         'sum': np.sum,
         'max': np.max,
@@ -2291,6 +2292,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
     if 'tie-break-left' in op:
         x[3:10] = x[numpy_op(x)]
     x_tri = to_triton(x, device=device)
+    print(f"1: {x_tri=}")
     # numpy result
     z_dtype_str = 'int32' if 'tie-break-left' in op else dtype_str
     z_tri_dtype_str = z_dtype_str
@@ -2299,18 +2301,23 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
         # trunc mantissa for a fair comparison of accuracy
         z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+        print(f"1: {z_ref=}")
         z_tri_dtype_str = 'bfloat16'
     else:
         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
+        print(f"1: {z_ref=}")
     # triton result
     z_tri = to_triton(numpy_random((1, ), dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
+    print(f"1: {z_tri=}")
     print(f"{x_tri.dtype=},   {z_tri.dtype=}\n")
     if is_xpu():
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas, num_warps=num_warps,
                       threads_per_warp=threads_per_warp)
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
+    print(f"after kernel: {z_tri=}")
     z_tri = to_numpy(z_tri)
+    print(f"after to_numpy: {z_tri=}")
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
