@@ -6,6 +6,10 @@ on:
   schedule:
     - cron: "1 5 * * *"
 
+  pull_request:
+    branches:
+      - main
+
 permissions: read-all
 
 env:
