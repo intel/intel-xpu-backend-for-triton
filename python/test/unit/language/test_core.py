@@ -2304,7 +2304,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
     # triton result
     z_tri = to_triton(numpy_random((1, ), dtype_str=z_dtype_str, rs=rs), device=device, dst_type=z_tri_dtype_str)
-    print(f"{x_tri=},   {z_tri=}\n")
+    print(f"{x_tri.dtype=},   {z_tri.dtype=}\n")
     if is_xpu():
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas, num_warps=num_warps,
                       threads_per_warp=threads_per_warp)
