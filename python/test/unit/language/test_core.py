@@ -2319,9 +2319,9 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
     print(f"after kernel: {z_tri=}")
     print(f"{kernel.device_caches=}")
     print("\n\n")
-    for key in list(kernel.device_caches[0][0].values())[0].asm.keys:
+    for key in list(kernel.device_caches[0][0].values())[0].asm.keys():
         print(f"{key=}\n")
-        print(list(kernel.device_caches[0][0].values())[0].asm.keys()[key])
+        print(list(kernel.device_caches[0][0].values())[0].asm[key])
     z_tri = to_numpy(z_tri)
     print(f"after to_numpy: {z_tri=}")
     # compare
