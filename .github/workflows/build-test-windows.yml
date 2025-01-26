@@ -91,7 +91,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd python/test/unit
-          pytest -vvv -s -n 8 --device xpu language/test_core.py::test_reduce1d
+          pytest -vvv -s --device xpu language/test_core.py::test_reduce1d
 
       - name: Run interpreter tests
         run: |
