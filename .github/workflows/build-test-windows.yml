@@ -100,6 +100,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           # Disable interactive plot window
           $env:MPLBACKEND = "Agg"
+          chcp 65001
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Pass rate
