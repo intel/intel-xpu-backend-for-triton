@@ -178,6 +178,7 @@ run_unit_tests() {
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/build/cmake*/test
+  ls . -a
   lit -v .
 }
 
