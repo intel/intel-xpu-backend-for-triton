@@ -245,18 +245,21 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
             std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
                                                     warpsPerCTA[rank - 1]))};
   } break;
+  case OpIdx::OperandC: {
+    auto shapePerWarp = getShapeC();
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
+                                                    warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
+                                                    warpsPerCTA[rank - 1]))};
+  } break;
   }
 
-  auto shapePerWarp = getShapeC();
-  int64_t numRepBatch =
-      rank == 3
-          ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))
-          : 1;
-  return {numRepBatch,
-          std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                  warpsPerCTA[rank - 2])),
-          std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                  warpsPerCTA[rank - 1]))};
+  llvm_unreachable("unexpected opIdx");
 }
 
 unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
@@ -278,6 +281,9 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
     auto totalElem = product<unsigned>(shapeB);
     // dpas operands scalar are evenly sharded to each work item.
     return (totalElem / threadsPerWar) * product<int64_t>(rep);
+  } break;
+  case OpIdx::OperandC: {
+    llvm_unreachable("unexpected OpIdx::OperandC");
   } break;
   }
   llvm_unreachable("unexpected opIdx");
@@ -349,6 +355,9 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
                                                executionSize};
     return {shapeB[rank - 2] / threadsPerWarp[0],
             shapeB[rank - 1] / threadsPerWarp[1] * repCluster[rank - 1]};
+  } break;
+  case OpIdx::OperandC: {
+    llvm_unreachable("unexpected OpIdx::OperandC");
   } break;
   }
   llvm_unreachable("unexpected opIdx");
