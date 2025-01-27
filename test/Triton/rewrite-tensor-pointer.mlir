@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -triton-rewrite-tensor-pointer -split-input-file | FileCheck %s
+// RUN: triton-opt %s -triton-rewrite-tensor-pointer -split-input-file | FileCheck %s
 
 tt.func public @rewrite_load(%arg0: !tt.ptr<f16>) {
   %c0_i32 = arith.constant 0 : i32

@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file --triton-nvidia-tma-lowering | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {

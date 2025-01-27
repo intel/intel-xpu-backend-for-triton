@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 
 module {
   tt.func public @wrap_stacked_masked_loop_01234567(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32) {

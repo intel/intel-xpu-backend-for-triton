@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file --tritonintelgpu-reduce-data-duplication | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-reduce-data-duplication | FileCheck %s
 
 #dpas1 = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 #dpas2 = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 32], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>

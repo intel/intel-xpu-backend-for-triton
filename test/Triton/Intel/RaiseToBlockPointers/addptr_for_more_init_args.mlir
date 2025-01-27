@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -triton-raise-block-pointer --split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer --split-input-file -canonicalize | FileCheck %s
 
 module {
   tt.func @kernel(

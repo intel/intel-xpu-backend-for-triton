@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s --allow-unregistered-dialect --tritongpu-fuse-nested-loops -cse | FileCheck %s
+// RUN: triton-opt %s --allow-unregistered-dialect --tritongpu-fuse-nested-loops -cse | FileCheck %s
 
 // CHECK-LABEL: @empty_function
 tt.func @empty_function() {

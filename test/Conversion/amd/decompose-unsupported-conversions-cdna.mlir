@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s --split-input-file --decompose-unsupported-amd-conversions=arch=gfx942 | FileCheck %s
+// RUN: triton-opt %s --split-input-file --decompose-unsupported-amd-conversions=arch=gfx942 | FileCheck %s
 
 // CHECK-DAG: #[[DST_ENC:.+]] = #ttg.blocked<{{.*}}>
 // CHECK-DAG: #[[SRC_ENC:.+]] = #ttg.amd_mfma<{{.*}}>

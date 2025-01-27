@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe -split-input-file -verify-diagnostics %s
+// RUN: triton-opt -split-input-file -verify-diagnostics %s
 
 llvm.func @triton_gen.duplicated_cache_controls(%arg0: !llvm.ptr) {
   // expected-error @+1 {{'triton_gen.decoration_cache_controls' cannot specify more than one cache control decoration of the same nature for the same cache level}}

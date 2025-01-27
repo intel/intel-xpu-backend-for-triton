@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -tritonintelgpu-prefetch-block=inject-split-barriers=true | FileCheck %s
+// RUN: triton-opt %s -tritonintelgpu-prefetch-block=inject-split-barriers=true | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], warpsPerCTA = [8, 4], order = [1, 0]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>

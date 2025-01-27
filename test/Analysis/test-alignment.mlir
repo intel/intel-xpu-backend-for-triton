@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -test-print-alignment -split-input-file -o %t 2>&1 | FileCheck %s
+// RUN: triton-opt %s -test-print-alignment -split-input-file -o %t 2>&1 | FileCheck %s
 
 // CHECK-LABEL: @cast
 tt.func @cast() {

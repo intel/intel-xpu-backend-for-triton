@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe -split-input-file %s --convert-triton-amdgpu-to-llvm='arch=gfx942' -verify-diagnostics
+// RUN: triton-opt -split-input-file %s --convert-triton-amdgpu-to-llvm='arch=gfx942' -verify-diagnostics
 
 // Invalid size
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>

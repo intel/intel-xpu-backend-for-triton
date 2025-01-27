@@ -2,7 +2,6 @@
 # ruff: noqa: F821
 
 import os
-from pathlib import PurePosixPath
 
 import lit.formats
 import lit.util
@@ -42,9 +41,9 @@ config.excludes = ['Inputs', 'Examples', 'CMakeLists.txt', 'README.txt', 'LICENS
 config.test_source_root = os.path.dirname(__file__)
 
 # test_exec_root: The root path where tests should be run.
-config.test_exec_root = str(PurePosixPath(config.triton_obj_root) / 'test')
-config.triton_tools_dir = str(PurePosixPath(config.triton_obj_root) / 'bin')
-config.filecheck_dir = str(PurePosixPath(config.triton_obj_root) / 'bin' / 'FileCheck')
+config.test_exec_root = os.path.join(config.triton_obj_root, 'test')
+config.triton_tools_dir = os.path.join(config.triton_obj_root, 'bin')
+config.filecheck_dir = os.path.join(config.triton_obj_root, 'bin', 'FileCheck')
 
 # FileCheck -enable-var-scope is enabled by default in MLIR test
 # This option avoids to accidentally reuse variable across -LABEL match,
@@ -57,8 +56,8 @@ tool_dirs = [config.triton_tools_dir, config.llvm_tools_dir, config.filecheck_di
 for d in tool_dirs:
     llvm_config.with_environment('PATH', d, append_path=True)
 tools = [
-    'triton-opt.exe',
-    'triton-llvm-opt.exe',
+    'triton-opt',
+    'triton-llvm-opt',
     ToolSubst('%PYTHON', config.python_executable, unresolved='ignore'),
 ]
 

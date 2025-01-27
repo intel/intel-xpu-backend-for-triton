@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe --split-input-file %s --verify-diagnostics
+// RUN: triton-opt --split-input-file %s --verify-diagnostics
 
 tt.func public @i64_tensor() {
     // expected-error @+1 {{i32 elements}}

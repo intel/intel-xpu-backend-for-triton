@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file -verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:      llvm.func @triton_gen.dpas(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {

@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s --split-input-file -triton-annotate-module='min-sg-size=16 support-sg-2d-block=true support-dpas=true threads-per-warp=32' | FileCheck %s
+// RUN: triton-opt %s --split-input-file -triton-annotate-module='min-sg-size=16 support-sg-2d-block=true support-dpas=true threads-per-warp=32' | FileCheck %s
 
 module {
   // COM: Ensure that the 'threads-per-warp' attribute is set according to the option.

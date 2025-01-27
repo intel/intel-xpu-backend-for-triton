@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file --mlir-disable-threading --convert-scf-to-cf --allocate-shared-memory -test-print-membar 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --mlir-disable-threading --convert-scf-to-cf --allocate-shared-memory -test-print-membar 2>&1 | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>

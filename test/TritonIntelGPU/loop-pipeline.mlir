@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 support-regular-ptr=true" | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 support-regular-ptr=true" | FileCheck %s
 
 // CHECK: #[[$BLOCK_0:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 // CHECK: #[[$BLOCK_1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>

@@ -1,5 +1,5 @@
 // RUN: env TRITON_INTEL_ADVANCED_PATH=1 \
-// RUN: triton-opt.exe %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @test_scalar(

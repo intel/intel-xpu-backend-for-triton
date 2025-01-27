@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe -split-input-file -verify-diagnostics %s
+// RUN: triton-opt -split-input-file -verify-diagnostics %s
 
 // COM: Ensure that tensors with different shape cannot be glued.
 tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16xf16>, %tensor2 : tensor<16x8xf32>) {

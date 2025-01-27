@@ -1,5 +1,5 @@
-// RUN: triton-opt.exe %s -split-input-file --convert-triton-to-tritongpu-warp="num-warps=32"  | FileCheck %s --check-prefix=CHECK --implicit-check-not="tensor<{{[0-9]+x[0-9]+x[if][0-9]+}}>"
-// RUN: triton-opt.exe %s -split-input-file --convert-triton-to-tritongpu-warp="num-warps=8"  | FileCheck %s --check-prefix=CHECK1 --implicit-check-not="tensor<{{[0-9]+x[0-9]+x[if][0-9]+}}>"
+// RUN: triton-opt %s -split-input-file --convert-triton-to-tritongpu-warp="num-warps=32"  | FileCheck %s --check-prefix=CHECK --implicit-check-not="tensor<{{[0-9]+x[0-9]+x[if][0-9]+}}>"
+// RUN: triton-opt %s -split-input-file --convert-triton-to-tritongpu-warp="num-warps=8"  | FileCheck %s --check-prefix=CHECK1 --implicit-check-not="tensor<{{[0-9]+x[0-9]+x[if][0-9]+}}>"
 
 // COM: The implicit-check-not ensures that an encoding attribute is added to all 2D tensors.
 // COM: Ideally, we should also check 1D tensors, but there are some tensor-typed attributes (`tt.divisibility_arg1`) that are not changed by the pass,

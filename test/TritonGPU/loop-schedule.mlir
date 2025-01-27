@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file -tritongpu-loop-scheduling=num-stages=3 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-loop-scheduling=num-stages=3 | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>

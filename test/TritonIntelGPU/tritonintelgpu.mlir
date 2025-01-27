@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file -verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
 tt.func @triton_intel_gpu.glue(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<16x8xf16>,
                                %ptr1 : !tt.ptr<tensor<16x8xf16>>, %ptr2 : !tt.ptr<tensor<16x8xf16>>) {

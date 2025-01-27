@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -canonicalize | FileCheck %s
 
 // CHECK-LABEL: dead_load
 tt.func @dead_load(%ptr: tensor<32x128x!tt.ptr<f16>>) {

@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file --tritonintelgpu-accelerate-matmul | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-accelerate-matmul | FileCheck %s
 
 // CHECK-NOT: triton_intel_gpu.dpas
 #blocked = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>

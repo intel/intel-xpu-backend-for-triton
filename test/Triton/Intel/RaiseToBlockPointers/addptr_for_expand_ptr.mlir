@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 // XFAIL: *
 // TODO: add support for tt.expand_dims in loops
 

@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
+// RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
 // CHECK: llvm.func spir_funccc @_Z41intel_sub_group_2d_block_write_8b_8r16x1cPU3AS1viiiDv2_iPh(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {no_unwind, will_return}
 

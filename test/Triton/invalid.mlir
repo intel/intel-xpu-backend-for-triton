@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe --split-input-file %s --verify-diagnostics
+// RUN: triton-opt --split-input-file %s --verify-diagnostics
 
 tt.func @fn(%v: i32) {
   %b = tt.splat %v : i32 -> tensor<128xi32>

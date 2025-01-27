@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -canonicalize | FileCheck %s
 
 
 // CHECK-LABEL: @test_canonicalize_convert_view

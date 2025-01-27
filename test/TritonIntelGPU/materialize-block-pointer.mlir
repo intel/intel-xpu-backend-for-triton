@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s --tritonintelgpu-materialize-block-pointer | FileCheck %s
+// RUN: triton-opt %s --tritonintelgpu-materialize-block-pointer | FileCheck %s
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>

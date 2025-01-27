@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file --intel-allocate-shared-memory | FileCheck %s
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>

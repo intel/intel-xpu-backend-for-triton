@@ -1,6 +1,6 @@
 // RUN: env TRITON_INTEL_REDUCE_TRANSPOSE=1 \
-// RUN: triton-opt.exe %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s --check-prefixes=CHECK,CHECK-TR-RED
-// RUN: triton-opt.exe %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s --check-prefixes=CHECK,CHECK-SG-RED
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s --check-prefixes=CHECK,CHECK-TR-RED
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-match-target-size | FileCheck %s --check-prefixes=CHECK,CHECK-SG-RED
 
 #warp = #triton_intel_gpu.warp<{sizePerThread = [32, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 #dot0_ = #ttg.dot_op<{opIdx = 0, parent = #warp}>

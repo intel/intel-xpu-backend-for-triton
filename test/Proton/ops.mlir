@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe --split-input-file %s -cse -canonicalize | FileCheck %s
+// RUN: triton-opt --split-input-file %s -cse -canonicalize | FileCheck %s
 
 module {
   // CHECK-LABEL: proton_record

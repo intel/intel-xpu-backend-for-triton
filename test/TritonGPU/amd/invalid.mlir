@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe --split-input-file %s --verify-diagnostics
+// RUN: triton-opt --split-input-file %s --verify-diagnostics
 
 // expected-error @+1 {{Transposed WMMA is supported only for version 2}}
 #wmma = #ttg.amd_wmma<{version = 1, isTranspose = true, warpsPerCTA = [2, 2]}>

@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file --tritongpu-accelerate-matmul | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritongpu-accelerate-matmul | FileCheck %s
 
 // CHECK: #[[MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
 // CHECK: #[[MMA1:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>

@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s --split-input-file --decompose-unsupported-amd-conversions | FileCheck %s
+// RUN: triton-opt %s --split-input-file --decompose-unsupported-amd-conversions | FileCheck %s
 
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{{.*}}>
 // CHECK: #[[$WMMA:.+]] = #ttg.amd_wmma<{{.*}}>

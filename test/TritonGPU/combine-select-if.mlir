@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file -tritongpu-combine-tensor-select-and-if | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-combine-tensor-select-and-if | FileCheck %s
 
 // CHECK-LABEL: @select_if_combine
 tt.func public @select_if_combine(%arg0: tensor<64xf32>, %dst_ptr: tensor<64x!tt.ptr<f32>>, %cnd: i1) {

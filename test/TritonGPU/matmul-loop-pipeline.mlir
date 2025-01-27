@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -tritongpu-pipeline | FileCheck %s
+// RUN: triton-opt %s -tritongpu-pipeline | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
 

@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -split-input-file --tritonamdgpu-block-pingpong | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-block-pingpong | FileCheck %s
 
 //CHECK-LABEL: pingpong_small
 //CHECK: ttg.local_load

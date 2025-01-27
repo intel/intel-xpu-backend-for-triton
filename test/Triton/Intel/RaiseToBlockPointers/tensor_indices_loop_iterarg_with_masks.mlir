@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 // XFAIL: *
 
 // IR from python/examples/test_tensor_index_iterargs.py

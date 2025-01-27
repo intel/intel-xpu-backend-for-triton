@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe --split-input-file %s | FileCheck %s
+// RUN: triton-opt --split-input-file %s | FileCheck %s
 
 // CHECK: #[[$WMMA_GEN1:.*]] = #ttg.amd_wmma<{{.*}}version = 1{{.*}}>
 // CHECK: #[[$WMMA_GEN2:.*]] = #ttg.amd_wmma<{{.*}}version = 2{{.*}}>

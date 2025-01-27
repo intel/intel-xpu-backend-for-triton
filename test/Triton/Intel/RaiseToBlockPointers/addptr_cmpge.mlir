@@ -1,4 +1,4 @@
-// RUN: triton-opt.exe %s -triton-raise-block-pointer --split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer --split-input-file -canonicalize | FileCheck %s
 
 // These tests check that loads/stores that exhibit a cmp ge against 0 work
 // correctly with the pointer analysis pass
