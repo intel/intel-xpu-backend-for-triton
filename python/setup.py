@@ -454,7 +454,7 @@ class CMakeBuild(build_ext):
 
         cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
         if platform.system() == "Windows":
-            cmake_args += [f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
+            cmake_args += [f"-DTRITON_PYD_PATH={extdir}"]
         else:
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
