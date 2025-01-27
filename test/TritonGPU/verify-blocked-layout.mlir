@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s --verify-diagnostics
+// RUN: triton-opt.exe --split-input-file %s --verify-diagnostics
 
 #blocked = #ttg.blocked<{
     sizePerThread=[1, 1],

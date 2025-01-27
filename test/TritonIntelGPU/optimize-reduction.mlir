@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --split-input-file -tritonintelgpu-optimize-reduction-locality | FileCheck %s
+// RUN: triton-opt.exe %s --split-input-file -tritonintelgpu-optimize-reduction-locality | FileCheck %s
 
 // Test reduction in a single warp (16x16->16).
 

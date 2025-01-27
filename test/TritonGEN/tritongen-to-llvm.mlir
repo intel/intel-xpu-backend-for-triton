@@ -1,4 +1,4 @@
-// RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
+// RUN: triton-opt.exe -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
 // CHECK: llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
 

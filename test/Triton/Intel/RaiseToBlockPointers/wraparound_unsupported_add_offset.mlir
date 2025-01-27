@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt.exe %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 
 
 // We currently do not support this kind of modulo pattern:

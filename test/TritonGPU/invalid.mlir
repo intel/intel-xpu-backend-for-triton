@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s --verify-diagnostics
+// RUN: triton-opt.exe --split-input-file %s --verify-diagnostics
 
 #shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory

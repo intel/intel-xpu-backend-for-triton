@@ -1,4 +1,4 @@
-; RUN: triton-llvm-opt -freeze-masked-div-rem %s | FileCheck %s
+; RUN: triton-llvm-opt.exe -freeze-masked-div-rem %s | FileCheck %s
 
 define void @phi_div_of_zero_okay(i8 noundef %x, i8 %i, ptr %v) {
 ; CHECK-LABEL: @phi_div_of_zero_okay(

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-optimize-dot-operands -canonicalize | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritongpu-optimize-dot-operands -canonicalize | FileCheck %s
 
 #Cv2 = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
 #Av2k1 = #ttg.dot_op<{opIdx = 0, parent = #Cv2, kWidth=1}>

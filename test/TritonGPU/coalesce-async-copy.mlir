@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-coalesce-async-copy | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritongpu-coalesce-async-copy | FileCheck %s
 
 // CHECK: #[[NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 // CHECK: %{{.*}} = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<64x16x!tt.ptr<i8>, #[[NEW_BLOCKED]]>

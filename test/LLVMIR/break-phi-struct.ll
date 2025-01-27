@@ -1,4 +1,4 @@
-; RUN: triton-llvm-opt -break-struct-phi-nodes %s | FileCheck %s
+; RUN: triton-llvm-opt.exe -break-struct-phi-nodes %s | FileCheck %s
 
 ; CHECK-LABEL: struct
 define {i32, i32} @struct(i1 %c) {

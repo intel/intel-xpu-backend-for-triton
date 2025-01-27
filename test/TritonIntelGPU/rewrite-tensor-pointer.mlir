@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-rewrite-tensor-pointer | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritonintelgpu-rewrite-tensor-pointer | FileCheck %s
 
 // COM: Case 0:
 // COM: Check that operations using block pointers satisfying the following conditions are not rewritten:

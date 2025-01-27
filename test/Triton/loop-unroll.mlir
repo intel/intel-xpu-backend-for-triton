@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s -triton-loop-unroll | FileCheck %s
+// RUN: triton-opt.exe --split-input-file %s -triton-loop-unroll | FileCheck %s
 
 tt.func @add_kernel_unroll(%arg0: tensor<256x!tt.ptr<f32>>, %arg1: i32) {
   %c1_i32 = arith.constant 1 : i32

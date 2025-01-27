@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --convert-nv-gpu-to-llvm  -split-input-file | FileCheck %s
+// RUN: triton-opt.exe %s --convert-nv-gpu-to-llvm  -split-input-file | FileCheck %s
 
 // CHECK-LABEL: @nvvm_syncs
 llvm.func @nvvm_syncs() {

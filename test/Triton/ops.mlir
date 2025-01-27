@@ -1,4 +1,4 @@
-// RUN: triton-opt %s | FileCheck %s
+// RUN: triton-opt.exe %s | FileCheck %s
 
 // CHECK-LABEL: @cast_ops
 tt.func @cast_ops(%scalar_ptr: !tt.ptr<f32>, %scalar_f32: f32, %scalar_i64: i64) {

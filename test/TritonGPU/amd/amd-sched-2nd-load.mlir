@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-reorder-instructions | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritonamdgpu-reorder-instructions | FileCheck %s
 
 // Check the logic of sched-2nd-load optimizations
 //

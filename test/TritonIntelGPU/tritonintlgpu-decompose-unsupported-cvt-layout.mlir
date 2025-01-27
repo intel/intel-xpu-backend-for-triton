@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-decompose-unsupported-conversions | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file --intel-decompose-unsupported-conversions | FileCheck %s
 
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked
 // CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas

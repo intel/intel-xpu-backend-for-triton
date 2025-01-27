@@ -1,4 +1,4 @@
-// RUN: triton-opt -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
+// RUN: triton-opt.exe -convert-tritongen-to-llvm -split-input-file %s | FileCheck %s
 
 // CHECK: llvm.func spir_funccc @_Z44intel_sub_group_2d_block_prefetch_8b_8r32x1cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind}
 

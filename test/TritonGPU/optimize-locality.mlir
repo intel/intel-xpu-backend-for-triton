@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-optimize-thread-locality -canonicalize | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritongpu-optimize-thread-locality -canonicalize | FileCheck %s
 
 // CHECK-LABEL: negative_zero_accumulator
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00>

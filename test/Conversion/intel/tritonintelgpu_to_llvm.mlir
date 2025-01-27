@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt.exe %s --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
 

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt.exe %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 
 module {
   tt.func @kernel(%a : !tt.ptr<i32>, %b : !tt.ptr<f32>) -> () {

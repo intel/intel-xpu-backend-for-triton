@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt.exe %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 
 // COM: 1D PTR + LOAD
 // CHECK-LABEL:   tt.func @test_addptr_splat_make_range(

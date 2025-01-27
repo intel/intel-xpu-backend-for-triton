@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-reorder-instructions | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritongpu-reorder-instructions | FileCheck %s
 
 // check that we don't hoist convert_layout above its operand definition.
 // CHECK-LABEL: convert_cannot_hoist

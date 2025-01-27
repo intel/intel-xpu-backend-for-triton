@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-reorder-instructions | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritonamdgpu-reorder-instructions | FileCheck %s
 
 // Check that we place local_alloc, local_store (optional) and local_load right after definition of their operands
 // in cases where local_alloc is in the loop but it's operand is not.

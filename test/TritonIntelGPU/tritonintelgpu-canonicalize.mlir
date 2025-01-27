@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -canonicalize -verify-diagnostics | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -canonicalize -verify-diagnostics | FileCheck %s
 
 tt.func @triton_intel_gpu.extract(%tensor1 : tensor<16x8xf16>, %tensor2 : tensor<16x8xf16>) -> tensor<16x8xf16> {
   // CHECK-LABEL: @triton_intel_gpu.extract

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-bypass-lds-for-dot-operand -tritongpu-remove-layout-conversions | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritonamdgpu-bypass-lds-for-dot-operand -tritongpu-remove-layout-conversions | FileCheck %s
 
 // For Bypass LDS optimization to be efficient we need collaboration of 2 passes:
 //     1) Bypass LDS pass: To convert load from blocked->dot layout.

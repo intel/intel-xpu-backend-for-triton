@@ -1,5 +1,5 @@
 // RUN: env TRITON_INTEL_ADVANCED_PATH=1 TRITON_INTEL_REDUCE_TRANSPOSE=1 \
-// RUN: triton-opt %s --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt.exe %s --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // COM: Checks the correct lowering of transpose reductions.
 

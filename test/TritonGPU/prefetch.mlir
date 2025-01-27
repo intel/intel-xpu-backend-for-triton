@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-prefetch -canonicalize | FileCheck %s
+// RUN: triton-opt.exe %s -split-input-file -tritongpu-prefetch -canonicalize | FileCheck %s
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
