@@ -86,6 +86,12 @@ jobs:
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
 
+      - name: Run unit tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          ${{ env.TRITON_TEST_CMD }} --unit
+
       - name: Run core tests
         run: |
           .venv\Scripts\activate.ps1
