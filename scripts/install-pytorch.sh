@@ -8,7 +8,7 @@ BUILD_LATEST=false
 FORCE_REINSTALL=false
 PYTORCH_CURRENT_COMMIT=""
 VENV=false
-NO_CLEAN=false
+CLEAN=true
 for arg in "$@"; do
   case $arg in
     --source)
@@ -26,7 +26,7 @@ for arg in "$@"; do
       VENV=true
       ;;
     -nc|--no-clean)
-      NO_CLEAN=true
+      CLEAN=false
       ;;
     --help)
       echo "Example usage: ./install-pytorch.sh [--source | --latest | --force-reinstall | --venv]"
@@ -134,7 +134,7 @@ if [ ! -d "$BASE" ]; then
   mkdir $BASE
 fi
 
-if [ "$NO_CLEAN" = false ]; then
+if [ "$CLEAN" = true ]; then
   [ "$BUILD_LATEST" = false ] || PYTORCH_PINNED_COMMIT=main
   if [ -d "$PYTORCH_PROJ" ] && cd "$PYTORCH_PROJ" && \
     git fetch --recurse-submodules && \
