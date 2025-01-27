@@ -2,7 +2,6 @@
 
 import argparse
 import importlib.util
-import os
 import pathlib
 import shutil
 import tempfile
@@ -20,9 +19,6 @@ class CustomMark(triton.testing.Mark):  # pylint: disable=too-few-public-methods
 
     def run(self, **kwargs):
         """Runs a benchmark."""
-        # Do not show plots when running in CI
-        if os.getenv('CI', 'false') == 'true':
-            kwargs['show_plots'] = False
         if 'save_path' in kwargs:
             return super().run(**kwargs)
         with tempfile.TemporaryDirectory() as tmp_dir:
