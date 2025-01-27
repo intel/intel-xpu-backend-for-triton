@@ -18,4 +18,4 @@ cd "$REPO_ROOT"
 
 curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
 # build trigger #3126
-git apply "${SCRIPT_DIR}/pytorch.patch"
+# git apply "${SCRIPT_DIR}/pytorch.patch"
