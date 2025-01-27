@@ -301,7 +301,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     set_target_properties(triton PROPERTIES PREFIX "lib")
     if(DEFINED TRITON_PYD_PATH)
       set_target_properties(triton PROPERTIES
-        CMAKE_RUNTIME_OUTPUT_DIRECTORY
+        CMAKE_RUNTIME_OUTPUT_DIRECTORY_${CMAKE_BUILD_TYPE}
       "${TRITON_PYD_PATH}")
     endif(DEFINED TRITON_PYD_PATH)
   else()
