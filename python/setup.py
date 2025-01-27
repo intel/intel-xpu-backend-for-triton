@@ -453,7 +453,9 @@ class CMakeBuild(build_ext):
         build_args = ["--config", cfg]
 
         cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
-        if platform.system() != "Windows":
+        if platform.system() == "Windows":
+            cmake_args += [f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
+        else:
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
 
