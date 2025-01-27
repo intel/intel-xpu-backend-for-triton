@@ -57,8 +57,8 @@ tool_dirs = [config.triton_tools_dir, config.llvm_tools_dir, config.filecheck_di
 for d in tool_dirs:
     llvm_config.with_environment('PATH', d, append_path=True)
 tools = [
-    'triton-opt',
-    'triton-llvm-opt',
+    'triton-opt.exe',
+    'triton-llvm-opt.exe',
     ToolSubst('%PYTHON', config.python_executable, unresolved='ignore'),
 ]
 
