@@ -72,7 +72,7 @@ bool isDivisible(Value value, unsigned divisor) {
   return false;
 }
 
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
     return encoding;
   if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
@@ -212,7 +212,7 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        enqueue(operand, *srcEncoding);
+        enqueue(operand, srcEncoding);
       }
       continue;
     }
@@ -257,8 +257,9 @@ LLVM::CallOp createSPIRVBuiltinCall(Location loc,
 }
 
 static std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
-  if (ofr.is<Attribute>() && isa<IntegerAttr>(ofr.get<Attribute>()))
-    return cast<IntegerAttr>(ofr.get<Attribute>()).getInt();
+  if (auto attr = dyn_cast<Attribute>(ofr))
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+      return intAttr.getInt();
   return std::nullopt;
 }
 

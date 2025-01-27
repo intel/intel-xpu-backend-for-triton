@@ -3,12 +3,12 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget, AttrsDescriptor
+from ..backends.compiler import GPUTarget
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
-from ..tools.disasm import get_sass
+from ..tools.disasm import get_sass, get_spvdis
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -51,34 +51,30 @@ def convert_type_repr(x):
 
 class ASTSource:
 
-    def __init__(self, fn, signature, constants=None, attrs=None) -> None:
+    def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         self.fn = fn
         self.ext = "ttir"
         self.name = fn.__name__
         self.signature = signature
-        self.constants = constants
-        self.attrs = attrs
+        self.constants = dict()
+        if constexprs is not None:
+            for k, v in constexprs.items():
+                k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
+                assert isinstance(k, tuple)
+                self.constants[k] = v
+        self.attrs = attrs or dict()
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
         else:
             for k in self.signature.keys():
                 if not isinstance(k, str):
                     raise TypeError("Signature keys must be string")
-        if self.constants is None:
-            self.constants = {}
-        else:
-            for k in self.constants.keys():
-                if not isinstance(k, str):
-                    raise TypeError("Constants keys must be string")
-        if self.attrs is None:
-            self.attrs = AttrsDescriptor()
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        # Note - we stringify the keys here to allow sorting to work for cases
-        # where constants have mixed int/str keys.
-        sorted_constants = sorted((str(k), v) for k, v in self.constants.items())
-        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
+        get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
+        constants_key = '-'.join([get_key(v) for k, v in sorted(self.constants.items())])
+        key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
@@ -124,8 +120,8 @@ class IRSource:
 
     def parse_options(self):
         if self.ext == "ttgir":
-            num_warps = self.module.get_int_attr("triton_gpu.num-warps")
-            assert num_warps is not None, "Unable to parse triton_gpu.num-warps attribute"
+            num_warps = self.module.get_int_attr("ttg.num-warps")
+            assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             return {'num_warps': num_warps}
         return dict()
 
@@ -171,9 +167,11 @@ def parse(full_name, ext, context):
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
-    if ext == "llir" or ext == "ptx":
+    if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin":
+    if ext == "cubin" or ext == "hsaco":
+        return Path(full_name).read_bytes()
+    if ext == "spv":
         return Path(full_name).read_bytes()
 
 
@@ -250,7 +248,6 @@ def compile(src, target=None, options=None):
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
     if not always_compile and metadata_path is not None:
         # cache hit!
-        metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
     # initialize metadata
     metadata = {
@@ -274,13 +271,13 @@ def compile(src, target=None, options=None):
         ir.load_dialects(context)
         backend.load_dialects(context)
 
-    codegen_fns = backend.get_codegen_implementation()
+    codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
-    try:
-        module = src.make_ir(options, codegen_fns, module_map, context)
-    except Exception as e:
-        filter_traceback(e)
-        raise
+    # try:
+    module = src.make_ir(options, codegen_fns, module_map, context)
+    # except Exception as e:
+    #     filter_traceback(e)
+    #     raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
@@ -305,7 +302,13 @@ def compile(src, target=None, options=None):
     # This is needed to safely finalize threads pool inside context: if current process forks before
     # python GC deletes context object, thread pool in child process will be invalid, which could
     # lead to child crash or hang.
-    context.disable_multithreading()
+    #
+    # However disabling multithreading causes the code to hang if the ASAN pass is enabled
+    # this is likely due to the llvm-symbolizer forking a process
+    # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
+    # multithreading in the MLIR context
+    if not os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+        context.disable_multithreading()
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
@@ -340,6 +343,8 @@ class AsmDict(dict):
 
         if key == "sass":
             value = get_sass(self["cubin"])
+        if key == "spvdis":
+            value = get_spvdis(self["spv"])
         else:
             raise KeyError("Unknown key: '%s'" % key)
 
@@ -411,11 +416,8 @@ class CompiledKernel:
         arg_dict = {}
         arg_idx = 0
         for i, arg_name in enumerate(self.src.fn.arg_names):
-            if i in self.src.fn.constexprs:
-                arg_dict[arg_name] = self.src.constants[arg_name]
-            else:
-                arg_dict[arg_name] = args[arg_idx]
-                arg_idx += 1
+            arg_dict[arg_name] = args[arg_idx]
+            arg_idx += 1
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 

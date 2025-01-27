@@ -1,11 +1,13 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SPIRVSubgroupOps.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -37,6 +39,53 @@ VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   size_t num = (tensorSize / 16) / elemType.getIntOrFloatBitWidth();
   return vec_ty(elemType, num);
 };
+
+MakeTensorPtrOp getMakePtrOp(Value v) {
+  using BranchOps = llvm::SetVector<std::pair<Operation *, int>>;
+  llvm::DenseMap<Block *, BranchOps> blockToBrOps;
+  auto moduleOp =
+      v.getParentBlock()->getParentOp()->getParentOfType<ModuleOp>();
+
+  moduleOp.walk([&](Operation *op) {
+    if (auto br = dyn_cast<LLVM::BrOp>(op)) {
+      Block *block = br.getDest();
+      blockToBrOps[block].insert({op, -1});
+    }
+    if (auto condBr = dyn_cast<LLVM::CondBrOp>(op)) {
+      Block *blockT = condBr.getTrueDest();
+      Block *blockF = condBr.getFalseDest();
+      blockToBrOps[blockT].insert({condBr, 1});
+      blockToBrOps[blockF].insert({condBr, 0});
+    }
+  });
+
+  if (Operation *def = v.getDefiningOp()) {
+    if (auto cast = dyn_cast<mlir::UnrealizedConversionCastOp>(def))
+      def = cast.getInputs()[0].getDefiningOp();
+    if (auto make = dyn_cast<MakeTensorPtrOp>(def))
+      return make;
+    if (auto advanceOp = dyn_cast<AdvanceOp>(def))
+      return getMakePtrOp(advanceOp.getPtr());
+    llvm_unreachable("Unable to getMakePtr()");
+  }
+
+  // If there is no defining op, v must be a BlockArgument.
+  BlockArgument arg = cast<BlockArgument>(v);
+  unsigned argNum = arg.getArgNumber();
+  Operation *argOwner = arg.getOwner()->getParentOp();
+
+  if (auto funcOp = dyn_cast<FunctionOpInterface>(argOwner)) {
+    Block *block = arg.getOwner();
+    auto [op, tOrF] = blockToBrOps[block][0];
+    if (auto br = dyn_cast<LLVM::BrOp>(op))
+      return getMakePtrOp(br.getDestOperands()[argNum]);
+    if (auto condBr = dyn_cast<LLVM::CondBrOp>(op))
+      return getMakePtrOp(tOrF ? condBr.getTrueDestOperands()[argNum]
+                               : condBr.getFalseDestOperands()[argNum]);
+    return getMakePtrOp(argOwner->getOperand(argNum));
+  }
+  llvm_unreachable("Unable to getMakePtr()");
+}
 
 static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
                                 Location loc, Value base, Value val,
@@ -154,6 +203,18 @@ public:
   matchAndRewrite(OpType op, typename OpType::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto ptrType = cast<PointerType>(op.getPtr().getType());
+    // scalar load/store
+    if (!isa<RankedTensorType>(ptrType.getPointeeType())) {
+      if constexpr (std::is_same_v<OpType, LoadOp>) {
+        auto newLoad = rewriter.create<LLVM::LoadOp>(op.getLoc(), op.getType(),
+                                                     adaptor.getPtr());
+        rewriter.replaceOp(op, newLoad);
+        return success();
+      }
+      assert(0 && "add more support");
+      return failure();
+    }
+    // blocked load/store
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
     assert(tensorType.getRank() == 2 &&
            "only support 2d load/store/prefetch for now");
@@ -185,7 +246,7 @@ public:
     if (auto cast = ptr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       ptr = cast.getInputs()[0];
 
-    MakeTensorPtrOp ptrOp = getMakeTensorPtrOp(ptr);
+    MakeTensorPtrOp ptrOp = getMakePtrOp(ptr);
     Value base = ptrOp.getBase();
     if (auto cast = base.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       base = cast.getInputs()[0];
@@ -561,7 +622,7 @@ public:
   using ConvertTritonGPUOpToLLVMPattern<
       ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReduceOp op, ReduceOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -582,18 +643,14 @@ public:
     Operation *combine = &*combineOp.front().getOperations().begin();
 
     // FIXME: support all possible reduction modes
-    using AllReduceOperation = mlir::gpu::AllReduceOperation;
-    AllReduceOperation redKind;
-    if (isa<arith::AddFOp>(combine))
-      redKind = AllReduceOperation::ADD;
-    else if (isa<arith::MaxNumFOp>(combine))
-      redKind = AllReduceOperation::MAXNUMF;
-    else
-      llvm_unreachable("Unhandled reduction kind");
+    TypeSwitch<Operation *>(combine).Case<arith::AddFOp, arith::MaxNumFOp>(
+        [&](auto reduce) {
+          rewriter.replaceOpWithNewOp<intel::SPIRVGroupOpTy<decltype(reduce)>>(
+              op, typeConverter->convertType(op.getType(0)),
+              spirv::Scope::Subgroup, spirv::GroupOperation::Reduce,
+              adaptor.getSrcs()[0], Value());
+        });
 
-    Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, adaptor.getSrcs()[0], redKind, true);
-    rewriter.replaceOp(op, result);
     return success();
   }
 };

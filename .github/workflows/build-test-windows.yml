@@ -1,26 +1,24 @@
-name: Build on Windows
+name: Build and test on Windows
 
 on:
   workflow_dispatch:
 
-  pull_request:
-    branches:
-      - main
-      - release/**
-  push:
-    branches:
-      - main
-      - release/**
+  schedule:
+    - cron: "1 5 * * *"
 
 permissions: read-all
 
 env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
+  ZE_PATH: C:\level_zero
+  PYTEST_MAX_PROCESSES: 8
+  SKIPLIST: --skip-list scripts/skiplist/a770
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
 
 jobs:
   build:
-    name: Build
-    runs-on: avc336
+    name: Build and test
+    runs-on: win-a770
     steps:
       - name: Enable long paths
         run: |
@@ -29,7 +27,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
@@ -39,18 +37,90 @@ jobs:
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
 
+      - name: Create venv
+        run:
+          python -m venv .venv
+
+      # FIXME: the runner has PyTorch wheels pre-compiled from sources in a specific location
+      - name: Install PyTorch (source)
+        run: |
+          .venv\Scripts\activate.ps1
+          pip install (Get-Item C:\pytorch\dist\*.whl)
+
+      - name: PyTorch version
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          python -c 'import torch;print(torch.__version__)'
+
+      - name: Clean up Triton cache
+        shell: bash
+        run: |
+          rm -rf ~/.triton/cache
+
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
       # runner.
-      - name: Build Triton
+      - name: Setup Triton
         run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           cd python
-          pip install -U wheel pybind11 certifi cython cmake
-          python -m certifi
-          pip install -v --no-build-isolation '.[build]'
+          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
+          pip install -v --no-build-isolation '.[build,tests,tutorials]'
 
-      - name: Clean
+      - name: Triton version
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Install test dependencies
+        run: |
+          .venv\Scripts\activate.ps1
+          pip install -r scripts\requirements-test.txt
+          pip uninstall pytest_forked -y
+
+      - name: Run core tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run interpreter tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Pass rate
+        run: |
+          .venv\Scripts\activate.ps1
+          # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          pip install defusedxml
+          bash -c "\
+            source ./scripts/capture-hw-details.sh; \
+            python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
+            python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json; \
+            python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \
+          "
+
+      - name: Upload pass rate report
+        # upload reports only for the default branch
+        if: github.ref_name == 'main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pass_rate
+          path: pass_rate*.json
+
+      - name: Clean up workspace
         if: ${{ always() }}
         run: |
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
+
+      - name: Clean up temporary files
+        shell: bash
+        run: |
+          rm -rf rm -rf /tmp/triton-* /tmp/tmp*

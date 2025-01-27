@@ -18,6 +18,7 @@ python/triton/_C/*.ilk
 benchmarks/dist
 benchmarks/*.egg-info/
 benchmarks/**/*.so
+.scripts_cache/
 
 # Logs
 inductor_log/
@@ -30,6 +31,9 @@ python/triton/backends/
 
 # Language extras
 python/triton/language/extra
+
+# Tools extras
+python/triton/tools/extra
 
 # Proton
 python/triton/profiler

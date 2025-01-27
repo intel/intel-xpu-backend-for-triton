@@ -498,13 +498,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   // getValuesFromDotOperandLayoutStruct as both a and b are K-major
   assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
                                                        aShapePerCTA.size(),
-                                                       /*kMajor=*/true));
+                                                       /*kContig=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
-                                                       /*kMajor=*/true));
+                                                       /*kContig=*/true));
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
 
@@ -516,6 +516,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   const auto &mmaInstructions =
       isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+  if (mmaInstructions.find(mmaType) == mmaInstructions.end()) {
+    return emitError(loc, "Unsupported MMA instruction for the given mma type");
+  }
   auto rank = dTensorTy.getRank();
   auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
   auto batchOffset =

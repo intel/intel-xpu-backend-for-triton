@@ -23,11 +23,10 @@
 #define TRITONNVIDIAGPU_OPS
 
 include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUDialect.td"
-include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUTypes.td"
-include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "mlir/IR/OpBase.td"
@@ -128,7 +127,7 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [DeclareOpInterfaceMethods<Memo
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc,
                          I32Attr:$count);
-    let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
+    let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
 }
 
 def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -136,14 +135,14 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<Me
 
     let description = [{
       Invalidate a barrier allocation so that it can be re-used. According to PTX
-      spec this has to be done before any re-use of the memory used by mbarrier.
+      spec this has to be done before any reuse of the memory used by mbarrier.
 
       https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
     }];
 
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc);
-    let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
+    let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -162,7 +161,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<
   );
 
   let assemblyFormat = [{
-    $alloc `,` $size attr-dict `,` $pred `:` type($alloc)
+    $alloc `,` $size attr-dict `,` $pred `:` qualified(type($alloc))
   }];
 }
 
@@ -183,7 +182,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc,
                          I32:$phase);
-    let assemblyFormat = "$alloc `,` $phase attr-dict `:` type($alloc)";
+    let assemblyFormat = "$alloc `,` $phase attr-dict `:` qualified(type($alloc))";
 }
 
 def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
@@ -213,7 +212,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   let description = [{
     This operation copies data from global memory to local memory
     asynchronously.  This is analogue to tt.load except the data are copied to
-    local memory pointed by the memory descriptor instread of a distributed
+    local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
     by `desc_ptr`.
   }];
@@ -233,7 +232,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
-    attr-dict `:` type($desc_ptr) `,` type($barrier) `->` type($result)
+    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 }
 
@@ -243,7 +242,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let description = [{
     This operation copies data from local memory to global memory
     asynchronously.  This is analogue to tt.store except the data are copied from
-    local memory pointed by the memory descriptor instread of a distributed
+    local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
     by `desc_ptr`.
   }];
@@ -255,11 +254,11 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
 
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $src
-    attr-dict `:` type($desc_ptr) `,` type($src)
+    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
   }];
 }
 
-def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
+def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
   let summary = "wait until all the inputs are read.";
   let arguments = (ins I32Attr:$pendings);
   let description = [{

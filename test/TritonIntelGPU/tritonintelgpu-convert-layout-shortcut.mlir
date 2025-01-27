@@ -1,14 +1,14 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_1_2
   // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_1_2(%arg: tensor<1024x32xf16, #dpas>) {
     // COM: The repetitions order of dot layout and dpas layout are same when the GEMM tiling is clustered as repCluster [1, 2].
     // CHECK-NO: llvm.insertvalue
     // CHECK-NO: llvm.extractvalue
-    %108 = triton_gpu.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }
@@ -16,7 +16,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
 // -----
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [2, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_2_2
   // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_2_2(%arg: tensor<1024x32xf16, #dpas>) {
@@ -153,7 +153,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK:           %[[VAL_127:.*]] = llvm.insertvalue %[[VAL_62]], %[[VAL_126]][61]
     // CHECK:           %[[VAL_128:.*]] = llvm.insertvalue %[[VAL_63]], %[[VAL_127]][62]
     // CHECK:           %[[VAL_129:.*]] = llvm.insertvalue %[[VAL_64]], %[[VAL_128]][63]
-    %108 = triton_gpu.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }
@@ -161,7 +161,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
 // -----
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [4, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_4_2
   // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_4_2(%arg: tensor<1024x32xf16, #dpas>) {
@@ -298,7 +298,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
     // CHECK:           %[[VAL_127:.*]] = llvm.insertvalue %[[VAL_62]], %[[VAL_126]][61]
     // CHECK:           %[[VAL_128:.*]] = llvm.insertvalue %[[VAL_63]], %[[VAL_127]][62]
     // CHECK:           %[[VAL_129:.*]] = llvm.insertvalue %[[VAL_64]], %[[VAL_128]][63]
-    %108 = triton_gpu.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }

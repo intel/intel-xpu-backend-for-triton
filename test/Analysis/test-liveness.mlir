@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --mlir-disable-threading --test-liveness --split-input-file 2>&1 | FileCheck %s
 
-module attributes {"triton_gpu.num-warps" = 8 : i32} {
+module attributes {"ttg.num-warps" = 8 : i32} {
   tt.func public @test(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %cond: i1) {
     // CHECK-LABEL: test
     // CHECK: scf.for

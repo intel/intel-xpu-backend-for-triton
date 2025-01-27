@@ -16,10 +16,13 @@ on:
         description: The method used to obtain performance numbers
         type: choice
         options:
-          - PYTORCH_LEGACY_PROFILER_USING_IPEX
           - ELAPSED_TIME
           - UPSTREAM_PYTORCH_PROFILER
-        default: PYTORCH_LEGACY_PROFILER_USING_IPEX
+        default: UPSTREAM_PYTORCH_PROFILER
+      verify:
+        description: Verify the benchmark results
+        type: boolean
+        default: true
       run_name:
         description: Run name
         type: string
@@ -46,9 +49,9 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
-  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'PYTORCH_LEGACY_PROFILER_USING_IPEX' }}
-  USE_IPEX: ${{ github.event_name != 'workflow_dispatch' && '1' || inputs.benchmarking_method  == 'PYTORCH_LEGACY_PROFILER_USING_IPEX' && '1' || '0' }}
-  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && 'pr') || (github.event_name == 'schedule' && 'ci') || 'test' }}
+  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
+  VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
+  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
   build:
@@ -60,16 +63,14 @@ jobs:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Load pip cache
-        id: pip-cache
-        uses: ./.github/actions/load
-        with:
-          path: $HOME/.cache/pip
-          # pip cache per commit id just to minimize network traffic
-          key: pip-$PYTHON_VERSION-$GITHUB_SHA
 
       - name: Install Python
         if: ${{ !(inputs.use_pyenv_python || false) }}
@@ -92,21 +93,8 @@ jobs:
         run: |
           pip install wheel cmake
 
-      - name: Setup PyTorch with IPEX
-        if: ${{ env.USE_IPEX == '1' }}
+      - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
-        with:
-          repository: Stonepia/pytorch
-
-      - name: Setup PyTorch without IPEX
-        if: ${{ env.USE_IPEX == '0' }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: pytorch/pytorch
-
-      - name: Setup IPEX
-        if: ${{ env.USE_IPEX == '1' }}
-        uses: ./.github/actions/setup-ipex
 
       - name: Build Triton wheels
         uses: ./.github/actions/setup-triton
@@ -130,7 +118,7 @@ jobs:
         id: install
         run: |
           cd benchmarks
-          python setup.py install
+          pip install .
 
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'fused_softmax.py') }}
@@ -152,29 +140,12 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-triton-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
           python ../../scripts/build_report.py $REPORTS/matmul-performance-base.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
-      - name: Run Triton GEMM kernel benchmark - default path
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py_default') }}
-        run: |
-          cd benchmarks/triton_kernels_benchmark
-          # Default path:
-          TRITON_INTEL_ADVANCED_PATH=0 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-          IGC_VISAOptions=" -enableBCR -nolocalra" \
-          IGC_DisableLoopUnroll=1 \
-          python gemm_benchmark.py --reports $REPORTS
-          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-default-path.csv
-
-          source ../../scripts/capture-hw-details.sh
-          TAG="${TAG}-dflt"
-          python ../../scripts/build_report.py $REPORTS/matmul-performance-default-path.csv $REPORTS/gemm-triton-default-report.csv --benchmark gemm --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-
       - name: Run Triton GEMM kernel benchmark - advanced path
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py_advanced') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           # Advanced path:
           TRITON_INTEL_ADVANCED_PATH=1 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR -nolocalra" \
           IGC_DisableLoopUnroll=1 \
           python gemm_benchmark.py --reports $REPORTS
@@ -213,6 +184,7 @@ jobs:
           python gemm_streamk_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-streamk-performance.csv $REPORTS/gemm-streamk-triton-report.csv --benchmark gemm-streamk --compiler triton --param_cols "M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-streamk-performance.csv $REPORTS/gemm-streamk-xetla-report.csv --benchmark gemm-streamk --compiler xetla --param_cols "M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton GEMM (split-k) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_splitk_benchmark.py') }}
@@ -221,6 +193,7 @@ jobs:
           python gemm_splitk_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-splitk-performance.csv $REPORTS/gemm-splitk-triton-report.csv --benchmark gemm-splitk --compiler triton --param_cols "M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-splitk-performance.csv $REPORTS/gemm-splitk-xetla-report.csv --benchmark gemm-splitk --compiler xetla --param_cols "M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PreOp (exp) kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_preop_exp_benchmark.py') }}
@@ -238,49 +211,55 @@ jobs:
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-gelu.csv $REPORTS/gemm-postop-gelu-triton-report.csv --benchmark gemm-postop-gelu --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
-      - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark
+      - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark bfloat16
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix.csv $REPORTS/gemm-postop-addmatrix-triton-report.csv --benchmark gemm-postop-addmatrix --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix-bfloat16.csv $REPORTS/gemm-postop-addmatrix-bfloat16-triton-report.csv --benchmark gemm-postop-addmatrix --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
-      - name: Run Triton FA kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fwd_benchmark.py') }}
+      - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark int8
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          python flash_attention_fwd_benchmark.py --reports $REPORTS
-
+          INT8_ONLY=1 python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix-int8.csv $REPORTS/gemm-postop-addmatrix-int8-triton-report.csv --benchmark gemm-postop-addmatrix-int8 --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
-      - name: Run Triton FA kernel benchmark - default path
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmark || '[]'), 'flash_attention_fwd_benchmark.py_default') }}
+      - name: Run Triton FA fwd kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          TRITON_INTEL_ADVANCED_PATH=0 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-          IGC_VISAOptions=" -enableBCR" \
-          python flash_attention_fwd_benchmark.py --reports $REPORTS
+          python flash_attention_benchmark.py --reports $REPORTS
 
-          TAG="${TAG}-dflt"
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-default-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL,MODE" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-xetla-report.csv --benchmark attn --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL,MODE" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
-      - name: Run Triton FA kernel benchmark - advanced path
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_fwd_benchmark.py_advanced') }}
+      - name: Run Triton FA fwd kernel benchmark - advanced path
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_benchmark.py_advanced') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           TRITON_INTEL_ADVANCED_PATH=1 \
-          TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
           IGC_VISAOptions=" -enableBCR" \
-          python flash_attention_fwd_benchmark.py --reports $REPORTS
+          python flash_attention_benchmark.py --reports $REPORTS
 
           TAG="${TAG}-adv"
           source ../../scripts/capture-hw-details.sh
-          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-advanced-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-performance.csv $REPORTS/attn-triton-advanced-report.csv --benchmark attn --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL,MODE" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run Triton FA bwd kernel benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_benchmark.py') }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark
+          FA_KERNEL_MODE="bwd" \
+            python flash_attention_benchmark.py --reports $REPORTS
+          mv $REPORTS/attn-performance.csv $REPORTS/attn-bwd-performance.csv
+
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/attn-bwd-performance.csv $REPORTS/attn-bwd-triton-report.csv --benchmark attn-bwd --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL,MODE" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/attn-bwd-performance.csv $REPORTS/attn-bwd-xetla-report.csv --benchmark attn-bwd --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL,MODE" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Prefix Sums kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix_sums.py') }}
@@ -295,13 +274,6 @@ jobs:
         run: |
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
-
-      - name: Save pip cache
-        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
-        uses: ./.github/actions/save
-        with:
-          path: ${{ steps.pip-cache.outputs.path }}
-          dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

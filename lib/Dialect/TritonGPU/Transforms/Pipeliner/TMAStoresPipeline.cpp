@@ -44,8 +44,8 @@ static Value createAlloc(scf::ForOp &forOp,
   Type memdescType =
       ttg::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
                             sharedMemorySpace, /*mutableMemory*/ true);
-  Value alloc = builder.create<ttg::LocalAllocOp>(storeOp->getLoc(),
-                                                  memdescType, Value());
+  Value alloc =
+      builder.create<ttg::LocalAllocOp>(storeOp->getLoc(), memdescType);
   return alloc;
 }
 
@@ -60,7 +60,7 @@ static void createTMAAsyncCopy(scf::ForOp &forOp,
 
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
-  builder.create<ttng::TMAStoreWait>(loc, 0);
+  builder.create<ttng::TMAStoreWaitOp>(loc, 0);
   builder.create<ttg::LocalStoreOp>(loc, storeOp.getSrc(), alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
   Value tmaPtr = builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
@@ -83,7 +83,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     // Reuse allocations for stores of the same shape and types. This allows
     // saving shared memory usage. It is valid since we have a wait 0 before
     // every local_store. We could pipeline more aggressively if we didn't
-    // re-use but there is a tradeoff with shared memory usage.
+    // reuse but there is a tradeoff with shared memory usage.
     auto key = std::make_pair(op.getSrc().getType().getShape(),
                               op.getSrc().getType().getElementType());
     auto it = allocs.find(key);
@@ -102,7 +102,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   // Deallocate shared memory buffers.
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
-  builder.create<ttng::TMAStoreWait>(forOp->getLoc(), 0);
+  builder.create<ttng::TMAStoreWaitOp>(forOp->getLoc(), 0);
   for (auto it : storeToAlloc) {
     builder.create<ttg::LocalDeallocOp>(forOp->getLoc(), it.second);
   }

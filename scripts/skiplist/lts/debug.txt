@@ -1,4 +1,4 @@
-https://github.com/intel/intel-xpu-backend-for-triton/issues/2755
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/2755
 test/unit/test_debug.py::test_device_assert[True-True-True-False]
 test/unit/test_debug.py::test_device_assert[True-False-None-False]
 test/unit/test_debug.py::test_device_assert[False-True-True-False]

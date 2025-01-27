@@ -2,21 +2,19 @@ import importlib.metadata
 import os
 import hashlib
 import shutil
+import ctypes
 import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
-from typing import Optional
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
-from packaging.version import Version
-from packaging.specifiers import SpecifierSet
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
+def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
     """
     Looks for the sycl library in known places.
 
@@ -30,13 +28,17 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
       AssertionError: if library was not found.
     """
     include_dir = include_dir.copy()
+    sycl_dir = None
     assertion_message = ("sycl headers not found, please install `icpx` compiler, "
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
-
-    if shutil.which("icpx") and os.name != "nt":
+    icpx_path = shutil.which("icpx")
+    if icpx_path and os.name != "nt":
         # only `icpx` compiler knows where sycl runtime binaries and header files are
-        return include_dir, None
+        compiler_root = os.path.abspath(f"{icpx_path}/../..")
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        sycl_dir = os.path.join(compiler_root, "lib")
+        return include_dir, sycl_dir
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
@@ -44,24 +46,27 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
             os.path.join(oneapi_root, "compiler/latest/include"),
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
-        return include_dir, None
+        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
+        return include_dir, sycl_dir
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
     except importlib.metadata.PackageNotFoundError:
         raise AssertionError(assertion_message)
 
-    if Version(sycl_rt.get("version", "0.0.0")) in SpecifierSet("<2025.0.0a1"):
+    if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
-    sycl_dir = None
     for f in importlib.metadata.files("intel-sycl-rt"):
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
-            include_dir += [f.locate().parent.parent.resolve().as_posix()]
-        if f.name == "libsycl.so":
-            sycl_dir = f.locate().parent.resolve().as_posix()
+            include_dir += [str(f.locate().parent.parent.resolve())]
+        if f.name in ["libsycl.so", "sycl8.dll"]:
+            sycl_dir = str(f.locate().parent.resolve())
+            # should we handle `_` somehow?
+            if os.name == "nt":
+                _ = os.add_dll_directory(sycl_dir)
 
     return include_dir, sycl_dir
 
@@ -69,14 +74,17 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], Optional[str]]:
 class CompilationHelper:
     _library_dir: list[str]
     _include_dir: list[str]
+    libraries: list[str]
 
     def __init__(self):
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader']
-        if os.name != "nt":
-            self.libraries += ["sycl"]
+        self.libraries = ['ze_loader', 'sycl']
+
+    @property
+    def inject_pytorch_dep(self):
+        return os.environ.get("INJECT_PYTORCH", "False") == "True"
 
     @cached_property
     def _compute_compilation_options_lazy(self):
@@ -92,8 +100,18 @@ class CompilationHelper:
 
         dirname = os.path.dirname(os.path.realpath(__file__))
         include_dir += [os.path.join(dirname, "include")]
-        # TODO: do we need this?
         library_dir += [os.path.join(dirname, "lib")]
+
+        if self.inject_pytorch_dep:
+            import torch
+
+            torch_path = torch.utils.cmake_prefix_path
+            include_dir += [
+                os.path.join(torch_path, "../../include"),
+                os.path.join(torch_path, "../../include/torch/csrc/api/include"),
+            ]
+            library_dir += [os.path.join(torch_path, "../../lib")]
+            self.libraries += ['torch']
 
         self._library_dir = library_dir
         self._include_dir = include_dir
@@ -109,12 +127,73 @@ class CompilationHelper:
         return self._include_dir
 
     @cached_property
-    def libsycl_dir(self) -> Optional[str]:
+    def libsycl_dir(self) -> str:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
 
 
-compilation_helper = CompilationHelper()
+COMPILATION_HELPER = CompilationHelper()
+
+
+class ArchParser:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.CDLL(cache_path)
+        self.shared_library.parse_device_arch.restype = ctypes.c_char_p
+        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
+
+    def __getattribute__(self, name):
+        if name == "parse_device_arch":
+            shared_library = super().__getattribute__("shared_library")
+            attr = getattr(shared_library, name)
+
+            def wrapper(*args, **kwargs):
+                return attr(*args, **kwargs).decode("utf-8")
+
+            return wrapper
+
+        return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
+
+
+class TritonLauncher:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        self.shared_library.launch.restype = ctypes.py_object
+        self.shared_library.launch.argtypes = (ctypes.py_object, )
+
+    def __getattribute__(self, name):
+        if name == "launch":
+            shared_library = super().__getattribute__("shared_library")
+            return getattr(shared_library, name)
+
+        return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
 
 
 def compile_module_from_src(src, name):
@@ -128,12 +207,22 @@ def compile_module_from_src(src, name):
             with open(src_path, "w") as f:
                 f.write(src)
             extra_compiler_args = []
-            if compilation_helper.libsycl_dir:
-                extra_compiler_args += ['-Wl,-rpath,' + compilation_helper.libsycl_dir]
-            so = _build(name, src_path, tmpdir, compilation_helper.library_dir, compilation_helper.include_dir,
-                        compilation_helper.libraries, extra_compile_args=extra_compiler_args)
+            if COMPILATION_HELPER.libsycl_dir:
+                if os.name == "nt":
+                    extra_compiler_args += ["/LIBPATH:" + COMPILATION_HELPER.libsycl_dir]
+                else:
+                    extra_compiler_args += ["-Wl,-rpath," + COMPILATION_HELPER.libsycl_dir]
+
+            so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
+                        COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), file_name, binary=True)
+
+    if name == 'arch_utils':
+        return ArchParser(cache_path)
+    elif name == '__triton_launcher':
+        return TritonLauncher(cache_path)
+
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
@@ -161,16 +250,17 @@ class XPUUtils(object):
         self.context = mod.init_context(self.get_sycl_queue())
         self.device_count = mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
+        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
 
     def get_current_device(self):
         return self.current_device
 
-    def get_event_pool(self):
-        return self.event_pool
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
+
+    def wait(self):
+        self.wait_on_sycl_queue(self.get_sycl_queue())
 
 
 # ------------------------
@@ -200,19 +290,34 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
-    # Record the end of regular arguments;
-    # subsequent arguments are architecture-specific descriptors.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+def make_launcher(constants, signature):
+
+    def _serialize_signature(sig):
+        if isinstance(sig, tuple):
+            return ','.join(map(_serialize_signature, sig))
+        return sig
 
     def _extracted_type(ty):
+        if isinstance(ty, tuple):
+            val = ','.join(map(_extracted_type, ty))
+            return f"[{val}]"
         if ty[0] == '*':
+            return "PyObject*"
+        if ty in ("constexpr"):
             return "PyObject*"
         return ty_to_cpp(ty)
 
     def format_of(ty):
+        if isinstance(ty, tuple):
+            val = ''.join(map(format_of, ty))
+            return f"({val})"
+        if ty[0] == '*':
+            return "O"
+        if ty in ("constexpr"):
+            return "O"
+        if ty == "void*":
+            return "O"
         return {
-            "PyObject*": "O",
             "float": "f",
             "double": "d",
             "long": "l",
@@ -224,234 +329,254 @@ def make_launcher(constants, signature, ids):
             "uint16_t": "H",
             "uint32_t": "I",
             "uint64_t": "K",
-        }[ty]
+        }[ty_to_cpp(ty)]
 
-    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = "iiiOOOOOO" + args_format
+    signature = ','.join(map(_serialize_signature, signature.values()))
+    signature = list(filter(bool, signature.split(',')))
+    signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
 
+    # Record the end of regular arguments;
+    # subsequent arguments are architecture-specific descriptors.
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
+    internal_args_list = []
+    for i, ty in signature.items():
+        if ty[0] == "*":
+            internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty != "constexpr":
+            internal_args_list.append(f"_arg{i}")
+
     # generate glue code
+    newline = '\n  '
+    ptr_decls = [
+        f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;"
+        for i, ty in signature.items()
+        if ty[0] == "*"
+    ]
+    params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
+    num_params = len(params)
+    params_decl = ""
+    if num_params:
+        params_decl = f"void *params[] = {{ {', '.join(params)} }};"
     src = f"""
-    #include <cstddef>
-    #include <string>
-    #include <iostream>
-    #include <iomanip>
-    #include <level_zero/ze_api.h>
-    #include <sycl/sycl.hpp>
+#include <cstddef>
+#include <string>
+#include <iostream>
+#include <iomanip>
+#include <level_zero/ze_api.h>
+#include <sycl/sycl.hpp>
+{ "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
-    #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
-    #include <Python.h>
-    #include <stdio.h>
-    #include <numpy/arrayobject.h>
+#if defined(_WIN32)
+#define EXPORT_FUNC __declspec(dllexport)
+#else
+#define EXPORT_FUNC __attribute__((visibility("default")))
+#endif
 
-    static inline void gpuAssert(ze_result_t code, const char *file, int line)
-    {{
-      if (code != ZE_RESULT_SUCCESS)
-      {{
-         const char* prefix = "Triton Error [ZE]: ";
-         std::string str = std::to_string(code);
-         char err[1024] = {{0}};
-         strcat(err, prefix);
-         strcat(err, str.c_str());
-         PyErr_SetString(PyExc_RuntimeError, err);
-      }}
-    }}
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+#include <Python.h>
+#include <stdio.h>
+#include <numpy/arrayobject.h>
 
-    #define ZE_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+static inline void gpuAssert(ze_result_t code, const char *file, int line)
+{{
+  if (code != ZE_RESULT_SUCCESS)
+  {{
+    const char* prefix = "Triton Error [ZE]: ";
+    std::string str = std::to_string(code);
+    char err[1024] = {{0}};
+    strcat(err, prefix);
+    strcat(err, str.c_str());
+    PyErr_SetString(PyExc_RuntimeError, err);
+  }}
+}}
 
-    typedef struct _DevicePtrInfo {{
-      void* dev_ptr;
-      bool valid;
-    }} DevicePtrInfo;
+#define ZE_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-    static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sycl::queue &queue) {{
-      if (!ptr_info->dev_ptr || !ptr_info->valid) {{
-        return;
-      }}
-      auto context = queue.get_context();
-      auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
-      ze_memory_allocation_properties_t prop;
-      prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
-      prop.pNext = nullptr;
-      ze_device_handle_t device;
-      auto res = zeMemGetAllocProperties((ze_context_handle_t)handle, ptr_info->dev_ptr, &prop, &device);
-      if (res != ZE_RESULT_SUCCESS) {{
-        PyErr_Format(PyExc_ValueError,
-                     "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
-        ptr_info->valid = false;
-      }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
-        PyErr_Format(PyExc_ValueError,
-                     "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
-        ptr_info->valid = false;
-      }}
-    }}
+typedef struct _DevicePtrInfo {{
+  void* dev_ptr;
+  bool valid;
+}} DevicePtrInfo;
 
-    static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue &queue) {{
-      DevicePtrInfo ptr_info;
-      ptr_info.dev_ptr = 0;
-      ptr_info.valid = true;
-      if (PyLong_Check(obj)) {{
-        ptr_info.dev_ptr = PyLong_AsVoidPtr(obj);
-        checkDevicePointer(&ptr_info, idx, queue);
-        return ptr_info;
-      }}
-      if (obj == Py_None) {{
-        // valid nullptr
-        return ptr_info;
-      }}
-      PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
-      if(ptr){{
-        PyObject *empty_tuple = PyTuple_New(0);
-        PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
-        Py_DECREF(empty_tuple);
-        Py_DECREF(ptr);
-        if (!PyLong_Check(ret)) {{
-          PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
-          ptr_info.valid = false;
-          return ptr_info;
-        }}
-        ptr_info.dev_ptr = PyLong_AsVoidPtr(ret);
-        if(!ptr_info.dev_ptr) {{
-          return ptr_info;
-        }}
-        checkDevicePointer(&ptr_info, idx, queue);
-        Py_DECREF(ret);  // Thanks ChatGPT!
-        return ptr_info;
-      }}
-      PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sycl::queue &queue) {{
+  if (!ptr_info->dev_ptr || !ptr_info->valid) {{
+    return;
+  }}
+  auto context = queue.get_context();
+  auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
+  ze_memory_allocation_properties_t prop;
+  prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
+  prop.pNext = nullptr;
+  ze_device_handle_t device;
+  auto res = zeMemGetAllocProperties((ze_context_handle_t)handle, ptr_info->dev_ptr, &prop, &device);
+  if (res != ZE_RESULT_SUCCESS) {{
+    PyErr_Format(PyExc_ValueError,
+                 "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
+    ptr_info->valid = false;
+  }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
+    PyErr_Format(PyExc_ValueError,
+                 "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
+    ptr_info->valid = false;
+  }}
+}}
+
+static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue &queue) {{
+  DevicePtrInfo ptr_info;
+  ptr_info.dev_ptr = 0;
+  ptr_info.valid = true;
+  if (PyLong_Check(obj)) {{
+    ptr_info.dev_ptr = PyLong_AsVoidPtr(obj);
+    checkDevicePointer(&ptr_info, idx, queue);
+    return ptr_info;
+  }}
+  if (obj == Py_None) {{
+    // valid nullptr
+    return ptr_info;
+  }}
+  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if(ptr){{
+    PyObject *empty_tuple = PyTuple_New(0);
+    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+    Py_DECREF(empty_tuple);
+    Py_DECREF(ptr);
+    if (!PyLong_Check(ret)) {{
+      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
       ptr_info.valid = false;
       return ptr_info;
     }}
+    ptr_info.dev_ptr = PyLong_AsVoidPtr(ret);
+    if(!ptr_info.dev_ptr) {{
+      return ptr_info;
+    }}
+    checkDevicePointer(&ptr_info, idx, queue);
+    Py_DECREF(ret);  // Thanks ChatGPT!
+    return ptr_info;
+  }}
+  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  ptr_info.valid = false;
+  return ptr_info;
+}}
+
 // start sycl
-  template <class T>
-  static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
-    cgh.set_arg(index, *static_cast<const T *>(value));
-  }}
-  static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+template <class T>
+static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *value) {{
+  cgh.set_arg(index, *static_cast<const T *>(value));
+}}
 
-    std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
-    void *params[] = {{ {', '.join(f"&arg{i}" for i in signature.keys() if i not in constants)} }};
-    uint32_t num_params = sizeof(params)/sizeof(params[0]);
-    uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
-    size_t global_range_x = gridX*threads_per_warp*num_warps;
-    size_t global_range_y = gridY;
-    size_t global_range_z = gridZ;
-    size_t local_range_x = num_warps*threads_per_warp;
-    size_t local_range_y = 1;
-    size_t local_range_z = 1;
-    sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
-    sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
-    sycl::nd_range<3> parallel_work_size(global_range, local_range);
+static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+
+  std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
+  { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
+
+  {params_decl};
+  uint32_t num_params = {num_params};
+  uint32_t expected_num_params = kernel_ptr.get_info<sycl::info::kernel::num_args>();
+  size_t global_range_x = gridX*threads_per_warp*num_warps;
+  size_t global_range_y = gridY;
+  size_t global_range_z = gridZ;
+  size_t local_range_x = num_warps*threads_per_warp;
+  size_t local_range_y = 1;
+  size_t local_range_z = 1;
+  sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
+  sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
+  sycl::nd_range<3> parallel_work_size(global_range, local_range);
+  if (shared_memory) {{
+    expected_num_params -= 1;
+  }}
+  assert(num_params == expected_num_params && "number of kernel param not matched");
+  // Submit the imported kernel.
+  auto cgf = [&](sycl::handler &cgh) {{
+    {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if signature[i] != "constexpr"]))}
     if (shared_memory) {{
-      expected_num_params -= 1;
+      using share_mem_t = sycl::local_accessor<int8_t, 1>;
+      share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
+      cgh.set_arg(num_params, local_buffer);
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
+    }} else {{
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
     }}
-    assert(num_params == expected_num_params && "number of kernel param not matched");
-    // Submit the imported kernel.
-    auto cgf = [&](sycl::handler &cgh) {{
-      {" ".join(f'set_scalar_arg<{ty_to_cpp(item)}>(cgh, {idx}, params[{idx}]);' for idx, item in enumerate([signature[i] for i in signature if i not in constants]))}
-      if (shared_memory) {{
-          using share_mem_t = sycl::local_accessor<int8_t, 1>;
-          share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
-          cgh.set_arg(num_params, local_buffer);
-          cgh.parallel_for(parallel_work_size, kernel_ptr);
-      }} else {{
-          cgh.parallel_for(parallel_work_size, kernel_ptr);
-      }}
-      }};
-    auto event = stream.submit(cgf);
-  }}
+  }};
+  auto event = stream.submit(cgf);
+}}
 // end sycl
-    static PyObject* launch(PyObject* self, PyObject* args) {{
 
-      int gridX, gridY, gridZ;
-      PyObject *launch_enter_hook = NULL;
-      PyObject *launch_exit_hook = NULL;
-      PyObject *kernel_metadata = NULL;
-      PyObject *launch_metadata = NULL;
-      PyObject *py_obj_stream;
-      PyObject* py_kernel;
+extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
+  int gridX, gridY, gridZ;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  PyObject *kernel_metadata = NULL;
+  PyObject *launch_metadata = NULL;
+  PyObject *py_obj_stream;
+  PyObject* py_kernel;
 
-      {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-      if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
-                                           &kernel_metadata, &launch_metadata,
-                                           &launch_enter_hook, &launch_exit_hook {args_list})) {{
-        return NULL;
-      }}
+  {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &py_obj_stream, &py_kernel,
+                                      &kernel_metadata, &launch_metadata,
+                                      &launch_enter_hook, &launch_exit_hook {args_list})) {{
+    return NULL;
+  }}
 
-      // extract kernel metadata
-      int num_warps     = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_warps"));
-      int num_ctas      = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "num_ctas"));
-      int shared_memory = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "shared"));
-      int threads_per_warp = PyLong_AsLong(PyObject_GetAttrString(kernel_metadata, "threads_per_warp"));
+  // extract kernel metadata
+  PyObject *num_warps_attr = PyObject_GetAttrString(kernel_metadata, "num_warps");
+  int num_warps = PyLong_AsLong(num_warps_attr);
+  Py_DECREF(num_warps_attr);
+  PyObject *num_ctas_attr = PyObject_GetAttrString(kernel_metadata, "num_ctas");
+  int num_ctas = PyLong_AsLong(num_ctas_attr);
+  Py_DECREF(num_ctas_attr);
+  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  int shared_memory = PyLong_AsLong(shared_attr);
+  Py_DECREF(shared_attr);
+  PyObject *threads_per_warp_attr = PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+  int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
+  Py_DECREF(threads_per_warp_attr);
 
-      // extract cluster dims
-      PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
-      if (!PyTuple_Check(kernel_metadata)) {{
-        PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
-        return NULL;
-      }}
-      int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
-      int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
-      int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
-      // extract launch metadata
-      if (launch_enter_hook != Py_None){{
-        PyObject* args = Py_BuildValue("(O)", launch_metadata);
-        PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
-        Py_DECREF(args);
-        if (!ret)
-          return NULL;
-      }}
+  // extract cluster dims
+  PyObject *clusterDim =  PyObject_GetAttrString(kernel_metadata, "cluster_dims");
+  if (!PyTuple_Check(kernel_metadata)) {{
+    PyErr_SetString(PyExc_TypeError, "kernel_metadata.cluster_dims must be a tuple");
+    return NULL;
+  }}
+  int clusterDimX   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 0));
+  int clusterDimY   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 1));
+  int clusterDimZ   = PyLong_AsLong(PyTuple_GetItem(clusterDim, 2));
+  Py_DECREF(clusterDim);
+  // extract launch metadata
+  if (launch_enter_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
+  }}
 
-      void * pStream = PyLong_AsVoidPtr(py_obj_stream);
-      //error check
-      if(pStream == nullptr || py_kernel == nullptr) return NULL;
+  void * pStream = PyLong_AsVoidPtr(py_obj_stream);
+  //error check
+  if(pStream == nullptr || py_kernel == nullptr) return NULL;
 
-      sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
-      sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
-      if(kernel_ptr == nullptr) return NULL;
-      sycl::kernel kernel = *kernel_ptr;
+  sycl::queue stream = *(static_cast<sycl::queue*>(pStream));
+  sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(py_kernel, "kernel"));
+  if(kernel_ptr == nullptr) return NULL;
+  sycl::kernel kernel = *kernel_ptr;
 
-      {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}, stream); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-      sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''});
+  {newline.join(ptr_decls)}
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
-      if(launch_exit_hook != Py_None){{
-        PyObject* args = Py_BuildValue("(O)", launch_metadata);
-        PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
-        Py_DECREF(args);
-        if (!ret)
-          return NULL;
-      }}
-      if (PyErr_Occurred()) {{
-        return NULL;
-      }}
+  if(launch_exit_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
+  }}
+  if (PyErr_Occurred()) {{
+    return NULL;
+  }}
 
-      // return None
-      Py_INCREF(Py_None);
-      return Py_None;
-    }}
-
-    static PyMethodDef ModuleMethods[] = {{
-      {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-      {{NULL, NULL, 0, NULL}} // sentinel
-    }};
-
-    static struct PyModuleDef ModuleDef = {{
-      PyModuleDef_HEAD_INIT,
-      \"__triton_launcher\",
-      NULL, //documentation
-      -1, //size
-      ModuleMethods
-    }};
-
-    PyMODINIT_FUNC PyInit___triton_launcher(void) {{
-      PyObject *m = PyModule_Create(&ModuleDef);
-      if(m == NULL) {{
-        return NULL;
-      }}
-      PyModule_AddFunctions(m, ModuleMethods);
-      return m;
-    }}
-    """
+  Py_RETURN_NONE;
+}}
+"""
     return src
 
 
@@ -474,13 +599,19 @@ def serialize_args(args, constants, signature):
 
     cnt = 0
     args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    # 3: stream
+    # 4: function
+    # 5: packed kernel metadata
+    assert type(args[cnt + 5]).__name__ == "KernelMetadata"
+    serialize_kernel_metadata(args[cnt + 5], args_dict)
+    # 6: launch_metadata
+    # 7: launch_enter_hook
+    # 8: launch_exit_hook
     args_dict['argument_list'] = []
     counts = {"tensors": 0, "scalars": 0, "karg_cnt": 0}
-    cnt = 4
+    cnt += 9
     for arg in args[cnt:]:
-        if type(arg).__name__ == "KernelMetadata":
-            serialize_kernel_metadata(arg, args_dict)
-
+        sig_name = list(signature.keys())[counts['karg_cnt']]
         if isinstance(arg, torch.Tensor):
             cpu_tensor = arg.cpu()
             tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
@@ -488,22 +619,20 @@ def serialize_args(args, constants, signature):
                 torch.save(cpu_tensor, f)
             new_arg = {
                 "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
-                signature[counts['karg_cnt']]
+                signature[sig_name]
             }
             args_dict['argument_list'].append(new_arg)
-            counts['karg_cnt'] += 1
             counts['tensors'] += 1
-
         if isinstance(arg, numbers.Number):
-            if counts['karg_cnt'] not in constants:
+            if (counts['karg_cnt'], ) not in constants.keys():
                 new_arg = {
-                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": args[cnt], "ctype":
-                    signature[counts['karg_cnt']]
+                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": arg, "ctype":
+                    signature[sig_name]
                 }
                 args_dict['argument_list'].append(new_arg)
-            counts['karg_cnt'] += 1
             counts['scalars'] += 1
-        cnt += 1
+        counts['karg_cnt'] += 1
+
     # Dump argument info as a JSON file
     json_path = os.path.join(dir_path, 'args_data.json')
     with open(json_path, 'w') as json_file:
@@ -514,21 +643,19 @@ def serialize_args(args, constants, signature):
 class XPULauncher(object):
 
     def __init__(self, src, metadata):
-        ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
-        cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
-        self.constants = {cst_key(key): value for key, value in constants.items()}
-        self.signature = {cst_key(key): value for key, value in src.signature.items()}
-        src = make_launcher(self.constants, self.signature, ids)
-        mod = compile_module_from_src(src, "__triton_launcher")
-        self.launch = mod.launch
+        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
+        self.constants = {arg_idx(idx): value for idx, value in constants.items()}
+        self.signature = {idx: value for idx, value in src.signature.items()}
+        src = make_launcher(self.constants, self.signature)
+        self.mod = compile_module_from_src(src, "__triton_launcher")
 
     def __call__(self, *args, **kwargs):
         # Serialize KernelArguments for SPIR-V Runner
         serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
         if serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
-        self.launch(*args, **kwargs)
+        self.mod.launch(args)
 
 
 class XPUDriver(DriverBase):
@@ -559,14 +686,21 @@ class XPUDriver(DriverBase):
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
 
+    def get_active_torch_device(self):
+        import torch
+        return torch.device("xpu", self.get_current_device())
+
     def get_device_interface(self):
         import torch
         return torch.xpu
 
     @staticmethod
     def is_active():
-        import torch
-        return torch.xpu.is_available()
+        try:
+            import torch
+            return torch.xpu.is_available()
+        except ImportError:
+            return False
 
     def get_benchmarker(self):
         from triton.testing import do_bench
@@ -580,3 +714,6 @@ class XPUDriver(DriverBase):
         # doesn't contain any input data before the run
         cache_size = 256 * 1024 * 1024
         return torch.empty(int(cache_size // 4), dtype=torch.int, device='xpu')
+
+    def clear_cache(self, cache):
+        cache.zero_()

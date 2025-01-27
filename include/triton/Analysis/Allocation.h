@@ -58,6 +58,12 @@ struct ScratchConfig {
   }
 };
 
+// For a layout conversion between `srcTy` and `dstTy`, return the vector length
+// that can be used for the stores to and loads from shared memory,
+// respectively.
+std::pair</*inVec*/ unsigned, /*outVec*/ unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy);
+
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy);
 
@@ -180,8 +186,8 @@ public:
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
-    /// Explicit: triton_gpu.local_alloc
-    /// Scratch: triton_gpu.convert_layout
+    /// Explicit: ttg.local_alloc
+    /// Scratch: ttg.convert_layout
     /// Virtual: triton.call
     enum class BufferKind { Explicit, Scratch, Virtual };
 
@@ -209,7 +215,7 @@ private:
   };
 
   /// Op -> Scratch Buffer
-  using OpScratchMapT = DenseMap<Operation *, BufferT *>;
+  using OpScratchMapT = llvm::MapVector<Operation *, BufferT *>;
   /// Value -> Explicit Buffer
   using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
   /// Value -> Alias Buffer

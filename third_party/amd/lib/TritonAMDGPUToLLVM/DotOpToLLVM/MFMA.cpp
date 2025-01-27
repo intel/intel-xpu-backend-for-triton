@@ -164,6 +164,9 @@ struct DotOpMFMAConversionHelper {
 
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+    // Check if this dot has come with priority set by setprio.
+    auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
+
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
@@ -180,9 +183,11 @@ struct DotOpMFMAConversionHelper {
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
 
+    bool allowXF32 =
+        op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef mfmaInsnName;
-    auto maybeMfmaInsn =
-        MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB, mfmaVersion);
+    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB,
+                                              mfmaVersion, allowXF32);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -192,7 +197,14 @@ struct DotOpMFMAConversionHelper {
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
+
+    // If we are using XF32, the kWidth (and kBase) is double that of F32.
+    if (aTensorTy.getElementType().isF32() && allowXF32)
+      kWidth *= 2;
+
     auto rank = aTensorTy.getShape().size();
+    const auto kDimOperandSize = aTensorTy.getShape()[rank - 1];
+    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
     auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
@@ -211,20 +223,26 @@ struct DotOpMFMAConversionHelper {
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
-        aTensorTy.getElementType());
+        aTensorTy.getElementType(), allowXF32);
     auto operandB = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
-        aTensorTy.getElementType());
+        aTensorTy.getElementType(), allowXF32);
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
 
     unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
     // compute number of output elements that each thread holds for one MFMA
-    // instruction. subBlocks
+    // instruction.
     const int subBlocks =
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
+
+    Value firstMfma;
+    auto setFirstMfma = [&](Value mfma) {
+      if (!firstMfma)
+        firstMfma = mfma;
+    };
 
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
@@ -240,23 +258,69 @@ struct DotOpMFMAConversionHelper {
           }
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
-            for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
+            for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
               acc =
                   mfmaLayout.getIsTransposed()
                       ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
+              setFirstMfma(acc);
+            }
           }
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
-            fc[b * numRepM * numRepN * elemsPerVec + m * numRepN * elemsPerVec +
-               n * elemsPerVec + v] =
-                extract_element(dstElemTy, acc, i32_val(v));
+            Value accElem = extract_element(dstElemTy, acc, i32_val(v));
+            // Dot operand layout minimal tile is kDimInstrSize elements across
+            // K dimension. If dot operand K dimension is smaller, layout
+            // assigns tensor elements to multiple different hardware locations.
+            // In this case mfma instruction adds elements in accumulator
+            // multiple times.
+            //
+            // Let say A=[1,2]; B=[3,4], C = A*B = 1*3+2*4 = 11
+            // Consider instruction K size is 4,
+            // in this case operands will be duplicated:
+            // A' = [1,2,1,2] B' = [3,4,3,4]
+            // C' = (1*3+2*4) + (1*3+2*4) = 22
+            //
+            // Following code adjusts accumulator values in such cases.
+            // If accumulator is integer, shift accumulator right by
+            // log2(duplicationRate). If accumulator is float, multiply accum
+            // with 1/duplicationRate constant.
+            if (kDimInstrSize > kDimOperandSize) {
+              assert(kDimInstrSize % kDimOperandSize == 0);
+              int duplicationRate = kDimInstrSize / kDimOperandSize;
+              assert(llvm::isPowerOf2_32(duplicationRate));
+              if (dstElemTy.isInteger()) {
+                auto shiftSize = llvm::Log2_32(duplicationRate);
+                assert(!accElem.getType().isUnsignedInteger() &&
+                       "MFMA uses signed accumulator");
+                accElem = ashr(accElem, i32_val(shiftSize));
+              } else {
+                auto multiplierAttr =
+                    rewriter.getFloatAttr(dstElemTy, 1.0 / duplicationRate);
+                auto multiplierVal = rewriter.create<LLVM::ConstantOp>(
+                    loc, dstElemTy, multiplierAttr);
+                accElem = fmul(accElem, multiplierVal);
+              }
+            }
+            auto linearIdx = b * numRepM * numRepN * elemsPerVec +
+                             m * numRepN * elemsPerVec + n * elemsPerVec + v;
+            fc[linearIdx] = accElem;
           }
         }
       }
     }
+
+    // Originally, setprio (high) is set to the high-level dot op. After dot is
+    // being lowered to the series of mfma operations, it should be moved next
+    // to the first mfma leaving the first mfma staying at the low priority. In
+    // this way, incoming warp can be effectively waiting on the first mfma
+    // instruction (low priority) while the other warp is executing mfma with
+    // high priority. Otherwise, incoming warp can break the cluster.
+    if (setPrioOp && firstMfma)
+      setPrioOp->moveAfter(firstMfma.getDefiningOp());
+
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
@@ -313,7 +377,8 @@ struct DotOpMFMAConversionHelper {
   /// appropriate for mfma instructions
   SmallVector<ValueTable>
   getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
-                                      int kWidth, int kBase, Type type) const {
+                                      int kWidth, int kBase, Type type,
+                                      bool allowXF32) const {
     auto elems = unpackLLElements(loc, value, rewriter);
     int kpack = kWidth / kBase;
     SmallVector<ValueTable> dotOpVals(kpack);
@@ -331,13 +396,15 @@ struct DotOpMFMAConversionHelper {
           }
 
           Value convertedElems;
-          if (type.isF32()) {
+          if (type.isF32() && !allowXF32) {
             for (int k = 0; k < kpack; ++k)
               dotOpVals[k][{b, i, j}] =
                   extract_element(type, rawElems, i32_val(k));
           } else {
             SmallVector<Value> vals;
-            if (type.getIntOrFloatBitWidth() == 8) {
+            if (type.isF32() && allowXF32) {
+              vals = extractOperands(rawElems, kWidth, kBase, f32_ty);
+            } else if (type.getIntOrFloatBitWidth() == 8) {
               vals = extractOperands(rawElems, kWidth, kBase, i8_ty);
             } else if (type.isBF16()) {
               vals = extractOperands(rawElems, kWidth, kBase, bf16_ty);

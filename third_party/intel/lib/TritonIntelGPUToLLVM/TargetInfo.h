@@ -11,6 +11,8 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
+#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+
 namespace mlir::triton::intel {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
@@ -66,7 +68,20 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  Value getStackPointer(RewriterBase &rewriter,
+                        FunctionOpInterface funcOp) const override;
+
+  Value getGlobalStringStart(Location loc, RewriterBase &rewriter,
+                             StringRef name, StringRef value,
+                             unsigned addressSpace) const;
+
 private:
+  LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
+                                 StringRef name, StringRef value,
+                                 unsigned addressSpace) const;
+
+  mutable llvm::DenseMap<std::pair<unsigned, StringAttr>, LLVM::GlobalOp>
+      globals;
 };
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H

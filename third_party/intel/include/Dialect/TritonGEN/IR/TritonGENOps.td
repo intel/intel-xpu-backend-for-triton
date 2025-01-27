@@ -29,63 +29,13 @@ class TritonGEN_Op<string mnemonic, list<Trait> traits = []> :
   Op<TritonGEN_Dialect, mnemonic, traits>;
 
 //===----------------------------------------------------------------------===//
-// Synchronization
-//===----------------------------------------------------------------------===//
-
-def TritonGEN_SubGroupReduceOp : TritonGEN_Op<"sub_group_reduce", [
-      AllTypesMatch<["res", "value"]>]>,
-  Results<(outs SignlessIntegerOrFloatLike:$res)>,
-  Arguments<(ins SignlessIntegerOrFloatLike:$value,
-                 TritonGEN_ReduceKindAttr:$kind,
-                 I32Attr:$size)> {
-  let summary = "Subgroup reduce";
-
-  let description = [{
-    The `triton_gen.sub_group_reduce` operation is invoked by all work items in
-    a subgroup, each of them providing a $value. The $size argument is used to
-    form groups of $size consecutive work items called clusters. Each cluster
-    performs the reduction operation identified by $kind. The result of the
-    cluster reduction is propagated to the work items belonging to that cluster.
-  }];
-
-  let assemblyFormat = [{
-    $kind $value ` ` `{` `size` `=` $size `}` attr-dict `:` type($value)
-  }];
-
-  let hasVerifier = 1;
-}
-
-def TritonGEN_SubGroupScanOp : TritonGEN_Op<"sub_group_scan", [
-      AllTypesMatch<["res", "value"]>]>,
-  Results<(outs SignlessIntegerOrFloatLike:$res)>,
-  Arguments<(ins SignlessIntegerOrFloatLike:$value,
-                 TritonGEN_ReduceKindAttr:$reduce_kind,
-                 TritonGEN_ScanKindAttr:$scan_kind)> {
-  let summary = "Subgroup scan";
-
-  let description = [{
-    The `triton_gen.sub_group_scan` operation is invoked by all work items in
-    a subgroup, each of them providing a $value. Each work item performs the
-    reduction operation identified by $reduce_kind. The $scan_kind attribute
-    indicates whether to perform an inclusive or exclusive scan. The result
-    of the scan operation is returned for each work item.
-    Note: The scan order is defined by increasing sub-group local ID within
-    the sub-group.
-  }];
-
-  let assemblyFormat = [{
-    $reduce_kind $value ` ` `{` `kind` `=` $scan_kind `}` attr-dict `:` type($value)
-  }];
-}
-
-//===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
 def TritonGEN_MatrixElemType : AnyTypeOf<[AnyI8, AnyI16, AnyI32, F32, F16, BF16]>;
 
 def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
-  Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$d)>,
+  Results<(outs FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType]>:$d)>,
   Arguments<(ins
     FixedVectorOfRankAndType<[1], [TritonGEN_MatrixElemType]>:$c,
     FixedVectorOfRankAndType<[1], [TritonGEN_MatrixElemType]>:$a,
@@ -132,7 +82,7 @@ def TritonGEN_MatrixDPASOp : TritonGEN_Op<"dpas">,
 }
 
 def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
-  Results<(outs FixedVectorOf<[TritonGEN_MatrixElemType]>:$res)>,
+  Results<(outs FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType]>:$res)>,
   Arguments<(ins
     Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
     I32:$base_width,
@@ -195,7 +145,7 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
     I32Attr:$tile_width,
     I32Attr:$tile_height,
     I32Attr:$v_blocks,
-    FixedVectorOf<[TritonGEN_MatrixElemType]>:$stored_val,
+    FixedVectorOfNonZeroRankOf<[TritonGEN_MatrixElemType]>:$stored_val,
     DefaultValuedAttr<TritonGEN_StoreCacheControl, "::mlir::triton::TritonGEN::StoreCacheControl::DEFAULT">:$cache_control
   )> {
 

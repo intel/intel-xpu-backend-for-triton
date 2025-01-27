@@ -90,7 +90,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
     This is analogue to tt.load except the data are copied to local memory pointed
-    by by the memory descriptor instread of a distributed tensor. The rest of the
+    by by the memory descriptor instead of a distributed tensor. The rest of the
     operands are the same as tt.load.
   }];
 
@@ -188,13 +188,13 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
 
     Because we assume a memdesc is dead at the first point that post-dominates
     its uses, ops that wait for an async operation on a memdesc to complete
-    (such as triton_nvidia_gpu.warp_group_dot_wait) should also take the memdesc as an
+    (such as ttng.warp_group_dot_wait) should also take the memdesc as an
     operand.
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
 
-  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
@@ -215,7 +215,7 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
   let arguments = (
     ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
 
-  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
   let results = (outs TTG_MemDescType:$result);
@@ -262,7 +262,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
       build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
       }]>];
 
-  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 
   let results = (outs TT_Tensor:$result);
@@ -277,14 +277,14 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   let arguments = (ins TT_Tensor:$src, TTG_MemDescType:$dst);
 
   let hasVerifier = 1;
-  // Use qualified() otherwise "!triton_gpu.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
 }
 
-def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
-  let summary = "Convert an mxfp tensor to bf16";
+def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure]> {
+  let summary = "Convert an mxfp tensor to bf16/fp16";
 
   let hasVerifier = 1;
 
@@ -292,14 +292,22 @@ def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<In
     Compute the bf16 encoded in the given mxfp number as per
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
   }];
-  let arguments = (ins
-                   TT_Tensor:$src,
-                   TT_Tensor:$scale,
-                   TT_ScaleDotElemTypeAttr:$fp_type);
+  let arguments = (
+    ins
+    TT_Tensor:$src,
+    TT_Tensor:$scale,
+    TT_ScaleDotElemTypeAttr:$fp_type,
+    BoolAttr:$fastMath
+  );
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
     $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
+  }];
+
+  let extraClassDeclaration = [{
+    static RankedTensorType deduceOutputType(
+        TypedValue<RankedTensorType> inputTensor, ScaleDotElemType inputElemType, Type outputElemType);
   }];
 }
 

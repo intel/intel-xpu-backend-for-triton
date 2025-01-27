@@ -27,6 +27,8 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
@@ -110,8 +112,7 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-device = torch.xpu.current_device()
-properties = driver.active.utils.get_device_properties(device)
+properties = driver.active.utils.get_device_properties(DEVICE.index)
 NUM_SM = properties["multiprocessor_count"]
 SIZE_SMEM = properties["max_shared_mem"]
 WARPS_PER_EU = 8  # TODO: Get from properties
@@ -174,14 +175,7 @@ def softmax(x):
         num_programs = n_rows
 
     # Create a number of persistent programs.
-    kernel[(num_programs, 1, 1)](
-        y,
-        x,
-        x.stride(0),
-        y.stride(0),
-        n_rows,
-        n_cols,
-    )
+    kernel[(num_programs, 1, 1)](y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE)
     return y
 
 
@@ -194,7 +188,7 @@ def softmax(x):
 # This will allow us to verify that our padding mechanism works.
 
 torch.manual_seed(0)
-x = torch.randn(1823, 781, device='xpu')
+x = torch.randn(1823, 781, device=DEVICE)
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
 assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
@@ -226,9 +220,9 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
         args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
     ))
 def benchmark(M, N, provider):
-    x = torch.randn(M, N, device='xpu', dtype=torch.float32)
-    stream = torch.xpu.Stream()
-    torch.xpu.set_stream(stream)
+    x = torch.randn(M, N, device=DEVICE, dtype=torch.float32)
+    stream = getattr(torch, DEVICE.type).Stream()
+    getattr(torch, DEVICE.type).set_stream(stream)
     if provider == 'torch':
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
