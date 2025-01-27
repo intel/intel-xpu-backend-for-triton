@@ -89,15 +89,9 @@ module {
 // CHECK-NOT: separator of consecutive DAGs
 // CHECK-DAG:       [[VAR_15_:%.+]] = tt.addptr [[VAR_14_]], [[VAR_13_]] : tensor<4x4x!tt.ptr<f32>>, tensor<4x4xi32>
 // CHECK-DAG:       [[VAR_16_:%.+]] = tt.expand_dims [[VAR_0_]] {axis = 1 : i32} : tensor<4xi32> -> tensor<4x1xi32>
-// CHECK-DAG:       [[VAR_17_:%.+]] = arith.index_cast [[arg6_]] : i32 to index
-// CHECK-DAG:       [[VAR_18_:%.+]] = arith.index_cast [[VAR_17_]] : index to i64
-// CHECK-DAG:       [[VAR_19_:%.+]] = arith.index_cast [[arg7_]] : i32 to index
-// CHECK-DAG:       [[VAR_20_:%.+]] = arith.index_cast [[VAR_19_]] : index to i64
-// CHECK-DAG:       [[VAR_21_:%.+]] = arith.trunci [[VAR_18_]] : i64 to i32
-// CHECK-DAG:       [[VAR_22_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_21_]] : i32
-// CHECK-DAG:       [[VAR_23_:%.+]] = arith.trunci [[VAR_20_]] : i64 to i32
-// CHECK-DAG:       [[VAR_24_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_23_]] : i32
-// CHECK:           [[VAR_25_:%.+]] = tt.make_tensor_ptr [[arg1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_18_]], [[VAR_20_]]], {{\[}}[[VAR_22_]], [[VAR_24_]]] {{.*}} : <tensor<4x4xf32>>
+// CHECK-DAG:       [[VAR_17_:%.+]] = arith.extsi [[arg6_]] : i32 to i64
+// CHECK-DAG:       [[VAR_18_:%.+]] = arith.extsi [[arg7_]] : i32 to i64
+// CHECK:           [[VAR_25_:%.+]] = tt.make_tensor_ptr [[arg1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_17_]], [[VAR_18_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<4x4xf32>>
 // CHECK:           [[VAR_26_:%.+]] = arith.cmpi slt, [[VAR_16_]], [[VAR_cst_0_]] : tensor<4x1xi32>
 // CHECK-DAG:       [[VAR_27_:%.+]] = tt.broadcast [[VAR_26_]] : tensor<4x1xi1> -> tensor<4x4xi1>
 // CHECK-DAG:       [[VAR_28_:%.+]] = arith.muli [[arg4_]], [[CST_4_i32]] : i32
