@@ -361,20 +361,7 @@ struct PtrState {
 
     for (const auto &[offset, stride, dim] :
          llvm::zip(offsets, strides, shape)) {
-      if (ttgi::isConstant(stride, 0)) {
-        newOffsets.push_back(findOrCreateCast(
-            loc, offset, builder.getIntegerType(offsetBitwidth), builder));
-      } else {
-        Value divOffset = builder.create<arith::DivUIOp>(
-            loc, builder.getIntegerType(offsetBitwidth),
-            findOrCreateCast(loc, offset,
-                             builder.getIntegerType(offsetBitwidth), builder),
-            findOrCreateCast(loc, stride,
-                             builder.getIntegerType(offsetBitwidth), builder));
-        newOffsets.push_back(
-            findOrCreateCast(loc, getFinalValue(divOffset),
-                             builder.getIntegerType(offsetBitwidth), builder));
-      }
+      newOffsets.push_back(computeOffset(offset, stride, builder, loc));
       newStrides.push_back(findOrCreateCast(
           loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
           builder));
@@ -384,6 +371,34 @@ struct PtrState {
 
     return findOrCreateMakeTensorPtr(loc, source, newShape, newStrides,
                                      newOffsets, order, sizes, builder);
+  }
+
+  Value createTTAdvanceOp(Value ptr, tt::MakeTensorPtrOp makeTPtrOp,
+                          OpBuilder &builder, Location loc) const {
+    SmallVector<Value> newOffsets;
+    for (const auto &[offset, stride] :
+         llvm::zip(offsets, makeTPtrOp.getStrides()))
+      newOffsets.push_back(computeOffset(offset, stride, builder, loc));
+
+    return builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(), ptr,
+                                               newOffsets);
+  }
+
+private:
+  Value computeOffset(Value offset, Value stride, OpBuilder &builder,
+                      Location loc) const {
+    if (ttgi::isConstant(stride, 0))
+      return findOrCreateCast(loc, offset,
+                              builder.getIntegerType(offsetBitwidth), builder);
+
+    Value divOffset = builder.create<arith::DivUIOp>(
+        loc, builder.getIntegerType(offsetBitwidth),
+        findOrCreateCast(loc, offset, builder.getIntegerType(offsetBitwidth),
+                         builder),
+        findOrCreateCast(loc, stride, builder.getIntegerType(offsetBitwidth),
+                         builder));
+    return findOrCreateCast(loc, getFinalValue(divOffset),
+                            builder.getIntegerType(offsetBitwidth), builder);
   }
 };
 
@@ -698,36 +713,17 @@ public:
       return val;
     };
 
-    // If the ptr has already been mapped (i.e. rewritten into a block pointer),
-    // rewrite the AddPtrOp using and AdvanceOp.
+    // If the ptr has already been mapped (i.e. rewritten into a block
+    // pointer), rewrite the AddPtrOp using and AdvanceOp.
     if (Value mappedV = ptrMap.lookupOrNull(ptr)) {
       if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
-        auto offsetType = cast<RankedTensorType>(op.getOffset().getType());
-        unsigned rank = offsetType.getRank();
-
-        SmallVector<Value> offsets;
-        TypeSwitch<Operation *>(op.getOffset().getDefiningOp())
-            .Case([&](tt::SplatOp splatOp) {
-              fillOffsets(splatOp.getSrc(), rank, offsets);
-            })
-            .Case([&](arith::ConstantOp cstOp) {
-              APInt val = getConstantValue(cstOp);
-
-              fillOffsets(findOrCreateConstant(loc, val.getZExtValue(),
-                                               offsetBitwidth, builder),
-                          rank, offsets);
-            })
-            .Default([](Operation *op) {
-              llvm::errs() << "Operation: " << *op << "\n";
-              llvm_unreachable("Unhandled operation");
-            });
-
-        assert(!offsets.empty() && offsets.size() == rank &&
-               "unexpected number of offsets");
+        PtrState state;
+        if (failed(visitOperand(op.getOffset(), state, loc, builder)))
+          return failure();
 
         Value basePtr = tt::isTensorPointerType(ptr.getType()) ? ptr : mappedV;
-        auto advanceOp = builder.createOrFold<tt::AdvanceOp>(
-            loc, basePtr.getType(), basePtr, offsets);
+        auto advanceOp =
+            state.createTTAdvanceOp(basePtr, makeTPtrOp, builder, loc);
 
         cleanUp.insert(op);
         ptrMap.map(op.getResult(), advanceOp);
