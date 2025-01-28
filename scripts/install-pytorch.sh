@@ -8,25 +8,25 @@ BUILD_LATEST=false
 FORCE_REINSTALL=false
 PYTORCH_CURRENT_COMMIT=""
 VENV=false
+CLEAN=true
 for arg in "$@"; do
   case $arg in
     --source)
       BUILD_PYTORCH=true
-      shift
       ;;
     --latest)
       # Build from the latest pytorch commit in the main branch.
       BUILD_PYTORCH=true
       BUILD_LATEST=true
-      shift
       ;;
     --force-reinstall)
       FORCE_REINSTALL=true
-      shift
       ;;
     --venv)
       VENV=true
-      shift
+      ;;
+    -nc|--no-clean)
+      CLEAN=false
       ;;
     --help)
       echo "Example usage: ./install-pytorch.sh [--source | --latest | --force-reinstall | --venv]"
@@ -134,23 +134,33 @@ if [ ! -d "$BASE" ]; then
   mkdir $BASE
 fi
 
-echo "**** Cleaning $PYTORCH_PROJ before build ****"
-rm -rf $PYTORCH_PROJ
+if [ "$CLEAN" = true ]; then
+  [ "$BUILD_LATEST" = false ] || PYTORCH_PINNED_COMMIT=main
+  if [ -d "$PYTORCH_PROJ" ] && cd "$PYTORCH_PROJ" && \
+    git fetch --recurse-submodules && \
+    git reset --hard $PYTORCH_PINNED_COMMIT && \
+    git submodule update --init --recursive && \
+    git clean -xffd; then
+    echo "**** Cleaning $PYTORCH_PROJ before build ****"
+  else
+    cd $BASE
+    rm -rf "$PYTORCH_PROJ"
+    echo "**** Cloning PyTorch into $PYTORCH_PROJ ****"
+    git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git
+    cd "$PYTORCH_PROJ"
 
-echo "**** Cloning $PYTORCH_PROJ ****"
-cd $BASE
-git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git
+    if [ "$BUILD_LATEST" = false ]; then
+      git checkout $PYTORCH_PINNED_COMMIT
+      git submodule update --init --recursive
+      git clean -xffd
+    fi
+  fi
 
-cd $PYTORCH_PROJ
-
-if [ "$BUILD_LATEST" = false ]; then
-  git fetch --all
-  git checkout $PYTORCH_PINNED_COMMIT
-  git submodule update --recursive
+  # Apply Triton specific patches to PyTorch.
+  $SCRIPTS_DIR/patch-pytorch.sh
+else
+  cd "$PYTORCH_PROJ"
 fi
-
-# Apply Triton specific patches to PyTorch.
-$SCRIPTS_DIR/patch-pytorch.sh
 
 echo "****** Building $PYTORCH_PROJ ******"
 pip install -r requirements.txt

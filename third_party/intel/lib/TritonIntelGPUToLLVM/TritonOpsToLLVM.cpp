@@ -40,6 +40,53 @@ VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   return vec_ty(elemType, num);
 };
 
+MakeTensorPtrOp getMakePtrOp(Value v) {
+  using BranchOps = llvm::SetVector<std::pair<Operation *, int>>;
+  llvm::DenseMap<Block *, BranchOps> blockToBrOps;
+  auto moduleOp =
+      v.getParentBlock()->getParentOp()->getParentOfType<ModuleOp>();
+
+  moduleOp.walk([&](Operation *op) {
+    if (auto br = dyn_cast<LLVM::BrOp>(op)) {
+      Block *block = br.getDest();
+      blockToBrOps[block].insert({op, -1});
+    }
+    if (auto condBr = dyn_cast<LLVM::CondBrOp>(op)) {
+      Block *blockT = condBr.getTrueDest();
+      Block *blockF = condBr.getFalseDest();
+      blockToBrOps[blockT].insert({condBr, 1});
+      blockToBrOps[blockF].insert({condBr, 0});
+    }
+  });
+
+  if (Operation *def = v.getDefiningOp()) {
+    if (auto cast = dyn_cast<mlir::UnrealizedConversionCastOp>(def))
+      def = cast.getInputs()[0].getDefiningOp();
+    if (auto make = dyn_cast<MakeTensorPtrOp>(def))
+      return make;
+    if (auto advanceOp = dyn_cast<AdvanceOp>(def))
+      return getMakePtrOp(advanceOp.getPtr());
+    llvm_unreachable("Unable to getMakePtr()");
+  }
+
+  // If there is no defining op, v must be a BlockArgument.
+  BlockArgument arg = cast<BlockArgument>(v);
+  unsigned argNum = arg.getArgNumber();
+  Operation *argOwner = arg.getOwner()->getParentOp();
+
+  if (auto funcOp = dyn_cast<FunctionOpInterface>(argOwner)) {
+    Block *block = arg.getOwner();
+    auto [op, tOrF] = blockToBrOps[block][0];
+    if (auto br = dyn_cast<LLVM::BrOp>(op))
+      return getMakePtrOp(br.getDestOperands()[argNum]);
+    if (auto condBr = dyn_cast<LLVM::CondBrOp>(op))
+      return getMakePtrOp(tOrF ? condBr.getTrueDestOperands()[argNum]
+                               : condBr.getFalseDestOperands()[argNum]);
+    return getMakePtrOp(argOwner->getOperand(argNum));
+  }
+  llvm_unreachable("Unable to getMakePtr()");
+}
+
 static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
                                 Location loc, Value base, Value val,
                                 VectorType vecTy, unsigned subGroupSize) {
@@ -199,7 +246,7 @@ public:
     if (auto cast = ptr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       ptr = cast.getInputs()[0];
 
-    MakeTensorPtrOp ptrOp = getMakeTensorPtrOp(ptr);
+    MakeTensorPtrOp ptrOp = getMakePtrOp(ptr);
     Value base = ptrOp.getBase();
     if (auto cast = base.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       base = cast.getInputs()[0];

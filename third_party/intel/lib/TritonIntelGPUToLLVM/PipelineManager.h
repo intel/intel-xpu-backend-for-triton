@@ -194,9 +194,8 @@ public:
       TritonIntelGPUToLLVMTypeConverter &typeConverter, int numWarps) const {
     funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
                                        /*benefit=*/1);
-    if (!isAdvancedPathEnabled)
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            funcPatterns);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                          funcPatterns);
   }
 
   /// Populate the conversion pipeline for various operations.

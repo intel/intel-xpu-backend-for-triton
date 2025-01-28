@@ -217,7 +217,6 @@ struct PtrState {
 
     source = lhsState.source ? lhsState.source : rhsState.source;
     Location loc = op->getLoc();
-    ArithBuilder abuilder(builder, loc);
 
     if (lhsState.scalar && rhsState.scalar) {
       scalar =
@@ -309,7 +308,6 @@ struct PtrState {
       std::swap(lhs, rhs);
 
     Location loc = op->getLoc();
-    ArithBuilder abuilder(builder, loc);
 
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
@@ -787,7 +785,6 @@ public:
     auto resType = cast<tt::PointerType>(makeTPtrOp.getResult().getType());
     auto pointeeType = cast<ShapedType>(resType.getPointeeType());
     ArrayRef<int64_t> shape = pointeeType.getShape();
-    ArithBuilder abuilder(builder, loc);
 
     for (int i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
@@ -798,8 +795,9 @@ public:
           loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
       auto scaledOffset =
           builder.createOrFold<arith::MulIOp>(loc, offsetCst, strideCst);
-      state.offsets.push_back(findOrCreateCast(
-          loc, scaledOffset, builder.getIntegerType(offsetBitwidth), builder));
+      state.offsets.push_back(
+          findOrCreateCast(loc, getFinalValue(scaledOffset),
+                           builder.getIntegerType(offsetBitwidth), builder));
     }
     state.strides = makeTPtrOp.getStrides();
     state.shape = makeTPtrOp.getShape();
