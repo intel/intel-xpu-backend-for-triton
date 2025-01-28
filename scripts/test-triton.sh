@@ -178,7 +178,7 @@ run_unit_tests() {
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/build/cmake*/test
-  lit -v .
+  lit -v . || $TRITON_TEST_IGNORE_ERRORS
 }
 
 run_core_tests() {

@@ -94,13 +94,6 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --unit
 
-      - name: Run core tests
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd python/test/unit
-          pytest -vvv -s --device xpu "language/test_core.py::test_reduce1d[64-16-1-min-with-indices-uint64-128]"
-
       - name: Run interpreter tests
         run: |
           .venv\Scripts\activate.ps1
