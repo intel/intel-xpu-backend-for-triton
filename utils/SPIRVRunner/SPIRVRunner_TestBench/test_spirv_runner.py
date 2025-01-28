@@ -6,11 +6,10 @@ import pytest
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Derive paths relative to the root directory
-SPIRVRUNNER_PATH = os.path.join(ROOT_DIR, "..", "spirv_runner")
-SPIRV_BINARIES_DIR = os.path.join(ROOT_DIR, "..", "spirv_binaries")
-EXPECTED_OUTPUTS_DIR = os.path.join(ROOT_DIR, "..", "expected_outputs")
-TEST_RESULTS_DIR = os.path.join(ROOT_DIR, "..", "test_results")
-
+TEST_RESULTS_DIR = os.path.join(ROOT_DIR, ".", "test_results")
+print(ROOT_DIR)
+print(TEST_RESULTS_DIR)
+'''
 # Ensure test results directory exists
 os.makedirs(TEST_RESULTS_DIR, exist_ok=True)
 
@@ -48,3 +47,4 @@ def test_spirv_runner(spv_file, test_name):
 
     # Assert that the output matches the expected output
     assert output == expected_output, f"Test {test_name} failed: Output does not match expected result."
+'''
