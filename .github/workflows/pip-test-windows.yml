@@ -21,6 +21,7 @@ on:
 permissions: read-all
 
 env:
+  PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
@@ -110,6 +111,14 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Run tutorials
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          # Disable interactive plot window
+          $env:MPLBACKEND = "Agg"
+          ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Pass rate
         run: |

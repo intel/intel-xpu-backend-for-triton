@@ -105,48 +105,49 @@ Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
                    loc, source, shape, strides, offsets, sizes, order);
 }
 
-Value addOrFold(Value lhs, Value rhs, ArithBuilder &abuilder) {
-  return ttgi::isConstant(lhs, 0)
-             ? rhs
-             : (ttgi::isConstant(rhs, 0) ? lhs : abuilder.add(lhs, rhs));
-}
+Value getFinalValue(Value value) {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp) {
+    // look init values outside the loop
+    BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp))
+      return getFinalValue(forOp.getInitArgs()[blockArg.getArgNumber() - 1]);
 
-Value mulOrFold(Value lhs, Value rhs, ArithBuilder &abuilder) {
-  if (ttgi::isConstant(lhs, 0) || ttgi::isConstant(rhs, 1))
-    return lhs;
-  if (ttgi::isConstant(rhs, 0) || ttgi::isConstant(lhs, 1))
-    return rhs;
-  return abuilder.mul(lhs, rhs);
-}
-
-Value divOrFold(Location loc, Type type, Value num, Value den,
-                OpBuilder &builder) {
-  // If the denominator has value one, return the numerator.
-  if (Operation *defOp = den.getDefiningOp()) {
-    if (auto truncOp = dyn_cast<arith::TruncIOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 1))
-        return num;
-    }
-    if (auto truncOp = dyn_cast<arith::TruncFOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 1.0))
-        return num;
-    }
+    return value;
   }
 
-  // If the numerator has value zero, return it.
-  if (Operation *defOp = num.getDefiningOp()) {
-    if (auto truncOp = dyn_cast<arith::TruncIOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 0))
-        return num;
-    }
-    if (auto truncOp = dyn_cast<arith::TruncFOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 0.0))
-        return num;
-    }
+  if (isa<tt::ExpandDimsOp, tt::BroadcastOp, tt::SplatOp, arith::IndexCastOp>(
+          defOp))
+    return getFinalValue(defOp->getOperand(0));
+
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+    if (ttgi::isConstant(addOp.getLhs(), 0))
+      return getFinalValue(addOp.getRhs());
+    if (ttgi::isConstant(addOp.getRhs(), 0))
+      return getFinalValue(addOp.getLhs());
+    return addOp.getResult();
   }
 
-  return builder.createOrFold<arith::DivUIOp>(loc, type, num, den);
-};
+  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+    if (ttgi::isConstant(mulOp.getLhs(), 1) ||
+        ttgi::isConstant(mulOp.getRhs(), 0))
+      return getFinalValue(mulOp.getRhs());
+    if (ttgi::isConstant(mulOp.getRhs(), 1) ||
+        ttgi::isConstant(mulOp.getLhs(), 0))
+      return getFinalValue(mulOp.getLhs());
+    return mulOp.getResult();
+  }
+
+  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
+    if (ttgi::isConstant(divOp.getRhs(), 1) ||
+        ttgi::isConstant(divOp.getLhs(), 0))
+      return getFinalValue(divOp.getLhs());
+    return divOp.getResult();
+  }
+
+  return value;
+}
 
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
@@ -218,19 +219,27 @@ struct PtrState {
     Location loc = op->getLoc();
     ArithBuilder abuilder(builder, loc);
 
-    if (lhsState.scalar && rhsState.scalar)
-      scalar = addOrFold(lhsState.scalar, rhsState.scalar, abuilder);
-    else if (lhsState.getRank() == 0)
+    if (lhsState.scalar && rhsState.scalar) {
+      scalar =
+          builder.create<arith::AddIOp>(loc, lhsState.scalar, rhsState.scalar);
+      scalar = findOrCreateCast(loc, getFinalValue(scalar),
+                                lhsState.scalar.getType(), builder);
+
+    } else if (lhsState.getRank() == 0)
       scalar = lhsState.scalar ? lhsState.scalar : rhsState.scalar;
 
     for (unsigned i = 0; i < lhsState.getRank(); ++i) {
-      Value newOffset =
-          addOrFold(lhsState.offsets[i], rhsState.offsets[i], abuilder);
-      offsets.push_back(newOffset);
+      Value newOffset = builder.create<arith::AddIOp>(loc, lhsState.offsets[i],
+                                                      rhsState.offsets[i]);
+      offsets.push_back(findOrCreateCast(loc, getFinalValue(newOffset),
+                                         lhsState.offsets[i].getType(),
+                                         builder));
 
-      Value newStride =
-          addOrFold(lhsState.strides[i], rhsState.strides[i], abuilder);
-      strides.push_back(newStride);
+      Value newStride = builder.create<arith::AddIOp>(loc, lhsState.strides[i],
+                                                      rhsState.strides[i]);
+      strides.push_back(findOrCreateCast(loc, getFinalValue(newStride),
+                                         lhsState.strides[i].getType(),
+                                         builder));
 
       sizes.push_back(lhsState.sizes[i]);
     }
@@ -304,28 +313,40 @@ struct PtrState {
 
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
-      Value newOffset = mulOrFold(
+      Value newOffset = builder.create<arith::MulIOp>(
+          loc,
           findOrCreateCast(loc, offset, builder.getIntegerType(offsetBitwidth),
                            builder),
           findOrCreateCast(loc, rhs->scalar,
-                           builder.getIntegerType(offsetBitwidth), builder),
-          abuilder);
-      Value newStride = mulOrFold(
+                           builder.getIntegerType(offsetBitwidth), builder));
+      newOffset =
+          findOrCreateCast(loc, getFinalValue(newOffset),
+                           builder.getIntegerType(offsetBitwidth), builder);
+
+      Value newStride = builder.create<arith::MulIOp>(
+          loc,
           findOrCreateCast(loc, stride,
                            builder.getIntegerType(shapeAndStridesBitwidth),
                            builder),
           findOrCreateCast(loc, rhs->scalar,
                            builder.getIntegerType(shapeAndStridesBitwidth),
-                           builder),
-          abuilder);
-      Value newDim = mulOrFold(
+                           builder));
+      newStride = findOrCreateCast(
+          loc, getFinalValue(newStride),
+          builder.getIntegerType(shapeAndStridesBitwidth), builder);
+
+      Value newDim = builder.create<arith::MulIOp>(
+          loc,
           findOrCreateCast(loc, dim,
                            builder.getIntegerType(shapeAndStridesBitwidth),
                            builder),
           findOrCreateCast(loc, rhs->scalar,
                            builder.getIntegerType(shapeAndStridesBitwidth),
-                           builder),
-          abuilder);
+                           builder));
+      newDim = findOrCreateCast(loc, getFinalValue(newDim),
+                                builder.getIntegerType(shapeAndStridesBitwidth),
+                                builder);
+
       offsets.push_back(newOffset);
       strides.push_back(newStride);
       shape.push_back(newDim);
@@ -341,17 +362,18 @@ struct PtrState {
     for (const auto &[offset, stride, dim] :
          llvm::zip(offsets, strides, shape)) {
       if (ttgi::isConstant(stride, 0)) {
-        newOffsets.push_back(
-            findOrCreateCast(loc, offset, builder.getI32Type(), builder));
+        newOffsets.push_back(findOrCreateCast(
+            loc, offset, builder.getIntegerType(offsetBitwidth), builder));
       } else {
-        auto divOffset = divOrFold(
-            loc, builder.getI32Type(),
+        Value divOffset = builder.create<arith::DivUIOp>(
+            loc, builder.getIntegerType(offsetBitwidth),
             findOrCreateCast(loc, offset,
                              builder.getIntegerType(offsetBitwidth), builder),
             findOrCreateCast(loc, stride,
-                             builder.getIntegerType(offsetBitwidth), builder),
-            builder);
-        newOffsets.push_back(divOffset);
+                             builder.getIntegerType(offsetBitwidth), builder));
+        newOffsets.push_back(
+            findOrCreateCast(loc, getFinalValue(divOffset),
+                             builder.getIntegerType(offsetBitwidth), builder));
       }
       newStrides.push_back(findOrCreateCast(
           loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
@@ -559,37 +581,6 @@ public:
     return success();
   }
 
-  Value getFinalValue(Value value) const {
-    Operation *defOp = value.getDefiningOp();
-    if (!defOp) {
-      // look init values outside the loop
-      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
-      Operation *parentOp = blockArg.getOwner()->getParentOp();
-      scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
-      return forOp ? getFinalValue(
-                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
-                   : value;
-    }
-
-    if (isa<tt::ExpandDimsOp>(defOp) || isa<tt::BroadcastOp>(defOp) ||
-        isa<tt::SplatOp>(defOp) || isa<arith::IndexCastOp>(defOp))
-      return getFinalValue(defOp->getOperand(0));
-    if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
-      if (ttgi::isConstant(addOp.getLhs(), 0))
-        return getFinalValue(addOp.getRhs());
-      if (ttgi::isConstant(addOp.getRhs(), 0))
-        return getFinalValue(addOp.getLhs());
-      return addOp.getResult();
-    } else if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
-      if (ttgi::isConstant(mulOp.getLhs(), 1))
-        return getFinalValue(mulOp.getRhs());
-      if (ttgi::isConstant(mulOp.getRhs(), 1))
-        return getFinalValue(mulOp.getLhs());
-      return mulOp.getResult();
-    }
-    return value;
-  }
-
   bool lookForMultiplyingValueInDefiningPath(Value &val, Value &ref) const {
     if (Operation *defOp = getFinalValue(val).getDefiningOp()) {
       if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
@@ -711,7 +702,6 @@ public:
     // rewrite the AddPtrOp using and AdvanceOp.
     if (Value mappedV = ptrMap.lookupOrNull(ptr)) {
       if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
-        Value finalVal = getFinalValue(op.getOffset());
         auto offsetType = cast<RankedTensorType>(op.getOffset().getType());
         unsigned rank = offsetType.getRank();
 
@@ -743,7 +733,7 @@ public:
         ptrMap.map(op.getResult(), advanceOp);
 
         LLVM_DEBUG(llvm::dbgs()
-                   << "Rewrote:\n\t" << op << "to:\n\t" << advanceOp << "\n");
+                   << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp << "\n");
         return success();
       } else {
         llvm_unreachable("Did not find tt::MakeTensorPtrOp");
@@ -810,9 +800,11 @@ public:
           loc, builder.getIndexType(), makeTPtrOp.getStrides()[i]);
       auto offsetCst = builder.createOrFold<arith::IndexCastOp>(
           loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
-      auto scaledOffset = mulOrFold(offsetCst, strideCst, abuilder);
-      state.offsets.push_back(findOrCreateCast(
-          loc, scaledOffset, builder.getIntegerType(offsetBitwidth), builder));
+      auto scaledOffset =
+          builder.createOrFold<arith::MulIOp>(loc, offsetCst, strideCst);
+      state.offsets.push_back(
+          findOrCreateCast(loc, getFinalValue(scaledOffset),
+                           builder.getIntegerType(offsetBitwidth), builder));
     }
     state.strides = makeTPtrOp.getStrides();
     state.shape = makeTPtrOp.getShape();

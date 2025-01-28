@@ -38,16 +38,15 @@ module {
 // CHECK-DAG:       [[CST_1_i64:%.+]] = arith.constant 1 : i64
 // CHECK-DAG:       [[CST_0_i64:%.+]] = arith.constant 0 : i64
 // CHECK-DAG:       [[VAR_0_:%.+]] = tt.get_program_id x : i32
-// CHECK-DAG:       [[VAR_1_:%.+]] = arith.index_cast [[PARAM_2_]] : i32 to index
-// CHECK:           [[VAR_2_:%.+]] = arith.muli [[PARAM_2_]], [[CST_2048_i32]] : i32
-// CHECK-DAG:       [[VAR_3_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
-// CHECK-DAG:       [[VAR_4_:%.+]] = arith.addi [[VAR_0_]], [[VAR_2_]] : i32
-// CHECK-DAG:       [[VAR_5_:%.+]] = arith.addi [[VAR_3_]], [[CST_1_i64]] : i64
-// CHECK-DAG:       [[VAR_6_:%.+]] = arith.trunci [[VAR_5_]] : i64 to i32
-// CHECK-DAG:       [[VAR_7_:%.+]] = arith.divui [[VAR_4_]], [[VAR_6_]] : i32
-// CHECK-DAG:       [[VAR_8_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]]], {{\[}}[[VAR_5_]]], {{\[}}[[VAR_7_]]] {{.*}} : <tensor<1024xbf16>>
-// CHECK-DAG:       [[VAR_9_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]]], {{\[}}[[CST_1_i64]]], {{\[}}[[VAR_0_]]] {{.*}} : <tensor<1024xbf16>>
-// CHECK:           [[VAR_10_:%.+]] = tt.load [[VAR_8_]] : !tt.ptr<tensor<1024xbf16>>
-// CHECK:           tt.store [[VAR_9_]], [[VAR_10_]] : !tt.ptr<tensor<1024xbf16>>
+// CHECK:           [[VAR_1_:%.+]] = arith.muli [[PARAM_2_]], [[CST_2048_i32]] : i32
+// CHECK-DAG:       [[VAR_2_:%.+]] = arith.extsi [[PARAM_2_]] : i32 to i64
+// CHECK-DAG:       [[VAR_3_:%.+]] = arith.addi [[VAR_0_]], [[VAR_1_]] : i32
+// CHECK-DAG:       [[VAR_4_:%.+]] = arith.addi [[VAR_2_]], [[CST_1_i64]] : i64
+// CHECK-DAG:       [[VAR_5_:%.+]] = arith.trunci [[VAR_4_]] : i64 to i32
+// CHECK-DAG:       [[VAR_6_:%.+]] = arith.divui [[VAR_3_]], [[VAR_5_]] : i32
+// CHECK-DAG:       [[VAR_7_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]]], {{\[}}[[VAR_4_]]], {{\[}}[[VAR_6_]]] {{.*}} : <tensor<1024xbf16>>
+// CHECK-DAG:       [[VAR_8_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]]], {{\[}}[[CST_1_i64]]], {{\[}}[[VAR_0_]]] {{.*}} : <tensor<1024xbf16>>
+// CHECK:           [[VAR_9_:%.+]] = tt.load [[VAR_7_]] : !tt.ptr<tensor<1024xbf16>>
+// CHECK:           tt.store [[VAR_8_]], [[VAR_9_]] : !tt.ptr<tensor<1024xbf16>>
 // CHECK:           tt.return
 // CHECK:         }

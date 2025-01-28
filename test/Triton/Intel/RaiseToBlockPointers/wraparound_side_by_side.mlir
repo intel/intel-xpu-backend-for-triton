@@ -63,41 +63,32 @@ module {
 // CHECK-DAG:       [[CST_4_i32:%.+]] = arith.constant 4 : i32
 // CHECK-DAG:       [[CST_6_i32:%.+]] = arith.constant 6 : i32
 // CHECK:           [[VAR_0_:%.+]] = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
-// CHECK:           [[VAR_1_:%.+]] = arith.index_cast [[PARAM_4_]] : i32 to index
-// CHECK-DAG:       [[VAR_2_:%.+]] = arith.muli [[PARAM_4_]], {{.*}} : i32
-// CHECK-DAG:       [[VAR_3_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
-// CHECK-DAG:       [[VAR_4_:%.+]] = arith.index_cast [[PARAM_3_]] : i32 to index
-// CHECK-DAG:       [[VAR_5_:%.+]] = arith.index_cast [[PARAM_5_]] : i32 to index
-// CHECK-DAG:       [[VAR_6_:%.+]] = arith.index_cast [[VAR_5_]] : index to i64
-// CHECK-DAG:       [[VAR_7_:%.+]] = arith.muli [[PARAM_5_]], [[CST_6_i32]] : i32
-// CHECK-DAG:       [[VAR_8_:%.+]] = arith.index_cast [[VAR_4_]] : index to i64
-// CHECK-DAG:       [[VAR_9_:%.+]] = arith.muli [[VAR_8_]], [[VAR_6_]] : i64
-// CHECK:           [[VAR_10_:%.+]] = arith.trunci [[VAR_3_]] : i64 to i32
-// CHECK:           [[VAR_11_:%.+]] = arith.divui [[VAR_2_]], [[VAR_10_]] : i32
-// CHECK:           [[VAR_12_:%.+]] = arith.trunci [[VAR_6_]] : i64 to i32
-// CHECK:           [[VAR_13_:%.+]] = arith.divui [[VAR_7_]], [[VAR_12_]] : i32
-// CHECK:           [[VAR_14_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[VAR_9_]]], {{\[}}[[VAR_3_]], [[VAR_6_]]], {{\[}}[[VAR_11_]], [[VAR_13_]]] {{.*}} : <tensor<4x4xf32>>
-// CHECK-DAG:       [[VAR_15_:%.+]] = tt.expand_dims [[VAR_0_]] {axis = 1 : i32} : tensor<4xi32> -> tensor<4x1xi32>
-// CHECK-DAG:       [[VAR_16_:%.+]] = arith.index_cast [[PARAM_6_]] : i32 to index
-// CHECK-DAG:       [[VAR_17_:%.+]] = arith.index_cast [[VAR_16_]] : index to i64
-// CHECK-DAG:       [[VAR_18_:%.+]] = arith.index_cast [[PARAM_7_]] : i32 to index
-// CHECK-DAG:       [[VAR_19_:%.+]] = arith.index_cast [[VAR_18_]] : index to i64
-// CHECK-DAG:       [[VAR_20_:%.+]] = arith.trunci [[VAR_17_]] : i64 to i32
-// CHECK-DAG:       [[VAR_21_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_20_]] : i32
-// CHECK-DAG:       [[VAR_22_:%.+]] = arith.trunci [[VAR_19_]] : i64 to i32
-// CHECK-DAG:       [[VAR_23_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_22_]] : i32
-// CHECK:           [[VAR_24_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_17_]], [[VAR_19_]]], {{\[}}[[VAR_21_]], [[VAR_23_]]] {{.*}} : <tensor<4x4xf32>>
-// CHECK:           [[VAR_25_:%.+]] = arith.cmpi slt, [[VAR_15_]], {{.*}} : tensor<4x1xi32>
-// CHECK:           [[VAR_26_:%.+]] = tt.broadcast [[VAR_25_]] : tensor<4x1xi1> -> tensor<4x4xi1>
-// CHECK-NOT: separator of consecutive DAGs
-// CHECK-DAG:       [[VAR_27_:%.+]] = arith.muli [[PARAM_4_]], [[CST_4_i32]] : i32
-// CHECK-DAG:       [[VAR_28_:%.+]] = arith.muli [[PARAM_5_]], [[CST_4_i32]] : i32
-// CHECK-DAG:       [[VAR_12_:%.+]]:2 = scf.for [[VAR_arg8_:%.+]] = {{.*}} iter_args([[VAR_arg9_:%.+]] = [[VAR_14_]], [[VAR_arg10_:%.+]] = [[VAR_24_]]) -> (!tt.ptr<tensor<4x4xf32>>, !tt.ptr<tensor<4x4xf32>>) : i32 {
-// CHECK:             [[VAR_30_:%.+]] = tt.load [[VAR_arg9_]], [[VAR_26_]], [[CST_]] : !tt.ptr<tensor<4x4xf32>>
-// CHECK:             tt.store [[VAR_arg10_]], [[VAR_30_]] : !tt.ptr<tensor<4x4xf32>>
-// CHECK-DAG:         [[VAR_31_:%.+]] = tt.advance [[VAR_arg9_]], {{\[}}[[CST_0_i32]], [[VAR_27_]]] : <tensor<4x4xf32>>
-// CHECK-DAG:         [[VAR_32_:%.+]] = tt.advance [[VAR_arg10_]], {{\[}}[[CST_0_i32]], [[VAR_28_]]] : <tensor<4x4xf32>>
-// CHECK:             scf.yield [[VAR_31_]], [[VAR_32_]] : !tt.ptr<tensor<4x4xf32>>, !tt.ptr<tensor<4x4xf32>>
+// CHECK-DAG:       [[VAR_1_:%.+]] = arith.muli [[PARAM_4_]], {{.*}} : i32
+// CHECK-DAG:       [[VAR_2_:%.+]] = arith.extsi [[PARAM_4_]] : i32 to i64
+// CHECK-DAG:       [[VAR_3_:%.+]] = arith.index_cast [[PARAM_3_]] : i32 to index
+// CHECK-DAG:       [[VAR_4_:%.+]] = arith.index_cast [[PARAM_5_]] : i32 to index
+// CHECK-DAG:       [[VAR_5_:%.+]] = arith.index_cast [[VAR_4_]] : index to i64
+// CHECK-DAG:       [[VAR_6_:%.+]] = arith.muli [[PARAM_5_]], [[CST_6_i32]] : i32
+// CHECK:           [[VAR_7_:%.+]] = arith.extsi [[PARAM_5_]] : i32 to i64
+// CHECK-DAG:       [[VAR_8_:%.+]] = arith.index_cast [[VAR_3_]] : index to i64
+// CHECK-DAG:       [[VAR_9_:%.+]] = arith.muli [[VAR_8_]], [[VAR_5_]] : i64
+// CHECK:           [[VAR_10_:%.+]] = arith.divui [[VAR_1_]], [[PARAM_4_]] : i32
+// CHECK:           [[VAR_11_:%.+]] = arith.divui [[VAR_6_]], [[PARAM_5_]] : i32
+// CHECK:           [[VAR_12_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[VAR_9_]]], {{\[}}[[VAR_2_]], [[VAR_7_]]], {{\[}}[[VAR_10_]], [[VAR_11_]]] {{.*}} : <tensor<4x4xf32>>
+// CHECK-DAG:       [[VAR_13_:%.+]] = tt.expand_dims [[VAR_0_]] {axis = 1 : i32} : tensor<4xi32> -> tensor<4x1xi32>
+// CHECK-DAG:       [[VAR_14_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
+// CHECK-DAG:       [[VAR_15_:%.+]] = arith.extsi [[PARAM_7_]] : i32 to i64
+// CHECK:           [[VAR_16_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_14_]], [[VAR_15_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<4x4xf32>>
+// CHECK:           [[VAR_21_:%.+]] = arith.cmpi slt, [[VAR_13_]], {{.*}} : tensor<4x1xi32>
+// CHECK:           [[VAR_22_:%.+]] = tt.broadcast [[VAR_21_]] : tensor<4x1xi1> -> tensor<4x4xi1>
+// CHECK-DAG:       [[VAR_23_:%.+]] = arith.muli [[PARAM_4_]], [[CST_4_i32]] : i32
+// CHECK-DAG:       [[VAR_24_:%.+]] = arith.muli [[PARAM_5_]], [[CST_4_i32]] : i32
+// CHECK-DAG:       [[VAR_25_:%.+]]:2 = scf.for [[VAR_arg8_:%.+]] = {{.*}} iter_args([[VAR_arg9_:%.+]] = [[VAR_12_]], [[VAR_arg10_:%.+]] = [[VAR_16_]]) -> (!tt.ptr<tensor<4x4xf32>>, !tt.ptr<tensor<4x4xf32>>) : i32 {
+// CHECK:             [[VAR_26_:%.+]] = tt.load [[VAR_arg9_]], [[VAR_22_]], [[CST_]] : !tt.ptr<tensor<4x4xf32>>
+// CHECK:             tt.store [[VAR_arg10_]], [[VAR_26_]] : !tt.ptr<tensor<4x4xf32>>
+// CHECK-DAG:         [[VAR_27_:%.+]] = tt.advance [[VAR_arg9_]], {{\[}}[[CST_0_i32]], [[VAR_23_]]] : <tensor<4x4xf32>>
+// CHECK-DAG:         [[VAR_28_:%.+]] = tt.advance [[VAR_arg10_]], {{\[}}[[CST_0_i32]], [[VAR_24_]]] : <tensor<4x4xf32>>
+// CHECK:             scf.yield [[VAR_27_]], [[VAR_28_]] : !tt.ptr<tensor<4x4xf32>>, !tt.ptr<tensor<4x4xf32>>
 // CHECK:           }
 // CHECK:           tt.return
 // CHECK:         }
