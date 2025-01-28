@@ -83,6 +83,14 @@ jobs:
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
 
+      - name: Print sys info
+        run: |
+          .venv\Scripts\activate.ps1
+          # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          pip install defusedxml
+          bash ./scripts/capture-hw-details.sh
+
       - name: Run core tests
         run: |
           .venv\Scripts\activate.ps1
