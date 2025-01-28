@@ -487,6 +487,14 @@ public:
   LogicalResult rewriteForOp(scf::ForOp op) {
     LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
 
+    for (auto &bodyOp : op.getRegion().getOps()) {
+      if (auto forOp = dyn_cast<scf::ForOp>(bodyOp)) {
+        op->emitRemark("TritonRaiseToBlockPointer: nested loops currently "
+                       "not supported");
+        return failure();
+      }
+    }
+
     SmallVector<Value> newInitArgs;
     SmallVector<std::pair<int, Value>> initArgIndex;
     OpBuilder builder(op);
@@ -544,15 +552,6 @@ public:
 
     for (auto [i, mappedV] : initArgIndex)
       ptrMap.map(newOp.getRegionIterArgs()[i], mappedV);
-
-    for (auto &bodyOp : newOp.getRegion().getOps()) {
-      if (auto forOp = dyn_cast<scf::ForOp>(bodyOp)) {
-        newOp.erase();
-        forOp->emitRemark("TritonRaiseToBlockPointer: nested loops currently "
-                          "not supported");
-        return failure();
-      }
-    }
 
     // Update the loop body.
     if (failed(rewriteOp(newOp))) {
