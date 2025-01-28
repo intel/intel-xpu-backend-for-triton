@@ -7,10 +7,16 @@ set(GPUInstrumentationTestLib_SOURCES
     )
 
 
+if(WIN32)
+  set(LIBRARY_TYPE MODULE)
+else()
+  set(LIBRARY_TYPE SHARED)
+endif()
+
 foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
     add_library(
       ${plugin}
-      SHARED
+      ${LIBRARY_TYPE}
       ${${plugin}_SOURCES}
       )
 
