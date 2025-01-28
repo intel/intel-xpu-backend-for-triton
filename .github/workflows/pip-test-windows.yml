@@ -21,6 +21,7 @@ on:
 permissions: read-all
 
 env:
+  PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
