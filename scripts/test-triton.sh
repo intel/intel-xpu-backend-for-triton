@@ -178,7 +178,6 @@ run_unit_tests() {
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/build/cmake*/test
-  ls . -a
   lit -v .
 }
 
@@ -308,9 +307,9 @@ run_instrumentation_tests() {
   INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
 
   cd $TRITON_PROJ/python/test/unit
-
+  INSTRUMENTATION_LIB_NAME=$(ls $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib*)
   TRITON_TEST_SUITE=instrumentation \
-    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
+    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
     pytest -vvv --device xpu instrumentation/test_gpuhello.py
 }
 
