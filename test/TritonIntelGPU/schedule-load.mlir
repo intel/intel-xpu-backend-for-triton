@@ -1,5 +1,5 @@
-// RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,SINK-ACROSS-REGIONS
-// RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 TRITON_INTEL_DO_NOT_SINK_INSTR_ACROSS_RGN=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,DO-NOT-SINK-ACROSS-REGIONS
+// RUN: env TRITON_INTEL_ENABLE_INSTR_SCHED=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,SINK-ACROSS-REGIONS
+// RUN: env TRITON_INTEL_ENABLE_INSTR_SCHED=1 TRITON_INTEL_DO_NOT_SINK_INSTR_ACROSS_RGN=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,DO-NOT-SINK-ACROSS-REGIONS
 
 // -----
 // COM: Inst Schedule for Flash Attention case
