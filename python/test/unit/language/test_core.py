@@ -2257,6 +2257,7 @@ def get_reduced_dtype(dtype_str, op):
 @pytest.mark.parametrize("num_warps, threads_per_warp",
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, device):
+    # breakpoint()
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
 
     # triton kernel
@@ -2289,6 +2290,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
     }[op]
     if 'tie-break-left' in op:
         x[3:10] = x[numpy_op(x)]
+
     x_tri = to_triton(x, device=device)
     # numpy result
     z_dtype_str = 'int32' if 'tie-break-left' in op else dtype_str
@@ -2309,6 +2311,16 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, d
     else:
         kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
     z_tri = to_numpy(z_tri)
+
+    print(" ----- INPUT DATA -----", flush=True)
+    print(x, flush=True)
+
+    print(f" ----- TRITON RESULT for {op} -----", flush=True)
+    print(z_tri, flush=True)
+
+    print(f" ----- EXPECTED RESULT for {op} ----- ", flush=True)
+    print(z_ref, flush=True)
+
     # compare
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
