@@ -99,17 +99,17 @@ jobs:
           .venv\Scripts\activate.ps1
           pip list -v
 
-#      - name: Run core tests
-#        run: |
-#          .venv\Scripts\activate.ps1
-#          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-#          ${{ env.TRITON_TEST_CMD }} --core
-#
-#      - name: Run interpreter tests
-#        run: |
-#          .venv\Scripts\activate.ps1
-#          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-#          ${{ env.TRITON_TEST_CMD }} --interpreter
+      - name: Run core tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run interpreter tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
         run: |
