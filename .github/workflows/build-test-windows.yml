@@ -87,7 +87,7 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-min-uint8-64] --device=xpu
+          pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-64] --device=xpu
 
 
       # - name: Run interpreter tests
