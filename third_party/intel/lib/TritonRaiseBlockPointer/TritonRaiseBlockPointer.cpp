@@ -802,8 +802,9 @@ public:
           loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
       auto scaledOffset =
           builder.createOrFold<arith::MulIOp>(loc, offsetCst, strideCst);
-      state.offsets.push_back(findOrCreateCast(
-          loc, scaledOffset, builder.getIntegerType(offsetBitwidth), builder));
+      state.offsets.push_back(
+          findOrCreateCast(loc, getFinalValue(scaledOffset),
+                           builder.getIntegerType(offsetBitwidth), builder));
     }
     state.strides = makeTPtrOp.getStrides();
     state.shape = makeTPtrOp.getShape();
