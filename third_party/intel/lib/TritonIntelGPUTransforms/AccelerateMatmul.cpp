@@ -132,8 +132,7 @@ public:
           oldAType.getElementType().getIntOrFloatBitWidth();
 
       // We are upcasting FP8 to FP16
-      if (isa<Float8E5M2Type>(oldAType.getElementType()) ||
-          isa<Float8E4M3FNType>(oldAType.getElementType()))
+      if (isa<Float8E5M2Type, Float8E4M3FNType>(oldAType.getElementType()))
         dpasElemBitWidths = 2 * dpasElemBitWidths;
 
       // Enlarge the repCluster size to use the large 2D load for A and B
@@ -488,8 +487,7 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 
     Type promoteType;
     if (dpasLayout) {
-      bool isNativeFP8 =
-          isa<Float8E5M2Type>(AElType) || isa<Float8E4M3FNType>(AElType);
+      bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
       // fp8 is not natively supported by the the DPAS instruction, promote it
       // to fp16.
       if (!isNativeFP8)

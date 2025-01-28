@@ -405,8 +405,7 @@ unsigned DpasEncodingAttr::getOpsPerChannel(Type elemType) {
   assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
 
   unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
-  if (llvm::isa<Float8E5M2Type>(elemType) ||
-      llvm::isa<Float8E4M3FNType>(elemType))
+  if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
     dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
 
   return DPASCapability::opsChanBitWidths / dpasElemBitWidths;
