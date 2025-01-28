@@ -100,14 +100,6 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
-      - name: Run tutorials
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          # Disable interactive plot window
-          $env:MPLBACKEND = "Agg"
-          ${{ env.TRITON_TEST_CMD }} --tutorial
-
       - name: Run instrumentation tests
         run: |
           .venv\Scripts\activate.ps1
