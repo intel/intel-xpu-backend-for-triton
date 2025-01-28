@@ -100,6 +100,13 @@ jobs:
           .venv\Scripts\activate.ps1
           pip list -v
 
+      - name: Run unit tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --unit --ignore-errors
+
       - name: Run core tests
         run: |
           .venv\Scripts\activate.ps1

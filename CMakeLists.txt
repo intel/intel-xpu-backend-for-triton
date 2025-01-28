@@ -299,6 +299,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
     set_target_properties(triton PROPERTIES PREFIX "lib")
+    if(DEFINED TRITON_PYD_PATH)
+      string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_CMAKE_BUILD_TYPE)
+      set_target_properties(triton PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${UPPER_CMAKE_BUILD_TYPE}
+      "${TRITON_PYD_PATH}")
+    endif(DEFINED TRITON_PYD_PATH)
   else()
     target_link_libraries(triton PRIVATE z)
   endif()
