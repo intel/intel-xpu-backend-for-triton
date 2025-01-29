@@ -42,9 +42,6 @@ def test_op(capfd, device: str):
     size = 98432
     x = torch.rand(size, device=device)
     y = torch.rand(size, device=device)
-    with capfd.disabled():
-        # FIXME: Skip kernel compilation warnings on MSVC
-        func(x, y)
     func(x, y)
     stdout, stderr = capfd.readouterr()
     print(f"{repr(stderr)=}", flush=True)
