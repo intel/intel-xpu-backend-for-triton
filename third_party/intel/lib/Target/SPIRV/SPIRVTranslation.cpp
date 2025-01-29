@@ -50,7 +50,7 @@ bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
   static const std::string DefaultTriple = "spirv64v1.6-unknown-unknown";
   static const std::vector<std::string> Opts{
       "--avoid-spirv-capabilities", "Shader", "--translator-compatibility-mode",
-      "--spirv-ext=all"};
+      "--spirv-ext=all", "- O3"};
   static const std::vector<std::string> AllowExtNames;
 
   // Correct the Triple value if needed
