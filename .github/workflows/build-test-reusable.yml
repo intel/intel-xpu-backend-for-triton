@@ -153,7 +153,7 @@ jobs:
 
       - name: Run core tests
         run: |
-          set MLIR_ENABLE_DUMP=1&& pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-64] --device=xpu
+          LLVM_IR_ENABLE_DUMP=1 MLIR_ENABLE_DUMP=1 pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-64] --device=xpu
 
       # - name: Run interpreter tests
       #   run: |
