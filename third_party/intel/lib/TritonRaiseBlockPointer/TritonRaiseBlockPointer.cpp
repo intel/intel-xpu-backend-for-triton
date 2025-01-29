@@ -109,7 +109,7 @@ Value getFinalValue(Value value) {
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
     // look init values outside the loop
-    BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+    auto blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp))
       return getFinalValue(forOp.getInitArgs()[blockArg.getArgNumber() - 1]);
@@ -639,7 +639,7 @@ public:
     Operation *defOp = value.getDefiningOp();
     if (!defOp) {
       // look init values outside the loop
-      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      auto blockArg = cast<BlockArgument>(value);
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
       return forOp ? hasExpandOpInDefiningPath(
@@ -912,7 +912,20 @@ public:
       }
     }
 
-    Operation *definingOp = operand.getDefiningOp();
+    auto getDefiningOp = [](Value val) {
+      Operation *defOp = val.getDefiningOp();
+      if (!defOp) {
+        auto blockArg = cast<BlockArgument>(val);
+        Operation *parentOp = blockArg.getOwner()->getParentOp();
+        if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+          Value v = forOp.getInitArgs()[blockArg.getArgNumber() - 1];
+          return v.getDefiningOp();
+        }
+      }
+      return defOp;
+    };
+
+    Operation *definingOp = getDefiningOp(operand);
     if (!definingOp) {
       if (!knownPtrs.contains(operand)) {
         llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
