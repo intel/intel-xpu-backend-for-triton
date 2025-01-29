@@ -4,10 +4,6 @@
 #include "llvm/Passes/PassPlugin.h"
 #include <map>
 
-#ifdef WIN32
-#define EXPORT __declspec(dllexport)
-#endif
-
 using namespace llvm;
 
 namespace {
@@ -100,7 +96,9 @@ PassPluginLibraryInfo getPassPluginInfo() {
           callback};
 };
 
-extern "C" EXPORT ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
 llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
+
+#pragma comment(linker, "/export:llvmGetPassPluginInfo")
