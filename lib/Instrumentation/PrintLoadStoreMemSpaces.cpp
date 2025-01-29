@@ -5,7 +5,7 @@
 #include <map>
 
 #ifdef WIN32
-#define EXPORT __declspec(dllexport)
+#define EXPORT __declspec(selectany)
 #else
 #define EXPORT LLVM_ATTRIBUTE_WEAK
 #endif
