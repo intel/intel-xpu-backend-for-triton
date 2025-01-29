@@ -330,7 +330,7 @@ run_instrumentation_tests() {
   fi
 
   INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
-  INSTRUMENTATION_LIB_NAME=$(ls $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib*)
+  INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
   cd $TRITON_PROJ/python/test/unit
 
