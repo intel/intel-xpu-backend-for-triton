@@ -3,11 +3,17 @@ import subprocess
 import os
 
 # Path to the SPIRVRunner executable
-SPIRV_RUNNER_PATH = "/data/kballeda/Kali/0122_ci_enable/intel-xpu-backend-for-triton/utils/SPIRVRunner/build/SPIRVRunner"
-SPIRV_RUNNER_TESTS= "/data/kballeda/Kali/0122_ci_enable/intel-xpu-backend-for-triton/utils/SPIRVRunner/SPIRVRunner_TestBench"
+SPIRV_RUNNER_PATH = os.getenv("SPIRV_RUNNER_PATH")
+SPIRV_RUNNER_TESTS = os.getenv("SPIRV_RUNNER_TESTS")
+
+# Check if SPIRV_RUNNER_TESTS is set
+if not SPIRV_RUNNER_TESTS:
+    raise EnvironmentError("SPIRV_RUNNER_TESTS environment variable is not set")
+
+
 # Define CLI arguments per directory
 SPIRV_CLI_ARGS = {
-    SPIRV_RUNNER_TESTS + f"/add_kernel": ["-o", "tensor_2", "-p"]
+    os.path.join(SPIRV_RUNNER_TESTS, "add_kernel"): ["-o", "tensor_2", "-p"]
 }
 
 @pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
@@ -17,7 +23,7 @@ def test_argument_parsing():
         print("Running SPIRVRunner with --help...")
         result = subprocess.run([SPIRV_RUNNER_PATH, "--help"], capture_output=True, text=True, check=True)
         print("SPIRVRunner output:", result.stdout)
-        assert "Usage" in result.stdout, "Help message not displayed correctly"
+        assert "USAGE" in result.stdout, "Help message not displayed correctly"
     except subprocess.CalledProcessError as e:
         print("Error executing SPIRVRunner:", e)
         pytest.fail(f"SPIRVRunner failed to execute: {e}")
@@ -30,7 +36,7 @@ def test_invalid_argument():
         result = subprocess.run([SPIRV_RUNNER_PATH, "--invalid-arg"], capture_output=True, text=True)
         print("SPIRVRunner stderr:", result.stderr)
         assert result.returncode != 0, "Invalid argument should result in an error"
-        assert "error" in result.stderr.lower(), "Error message not displayed for invalid argument"
+        assert "unknown command" in result.stderr.lower(), "Error message not displayed for invalid argument"
     except subprocess.CalledProcessError as e:
         print("Unexpected error executing SPIRVRunner:", e)
         pytest.fail(f"SPIRVRunner failed unexpectedly: {e}")
