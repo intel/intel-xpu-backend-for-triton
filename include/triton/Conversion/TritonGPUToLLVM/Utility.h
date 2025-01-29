@@ -414,6 +414,19 @@ inline bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
+inline Value getStackPointer(RewriterBase &rewriter,
+                             FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
+  if (!isKernel(funcOp)) {
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+  }
+
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+  assert(globalBase);
+  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
+
 inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                                  FunctionOpInterface funcOp,
                                  Value allocOffset = {}) {
