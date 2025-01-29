@@ -95,7 +95,8 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          set MLIR_ENABLE_DUMP=1&& pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-64] --device=xpu
+          $env:MLIR_ENABLE_DUMP = 1
+          pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-64] --device=xpu
 
 
       # - name: Run interpreter tests
