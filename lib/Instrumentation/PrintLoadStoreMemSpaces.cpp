@@ -5,9 +5,7 @@
 #include <map>
 
 #ifdef WIN32
-#define EXPORT __declspec(selectany)
-#else
-#define EXPORT LLVM_ATTRIBUTE_WEAK
+#define EXPORT __declspec(dllexport)
 #endif
 
 using namespace llvm;
@@ -102,6 +100,7 @@ PassPluginLibraryInfo getPassPluginInfo() {
           callback};
 };
 
-extern "C" EXPORT ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo() {
+extern "C" EXPORT ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
