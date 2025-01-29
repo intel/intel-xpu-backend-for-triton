@@ -286,8 +286,8 @@ def TTIG_SIMDReduceOp : TTIG_Op<"simd_reduce", [Pure, SameOperandsAndResultEleme
     ```
   }];
   let arguments = (ins TT_Tensor:$src,
-		       TritonGEN_ReduceKindAttr: $op,
-		       I32Attr:$axis);
+                       TritonGEN_ReduceKindAttr: $op,
+                       I32Attr:$axis);
   let results = (outs TT_Tensor:$res);
   let assemblyFormat = [{
     $op $src `axis` `=` $axis attr-dict `:` type($src) `->` type($res)
