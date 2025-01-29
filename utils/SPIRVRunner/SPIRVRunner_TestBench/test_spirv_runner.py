@@ -1,50 +1,52 @@
-import os
-import subprocess
 import pytest
+import subprocess
+import os
 
-# Define the root directory (current directory where the script is run)
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Path to the SPIRVRunner executable
+SPIRV_RUNNER_PATH = "/data/kballeda/Kali/0122_ci_enable/intel-xpu-backend-for-triton/utils/SPIRVRunner/build/SPIRVRunner"
+SPIRV_RUNNER_TESTS= "/data/kballeda/Kali/0122_ci_enable/intel-xpu-backend-for-triton/utils/SPIRVRunner/SPIRVRunner_TestBench"
+# Define CLI arguments per directory
+SPIRV_CLI_ARGS = {
+    SPIRV_RUNNER_TESTS + f"/add_kernel": ["-o", "tensor_2", "-p"]
+}
 
-# Derive paths relative to the root directory
-TEST_RESULTS_DIR = os.path.join(ROOT_DIR, ".", "test_results")
-print(ROOT_DIR)
-print(TEST_RESULTS_DIR)
-'''
-# Ensure test results directory exists
-os.makedirs(TEST_RESULTS_DIR, exist_ok=True)
+@pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
+def test_argument_parsing():
+    """Test that SPIRVRunner correctly handles argument parsing."""
+    try:
+        print("Running SPIRVRunner with --help...")
+        result = subprocess.run([SPIRV_RUNNER_PATH, "--help"], capture_output=True, text=True, check=True)
+        print("SPIRVRunner output:", result.stdout)
+        assert "Usage" in result.stdout, "Help message not displayed correctly"
+    except subprocess.CalledProcessError as e:
+        print("Error executing SPIRVRunner:", e)
+        pytest.fail(f"SPIRVRunner failed to execute: {e}")
 
-def run_spirv_runner(spv_file):
-    """Run the SPIRVRunner utility on a SPIR-V binary."""
-    result = subprocess.run([SPIRVRUNNER_PATH, spv_file], capture_output=True, text=True)
-    return result.stdout
+@pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
+def test_invalid_argument():
+    """Test SPIRVRunner's response to an invalid argument."""
+    try:
+        print("Running SPIRVRunner with an invalid argument...")
+        result = subprocess.run([SPIRV_RUNNER_PATH, "--invalid-arg"], capture_output=True, text=True)
+        print("SPIRVRunner stderr:", result.stderr)
+        assert result.returncode != 0, "Invalid argument should result in an error"
+        assert "error" in result.stderr.lower(), "Error message not displayed for invalid argument"
+    except subprocess.CalledProcessError as e:
+        print("Unexpected error executing SPIRVRunner:", e)
+        pytest.fail(f"SPIRVRunner failed unexpectedly: {e}")
 
-def read_expected_output(test_name):
-    """Read the expected output for a test case."""
-    expected_output_path = os.path.join(EXPECTED_OUTPUTS_DIR, f"{test_name}.txt")
-    with open(expected_output_path, "r") as f:
-        return f.read()
+@pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
+@pytest.mark.parametrize("spirv_test_dir", SPIRV_CLI_ARGS.keys())
+def test_spirv_execution(spirv_test_dir):
+    """Test SPIRVRunner's ability to execute SPIR-V files from multiple directories with specific arguments."""
+    if not os.path.exists(spirv_test_dir):
+        print(f"Skipping test: Directory {spirv_test_dir} not found")
+        pytest.skip(f"Test SPIR-V directory {spirv_test_dir} not found")    
+    cli_args = SPIRV_CLI_ARGS.get(spirv_test_dir, [])   
+    result = subprocess.run([SPIRV_RUNNER_PATH] + cli_args, capture_output=True, text=True, check=True, cwd=spirv_test_dir)
+    print("SPIRVRunner output:", result.stdout)
 
-def generate_test_cases():
-    """Generate test cases dynamically based on SPIR-V binaries."""
-    test_cases = []
-    for spv_file in os.listdir(SPIRV_BINARIES_DIR):
-        if spv_file.endswith(".spv"):
-            test_name = os.path.splitext(spv_file)[0]
-            test_cases.append((spv_file, test_name))
-    return test_cases
-
-@pytest.mark.parametrize("spv_file, test_name", generate_test_cases())
-def test_spirv_runner(spv_file, test_name):
-    """Dynamic test case for SPIRVRunner."""
-    spv_path = os.path.join(SPIRV_BINARIES_DIR, spv_file)
-    output = run_spirv_runner(spv_path)
-    expected_output = read_expected_output(test_name)
-
-    # Write output to test results directory
-    result_path = os.path.join(TEST_RESULTS_DIR, f"{test_name}_result.txt")
-    with open(result_path, "w") as f:
-        f.write(output)
-
-    # Assert that the output matches the expected output
-    assert output == expected_output, f"Test {test_name} failed: Output does not match expected result."
-'''
+if __name__ == "__main__":
+    # Run the tests using pytest
+    print("Starting pytest execution...")
+    pytest.main()
