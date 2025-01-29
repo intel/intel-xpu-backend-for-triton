@@ -44,6 +44,5 @@ def test_op(capfd, device: str):
     y = torch.rand(size, device=device)
     func(x, y)
     stdout, stderr = capfd.readouterr()
-    print(f"{repr(stderr)=}", flush=True)
     if 'LLVM_PASS_PLUGIN_PATH' in os.environ:
         assert repr(stderr) == repr(test_stdout)
