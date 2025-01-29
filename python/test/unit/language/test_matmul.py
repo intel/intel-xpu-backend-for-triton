@@ -6,7 +6,7 @@ import triton.language as tl
 import triton.tools.experimental_descriptor
 from test_mxfp import MXFP4Tensor, MXScaleTensor
 import re
-from triton._internal_testing import is_cuda, is_hip, is_hip_mi200
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi200, is_xpu
 
 
 def f8_to_f16(x, dtype):
@@ -82,7 +82,7 @@ def get_src_element_ty_size(dtype_str):
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, NUM_CTAS,
                        device):
     if NUM_CTAS > 1 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 9):
-        pytest.skip("Clusters requires nvidia compute capability >= 9")
+        pytest.xfail("Clusters requires nvidia compute capability >= 9")
     if is_hip() and ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
                      > 65536):
         pytest.skip("HIP path requires less than 64KB of shared memory")
@@ -316,8 +316,11 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
+                    reason="Requires compute capability >= 10")
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
+    if is_xpu():
+        pytest.skip("FIXME: Fail RuntimeError on XPU")
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     torch.manual_seed(42)
@@ -442,8 +445,11 @@ def block_scale_mxfp_matmul(  #
                                                        (128, 128, 256), (128, 256, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2, 4])
 @pytest.mark.parametrize("USE_2D_SCALE_LOAD", [False, True])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
+                    reason="Requires compute capability >= 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
+    if is_xpu():
+        pytest.skip("FIXME: Fail RuntimeError on XPU")
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
@@ -564,7 +570,8 @@ def lhs_in_tmem_kernel(  #
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("a_trans", [False, True])
 @pytest.mark.parametrize("dtype_src_str", ["float32", "float16", "float8e5"])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
+                    reason="Requires compute capability >= 10")
 def test_lhs_in_tmem(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
     _knob_promote_lhs_to_tmem(monkeypatch)
     if M != BLOCK_M or N != BLOCK_N or K != BLOCK_K:
@@ -628,8 +635,11 @@ def lhs_in_tmem_kernel_mxfp(  #
     tl.store(output_ptrs, accumulator)
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
+                    reason="Requires compute capability >= 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
+    if is_xpu():
+        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
     _knob_promote_lhs_to_tmem(monkeypatch)
     M, N, K = 128, 64, 32
     torch.manual_seed(42)
@@ -712,8 +722,11 @@ def block_scale_fp4_matmul(  #
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
                          ids=["mxfp4", "nvfp4"])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
+                    reason="Requires compute capability >= 10")
 def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_type, device):
+    if is_xpu():
+        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
     NUM_STAGES = 1
     torch.manual_seed(42)
     a_mxfp4 = MXFP4Tensor(size=(M, K), device=device).random()

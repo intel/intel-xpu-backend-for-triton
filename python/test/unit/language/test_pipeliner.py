@@ -504,9 +504,11 @@ def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
         c_desc.scatter(c, offs_am + tl.arange(0, BLOCK_SIZE_M), offs_bn)
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] != 10,
                     reason="TMA Scatter only works on cloud Blackwell Chips")
 def test_scatter_pipeline(device):
+    if is_xpu():
+        pytest.xfail("XPU does not support TMA scatter")
 
     def alloc_fn(size, alignment, stream):
         return torch.empty(size, device="cuda", dtype=torch.int8)
