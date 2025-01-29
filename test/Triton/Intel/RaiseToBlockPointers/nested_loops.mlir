@@ -181,14 +181,14 @@ module {
 
 // CHECK:         tt.func public @nested2_complex_body([[arg0_:.+]]: !tt.ptr<f32>, [[arg1_:.+]]: !tt.ptr<f32>, [[arg2_:.+]]: i32, [[arg3_:.+]]: i32) {
 // CHECK:           scf.for [[VAR_arg1_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {
-// CHECK-NOT:         tt.make_tensor_ptr  
+// CHECK-NOT:         tt.make_tensor_ptr
 // CHECK-NOT:         tt.advance
 // CHECK:             scf.for [[VAR_arg2_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {
 // CHECK-NOT:           tt.make_tensor_ptr
 // CHECK-NOT:           tt.advance
 // CHECK:               scf.yield {{.*}}, {{.*}} : tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>
 // CHECK:             }
-// CHECK-NOT:         tt.make_tensor_ptr  
+// CHECK-NOT:         tt.make_tensor_ptr
 // CHECK-NOT:         tt.advance
 // CHECK:             scf.yield {{.*}}, {{.*}} : tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>
 // CHECK:           }
@@ -197,7 +197,7 @@ module {
 //
 // CHECK:         tt.func public @nested2_use_loop_results([[arg0_:.+]]: !tt.ptr<f32>, [[arg1_:.+]]: !tt.ptr<f32>, [[arg2_:.+]]: i32, [[arg3_:.+]]: i32) {
 // CHECK:           scf.for [[VAR_arg1_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {
-// CHECK-NOT:         tt.make_tensor_ptr    
+// CHECK-NOT:         tt.make_tensor_ptr
 // CHECK-NOT:         tt.advance
 // CHECK:             scf.for [[VAR_arg2_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {
 // CHECK-NOT:           tt.make_tensor_ptr
@@ -210,11 +210,11 @@ module {
 // CHECK:         }
 //
 // CHECK:         tt.func public @nested3([[arg0_:.+]]: !tt.ptr<f32>, [[arg1_:.+]]: !tt.ptr<f32>, [[arg2_:.+]]: i32, [[arg3_:.+]]: i32) {
-// CHECK:           scf.for [[VAR_arg1_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {  
-// CHECK-NOT:         tt.make_tensor_ptr    
+// CHECK:           scf.for [[VAR_arg1_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {
+// CHECK-NOT:         tt.make_tensor_ptr
 // CHECK-NOT:         tt.advance
 // CHECK:             scf.for [[VAR_arg2_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {
-// CHECK-NOT:           tt.make_tensor_ptr      
+// CHECK-NOT:           tt.make_tensor_ptr
 // CHECK-NOT:           tt.advance
 // CHECK:               scf.for [[VAR_arg3_:%.+]] = {{.*}} iter_args({{.*}}) -> (tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>)  : i32 {
 // CHECK-NOT:             tt.make_tensor_ptr
@@ -223,7 +223,7 @@ module {
 // CHECK:               }
 // CHECK-NEXT:          scf.yield {{.*}}, {{.*}} : tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>
 // CHECK:             }
-// CHECK-NOT:         tt.make_tensor_ptr  
+// CHECK-NOT:         tt.make_tensor_ptr
 // CHECK-NOT:         tt.advance
 // CHECK:             scf.yield {{.*}}, {{.*}} : tensor<2x2x!tt.ptr<f32>>, tensor<2x2x!tt.ptr<f32>>
 // CHECK:           }
