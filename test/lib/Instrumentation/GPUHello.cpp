@@ -74,3 +74,7 @@ extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
+
+#ifdef WIN32
+#pragma comment(linker, "/export:llvmGetPassPluginInfo")
+#endif

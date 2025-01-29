@@ -7,15 +7,15 @@ set(PrintLoadStoreMemSpaces_SOURCES
     )
 
 if(WIN32)
-  set(LIBRARY_TYPE MODULE)
+  set(TYPE_OUTPUT_DIRECTORY RUNTIME_OUTPUT_DIRECTORY)
 else()
-  set(LIBRARY_TYPE SHARED)
+  set(TYPE_OUTPUT_DIRECTORY LIBRARY_OUTPUT_DIRECTORY)
 endif()
 
 foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
     add_library(
       ${plugin}
-      ${LIBRARY_TYPE}
+      SHARED
       ${${plugin}_SOURCES}
       )
 
@@ -34,7 +34,7 @@ foreach( plugin ${GPU_INSTRUMENTATION_PASSES} )
     # build error
     if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
     set_target_properties(${plugin} PROPERTIES
-          LIBRARY_OUTPUT_DIRECTORY
+          ${TYPE_OUTPUT_DIRECTORY}
       "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../instrumentation")
     endif(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
 
