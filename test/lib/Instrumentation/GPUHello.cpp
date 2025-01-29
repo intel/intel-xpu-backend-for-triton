@@ -76,4 +76,6 @@ llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
 
+#ifdef WIN32
 #pragma comment(linker, "/export:llvmGetPassPluginInfo")
+#endif

@@ -96,9 +96,10 @@ PassPluginLibraryInfo getPassPluginInfo() {
           callback};
 };
 
-extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
-llvmGetPassPluginInfo() {
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
 
+#ifdef WIN32
 #pragma comment(linker, "/export:llvmGetPassPluginInfo")
+#endif
