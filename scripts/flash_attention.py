@@ -23,8 +23,8 @@ def get_options():
 
     config = parser.add_argument_group(title='Tuning configuration',
                                        description='Options setting different tuning parameters')
-    config.add_argument('-BLOCK-M', action='extend', nargs='+', type=int, help='Sizes of m')
-    config.add_argument('-BLOCK-N', action='extend', nargs='+', type=int, help='Size of N')
+    config.add_argument('-BLOCK-M', action='extend', nargs='+', type=int, help='Sizes of M')
+    config.add_argument('-BLOCK-N', action='extend', nargs='+', type=int, help='Sizes of N')
     config.add_argument('-stages', action='extend', nargs='+', type=int, help='Numbers of stages')
     config.add_argument('-warps', action='extend', nargs='+', type=int, help='Numbers of warps')
     return parser.parse_args()
