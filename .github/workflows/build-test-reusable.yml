@@ -153,7 +153,9 @@ jobs:
 
       - name: Run core tests
         run: |
-          pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-min-uint8-64] --device=xpu
+          pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-32] --device=xpu
+          pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-64] --device=xpu
+          pytest -s python/test/unit/language/test_core.py::test_reduce1d[4-32-1-max-int8-128] --device=xpu
 
       # - name: Run interpreter tests
       #   run: |
