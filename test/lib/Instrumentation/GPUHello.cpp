@@ -8,12 +8,6 @@
 #include <iostream>
 #include <vector>
 
-#ifdef WIN32
-#define EXPORT __declspec(dllexport)
-#else
-#define EXPORT LLVM_ATTRIBUTE_WEAK
-#endif
-
 using namespace llvm;
 using namespace std;
 
@@ -77,6 +71,9 @@ PassPluginLibraryInfo getPassPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "gpu-hello", LLVM_VERSION_STRING, callback};
 };
 
-extern "C" EXPORT ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo() {
+extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
+
+#pragma comment(linker, "/export:llvmGetPassPluginInfo")
