@@ -8,30 +8,30 @@ if(spirv_present_result)
   message(STATUS "Found SPIR-V Backend")
   add_compile_definitions(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   add_mlir_translation_library(TritonSPIRV
-  SPIRVTranslation.cpp
+    SPIRVTranslation.cpp
 
-  LINK_COMPONENTS
-  Core
-  # spirv backend
-  SPIRVCodeGen
+    LINK_COMPONENTS
+    Core
+    # spirv backend
+    SPIRVCodeGen
 
-  LINK_LIBS PUBLIC
-  TritonLLVMIR
-  # spirv tools
-  LLVMSPIRVLib
+    LINK_LIBS PUBLIC
+    TritonLLVMIR
+    # spirv tools
+    LLVMSPIRVLib
   )
 else()
   add_mlir_translation_library(TritonSPIRV
-  SPIRVTranslation.cpp
+    SPIRVTranslation.cpp
 
-  LINK_COMPONENTS
-  Core
+    LINK_COMPONENTS
+    Core
 
-  LINK_LIBS PUBLIC
-  TritonLLVMIR
-  # spirv tools
-  LLVMSPIRVLib
-)
+    LINK_LIBS PUBLIC
+    TritonLLVMIR
+    # spirv tools
+    LLVMSPIRVLib
+  )
 endif()
 
 # Add SPIRV-LLVM-Translator include directory.

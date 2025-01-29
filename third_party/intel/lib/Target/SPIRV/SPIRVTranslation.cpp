@@ -19,6 +19,21 @@ namespace llvm {
 using namespace llvm;
 using namespace SPIRV;
 
+// TODO: The LLVM SPIR-V backend API has changed in
+// https://github.com/llvm/llvm-project/pull/124745 to improve the way SPIR-V
+// Backend API works with user facing options and allow for multithreading
+// within the host application. This PR in llvm-project breaks existing API
+// contract in how options are being interpreted inside the call, and we need to
+// update this file accordingly. After this change is visible in the LLVM
+// version from cmake/llvm-hash.txt we will need to update the call to
+// SPIRVTranslateModule(M, Result, ErrMsg, AllowExtNames, Opts) in a style of
+// SPIRVTranslate(M, Result, ErrMsg, {"all"}, CodeGenOptLevel::Aggressive,
+// Triple("spirv64v1.6-unknown-unknown")).
+
+// The LLVM SPIR-V backend exposes an API call that translates LLVM module to
+// SPIR-V and writes results into a string as binary SPIR-V output, providing
+// diagnostics on fail and means of configuring translation
+// (https://github.com/llvm/llvm-project/pull/107216).
 extern "C" bool
 SPIRVTranslateModule(Module *M, std::string &SpirvObj, std::string &ErrMsg,
                      const std::vector<std::string> &AllowExtNames,
