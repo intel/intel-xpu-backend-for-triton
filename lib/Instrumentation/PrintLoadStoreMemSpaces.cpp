@@ -102,6 +102,6 @@ PassPluginLibraryInfo getPassPluginInfo() {
           callback};
 };
 
-extern "C" EXPORT PassPluginLibraryInfo llvmGetPassPluginInfo() {
+extern "C" EXPORT ::llvm::PassPluginLibraryInfo llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
