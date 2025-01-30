@@ -11,7 +11,7 @@ def is_xpu():
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     if "cl.EXE" in cc or "clang-cl" in cc:
-        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD"]
+        cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD", "/wd4996"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
         cc_cmd += ["/link"]
@@ -24,6 +24,8 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
         cc_cmd = [cc, src, "-O3", "-shared", "-Wno-psabi"]
         if os.name != "nt":
             cc_cmd += ["-fPIC"]
+        else:
+            cc_cmd += ["-Wno-deprecated-declarations"]
         cc_cmd += [f'-l{lib}' for lib in libraries]
         cc_cmd += [f"-L{dir}" for dir in library_dirs]
         cc_cmd += [f"-I{dir}" for dir in include_dirs]
