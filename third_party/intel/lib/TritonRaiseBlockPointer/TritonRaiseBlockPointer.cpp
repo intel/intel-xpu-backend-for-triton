@@ -911,20 +911,7 @@ public:
       }
     }
 
-    auto getDefiningOp = [](Value val) {
-      Operation *defOp = val.getDefiningOp();
-      if (!defOp) {
-        auto blockArg = cast<BlockArgument>(val);
-        Operation *parentOp = blockArg.getOwner()->getParentOp();
-        if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
-          Value v = forOp.getInitArgs()[blockArg.getArgNumber() - 1];
-          return v.getDefiningOp();
-        }
-      }
-      return defOp;
-    };
-
-    Operation *definingOp = getDefiningOp(operand);
+    Operation *definingOp = operand.getDefiningOp();
     if (!definingOp) {
       if (!knownPtrs.contains(operand)) {
         llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
