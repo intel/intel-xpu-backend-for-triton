@@ -111,10 +111,9 @@ jobs:
       - name: Get transformers version
         run: |
           cd C:\pytorch
-          bash -c "\
-            TRANSFORMERS_VERSION='$(<.ci/docker/ci_commit_pins/huggingface.txt)'; \
-            echo 'TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION' | tee -a $GITHUB_ENV; \
-          "
+          $TRANSFORMERS_VERSION = Get-Content .ci/docker/ci_commit_pins/huggingface.txt
+          "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | Tee-Object -FilePath $env:GITHUB_ENV -Append
+          Write-Output "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION"
 
       - name: Install transformers
         uses: ./.github/actions/install-dependency
