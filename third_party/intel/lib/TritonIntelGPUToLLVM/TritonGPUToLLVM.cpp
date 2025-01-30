@@ -21,6 +21,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <iostream>
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_CONVERTTRITONINTELGPUTOLLVM
@@ -86,6 +87,7 @@ struct ConvertTritonGPUToLLVM
     bool isAdvancedPathEnabled =
         mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH") ||
         advancedPath;
+    std::cout << "ADVANCED PATH ENABLED: " << isAdvancedPathEnabled << std::endl;
     if (isAdvancedPathEnabled)
       assert(mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                               getSupportSG2DBlockAttrName()) &&
@@ -124,6 +126,8 @@ struct ConvertTritonGPUToLLVM
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
+      std::cout << "MODULE AFTER FUNC CONVERSION" << std::endl;
+      mod.dump();
     }
 
     mlir::triton::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);

@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <vector>
+#include <iostream>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -27,6 +28,11 @@ public:
   LogicalResult
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::dbgs() << "=========== BEFORE reduce op:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     ReduceOpHelper helper(op);
     assert(helper.isSupportedLayout() &&
            "Unexpected srcLayout in ReduceOpConversion");
@@ -73,6 +79,12 @@ public:
 
     // set output values
     loadReductionAndPackResult(helper, smemShape, smemBases, rewriter);
+
+    llvm::dbgs() << "=========== AFTER reduce op:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
 
     return success();
   }
