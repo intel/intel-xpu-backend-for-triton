@@ -108,12 +108,28 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --instrumentation
 
-      - name: Run instrumentation tests
+      - name: Get transformers version
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          cd pytorch
+          bash -c "\
+            TRANSFORMERS_VERSION='$(<.ci/docker/ci_commit_pins/huggingface.txt)'; \
+            echo 'TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION' | tee -a $GITHUB_ENV; \
+          "
+
+      - name: Install transformers
+        uses: ./.github/actions/install-dependency
+        with:
+          package: transformers
+          repository: huggingface/transformers
+          ref: ${{ env.TRANSFORMERS_VERSION }}
+          try-tag-prefix: v
+
+      - name: Run E2E test
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          ${{ env.TRITON_TEST_CMD }} --instrumentation
+          ${{ env.TRITON_TEST_CMD }} --inductor
 
       - name: Pass rate
         run: |
