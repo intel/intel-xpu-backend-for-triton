@@ -1,0 +1,124 @@
+name: Build and test reusable workflow
+run-name: ${{ inputs.run_name }} - ${{ inputs.python_version }} - ${{ inputs.runner_label || 'default'}}
+
+on:
+  workflow_call:
+    inputs:
+      device:
+        description: Device
+        type: string
+        default: max1100
+      python_version:
+        description: Python version
+        type: string
+        required: true   
+      run_name:
+        description: Custom run name
+        type: string
+        default: Build and test
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: "3.10"
+  BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
+  VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
+  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
+
+
+jobs:
+  build:
+    name: build
+    runs-on: 
+      - ${{ inputs.runner_label || 'max1550' }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with: 
+          fetch-depth: 2
+
+      - name: Install Python
+        if: ${{ !(inputs.use_pyenv_python || false) }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Python build dependencies
+        run: |
+          pip install wheel cmake
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          command: DEBUG=1 python setup.py bdist_wheel
+      
+      - name: Install Triton
+        run: |
+          pip install python/dist/*.whl    
+     
+      - name: print files and git log
+        run: |  
+            ls -l
+            echo "old--"
+            git log 
+            git fetch --depth=10
+            echo "new--"
+            git log 
+            echo "before writing--"
+            echo "new--" > logfile
+            cat logfile
+            git branch
+            echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with: 
+          ref: 'main'
+          fetch-depth: 2
+      
+      - name: print files and git log
+        run: |  
+              ls -l
+              echo "old--"
+              git log 
+              git fetch --depth=10
+              echo "new--"
+              git log 
+              echo "before writing--"
+              echo "new--" > logfile
+              cat logfile
+              git branch

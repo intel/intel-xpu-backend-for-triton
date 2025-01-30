@@ -1,0 +1,50 @@
+name: Run benchmark and upload IRs 
+run-name: ${{ inputs.run_name }}
+
+on:
+  push:
+    branches:
+      - arunjose696/ir-compare
+
+
+jobs:
+
+  prepare:
+    name: Prepare
+    runs-on: Linux
+
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Matrix
+        id: matrix
+        run: |
+          if [[ -n "${{ inputs.runner_label }}" ]]; then
+            matrix='{"python": ["3.9"]}'
+          else
+            matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
+          fi
+          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+  
+
+    
+
+  run-kernels-to-compare:
+    name: run-kernels
+    needs: prepare
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    uses: ./.github/workflows/build-reusable.yml
+    with:
+      # For this workflow, use max1550 runners to reduce cache consumption on max1100 runners.
+      device: ${{ matrix.driver == 'rolling' && 'max1550' || 'max1100' }}
+      python_version: ${{ matrix.python }}
+      run_name: ${{ 'compare-ir' }}
+      use_pyenv_python: ${{false }}
