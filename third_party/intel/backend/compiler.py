@@ -327,7 +327,7 @@ class XPUBackend(BaseBackend):
             llvm.link_extern_libs(llvm_mod, paths)
         print("========== LLVM BEFORE OPT ===========")
         print(str(llvm_mod))
-        intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O0)
+        intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         print("=========== LLVM after OPT ========")
         print(str(llvm_mod))
         intel.post_process_llir(llvm_mod)
