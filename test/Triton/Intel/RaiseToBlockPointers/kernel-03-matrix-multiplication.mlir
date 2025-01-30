@@ -106,6 +106,8 @@ module {
 // CHECK-DAG:       [[CST_64_i32:%.+]] = arith.constant 64 : i32
 // CHECK-DAG:       [[CST_0_i32:%.+]] = arith.constant 0 : i32
 // CHECK-DAG:       [[CST_1_i32:%.+]] = arith.constant 1 : i32
+// CHECK:           [[VAR_17_:%.+]] = arith.muli {{.*}}, [[CST_128_i32]] : i32
+// CHECK:           [[VAR_18_:%.+]] = arith.muli {{.*}}, [[CST_256_i32]] : i32
 // CHECK:           [[VAR_20_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
 // CHECK:           [[VAR_21_:%.+]] = arith.extsi [[PARAM_7_]] : i32 to i64
 // CHECK:           [[VAR_22_:%.+]] = arith.divui {{.*}}, [[PARAM_6_]] : i32
@@ -122,12 +124,20 @@ module {
 // CHECK-DAG:         [[VAR_41_:%.+]] = tt.load [[VAR_arg15_]] : !tt.ptr<tensor<64x256xbf16>>
 // CHECK:             [[VAR_42_:%.+]] = tt.dot [[VAR_40_]], [[VAR_41_]], [[VAR_cst_]], inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x256xbf16> -> tensor<128x256xf32>
 // CHECK-DAG:         [[VAR_43_:%.+]] = arith.addf [[VAR_arg13_]], [[VAR_42_]] : tensor<128x256xf32>
-// CHECK-DAG:         [[VAR_44_:%.+]] = tt.advance [[VAR_arg14_]], {{\[}}[[CST_0_i32]], [[VAR_29_]]] : <tensor<128x64xbf16>>
-// CHECK-DAG:         [[VAR_45_:%.+]] = tt.advance [[VAR_arg15_]], {{\[}}[[CST_0_i32]], [[VAR_30_]]] : <tensor<64x256xbf16>>
-// CHECK:             scf.yield [[VAR_43_]], [[VAR_44_]], [[VAR_45_]] : tensor<128x256xf32>, !tt.ptr<tensor<128x64xbf16>>, !tt.ptr<tensor<64x256xbf16>>
+// CHECK-DAG:         [[VAR_44_:%.+]] = arith.divui [[VAR_29_]], [[PARAM_6_]] : i32
+// CHECK-DAG:         [[VAR_45_:%.+]] = tt.advance [[VAR_arg14_]], {{\[}}[[VAR_44_]], [[CST_0_i32]]] : <tensor<128x64xbf16>>
+// CHECK-DAG:         [[VAR_46_:%.+]] = arith.divui [[VAR_30_]], [[PARAM_8_]] : i32
+// CHECK-DAG:         [[VAR_47_:%.+]] = tt.advance [[VAR_arg15_]], {{\[}}[[VAR_46_]], [[CST_0_i32]]] : <tensor<64x256xbf16>>
+// CHECK:             scf.yield [[VAR_43_]], [[VAR_45_]], [[VAR_47_]] : tensor<128x256xf32>, !tt.ptr<tensor<128x64xbf16>>, !tt.ptr<tensor<64x256xbf16>>
 // CHECK:           }
 // CHECK-DAG:       [[VAR_32_:%.+]] = arith.truncf [[VAR_31_]]#0 : tensor<128x256xf32> to tensor<128x256xbf16>
-// CHECK:           [[VAR_39_:%.+]] = tt.make_tensor_ptr [[PARAM_2_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}{{.*}}], {{\[}}{{.*}}] {{.*}} : <tensor<128x256xbf16>>
+// CHECK-DAG:       [[VAR_33_:%.+]] = arith.muli [[VAR_17_]], [[PARAM_10_]] : i32
+// CHECK-DAG:       [[VAR_34_:%.+]] = arith.extsi [[PARAM_10_]] : i32 to i64
+// CHECK-DAG:       [[VAR_35_:%.+]] = arith.muli [[VAR_18_]], [[PARAM_11_]] : i32
+// CHECK-DAG:       [[VAR_36_:%.+]] = arith.extsi [[PARAM_11_]] : i32 to i64
+// CHECK-DAG:       [[VAR_37_:%.+]] = arith.divui [[VAR_33_]], [[PARAM_10_]] : i32
+// CHECK-DAG:       [[VAR_38_:%.+]] = arith.divui [[VAR_35_]], [[PARAM_11_]] : i32
+// CHECK:           [[VAR_39_:%.+]] = tt.make_tensor_ptr [[PARAM_2_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_34_]], [[VAR_36_]]], {{\[}}[[VAR_37_]], [[VAR_38_]]] {{.*}} : <tensor<128x256xbf16>>
 // CHECK:           tt.store [[VAR_39_]], [[VAR_32_]] : !tt.ptr<tensor<128x256xbf16>>
 // CHECK:           tt.return
 // CHECK:         }

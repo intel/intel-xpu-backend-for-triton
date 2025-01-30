@@ -108,6 +108,13 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --instrumentation
 
+      - name: Run instrumentation tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --instrumentation
+
       - name: Pass rate
         run: |
           .venv\Scripts\activate.ps1

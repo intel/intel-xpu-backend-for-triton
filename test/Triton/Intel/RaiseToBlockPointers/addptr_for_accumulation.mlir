@@ -64,20 +64,18 @@ module {
 // CHECK-DAG:       [[CST_3_:%.+]] = arith.constant 3 : i32
 // CHECK-DAG:       [[CST_5_:%.+]] = arith.constant 5 : i64
 // CHECK-DAG:       [[CST_1_:%.+]] = arith.constant 1 : i64
-// CHECK-DAG:       [[CST_12_:%.+]] = arith.constant 12 : index
 // CHECK-DAG:       [[CST_0_:%.+]] = arith.constant 0 : i64
 // CHECK-DAG:       [[CST_0_i32:%.+]] = arith.constant 0 : i32
-// CHECK:           [[VAR_1_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_]], [[CST_0_]]], {{\[}}[[CST_1_]], [[CST_5_]]], {{\[}}[[PARAM_3_]], [[CST_0_i32]]] {{.*}} : <tensor<4x256xbf16>>
-// CHECK:           [[VAR_2_:%.+]] = tt.load [[VAR_1_]] : !tt.ptr<tensor<4x256xbf16>>
-// CHECK:           [[VAR_3_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_]], [[CST_0_]]], {{\[}}[[CST_1_]], [[CST_5_]]], {{\[}}[[PARAM_3_]], [[CST_0_i32]]] {{.*}} : <tensor<4x256xbf16>>
-// CHECK:           [[VAR_4_:%.+]]:2 = scf.for [[VAR_arg5_:%.+]] = {{.*}} iter_args([[VAR_arg6_:%.+]] = [[VAR_2_]], [[VAR_arg7_:%.+]] = [[VAR_3_]]) -> (tensor<4x256xbf16>, !tt.ptr<tensor<4x256xbf16>>) {
-// CHECK:             [[VAR_8_:%.+]] = tt.load [[VAR_arg7_]] : !tt.ptr<tensor<4x256xbf16>>
-// CHECK-DAG:         [[VAR_9_:%.+]] = arith.addf [[VAR_arg6_]], [[VAR_8_]] : tensor<4x256xbf16>
-// CHECK-DAG:         [[VAR_10_:%.+]] = tt.advance [[VAR_arg7_]], {{\[}}[[CST_0_i32]], [[CST_3_]]] : <tensor<4x256xbf16>>
-// CHECK:             scf.yield [[VAR_9_]], [[VAR_10_]] : tensor<4x256xbf16>, !tt.ptr<tensor<4x256xbf16>>
+// CHECK:           [[VAR_0_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_]], [[CST_0_]]], {{\[}}[[CST_1_]], [[CST_5_]]], {{\[}}[[PARAM_3_]], [[CST_0_i32]]] {{.*}} : <tensor<4x256xbf16>>
+// CHECK:           [[VAR_1_:%.+]] = tt.load [[VAR_0_]] : !tt.ptr<tensor<4x256xbf16>>
+// CHECK:           [[VAR_2_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_]], [[CST_0_]]], {{\[}}[[CST_1_]], [[CST_5_]]], {{\[}}[[PARAM_3_]], [[CST_0_i32]]] {{.*}} : <tensor<4x256xbf16>>
+// CHECK:           [[VAR_3_:%.+]]:2 = scf.for [[VAR_arg5_:%.+]] = {{.*}} iter_args([[VAR_arg6_:%.+]] = [[VAR_1_]], [[VAR_arg7_:%.+]] = [[VAR_2_]]) -> (tensor<4x256xbf16>, !tt.ptr<tensor<4x256xbf16>>) {
+// CHECK:             [[VAR_5_:%.+]] = tt.load [[VAR_arg7_]] : !tt.ptr<tensor<4x256xbf16>>
+// CHECK-DAG:         [[VAR_6_:%.+]] = arith.addf [[VAR_arg6_]], [[VAR_5_]] : tensor<4x256xbf16>
+// CHECK-DAG:         [[VAR_7_:%.+]] = tt.advance [[VAR_arg7_]], {{\[}}[[CST_3_]], [[CST_0_i32]]] : <tensor<4x256xbf16>>
+// CHECK:             scf.yield [[VAR_6_]], [[VAR_7_]] : tensor<4x256xbf16>, !tt.ptr<tensor<4x256xbf16>>
 // CHECK:           }
-// COM:             to sizes: [4, 256], strides: [1, [[CST_5_]]{{.}}, offsets: {{.}}[[VAR_5_]], 0], shape: [0, 0], order: [] : <bf16> to tensor<4x256x!tt.ptr<bf16>>
-// CHECK:           [[VAR_6_:%.+]] = tt.make_tensor_ptr [[PARAM_2_]], {{\[}}[[CST_0_]], [[CST_0_]]], {{\[}}[[CST_1_]], [[CST_5_]]], {{\[}}[[PARAM_3_]], [[CST_0_i32]]] {{.*}} : <tensor<4x256xbf16>>
-// CHECK:           tt.store [[VAR_6_]], [[VAR_4_]]#0 : !tt.ptr<tensor<4x256xbf16>>
+// CHECK:           [[VAR_4_:%.+]] = tt.make_tensor_ptr [[PARAM_2_]], {{\[}}[[CST_0_]], [[CST_0_]]], {{\[}}[[CST_1_]], [[CST_5_]]], {{\[}}[[PARAM_3_]], [[CST_0_i32]]] {{.*}} : <tensor<4x256xbf16>>
+// CHECK:           tt.store [[VAR_4_]], [[VAR_3_]]#0 : !tt.ptr<tensor<4x256xbf16>>
 // CHECK:           tt.return
 // CHECK:         }
