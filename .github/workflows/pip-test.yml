@@ -6,7 +6,7 @@ on:
   # run workflow on changes to the driver, which handles the libraries logic
   pull_request:
     branches:
-      - main
+      - main_1
     paths:
       - third_party/intel/backend/driver.py
   push:

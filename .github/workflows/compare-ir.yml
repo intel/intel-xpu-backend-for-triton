@@ -1,10 +1,10 @@
-name: Run benchmark and upload IRs 
+name: Run benchmark and upload IRs
 run-name: ${{ inputs.run_name }}
 
 on:
-  push:
-    branches:
-      - arunjose696/ir-compare
+  pull_request:
+    types: [opened, synchronize, reopened]
+
 
 
 jobs:
@@ -32,9 +32,9 @@ jobs:
             matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
           fi
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
-  
 
-    
+
+
 
   run-kernels-to-compare:
     name: run-kernels
