@@ -110,7 +110,7 @@ jobs:
           ref: 'main'
           fetch-depth: 2
       
-      - name: print files and git log
+      - name: print files and git log after second checkout
         run: |  
               ls -l
               echo "old--"
