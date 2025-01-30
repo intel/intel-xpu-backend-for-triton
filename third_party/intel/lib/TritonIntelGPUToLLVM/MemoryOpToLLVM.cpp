@@ -48,6 +48,7 @@ struct GlobalScratchAllocOpConversion
   matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
         "ttg.global_scratch_memory_offset");
@@ -59,7 +60,7 @@ struct GlobalScratchAllocOpConversion
       return failure();
     }
     Value ptr =
-        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, b.i32_val(opOffset));
 
     rewriter.replaceOp(op, ptr);
     return success();
@@ -162,6 +163,7 @@ private:
       ConversionPatternRewriter &rewriter, const DpasEncodingAttr &dpasLayout,
       const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto src = op.getSrc();
     Value dst = op.getResult();
 
@@ -174,7 +176,7 @@ private:
     if (!isOuter) {
       res = SharedToDotOperandDPAS::intel::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
-          smemObj, typeConverter, tid_val());
+          smemObj, typeConverter, b.tid_val());
     } else {
       assert(false && "unsupported DPAS layout found");
     }

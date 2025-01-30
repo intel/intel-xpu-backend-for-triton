@@ -32,6 +32,7 @@ static Type findShuffleType(RewriterBase &rewriter, Type valType) {
 
 static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
                                Value i, mlir::gpu::ShuffleMode mode) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type valType = val.getType();
   Type shuffleType = findShuffleType(rewriter, valType);
 
@@ -40,25 +41,25 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
     assert(shuffleType.isInteger() &&
            "expected to bitcast to an integer for unsupported shuffles");
     if (!valType.isInteger()) {
-      val = bitcast(val, int_ty(bitWidth));
+      val = b.bitcast(val, int_ty(bitWidth));
     }
     if (bitWidth < shuffleType.getIntOrFloatBitWidth()) {
-      val = zext(shuffleType, val);
+      val = b.zext(shuffleType, val);
     }
   }
 
   int width = TritonGEN::getSubgroupSize(i.getDefiningOp());
-  Value widthConstant = i32_val(width);
+  Value widthConstant = b.i32_val(width);
   Value result =
       rewriter.create<mlir::gpu::ShuffleOp>(loc, val, i, widthConstant, mode)
           .getShuffleResult();
 
   if (shuffleType != valType) {
     if (bitWidth < shuffleType.getIntOrFloatBitWidth()) {
-      result = trunc(int_ty(bitWidth), result);
+      result = b.trunc(int_ty(bitWidth), result);
     }
     if (!valType.isInteger()) {
-      result = bitcast(result, valType);
+      result = b.bitcast(result, valType);
     }
   }
 
@@ -68,27 +69,31 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
 static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
                            Value i, mlir::gpu::ShuffleMode mode) {
   // To shuffle pointers, convert them to i64.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type valTy = val.getType();
   if (isa<LLVM::LLVMPointerType>(valTy))
-    val = ptrtoint(i64_ty, val);
+    val = b.ptrtoint(i64_ty, val);
   Value result = shuffleCommonImpl(loc, rewriter, val, i, mode);
   if (isa<LLVM::LLVMPointerType>(valTy))
-    result = inttoptr(valTy, result);
+    result = b.inttoptr(valTy, result);
   return result;
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i),
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i),
                        mlir::gpu::ShuffleMode::XOR);
 }
 
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i),
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i),
                        mlir::gpu::ShuffleMode::UP);
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleIdx(loc, rewriter, val, i32_val(i));
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleIdx(loc, rewriter, val, b.i32_val(i));
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {

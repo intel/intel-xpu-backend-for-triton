@@ -19,30 +19,33 @@ namespace mlir::triton::intel {
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Emulate vote.ballot.sync behavior using shift, shuffle, and or.
   // TODO: check for more efficient solution.
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   Value threadId = getThreadId(rewriter, loc);
   int numThreadPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-  Value laneId = and_(threadId, i32_val(numThreadPerWarp - 1));
-  Value reduced_val = shl(select(cmp, i32_val(1), i32_val(0)), laneId);
+  Value laneId = b.and_(threadId, b.i32_val(numThreadPerWarp - 1));
+  Value reduced_val = b.shl(b.select(cmp, b.i32_val(1), b.i32_val(0)), laneId);
   for (int offs = 1; offs < numThreadPerWarp; offs = offs << 1) {
     Value other_val = LLVM::intel::shuffleXor(loc, rewriter, reduced_val, offs);
-    reduced_val = or_(reduced_val, other_val);
+    reduced_val = b.or_(reduced_val, other_val);
   }
   return reduced_val;
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Clusters of thread blocks aren't supported.
-  return i32_val(0);
+  return b.i32_val(0);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Value val,
                               Value pred) const {
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
-    store(val, ptr);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    b.store(val, ptr);
     return ArrayRef<Value>();
   });
 }
@@ -66,10 +69,11 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
-  Value undef = undef(elemTy);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value undef = b.undef(elemTy);
   Block &endBlock = LLVM::intel::createPredicatedBlock(
       rewriter, loc, pred, SmallVector<Value, 1>{undef}, [&] {
-        Value ret = load(elemTy, ptr);
+        Value ret = b.load(elemTy, ptr);
         return SmallVector<Value, 1>{ret};
       });
   return *endBlock.args_begin();
@@ -214,13 +218,14 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto funcOp = LLVM::intel::getSpirvPrintfDeclaration(rewriter);
   auto loc = UnknownLoc::get(ctx);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   SmallVector<Value> operands;
   operands.push_back(formatStrStart);
   for (auto arg : args) {
     operands.push_back(arg);
   }
-  call(funcOp, operands);
+  b.call(funcOp, operands);
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
@@ -263,6 +268,7 @@ static LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto funcOp = getAssertfailDeclaration(rewriter);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   unsigned addrSpace = TritonGEN::TritonGENMemorySpace::kCrossWorkgroup;
@@ -280,18 +286,18 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   Value funcStringVal =
       getGlobalStringStart(loc, rewriter, "assertFunc_", funcString,
                            /*addressSpace=*/TritonGEN::kCrossWorkgroup);
-  Value lineNumber = i32_val(line);
+  Value lineNumber = b.i32_val(line);
 
   auto *ctx = rewriter.getContext();
   SmallVector<Value> operands;
-  Value messageStringPtr = addrspacecast(
+  Value messageStringPtr = b.addrspacecast(
       ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), messageStringVal);
-  Value fileStringPtr = addrspacecast(
+  Value fileStringPtr = b.addrspacecast(
       ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), fileStringVal);
-  Value funcStringPtr = addrspacecast(
+  Value funcStringPtr = b.addrspacecast(
       ptr_ty(ctx, TritonGEN::TritonGENMemorySpace::kGeneric), funcStringVal);
   operands = {messageStringPtr, fileStringPtr, lineNumber, funcStringPtr};
-  auto ret = call(funcOp, operands);
+  auto ret = b.call(funcOp, operands);
   ret.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
 }
 
@@ -318,12 +324,13 @@ Value TargetInfo::getStackPointer(RewriterBase &rewriter,
 Value TargetInfo::getGlobalStringStart(Location loc, RewriterBase &rewriter,
                                        StringRef name, StringRef value,
                                        unsigned addressSpace) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   LLVM::GlobalOp global =
       getGlobalString(loc, rewriter, name, value, addressSpace);
   MLIRContext *ctx = rewriter.getContext();
   Type globalPtrType = ptr_ty(ctx, addressSpace);
   Value globalPtr = rewriter.create<LLVM::AddressOfOp>(loc, global);
-  return gep(globalPtrType, i8_ty, globalPtr, LLVM::GEPArg{0});
+  return b.gep(globalPtrType, i8_ty, globalPtr, LLVM::GEPArg{0});
 }
 
 LLVM::GlobalOp TargetInfo::getGlobalString(Location loc, RewriterBase &rewriter,

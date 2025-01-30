@@ -81,8 +81,9 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter);
 
 static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  return i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+  return b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
 }
 
 Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
@@ -277,6 +278,7 @@ static SmallVector<Value>
 emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
                             const DotOperandEncodingAttr &dotLayout,
                             RankedTensorType type) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
   if (!dpasLayout) {
     llvm::errs() << "dotLayout: " << dotLayout << "\n";
@@ -286,8 +288,8 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
 
   Value threadId = getThreadId(rewriter, loc);
   unsigned warpSize = triton::gpu::getWarpSize(dpasLayout);
-  Value warpId = udiv(threadId, i32_val(warpSize));
-  Value laneId = urem(threadId, i32_val(warpSize));
+  Value warpId = b.udiv(threadId, b.i32_val(warpSize));
+  Value laneId = b.urem(threadId, b.i32_val(warpSize));
 
   const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
   SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
@@ -304,14 +306,15 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
   size_t rank = warpShape.size();
   assert(rank == shapePerCTA.size() && "Rank mismatch");
   Value warpIndex =
-      (opIdx == 0) ? urem(multiDimWarpId[rank - 2],
-                          i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 2],
-                                                       warpShape[rank - 2])))
-                   : urem(multiDimWarpId[rank - 1],
-                          i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 1],
-                                                       warpShape[rank - 1])));
+      (opIdx == 0)
+          ? b.urem(multiDimWarpId[rank - 2],
+                   b.i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 2],
+                                                  warpShape[rank - 2])))
+          : b.urem(multiDimWarpId[rank - 1],
+                   b.i32_val(mlir::ceil<unsigned>(shapePerCTA[rank - 1],
+                                                  warpShape[rank - 1])));
   Value warpOffset =
-      mul(warpIndex, i32_val(warpShape[opIdx ? rank - 1 : rank - 2]));
+      b.mul(warpIndex, b.i32_val(warpShape[opIdx ? rank - 1 : rank - 2]));
 
   // Compute the 2-dim coordinates of the first element in the warp operated
   // own by this thread.
@@ -333,9 +336,9 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
           "DpasEncodingAttr sub-group size could not "
           "be smaller than the threads required per row for A operand.");
 
-    laneRowIndex = udiv(laneId, i32_val(packedColNum));
-    laneColIndex = urem(laneId, i32_val(packedColNum));
-    laneColIndex = mul(laneColIndex, i32_val(packedOpsPerLane));
+    laneRowIndex = b.udiv(laneId, b.i32_val(packedColNum));
+    laneColIndex = b.urem(laneId, b.i32_val(packedColNum));
+    laneColIndex = b.mul(laneColIndex, b.i32_val(packedOpsPerLane));
   } break;
   case 1: {
     if (warpSize < executionSize)
@@ -343,9 +346,9 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
           "DpasEncodingAttr sub-group size could not "
           "be smaller than the execution size for B operand.");
 
-    laneRowIndex = udiv(laneId, i32_val(executionSize));
-    laneRowIndex = mul(laneRowIndex, i32_val(opsPerChannel));
-    laneColIndex = urem(laneId, i32_val(executionSize));
+    laneRowIndex = b.udiv(laneId, b.i32_val(executionSize));
+    laneRowIndex = b.mul(laneRowIndex, b.i32_val(opsPerChannel));
+    laneColIndex = b.urem(laneId, b.i32_val(executionSize));
   } break;
   default: {
     llvm::report_fatal_error("Only support opIdx 1 or 0 for DotOpLayout.");
@@ -356,9 +359,9 @@ emitBaseIndexForDotOpLayout(Location loc, RewriterBase &rewriter,
   if (rank == 3)
     multiDimBase[0] = multiDimWarpId[0];
   multiDimBase[rank - 2] =
-      (opIdx == 0) ? add(laneRowIndex, warpOffset) : laneRowIndex;
+      (opIdx == 0) ? b.add(laneRowIndex, warpOffset) : laneRowIndex;
   multiDimBase[rank - 1] =
-      (opIdx == 0) ? laneColIndex : add(laneColIndex, warpOffset);
+      (opIdx == 0) ? laneColIndex : b.add(laneColIndex, warpOffset);
 
   return multiDimBase;
 }
@@ -367,10 +370,11 @@ static SmallVector<Value>
 emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
                            const DpasEncodingAttr &dpasLayout,
                            RankedTensorType type) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
-  Value warpId = udiv(threadId, warpSize);
-  Value laneId = urem(threadId, warpSize);
+  Value warpSize = b.i32_val(triton::gpu::getWarpSize(dpasLayout));
+  Value warpId = b.udiv(threadId, warpSize);
+  Value laneId = b.urem(threadId, warpSize);
 
   size_t rank = type.getShape().size();
   auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
@@ -383,14 +387,14 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   // Compute the 2-dim coordinates of the warp containing the tensor element
   // operated on by this thread.
   SmallVector<unsigned> warpShape = dpasLayout.getShapeC();
-  Value rowWarpId =
-      urem(multiDimWarpId[rank - 2],
-           i32_val(mlir::ceil<unsigned>(shape[rank - 2], warpShape[rank - 2])));
-  Value colWarpId =
-      urem(multiDimWarpId[rank - 1],
-           i32_val(mlir::ceil<unsigned>(shape[rank - 1], warpShape[rank - 1])));
-  Value rowWarpOffset = mul(rowWarpId, i32_val(warpShape[rank - 2]));
-  Value colWarpOffset = mul(colWarpId, i32_val(warpShape[rank - 1]));
+  Value rowWarpId = b.urem(
+      multiDimWarpId[rank - 2],
+      b.i32_val(mlir::ceil<unsigned>(shape[rank - 2], warpShape[rank - 2])));
+  Value colWarpId = b.urem(
+      multiDimWarpId[rank - 1],
+      b.i32_val(mlir::ceil<unsigned>(shape[rank - 1], warpShape[rank - 1])));
+  Value rowWarpOffset = b.mul(rowWarpId, b.i32_val(warpShape[rank - 2]));
+  Value colWarpOffset = b.mul(colWarpId, b.i32_val(warpShape[rank - 1]));
 
   // Compute the 2-dim coordinates of the first element in the warp operated
   // on by this thread.
@@ -399,9 +403,9 @@ emitBaseIndexForDpasLayout(Location loc, RewriterBase &rewriter,
   if (rank == 3)
     multiDimBase[0] = multiDimWarpId[0];
   multiDimBase[rank - 2] =
-      add(udiv(laneId, i32_val(threadsPerWarp[rank - 1])), rowWarpOffset);
+      b.add(b.udiv(laneId, b.i32_val(threadsPerWarp[rank - 1])), rowWarpOffset);
   multiDimBase[rank - 1] =
-      add(urem(laneId, i32_val(threadsPerWarp[rank - 1])), colWarpOffset);
+      b.add(b.urem(laneId, b.i32_val(threadsPerWarp[rank - 1])), colWarpOffset);
   return multiDimBase;
 }
 
@@ -418,6 +422,7 @@ inline SmallVector<Value>
 emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
                            const TargetInfoBase &target, Attribute layout,
                            RankedTensorType type, bool withCTAOffset) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto shape = type.getShape();
 
   SmallVector<Value> baseIndex;
@@ -451,7 +456,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
       // off.
       if (!result[k])
         continue;
-      result[k] = add(result[k], CTAOffset[k]);
+      result[k] = b.add(result[k], CTAOffset[k]);
     }
   }
   return result;
@@ -490,6 +495,7 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
 inline SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
   std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
@@ -511,7 +517,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
                                               SmallVector<Value>(rank));
   for (unsigned n = 0; n < elemsPerThread; ++n)
     for (unsigned k = 0; k < rank; ++k)
-      multiDimIdx[n][k] = add(multiDimBase[k], i32_val(offset[n][k]));
+      multiDimIdx[n][k] = b.add(multiDimBase[k], b.i32_val(offset[n][k]));
 
   return multiDimIdx;
 }
