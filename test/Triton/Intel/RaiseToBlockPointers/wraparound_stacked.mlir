@@ -83,9 +83,11 @@ module {
 // CHECK:           [[VAR_20_:%.+]]:2 = scf.for [[VAR_arg8_:%.+]] = {{.*}} iter_args([[VAR_arg9_:%.+]] = [[VAR_12_]], [[VAR_arg10_:%.+]] = [[VAR_16_]]) -> (!tt.ptr<tensor<4x4xf32>>, !tt.ptr<tensor<4x4xf32>>) : i32 {
 // CHECK:             [[VAR_21_:%.+]] = tt.load [[VAR_arg9_]], [[VAR_18_]], [[CST_]] : !tt.ptr<tensor<4x4xf32>>
 // CHECK:             tt.store [[VAR_arg10_]], [[VAR_21_]] : !tt.ptr<tensor<4x4xf32>>
-// CHECK-DAG:         [[VAR_22_:%.+]] = tt.advance [[VAR_arg9_]], {{\[}}[[CST_0_i32]], [[VAR_19_]]] : <tensor<4x4xf32>>
-// CHECK-DAG:         [[VAR_23_:%.+]] = tt.advance [[VAR_arg10_]], {{\[}}[[CST_0_i32]], [[VAR_19_]]] : <tensor<4x4xf32>>
-// CHECK:             scf.yield [[VAR_22_]], [[VAR_23_]] : !tt.ptr<tensor<4x4xf32>>, !tt.ptr<tensor<4x4xf32>>
+// CHECK:             [[VAR_22_:%.+]] = arith.divui [[VAR_19_]], [[PARAM_4_]] : i32
+// CHECK:             [[VAR_23_:%.+]] = tt.advance [[VAR_arg9_]], {{\[}}[[VAR_22_]], [[CST_0_i32]]] : <tensor<4x4xf32>>
+// CHECK:             [[VAR_24_:%.+]] = arith.divui [[VAR_19_]], [[PARAM_6_]] : i32
+// CHECK-DAG:         [[VAR_25_:%.+]] = tt.advance [[VAR_arg10_]], {{\[}}[[VAR_24_]], [[CST_0_i32]]] : <tensor<4x4xf32>>
+// CHECK:             scf.yield [[VAR_23_]], [[VAR_25_]] : !tt.ptr<tensor<4x4xf32>>, !tt.ptr<tensor<4x4xf32>>
 // CHECK:           }
 // CHECK:           tt.return
 // CHECK:         }

@@ -12,6 +12,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -217,7 +218,6 @@ struct PtrState {
 
     source = lhsState.source ? lhsState.source : rhsState.source;
     Location loc = op->getLoc();
-    ArithBuilder abuilder(builder, loc);
 
     if (lhsState.scalar && rhsState.scalar) {
       scalar =
@@ -309,7 +309,6 @@ struct PtrState {
       std::swap(lhs, rhs);
 
     Location loc = op->getLoc();
-    ArithBuilder abuilder(builder, loc);
 
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
@@ -361,20 +360,7 @@ struct PtrState {
 
     for (const auto &[offset, stride, dim] :
          llvm::zip(offsets, strides, shape)) {
-      if (ttgi::isConstant(stride, 0)) {
-        newOffsets.push_back(findOrCreateCast(
-            loc, offset, builder.getIntegerType(offsetBitwidth), builder));
-      } else {
-        Value divOffset = builder.create<arith::DivUIOp>(
-            loc, builder.getIntegerType(offsetBitwidth),
-            findOrCreateCast(loc, offset,
-                             builder.getIntegerType(offsetBitwidth), builder),
-            findOrCreateCast(loc, stride,
-                             builder.getIntegerType(offsetBitwidth), builder));
-        newOffsets.push_back(
-            findOrCreateCast(loc, getFinalValue(divOffset),
-                             builder.getIntegerType(offsetBitwidth), builder));
-      }
+      newOffsets.push_back(computeOffset(offset, stride, builder, loc));
       newStrides.push_back(findOrCreateCast(
           loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
           builder));
@@ -384,6 +370,36 @@ struct PtrState {
 
     return findOrCreateMakeTensorPtr(loc, source, newShape, newStrides,
                                      newOffsets, order, sizes, builder);
+  }
+
+  Value createTTAdvanceOp(Value ptr, tt::MakeTensorPtrOp makeTPtrOp,
+                          OpBuilder &builder, Location loc) const {
+    assert(triton::isTensorPointerType(ptr.getType()) &&
+           "Expecting a block ptr");
+    SmallVector<Value> newOffsets;
+    for (const auto &[offset, stride] :
+         llvm::zip(offsets, makeTPtrOp.getStrides()))
+      newOffsets.push_back(computeOffset(offset, stride, builder, loc));
+
+    return builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(), ptr,
+                                               newOffsets);
+  }
+
+private:
+  Value computeOffset(Value offset, Value stride, OpBuilder &builder,
+                      Location loc) const {
+    if (ttgi::isConstant(stride, 0))
+      return findOrCreateCast(loc, offset,
+                              builder.getIntegerType(offsetBitwidth), builder);
+
+    Value divOffset = builder.create<arith::DivUIOp>(
+        loc, builder.getIntegerType(offsetBitwidth),
+        findOrCreateCast(loc, offset, builder.getIntegerType(offsetBitwidth),
+                         builder),
+        findOrCreateCast(loc, stride, builder.getIntegerType(offsetBitwidth),
+                         builder));
+    return findOrCreateCast(loc, getFinalValue(divOffset),
+                            builder.getIntegerType(offsetBitwidth), builder);
   }
 };
 
@@ -663,89 +679,79 @@ public:
   }
 
   LogicalResult rewriteAddPtrOp(tt::AddPtrOp op) {
-    LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
-
     OpBuilder builder(op);
     Location loc = op.getLoc();
     Value ptr = op.getPtr();
 
-    auto fillOffsets = [&](Value offset, unsigned rank,
-                           SmallVector<Value> &offsets) {
-      switch (rank) {
-      case 1:
-        offsets.push_back(offset);
-        break;
-      case 2:
-        offsets.push_back(
-            findOrCreateConstant(loc, 0, offsetBitwidth, builder));
-        offsets.push_back(offset);
-        break;
-      default:
-        llvm_unreachable("unexpected rank");
-      }
-    };
-
-    auto getConstantValue = [](arith::ConstantOp cstOp) {
-      TypedAttr cstVal = cstOp.getValue();
-      APInt val;
-      if (auto attr = dyn_cast<DenseIntElementsAttr>(cstVal))
-        val = attr.getSplatValue<APInt>();
-      else if (auto attr = dyn_cast<IntegerAttr>(cstVal))
-        val = attr.getValue();
-      else
-        assert(false && "unexpected constant type");
-
-      return val;
-    };
-
-    // If the ptr has already been mapped (i.e. rewritten into a block pointer),
-    // rewrite the AddPtrOp using and AdvanceOp.
+    // Case 1: the ptr has been already been mapped.
     if (Value mappedV = ptrMap.lookupOrNull(ptr)) {
+      // Case 1a: the ptr has been mapped to a make_tensor_ptr operation.
       if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
-        auto offsetType = cast<RankedTensorType>(op.getOffset().getType());
-        unsigned rank = offsetType.getRank();
-
-        SmallVector<Value> offsets;
-        TypeSwitch<Operation *>(op.getOffset().getDefiningOp())
-            .Case([&](tt::SplatOp splatOp) {
-              fillOffsets(splatOp.getSrc(), rank, offsets);
-            })
-            .Case([&](arith::ConstantOp cstOp) {
-              APInt val = getConstantValue(cstOp);
-
-              fillOffsets(findOrCreateConstant(loc, val.getZExtValue(),
-                                               offsetBitwidth, builder),
-                          rank, offsets);
-            })
-            .Default([](Operation *op) {
-              llvm::errs() << "Operation: " << *op << "\n";
-              llvm_unreachable("Unhandled operation");
-            });
-
-        assert(!offsets.empty() && offsets.size() == rank &&
-               "unexpected number of offsets");
+        PtrState state;
+        if (failed(visitOperand(op.getOffset(), state, loc, builder)))
+          return failure();
 
         Value basePtr = tt::isTensorPointerType(ptr.getType()) ? ptr : mappedV;
-        auto advanceOp = builder.createOrFold<tt::AdvanceOp>(
-            loc, basePtr.getType(), basePtr, offsets);
+        auto advanceOp =
+            state.createTTAdvanceOp(basePtr, makeTPtrOp, builder, loc);
 
         cleanUp.insert(op);
         ptrMap.map(op.getResult(), advanceOp);
 
-        LLVM_DEBUG(llvm::dbgs()
-                   << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp << "\n");
+        LLVM_DEBUG({
+          auto modOp =
+              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+          llvm::dbgs() << "Module:\n" << modOp << "\n";
+          llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp
+                       << "\n";
+        });
+
         return success();
-      } else {
-        llvm_unreachable("Did not find tt::MakeTensorPtrOp");
       }
+
+      // Case 1b: the ptr has been mapped to a tt.advance operation.
+      if (auto advanceOp = mappedV.getDefiningOp<tt::AdvanceOp>()) {
+        PtrState state;
+        if (failed(visitOperand(op.getOffset(), state, loc, builder)))
+          return failure();
+
+        // Skip through a chain of tt.advance operations...
+        Value ptr = advanceOp.getPtr();
+        while (auto advanceOp = ptr.getDefiningOp<tt::AdvanceOp>())
+          ptr = advanceOp.getPtr();
+
+        // ... until we find the make_tensor_ptr operation defining the block
+        // ptr feeding the first tt.advance operation.
+        auto makeTPtrOp = ptr.getDefiningOp<tt::MakeTensorPtrOp>();
+        assert(makeTPtrOp && "Expected a MakeTensorPtrOp");
+
+        Value newAdvanceOp = state.createTTAdvanceOp(advanceOp.getResult(),
+                                                     makeTPtrOp, builder, loc);
+
+        cleanUp.insert(op);
+        ptrMap.map(op.getResult(), newAdvanceOp);
+
+        LLVM_DEBUG({
+          llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << newAdvanceOp
+                       << "\n";
+          auto modOp =
+              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+          llvm::dbgs() << "Module:\n" << modOp << "\n";
+        });
+
+        return success();
+      }
+
+      llvm_unreachable("Unexpected mappedV defining operation");
     }
 
+    // Case 2: the ptr has not previously been mapped.
     // If the addptr operation increments a scalar pointer, give up.
     Value result = op.getResult();
     if (!isa<RankedTensorType>(result.getType()))
       return failure();
 
-    // Otherwise, rewrite the AddPtrOp using PtrState.
+    // Otherwise, rewrite the AddPtrOp.
     PtrState state;
     if (failed(visitOperandAddptr(op, state, loc, builder)))
       return failure();
@@ -756,16 +762,11 @@ public:
     Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
     knownPtrs[makePtrOp] = std::move(state);
 
+    cleanUp.insert(op);
     ptrMap.map(result, makePtrOp);
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "Rewrote:\n\t" << op << "\nto:\n\t" << makePtrOp << "\n");
-
-    // AddPtrOps that have been rewritten and no longer used in the code must
-    // be removed in the pass to avoid type matching issue.
-    cleanUp.insert(op);
-
     LLVM_DEBUG({
+      llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << makePtrOp << "\n";
       auto modOp =
           builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
       llvm::dbgs() << "Module:\n" << modOp << "\n";
@@ -791,7 +792,6 @@ public:
     auto resType = cast<tt::PointerType>(makeTPtrOp.getResult().getType());
     auto pointeeType = cast<ShapedType>(resType.getPointeeType());
     ArrayRef<int64_t> shape = pointeeType.getShape();
-    ArithBuilder abuilder(builder, loc);
 
     for (int i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
@@ -922,8 +922,8 @@ public:
       }
 
       // This operand must be an iter-arg of an inner-loop in a multiple-level
-      // nested loop, which means its PtrState must have already been populated
-      // during rewriteForOp of the parent loop.
+      // nested loop, which means its PtrState must have already been
+      // populated during rewriteForOp of the parent loop.
       state = knownPtrs[operand];
       return success();
     }
