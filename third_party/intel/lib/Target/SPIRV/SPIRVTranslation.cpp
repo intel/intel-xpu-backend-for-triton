@@ -91,12 +91,12 @@ bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
   return SPIRVTranslateModule(M, Result, ErrMsg, AllowExtNames, Opts);
 }
 
-bool runSpirvBackend(Module *M, std::ostream *OS, std::string &ErrMsg,
+bool runSpirvBackend(Module *M, std::ostream &OS, std::string &ErrMsg,
                      const SPIRV::TranslatorOpts &TranslatorOpts) {
   std::string Result;
   bool Status = runSpirvBackend(M, Result, ErrMsg, TranslatorOpts);
-  if (Status && OS)
-    *OS << Result;
+  if (Status)
+    OS << Result;
   return Status;
 }
 
@@ -161,7 +161,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   if (const char *EnvIsBackend = std::getenv("TRITON_USE_SPIRV_BACKEND"))
     llvm::StringRef(EnvIsBackend).getAsInteger(10, SpvTranslateMode);
   auto success = SpvTranslateMode
-                     ? llvm::runSpirvBackend(&module, &OS, Err, SPIRVOpts)
+                     ? llvm::runSpirvBackend(&module, OS, Err, SPIRVOpts)
                      : llvm::writeSpirv(&module, SPIRVOpts, OS, Err);
 #else
   auto success = llvm::writeSpirv(&module, SPIRVOpts, OS, Err);
