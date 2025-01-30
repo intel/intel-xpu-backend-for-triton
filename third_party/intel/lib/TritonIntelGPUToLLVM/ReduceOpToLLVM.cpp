@@ -39,13 +39,31 @@ public:
     Location loc = op->getLoc();
 
     auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
+
+    llvm::dbgs() << "=========== AFTER unpackInputs:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
     std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
     // First reduce all the values along axis within each thread.
     reduceWithinThreads(helper, srcValues, accs, indices, rewriter);
 
+    llvm::dbgs() << "=========== AFTER reduceWithinThreads:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
+
     // Then reduce across threads within a warp.
     reduceWithinWarps(helper, accs, rewriter);
+
+    llvm::dbgs() << "=========== AFTER reduceWithinWarps:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
 
     if (helper.isWarpSynchronous()) {
       // If all the values to be reduced are within the same warp there is
@@ -57,12 +75,36 @@ public:
     // Compute a shared memory base per operand.
     auto smemShape = helper.getScratchRepShape();
 
+    llvm::dbgs() << "=========== AFTER getScratchRepShape:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
+
     SmallVector<Value> smemBases =
         getSmemBases(op, product<unsigned>(smemShape), rewriter, targetInfo);
 
+    llvm::dbgs() << "=========== AFTER getSmemBases:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
+
     storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
 
+    llvm::dbgs() << "=========== AFTER storeWarpReduceToSharedMemory:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
+
     sync(rewriter, loc, op);
+
+    llvm::dbgs() << "=========== AFTER sync:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
 
     // The second round of shuffle reduction
     //   now the problem size: sizeInterWarps, s1, s2, .. , sn
@@ -71,12 +113,20 @@ public:
     // Each thread needs to process:
     //   elemsPerThread = sizeInterWarps * s1 * s2 .. Sn / numThreads
     accumulatePartialReductions(helper, smemBases, rewriter);
-
+    llvm::dbgs() << "=========== AFTER accumulatePartialReductions:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     // We could avoid this barrier in some of the layouts, however this is not
     // the general case.
     // TODO: optimize the barrier in case the layouts are accepted.
     sync(rewriter, loc, op);
-
+    llvm::dbgs() << "=========== AFTER sync2:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     // set output values
     loadReductionAndPackResult(helper, smemShape, smemBases, rewriter);
 
@@ -239,6 +289,11 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     Value threadId = getThreadId(rewriter, loc);
+    llvm::dbgs() << "=========== AFTER getThreadId:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     auto srcLayout =
         mlir::cast<DistributedEncodingTrait>(helper.getSrcLayout());
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
@@ -246,18 +301,38 @@ private:
         i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
     Value warpId = udiv(threadId, warpSize);
     Value laneId = urem(threadId, warpSize);
+    llvm::dbgs() << "=========== AFTER warpId calc:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
+
+    llvm::dbgs() << "=========== AFTER getScratchRepShape:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
 
     // Lezcano: We should move all the shared memory logic to use LLs natively
     auto srcShape = helper.getSrcShape();
     auto kLane = rewriter.getStringAttr("lane");
     auto [multiDimLaneId, isRepresentativeLane] =
         delinearize(rewriter, loc, srcLayout, srcShape, kLane, laneId);
+    llvm::dbgs() << "=========== AFTER delinearize lane:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     auto kWarp = rewriter.getStringAttr("warp");
     auto [multiDimWarpId, isRepresentativeWarp] =
         delinearize(rewriter, loc, srcLayout, srcShape, kWarp, warpId);
-
+    llvm::dbgs() << "=========== AFTER delinearize warp:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     Value laneIdAxis = multiDimLaneId[axis];
     Value laneZero = icmp_eq(laneIdAxis, i32_val(0));
     Value write =
@@ -266,6 +341,11 @@ private:
     Value warpIdAxis = multiDimWarpId[axis];
 
     auto smemOrder = helper.getOrderWithAxisAtBeginning();
+    llvm::dbgs() << "=========== AFTER getOrderWithAxisAtBeginning:\n";
+    op.dump();
+    for (auto& x : op->getParentRegion()->getOps()) {
+        x.dump();
+    }
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = it.second;
@@ -274,6 +354,11 @@ private:
       writeIdx[axis] = warpIdAxis;
       Value writeOffset =
           linearize(rewriter, loc, writeIdx, smemShape, smemOrder);
+    llvm::dbgs() << "=========== AFTER linearize:\n";
+        op.dump();
+        for (auto& x : op->getParentRegion()->getOps()) {
+            x.dump();
+        }
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         auto elemTy = getElementType(op, i);
         Value writePtr =

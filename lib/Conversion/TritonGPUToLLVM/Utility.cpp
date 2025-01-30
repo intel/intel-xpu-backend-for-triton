@@ -12,17 +12,31 @@
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
 #include <intrin.h>
 
-static int __builtin_clz(unsigned x) {
-  unsigned long r;
-  _BitScanReverse(&r, x);
-  return static_cast<int>(r);
+inline int __builtin_clz(unsigned int x) {
+    unsigned long index;
+    if (_BitScanReverse(&index, x))
+        return 31 - index; // CLZ is the number of leading zeros
+    return 32; // If x == 0, return 32 (as per GCC behavior)
 }
 
-static int __builtin_ctz(unsigned x) {
-  unsigned long r;
-  _BitScanForward(&r, x);
-  return static_cast<int>(r);
+inline int __builtin_ctz(unsigned int x) {
+    unsigned long index;
+    if (_BitScanForward(&index, x))
+        return index; // CTZ is simply the index of the first set bit
+    return 32; // If x == 0, return 32 (as per GCC behavior)
 }
+
+// static int __builtin_clz(unsigned x) {
+//   unsigned long r;
+//   _BitScanReverse(&r, x);
+//   return static_cast<int>(r);
+// }
+
+// static int __builtin_ctz(unsigned x) {
+//   unsigned long r;
+//   _BitScanForward(&r, x);
+//   return static_cast<int>(r);
+// }
 
 #endif
 
@@ -608,6 +622,7 @@ Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   uint32_t mskConst = mask;
   uint32_t extcnt = 0;
   Value result = i32_val(0);
+  llvm::dbgs() << "mskConst: " << mask << "\n";
   while (mskConst) {
     uint32_t oldmsk = mskConst;
     uint32_t bitgrplsb = mskConst & (-mskConst);
@@ -634,8 +649,10 @@ delinearize(RewriterBase &rewriter, Location loc,
   int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
   auto isRepresentative = true_val();
   if (freeVarMask != 0) {
+    llvm::dbgs() << "freeVarMask: " << freeVarMask << "\n";
     isRepresentative = icmp_eq(and_(i32_val(freeVarMask), linear), i32_val(0));
     // We remove the bits of linear that are set to one in freeVarMask
+    llvm::dbgs() << "ll.getInDimSize(dimName): " << ll.getInDimSize(dimName) << "\n";
     int32_t nonFreeVarMask = ~freeVarMask & (ll.getInDimSize(dimName) - 1);
     linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
   }
