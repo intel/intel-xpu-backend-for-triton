@@ -13,7 +13,7 @@ add_mlir_translation_library(TritonSPIRV
         TritonLLVMIR
         # spirv tools
         LLVMSPIRVLib
-)
+        )
 
 # Add SPIRV-LLVM-Translator include directory.
 target_include_directories(TritonSPIRV PRIVATE ${SPIRVToLLVMTranslator_INCLUDE_DIR})
