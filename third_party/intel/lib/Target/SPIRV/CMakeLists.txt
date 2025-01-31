@@ -2,17 +2,17 @@
 find_package(SPIRVToLLVMTranslator)
 
 add_mlir_translation_library(TritonSPIRV
-  SPIRVTranslation.cpp
+        SPIRVTranslation.cpp
 
-  LINK_COMPONENTS
-  Core
-  # spirv backend
-  SPIRVCodeGen
+        LINK_COMPONENTS
+        Core
+        # spirv backend
+        SPIRVCodeGen
 
-  LINK_LIBS PUBLIC
-  TritonLLVMIR
-  # spirv tools
-  LLVMSPIRVLib
+        LINK_LIBS PUBLIC
+        TritonLLVMIR
+        # spirv tools
+        LLVMSPIRVLib
 )
 
 # Add SPIRV-LLVM-Translator include directory.
