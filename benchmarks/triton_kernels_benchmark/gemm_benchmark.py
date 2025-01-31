@@ -18,6 +18,7 @@ from triton_kernels_benchmark import xetla_kernel
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
 use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
+SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0' and not TRANSPOSE_A
 
 
 @triton.autotune(
@@ -27,16 +28,18 @@ use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
             num_stages=s, num_warps=32) for s in [1, 2, 3]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w) for s in [2, 3, 4] for (m, w) in
-        ([('large', 32), ('small', 64)] if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0' else [('large', 32)])
+                      num_stages=s, num_warps=w)
+        for s in [2, 3, 4]
+        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=s, num_warps=32) for s in [2]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': m},
-                      num_stages=s, num_warps=w) for s in [2, 3] for (m, w) in
-        ([('large', 32), ('small', 64)] if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0' else [('large', 32)])
+                      num_stages=s, num_warps=w)
+        for s in [2, 3]
+        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
     ],
     key=['M', 'N', 'K'],
 )
@@ -92,8 +95,9 @@ def matmul_kernel_with_block_pointers(
             num_stages=s, num_warps=32) for s in [2, 3]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w) for s in [2] for (m, w) in
-        ([('large', 32), ('small', 64)] if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0' else [('large', 32)])
+                      num_stages=s, num_warps=w)
+        for s in [2]
+        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 1024, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
