@@ -2,9 +2,9 @@
     "gridX": 1,
     "gridY": 1,
     "gridZ": 1,
-    "num_warps": 1,
-    "threads_per_warp": 32,
-    "shared_memory": 1536,
+    "num_warps": 4,
+    "threads_per_warp": 16,
+    "shared_memory": 32768,
     "kernel_name": "kernel",
     "spv_name": "kernel.spv",
     "build_flags": "",
@@ -18,7 +18,7 @@
         {
             "name": "scalarArg_0",
             "type": "scalar",
-            "value": 16,
+            "value": 64,
             "ctype": "i32"
         },
         {
@@ -30,7 +30,7 @@
         {
             "name": "scalarArg_2",
             "type": "scalar",
-            "value": 16,
+            "value": 64,
             "ctype": "i32"
         },
         {
@@ -42,7 +42,7 @@
         {
             "name": "scalarArg_4",
             "type": "scalar",
-            "value": 16,
+            "value": 64,
             "ctype": "i32"
         },
         {
@@ -54,7 +54,7 @@
         {
             "name": "scalarArg_6",
             "type": "scalar",
-            "value": 16,
+            "value": 64,
             "ctype": "i32"
         }
     ]

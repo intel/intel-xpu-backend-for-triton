@@ -14,7 +14,7 @@ if not SPIRV_RUNNER_TESTS:
 # Define CLI arguments per directory
 SPIRV_CLI_ARGS = {
     os.path.join(SPIRV_RUNNER_TESTS, "add_kernel"): ["-o", "tensor_2", "-p"],
-    os.path.join(SPIRV_RUNNER_TESTS, "dot_1816161fp32"): ["-o", "tensor_3", "-p"]
+    os.path.join(SPIRV_RUNNER_TESTS, "dot"): ["-o", "tensor_3", "-p"]
 }
 
 @pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
