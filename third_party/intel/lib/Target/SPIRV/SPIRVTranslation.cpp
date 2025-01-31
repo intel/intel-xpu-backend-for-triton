@@ -13,6 +13,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
+#if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
 namespace llvm {
 
 using namespace llvm;
@@ -101,6 +102,8 @@ bool runSpirvBackend(Module *M, std::ostream &OS, std::string &ErrMsg,
 
 } // namespace llvm
 
+#endif // LLVM_SPIRV_BACKEND_TARGET_PRESENT
+
 namespace triton {
 
 class SmallVectorBuffer : public std::streambuf {
@@ -153,12 +156,16 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   SPIRVOpts.setPreserveAuxData(false);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
 
+#if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;
   if (const char *EnvIsBackend = std::getenv("TRITON_USE_SPIRV_BACKEND"))
     llvm::StringRef(EnvIsBackend).getAsInteger(10, SpvTranslateMode);
   auto success = SpvTranslateMode
                      ? llvm::runSpirvBackend(&module, OS, Err, SPIRVOpts)
                      : llvm::writeSpirv(&module, SPIRVOpts, OS, Err);
+#else
+  auto success = llvm::writeSpirv(&module, SPIRVOpts, OS, Err);
+#endif // LLVM_SPIRV_BACKEND_TARGET_PRESENT
 
   if (!success) {
     llvm::errs() << "SPIRVTranslation: SPIRV translation failed with"
