@@ -266,5 +266,8 @@ def test_line_info_env(monkeypatch, status: str):
     monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", status)
     kernel_single.device_caches.clear()
     kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
-    file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
+    if obj_kind == "spvbin":
+        file_lines = spv_extract_file_lines(kernel_info.asm["spv"], command)
+    else:
+        file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     assert len(file_lines) == 0 if status == "1" else len(file_lines) > 0
