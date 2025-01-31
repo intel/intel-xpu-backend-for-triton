@@ -33,8 +33,7 @@ env:
 jobs:
   build:
     name: build
-    runs-on: 
-      - ${{ inputs.runner_label || 'max1550' }}
+    runs-on: Linux
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -45,10 +44,15 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
+      - name: print files and git base
+        run: |
+              echo "Base SHA: ${{ github.event.pull_request.base.sha }}"
+  
+              echo "++++++++++++++"
+
       - name: Checkout repository
         uses: actions/checkout@v4
-        with: 
-          fetch-depth: 2
+        
 
       - name: Install Python
         if: ${{ !(inputs.use_pyenv_python || false) }}
@@ -86,6 +90,10 @@ jobs:
         with:
           command: DEBUG=1 python setup.py bdist_wheel
       
+      - name: Install benchmark dependencies
+        run: |
+            pip install matplotlib pandas tabulate
+
       - name: Install Triton
         run: |
           pip install python/dist/*.whl    
@@ -95,30 +103,39 @@ jobs:
             ls -l
             echo "old--"
             git log 
-            git fetch --depth=10
-            echo "new--"
-            git log 
-            echo "before writing--"
-            echo "new--" > logfile
-            cat logfile
             git branch
+            pip list
+            python benchmarks/triton_kernels_benchmark/benchmarks_to_compare_irs.py
             echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
-      
+
+
+      - name: clean up before re-install
+        run: |  
+            mv ~/.triton ~/.triton_original
+            pip uninstall -y triton
+
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with: 
-          ref: 'main'
-          fetch-depth: 2
+          ref: '${{ github.event.pull_request.base.sha }}'
+
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          command: DEBUG=1 python setup.py bdist_wheel
+      
+      - name: Install Triton
+        run: |
+            pip install python/dist/*.whl    
       
       - name: print files and git log after second checkout
         run: |  
               ls -l
               echo "old--"
               git log 
-              git fetch --depth=10
-              echo "new--"
-              git log 
-              echo "before writing--"
-              echo "new--" > logfile
-              cat logfile
               git branch
+              pip list
+              python benchmarks/triton_kernels_benchmark/benchmarks_to_compare_irs.py
+              echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"

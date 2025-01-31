@@ -7,6 +7,8 @@ on:
     branches:
       - main
       - release/**
+    branches-ignore:
+      - arunjose696/ir-compare
   push:
     branches:
       - main
