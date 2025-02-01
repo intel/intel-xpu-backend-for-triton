@@ -16,6 +16,7 @@ fi
 echo "Applying PyTorch patches in $REPO_ROOT"
 cd "$REPO_ROOT"
 
-curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
+# curl -sSL https://github.com/pytorch/pytorch/pull/126516.diff | git apply -
+git apply "${SCRIPT_DIR}/pytorch_fp64.patch"
 # build trigger #3126
 # git apply "${SCRIPT_DIR}/pytorch.patch"
