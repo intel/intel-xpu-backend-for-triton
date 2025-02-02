@@ -22,7 +22,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace mlir::triton::gpu {

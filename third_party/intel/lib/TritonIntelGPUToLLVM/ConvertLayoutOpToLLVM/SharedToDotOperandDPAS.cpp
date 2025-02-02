@@ -6,7 +6,7 @@
 using ValueTable = std::map<std::array<int, 3>, Value>;
 using mlir::triton::gpu::getShapePerCTA;
 using mlir::triton::gpu::MemDescType;
-using mlir::triton::gpu::SharedEncodingAttr;
+using mlir::triton::gpu::SwizzledSharedEncodingAttr;
 using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace {
@@ -124,8 +124,7 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   // outer index offset
   Value iOff = b.mul(warpId, warpMatStride);
 
-  SharedEncodingAttr sharedLayout =
-      cast<SharedEncodingAttr>(descTy.getEncoding());
+  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(descTy.getEncoding());
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vec = sharedLayout.getVec();
@@ -284,7 +283,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   SmallVector<int64_t> shapePerCTA = getShapePerCTA(descTy);
   Type eltTy = descTy.getElementType();
 
-  auto sharedLayout = cast<SharedEncodingAttr>(descTy.getEncoding());
+  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(descTy.getEncoding());
   ArrayRef<unsigned> order = sharedLayout.getOrder();
   size_t rank = order.size();
 
