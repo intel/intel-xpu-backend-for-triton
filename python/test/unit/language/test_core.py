@@ -2482,7 +2482,7 @@ scan_configs = [(op, type, shape, axis, reverse, num_warps)
 negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
-def test_sum_dtype():
+def test_sum_dtype(device):
 
     @triton.jit
     def kernel_dtype(out_ptr, init, in_dtype: tl.constexpr, out_dtype: tl.constexpr):
@@ -2502,7 +2502,7 @@ def test_sum_dtype():
         x = tl.sum(x)
         tl.store(out_ptr, x)
 
-    out = torch.empty(1, dtype=torch.int32, device='cuda')
+    out = torch.empty(1, dtype=torch.int32, device=device)
     kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=None)
     assert out[0] == 32 * 32
 
@@ -2518,9 +2518,9 @@ def test_sum_dtype():
     kernel_default_int[(1, )](out)
     assert out[0] == 32 * 32
 
-    out = torch.empty(1, dtype=torch.bfloat16, device='cuda')
+    out = torch.empty(1, dtype=torch.bfloat16, device=device)
     kernel_default_float[(1, )](out)
-    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device='cuda'))
+    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
 
 
 @triton.jit
