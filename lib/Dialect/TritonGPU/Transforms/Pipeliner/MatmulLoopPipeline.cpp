@@ -497,23 +497,14 @@ assignMemoryLayouts(scf::ForOp &forOp,
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
 
-    // Check stage for uses. If any direct use is in a different stage, treat it
+    // Check stage for uses. If the first use is in a different stage, treat it
     // as a pipelined load.
-    bool isPipelined = false;
     auto [sLoad, _cLoad] = tt::getStageCluster(&op);
-    auto directUsers = getDirectUserInBlock(&op);
-    LDBG("DirectUser for load " << op);
-    for (auto user : directUsers) {
-      LDBG("  - use: " << *user);
-      if (!user->hasAttr(mlir::triton::kLoopStageAttrName))
-        continue;
-      auto [stage, _cluster] = tt::getStageCluster(user);
-      if (stage != sLoad) {
-        isPipelined = true;
-        break;
-      }
-    }
-    if (!isPipelined)
+    Operation *firstUse = getFirstUseOfPipelinedLoad(&op);
+    LDBG("first use for load " << op);
+    LDBG("  - use: " << *firstUse);
+    auto firstUseStageCluster = tt::maybeGetStageCluster(firstUse);
+    if (!firstUseStageCluster || firstUseStageCluster->first == sLoad)
       continue;
 
     // Try to set shared encoding etc for the pipelined load.
@@ -926,7 +917,7 @@ createAsyncOps(scf::ForOp &forOp,
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma
     // pipelining post-processing. Additionally, SMEM for scales in MMAv5
     // should get the same number of buffers as the operand SMEM.
-    if (info.isMMAv3Shared || info.isMMAv3Registers || info.isMMAv5Scale) {
+    if (info.isMMAv3Shared || info.isMMAv5Scale) {
       ++numBuffers;
     }
     if (isa<tt::ExperimentalDescriptorLoadOp,
