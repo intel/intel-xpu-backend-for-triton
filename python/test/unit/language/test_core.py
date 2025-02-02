@@ -5978,7 +5978,7 @@ def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path:
     kernel[(1, 1, 1)](x, z)
     assert torch.equal(z, x)
 
-    if isinstance(shared_layout, NVMMASharedLayout) and mma_layout.version[0] >= 3:
+    if isinstance(shared_layout, NVMMASharedLayout) and hasattr(mma_layout, "version") and mma_layout.version[0] >= 3:
         assert "stmatrix" in kernel.asm["ptx"]
 
 
