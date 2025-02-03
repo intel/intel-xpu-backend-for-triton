@@ -164,6 +164,8 @@ def test_reuse(device, fresh_triton_cache):
     for i in range(10):
         kernel[(1, )](x, 1, BLOCK=1024)
     assert counter == 1
+    device = getattr(torch, device).current_device()
+    kernel.device_caches[device][0].clear()
 
 
 @pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
@@ -181,6 +183,10 @@ def test_specialize(mode, device, fresh_triton_cache):
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
+    device = getattr(torch, device).current_device()
+    kernel.device_caches[device][0].clear()
+    kernel_nospec.device_caches[device][0].clear()
+    kernel_nospec_on_alignment.device_caches[device][0].clear()
 
 
 def test_annotation(device):
@@ -489,7 +495,7 @@ def test_preload(device, fresh_triton_cache) -> None:
     assert specialization_data is not None
 
     # clear the cache
-    shutil.rmtree(fresh_triton_cache, ignore_errors=True)
+    shutil.rmtree(fresh_triton_cache)
     kernel_add.device_caches[device][0].clear()
 
     # preload the kernel

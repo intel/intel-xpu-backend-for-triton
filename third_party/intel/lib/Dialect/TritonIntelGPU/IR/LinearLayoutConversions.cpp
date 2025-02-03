@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/DenseMap.h"
@@ -193,92 +194,6 @@ LinearLayout shrinkCodomain(const LinearLayout &layout, StringAttr inDimName,
 
   // Compose O' with L.
   return layout.compose(transform);
-}
-
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// larger than shape[d].  Do this without changing the size of the layout's
-// inputs (i.e. leave its domain unchanged).
-//
-// This function is invariant to the order of the layout's input and output
-// dimensions.
-LinearLayout ensureLayoutNotLargerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
-  assert(shape.size() == layout.getNumOutDims() && "shape must match layout");
-  if (shape.empty()) {
-    return layout;
-  }
-  MLIRContext *ctx = shape.begin()->first.getContext();
-
-  // For the purposes of this function, "block" is the "most-minor" dimension.
-  // This is just a consequence of how legacy layouts work: We only put the same
-  // tensor element into two different blocks as a last resort, only after all
-  // the registers in all the lanes in all the warps in a block already have the
-  // same tensor element.  (Or, for shared layouts, only after all values in
-  // smem within a block have the same value.)
-  //
-  // inDimNames combines the in dims for register and shared layouts; that's OK
-  // because we skip in-dims that aren't present.  So we'll iterate over
-  // {blocked, register, lane, warp} or {blocked, offset}.
-  SmallVector<StringAttr> inDimNames = {
-      // for both register and shared layouts
-      S("block"),
-
-      // for register layouts
-      S("register"),
-      S("lane"),
-      S("warp"),
-
-      // for shared layouts
-      S("offset"),
-  };
-
-  LinearLayout ret = layout;
-  for (auto outDimName : layout.getOutDimNames()) {
-    int32_t actualSize = layout.getOutDimSize(outDimName);
-    int32_t desiredSize = shape.lookup(outDimName);
-    if (actualSize <= desiredSize) {
-      continue;
-    }
-    assert(desiredSize != 0 && actualSize % desiredSize == 0 && "bad shape");
-    for (StringAttr inDimName : llvm::reverse(inDimNames)) {
-      if (ret.hasInDim(inDimName)) {
-        ret = shrinkCodomain(ret, inDimName, outDimName, desiredSize);
-      }
-    }
-    assert(ret.getOutDimSize(outDimName) == desiredSize && "bad shrink");
-  }
-  return ret;
-}
-
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// smaller than shape[d].  Do this by increasing the size of the layout's inputs
-// along its most-minor dimension ("register" for register layouts, "offset" for
-// shared layouts).
-//
-// This function is invariant to the order of the layout's input dimensions, but
-// it cares about the order of the output dims, which should be minor-to-major.
-LinearLayout ensureLayoutNotSmallerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
-  assert(shape.size() == layout.getNumOutDims() && "shape must match layout");
-  if (shape.empty()) {
-    return layout;
-  }
-
-  StringAttr kDim = *layout.getInDimNames().begin();
-  assert(kDim == "register" || kDim == "offset" && "unexpected kDim");
-
-  LinearLayout ret = layout;
-  for (StringAttr outDimName : layout.getOutDimNames()) {
-    int32_t actualSize = layout.getOutDimSize(outDimName);
-    int32_t desiredSize = shape.lookup(outDimName);
-    assert(actualSize > desiredSize ||
-           desiredSize % actualSize == 0 && "bad shape");
-    ret *= LinearLayout::identity1D(desiredSize / actualSize, kDim, outDimName);
-    assert(ret.getOutDimSize(outDimName) >= desiredSize && "bad grow");
-  }
-  return ret;
 }
 
 // Combines the layout of a CTA (input dims [register, lane, warp]) with the

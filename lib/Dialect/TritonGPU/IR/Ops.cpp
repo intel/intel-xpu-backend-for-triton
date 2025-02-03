@@ -5,6 +5,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
@@ -63,7 +64,7 @@ struct CanonicalizeConvertFromReshape
 
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder() || op.getEfficientLayout())
+    if (!op.getAllowReorder())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
@@ -217,15 +218,6 @@ struct CanonicalizeConvertFromConvert
         (mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) ||
          mlir::isa<intel::DpasEncodingAttr>(srcType.getEncoding())))
       return failure();
-
-    // for hopper MMAv3
-    if (mlir::isa<SharedEncodingAttr>(dstType.getEncoding()) &&
-        mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) &&
-        llvm::any_of(op.getResult().getUsers(), [](Operation *dot) {
-          return dot->hasTrait<OpTrait::DotLike>();
-        })) {
-      return failure();
-    }
 
     Operation *arg = op.getSrc().getDefiningOp();
     if (!arg)
@@ -607,11 +599,33 @@ LogicalResult MemDescSubviewOp::verify() {
     return emitError("src and result must both have or not have an encoding");
   }
 
-  if (!isa<SharedEncodingAttr>(srcEnc)) {
-    return emitError("src encoding must be SharedEncodingAttr");
+  if (!isa<SharedEncodingTrait>(srcEnc) &&
+      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    return emitError("src encoding must be SharedEncodingTrait");
   }
-  if (!isa<SharedEncodingAttr>(dstEnc)) {
-    return emitError("result encoding must be SharedEncodingAttr");
+  if (!isa<SharedEncodingTrait>(dstEnc) &&
+      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    return emitError("result encoding must be SharedEncodingTrait");
+  }
+
+  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    // We support only 3D -> 2D subviews with only first offset being non-zero.
+    if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
+      return emitError("only 3D -> 2D subviews are supported for "
+                       "TensorMemoryEncodingAttr");
+    }
+    for (int i = 1; i < srcTy.getRank(); i++) {
+      if (auto constOp = getOffsets()[i].getDefiningOp<arith::ConstantOp>()) {
+        if (!isa<IntegerAttr>(constOp.getValue()) ||
+            cast<IntegerAttr>(constOp.getValue()).getInt() != 0) {
+          return emitError("only first offset can be non-zero for the subview"
+                           "of TensorMemoryEncodingAttr");
+        }
+      } else {
+        return emitError(
+            "offsets other than the first one must be constant zeros");
+      }
+    }
   }
 
   // TODO(jlebar): Currently we generate illegal encodings, so we can't add a
@@ -633,7 +647,7 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   }
 
   auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingAttr>(ty.getEncoding());
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
   return enc ? enc.getAlignment() : 16;
 }
 

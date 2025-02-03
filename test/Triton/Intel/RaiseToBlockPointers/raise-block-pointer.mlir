@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 
+// COM: 1D PTR + LOAD
 // CHECK-LABEL:   tt.func @test_addptr_splat_make_range(
 // CHECK-SAME:                                          %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<128xf32> {
 // CHECK-DAG:       %[[VAL_1:.*]] = arith.constant 0 : i64
@@ -16,6 +17,7 @@ tt.func @test_addptr_splat_make_range(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
   tt.return %3 : tensor<128xf32>
 }
 
+// COM: 1D PTR + LOAD WITH MASK (missing support for load)
 // CHECK-LABEL:   tt.func @test_addptr_load_with_mask(
 // CHECK-SAME:                                         %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                                         %[[VAL_1:.*]]: i32,
@@ -31,6 +33,7 @@ tt.func @test_addptr_load_with_mask(%arg0 : !tt.ptr<f32>, %arg1: i32, %arg2: ten
   tt.return %3 : tensor<128xf32>
 }
 
+// COM: 1D PTR + LOAD
 // CHECK-LABEL:   tt.func @test_addptr_splat_splat_i32(
 // CHECK-SAME:                                         %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                                         %[[VAL_1:.*]]: i32) -> tensor<128xf32> {
@@ -46,13 +49,13 @@ tt.func @test_addptr_splat_splat_i32(%arg0 : !tt.ptr<f32>, %arg1: i32) -> tensor
   tt.return %3 : tensor<128xf32>
 }
 
+// COM: 1D PTR + LOAD
 // CHECK-LABEL:   tt.func @test_addptr_splat_splat_i64(
 // CHECK-SAME:                                         %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                                         %[[VAL_1:.*]]: i64) -> tensor<128xf32> {
 // CHECK:           %[[VAL_2:.*]] = arith.constant 0 : i64
-// CHECK:           %[[VAL_3:.*]] = arith.index_cast %[[VAL_1]] : i64 to index
-// CHECK:           %[[VAL_4:.*]] = arith.index_cast %[[VAL_3]] : index to i32
-// CHECK:           %[[VAL_5:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_2]]], {{\[}}%[[VAL_2]]], {{\[}}%[[VAL_4]]] {order = array<i32>} : <tensor<128xf32>>
+// CHECK:           %[[VAL_3:.*]] = arith.trunci %[[VAL_1]] : i64 to i32
+// CHECK:           %[[VAL_5:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_2]]], {{\[}}%[[VAL_2]]], {{\[}}%[[VAL_3]]] {order = array<i32>} : <tensor<128xf32>>
 // CHECK:           %[[VAL_6:.*]] = tt.load %[[VAL_5]] : !tt.ptr<tensor<128xf32>>
 // CHECK:           tt.return %[[VAL_6]] : tensor<128xf32>
 tt.func @test_addptr_splat_splat_i64(%arg0 : !tt.ptr<f32>, %arg1: i64) -> tensor<128xf32> {
@@ -63,14 +66,14 @@ tt.func @test_addptr_splat_splat_i64(%arg0 : !tt.ptr<f32>, %arg1: i64) -> tensor
   tt.return %3 : tensor<128xf32>
 }
 
+// COM: 2D PTR + LOAD
 // CHECK-LABEL:   tt.func @test_addptr_splat_splat_2d(
 // CHECK-SAME:                                        %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                                        %[[VAL_1:.*]]: i64) -> tensor<2x128xf32> {
 // CHECK:           %[[VAL_4:.*]] = arith.constant 0 : i64
 // CHECK:           %[[VAL_5:.*]] = arith.constant 0 : i32
-// CHECK:           %[[VAL_6:.*]] = arith.index_cast %[[VAL_1]] : i64 to index
-// CHECK:           %[[VAL_7:.*]] = arith.index_cast %[[VAL_6]] : index to i32
-// CHECK:           %[[VAL_8:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_4]], %[[VAL_4]]], {{\[}}%[[VAL_4]], %[[VAL_4]]], {{\[}}%[[VAL_7]], %[[VAL_5]]] {order = array<i32>} : <tensor<2x128xf32>>
+// CHECK:           %[[VAL_6:.*]] = arith.trunci %[[VAL_1]] : i64 to i32
+// CHECK:           %[[VAL_8:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_4]], %[[VAL_4]]], {{\[}}%[[VAL_4]], %[[VAL_4]]], {{\[}}%[[VAL_6]], %[[VAL_5]]] {order = array<i32>} : <tensor<2x128xf32>>
 // CHECK:           %[[VAL_9:.*]] = tt.load %[[VAL_8]] : !tt.ptr<tensor<2x128xf32>>
 // CHECK:           tt.return %[[VAL_9]] : tensor<2x128xf32>
 tt.func @test_addptr_splat_splat_2d(%arg0 : !tt.ptr<f32>, %arg1: i64) -> tensor<2x128xf32> {
@@ -87,9 +90,8 @@ tt.func @test_addptr_splat_splat_2d(%arg0 : !tt.ptr<f32>, %arg1: i64) -> tensor<
 // CHECK-SAME:                                              %[[VAL_2:.*]]: tensor<2x128xf32>) {
 // CHECK:           %[[VAL_3:.*]] = arith.constant 0 : i64
 // CHECK:           %[[VAL_4:.*]] = arith.constant 0 : i32
-// CHECK:           %[[VAL_5:.*]] = arith.index_cast %[[VAL_1]] : i64 to index
-// CHECK:           %[[VAL_6:.*]] = arith.index_cast %[[VAL_5]] : index to i32
-// CHECK:           %[[VAL_7:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_3]], %[[VAL_3]]], {{\[}}%[[VAL_3]], %[[VAL_3]]], {{\[}}%[[VAL_6]], %[[VAL_4]]] {order = array<i32>} : <tensor<2x128xf32>>
+// CHECK:           %[[VAL_5:.*]] = arith.trunci %[[VAL_1]] : i64 to i32
+// CHECK:           %[[VAL_7:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_3]], %[[VAL_3]]], {{\[}}%[[VAL_3]], %[[VAL_3]]], {{\[}}%[[VAL_5]], %[[VAL_4]]] {order = array<i32>} : <tensor<2x128xf32>>
 // CHECK:           tt.store %[[VAL_7]], %[[VAL_2]] : !tt.ptr<tensor<2x128xf32>>
 tt.func @test_addptr_splat_splat_2d_store(%arg0 : !tt.ptr<f32>, %arg1: i64, %arg2: tensor<2x128xf32>) {
   %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x128x!tt.ptr<f32>>
@@ -122,11 +124,8 @@ tt.func @test_addptr_splat_make_range_add(%arg0 : !tt.ptr<f32>) -> tensor<128xf3
 // CHECK-SAME:                                              %[[VAL_1:.*]]: i32) -> tensor<128xf32> {
 // CHECK:           %[[VAL_2:.*]] = arith.constant 0 : i64
 // CHECK:           %[[VAL_3:.*]] = arith.constant 0 : i32
-// CHECK:           %[[VAL_4:.*]] = arith.index_cast %[[VAL_1]] : i32 to index
-// CHECK:           %[[VAL_5:.*]] = arith.index_cast %[[VAL_4]] : index to i64
-// CHECK:           %[[VAL_6:.*]] = arith.trunci %[[VAL_5]] : i64 to i32
-// CHECK:           %[[VAL_7:.*]] = arith.divui %[[VAL_3]], %[[VAL_6]] : i32
-// CHECK:           %[[VAL_8:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_2]]], {{\[}}%[[VAL_5]]], {{\[}}%[[VAL_7]]] {order = array<i32>} : <tensor<128xf32>>
+// CHECK:           %[[VAL_4:.*]] =  arith.extsi %[[VAL_1]] : i32 to i64
+// CHECK:           %[[VAL_8:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[VAL_2]]], {{\[}}%[[VAL_4]]], {{\[}}%[[VAL_3]]] {order = array<i32>} : <tensor<128xf32>>
 // CHECK:           %[[VAL_9:.*]] = tt.load %[[VAL_8]] : !tt.ptr<tensor<128xf32>>
 // CHECK:           tt.return %[[VAL_9]] : tensor<128xf32>
 tt.func @test_addptr_splat_make_range_mul(%arg0 : !tt.ptr<f32>, %arg1: i32) -> tensor<128xf32> {
@@ -261,31 +260,23 @@ tt.func @test_addptr_broadcast_rank_3(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128x
 // CHECK-DAG:   [[CST_0_i64:%.+]] = arith.constant 0 : i64
 // CHECK-DAG:   [[CST_0_i32:%.+]] = arith.constant 0 : i32
 // CHECK-DAG:   [[CST_2_i32:%.+]] = arith.constant 2 : i32
-// CHECK:       [[VAR_1_:%.+]] = arith.index_cast [[PARAM_3_]] : i32 to index
-// CHECK:       [[VAR_3_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
-// CHECK:       [[VAR_2_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
-// CHECK:       [[VAR_4_:%.+]] = arith.index_cast [[PARAM_2_]] : i32 to index
-// CHECK:       [[VAR_5_:%.+]] = arith.index_cast [[PARAM_4_]] : i32 to index
-// CHECK:       [[VAR_6_:%.+]] = arith.index_cast [[VAR_5_]] : index to i64
-// CHECK:       [[VAR_7_:%.+]] = arith.muli [[PARAM_4_]], [[CST_6_i32]] : i32
-// CHECK:       [[VAR_8_:%.+]] = arith.index_cast [[VAR_4_]] : index to i64
-// CHECK:       [[VAR_9_:%.+]] = arith.muli [[VAR_8_]], [[VAR_6_]] : i64
-// CHECK:       [[VAR_10_:%.+]] = arith.trunci [[VAR_2_]] : i64 to i32
-// CHECK:       [[VAR_11_:%.+]] = arith.divui [[VAR_3_]], [[VAR_10_]] : i32
-// CHECK:       [[VAR_12_:%.+]] = arith.trunci [[VAR_6_]] : i64 to i32
-// CHECK:       [[VAR_13_:%.+]] = arith.divui [[VAR_7_]], [[VAR_12_]] : i32
-// CHECK:       [[VAR_14_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[VAR_9_]]], {{\[}}[[VAR_2_]], [[VAR_6_]]], {{\[}}[[VAR_11_]], [[VAR_13_]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_15_:%.+]] = arith.index_cast [[PARAM_5_]] : i32 to index
-// CHECK:       [[VAR_16_:%.+]] = arith.index_cast [[VAR_15_]] : index to i64
-// CHECK:       [[VAR_17_:%.+]] = arith.index_cast [[PARAM_6_]] : i32 to index
-// CHECK:       [[VAR_18_:%.+]] = arith.index_cast [[VAR_17_]] : index to i64
-// CHECK:       [[VAR_19_:%.+]] = arith.trunci [[VAR_16_]] : i64 to i32
-// CHECK:       [[VAR_20_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_19_]] : i32
-// CHECK:       [[VAR_21_:%.+]] = arith.trunci [[VAR_18_]] : i64 to i32
-// CHECK:       [[VAR_22_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_21_]] : i32
-// CHECK:       [[VAR_23:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_16_]], [[VAR_18_]]], {{\[}}[[VAR_20_]], [[VAR_22_]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_24:%.+]] = tt.load [[VAR_14_]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<4x4xf32>>
-// CHECK:	      tt.store [[VAR_23]], [[VAR_24]] : !tt.ptr<tensor<4x4xf32>>
+// CHECK:       [[VAR_0_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
+// CHECK:       [[VAR_1_:%.+]] = arith.extsi [[PARAM_3_]] : i32 to i64
+// CHECK:       [[VAR_2_:%.+]] = arith.index_cast [[PARAM_2_]] : i32 to index
+// CHECK:       [[VAR_3_:%.+]] = arith.index_cast [[PARAM_4_]] : i32 to index
+// CHECK:       [[VAR_4_:%.+]] = arith.index_cast [[VAR_3_]] : index to i64
+// CHECK:       [[VAR_5_:%.+]] = arith.muli [[PARAM_4_]], [[CST_6_i32]] : i32
+// CHECK:       [[VAR_6_:%.+]] = arith.extsi [[PARAM_4_]] : i32 to i64
+// CHECK:       [[VAR_7_:%.+]] = arith.index_cast [[VAR_2_]] : index to i64
+// CHECK:       [[VAR_8_:%.+]] = arith.muli [[VAR_7_]], [[VAR_4_]] : i64
+// CHECK:       [[VAR_9_:%.+]] = arith.divui [[VAR_0_]], [[PARAM_3_]] : i32
+// CHECK:       [[VAR_10_:%.+]] = arith.divui [[VAR_5_]], [[PARAM_4_]] : i32
+// CHECK:       [[VAR_11_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[VAR_8_]]], {{\[}}[[VAR_1_]], [[VAR_6_]]], {{\[}}[[VAR_9_]], [[VAR_10_]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_12_:%.+]] = arith.extsi [[PARAM_5_]] : i32 to i64
+// CHECK:       [[VAR_13_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
+// CHECK:       [[VAR_14_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_12_]], [[VAR_13_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_15_:%.+]] = tt.load [[VAR_11_]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<4x4xf32>>
+// CHECK:	      tt.store [[VAR_14_]], [[VAR_15_]] : !tt.ptr<tensor<4x4xf32>>
 // CHECK:       tt.return
 module {
 tt.func public @wrap_side_by_side_masked(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32) {
@@ -351,7 +342,7 @@ tt.func public @wrap_side_by_side_masked(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32
 // CHECK:       [[VAR_4_:%.+]]:2 = scf.for [[VAR_arg5_:%.+]] = [[CST_0_]] to [[CST_12_]] step [[CST_3_]] iter_args([[VAR_arg6_:%.+]] = [[VAR_2_]], [[VAR_arg7_:%.+]] = [[VAR_3_]]) -> (tensor<4x256xbf16>, !tt.ptr<tensor<4x256xbf16>>) {
 // CHECK:         [[VAR_5_:%.+]] = tt.load [[VAR_arg7_]] : !tt.ptr<tensor<4x256xbf16>>
 // CHECK:         [[VAR_6_:%.+]] = arith.addf [[VAR_arg6_]], [[VAR_5_]] : tensor<4x256xbf16>
-// CHECK:         [[VAR_7_:%.+]] = tt.advance [[VAR_arg7_]], {{\[}}[[CST_0_i32]], [[CST_3_i32]]{{\]}} : <tensor<4x256xbf16>>
+// CHECK:         [[VAR_7_:%.+]] = tt.advance [[VAR_arg7_]], {{\[}}[[CST_3_i32]], [[CST_0_i32]]{{\]}} : <tensor<4x256xbf16>>
 // CHECK:         scf.yield [[VAR_6_]], [[VAR_7_]] : tensor<4x256xbf16>, !tt.ptr<tensor<4x256xbf16>>
 // CHECK:       }
 // CHECK:       [[VAR_5_:%.+]] = tt.make_tensor_ptr [[PARAM_2_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[CST_1_i64]], [[CST_5_i64]]], {{\[}}[[PARAM_3_]], [[CST_0_i32]]] {order = array<i32>} : <tensor<4x256xbf16>>
@@ -426,29 +417,21 @@ module {
 // CHECK-DAG:   [[CST_0_i32:%.+]] = arith.constant 0 : i32
 // CHECK:       [[VAR_0_:%.+]] = arith.index_cast [[PARAM_2_]] : i32 to index
 // CHECK:       [[VAR_1_:%.+]] = arith.index_cast [[PARAM_3_]] : i32 to index
-// CHECK:       [[VAR_3_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
-// CHECK:       [[VAR_2_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
-// CHECK:       [[VAR_4_:%.+]] = arith.index_cast [[VAR_0_]] : index to i64
-// CHECK:       [[VAR_5_:%.+]] = arith.muli [[VAR_4_]], [[VAR_2_]] : i64
-// CHECK:       [[VAR_6_:%.+]] = arith.index_cast [[PARAM_4_]] : i32 to index
-// CHECK:       [[VAR_7_:%.+]] = arith.index_cast [[VAR_6_]] : index to i64
-// CHECK:       [[VAR_8_:%.+]] = arith.muli [[PARAM_4_]], [[CST_3_i32]] : i32
-// CHECK:       [[VAR_9_:%.+]] = arith.trunci [[VAR_2_]] : i64 to i32
-// CHECK:       [[VAR_10_:%.+]] = arith.divui [[VAR_3_]], [[VAR_9_]] : i32
-// CHECK:       [[VAR_11_:%.+]] = arith.trunci [[VAR_7_]] : i64 to i32
-// CHECK:       [[VAR_12_:%.+]] = arith.divui [[VAR_8_]], [[VAR_11_]] : i32
-// CHECK:       [[VAR_13:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[VAR_5_]], [[CST_0_i64]]], {{\[}}[[VAR_2_]], [[VAR_7_]]], {{\[}}[[VAR_10_]], [[VAR_12_]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_14_:%.+]] = arith.index_cast [[PARAM_5_]] : i32 to index
-// CHECK:       [[VAR_15_:%.+]] = arith.index_cast [[VAR_14_]] : index to i64
-// CHECK:       [[VAR_16_:%.+]] = arith.index_cast [[PARAM_6_]] : i32 to index
-// CHECK:       [[VAR_17_:%.+]] = arith.index_cast [[VAR_16_]] : index to i64
-// CHECK:       [[VAR_18_:%.+]] = arith.trunci [[VAR_15_]] : i64 to i32
-// CHECK:       [[VAR_19_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_18_]] : i32
-// CHECK:       [[VAR_20_:%.+]] = arith.trunci [[VAR_17_]] : i64 to i32
-// CHECK:       [[VAR_21_:%.+]] = arith.divui [[CST_0_i32]], [[VAR_20_]] : i32
-// CHECK:       [[VAR_22:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_15_]], [[VAR_17_]]], {{\[}}[[VAR_19_]], [[VAR_21_]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_23:%.+]] = tt.load [[VAR_13]] {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<4x4xf32>>
-// CHECK:	tt.store [[VAR_22]], [[VAR_23]] : !tt.ptr<tensor<4x4xf32>>
+// CHECK:       [[VAR_2_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
+// CHECK:       [[VAR_3_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
+// CHECK:       [[VAR_4_:%.+]] = arith.extsi [[PARAM_3_]] : i32 to i64
+// CHECK:       [[VAR_5_:%.+]] = arith.index_cast [[VAR_0_]] : index to i64
+// CHECK:       [[VAR_6_:%.+]] = arith.muli [[VAR_5_]], [[VAR_3_]] : i64
+// CHECK:       [[VAR_7_:%.+]] = arith.muli [[PARAM_4_]], [[CST_3_i32]] : i32
+// CHECK:       [[VAR_8_:%.+]] = arith.extsi [[PARAM_4_]] : i32 to i64
+// CHECK:       [[VAR_9_:%.+]] = arith.divui [[VAR_2_]], [[PARAM_3_]] : i32
+// CHECK:       [[VAR_10_:%.+]] = arith.divui [[VAR_7_]], [[PARAM_4_]] : i32
+// CHECK:       [[VAR_11:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[VAR_6_]], [[CST_0_i64]]], {{\[}}[[VAR_4_]], [[VAR_8_]]], {{\[}}[[VAR_9_]], [[VAR_10_]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_12_:%.+]] = arith.extsi [[PARAM_5_]] : i32 to i64
+// CHECK:       [[VAR_13_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
+// CHECK:       [[VAR_14:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_12_]], [[VAR_13_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_15:%.+]] = tt.load [[VAR_11]] {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<4x4xf32>>
+// CHECK:     	tt.store [[VAR_14]], [[VAR_15]] : !tt.ptr<tensor<4x4xf32>>
 // CHECK:       tt.return
 module {
   tt.func public @wrap_stacked_masked_loop(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32) {

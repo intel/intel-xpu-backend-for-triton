@@ -504,8 +504,7 @@ struct TritonIntelGPUOptimizeReductionLocality final
     MLIRContext *ctx = op->getContext();
     RewritePatternSet patterns(ctx);
     patterns.add<DpasOperandPattern>(ctx);
-    if (failed(
-            applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
 };

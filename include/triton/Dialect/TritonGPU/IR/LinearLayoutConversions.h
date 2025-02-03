@@ -9,6 +9,8 @@
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton::gpu {
+class SwizzledSharedEncodingAttr;
+class NVMMASharedEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -17,7 +19,8 @@ namespace mlir::triton::gpu {
 //   "warp": warps in a block/CTA
 //   "block": blocks in a cluster
 //
-// - An n-dimensional SharedEncodingAttr has the following input dimensions.
+// - An n-dimensional SwizzledSharedEncodingAttr has the following input
+// dimensions.
 //
 //   "offset": the n'th element in the allocation, within a particular thread
 //      block (i.e. within a CTA).  The offset is measured in elements, not
@@ -35,11 +38,21 @@ namespace mlir::triton::gpu {
 //
 // elemBitWidth is the bit width of one element in the layout.  This is required
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
-// shared layouts with hasLeadingOffset == true) but is otherwise unused.
+// shared layouts with nvmma_shared layout) but is otherwise unused.
 //
 // Returns std::nullopt if the given layout can't be converted to an LL.
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                             std::optional<int32_t> elemBitWidth = std::nullopt);
+
+// Convert the shared encoding of a tensor with `nvmma_shared` layout to a
+// LinearLayout that maps from a linear shared memory offset to tensor index.
+//
+// If `disableSwizzle` is set, then the resulting layout does not include
+// swizzling.
+LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
+                                               NVMMASharedEncodingAttr shared,
+                                               int32_t elemBitWidth,
+                                               bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
@@ -243,8 +256,8 @@ LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
 
 // The primary goal of this function is to efficiently store 2D tiles of a
 // tensor into shared memory using the `ldmatrix` instruction.
-LinearLayout chooseLdMatrixLayout(MLIRContext *ctx, Attribute sharedEnc,
-                                  Attribute dotEnc, ArrayRef<int64_t> shape);
+LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                  bool needTrans, int32_t elemBitWidth);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

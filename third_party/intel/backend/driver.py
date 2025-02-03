@@ -2,6 +2,7 @@ import importlib.metadata
 import os
 import hashlib
 import shutil
+import ctypes
 import sysconfig
 import tempfile
 from pathlib import Path
@@ -143,6 +144,67 @@ class CompilationHelper:
 COMPILATION_HELPER = CompilationHelper()
 
 
+class ArchParser:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.CDLL(cache_path)
+        self.shared_library.parse_device_arch.restype = ctypes.c_char_p
+        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
+
+    def __getattribute__(self, name):
+        if name == "parse_device_arch":
+            shared_library = super().__getattribute__("shared_library")
+            attr = getattr(shared_library, name)
+
+            def wrapper(*args, **kwargs):
+                return attr(*args, **kwargs).decode("utf-8")
+
+            return wrapper
+
+        return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
+
+
+class TritonLauncher:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        self.shared_library.launch.restype = ctypes.py_object
+        self.shared_library.launch.argtypes = (ctypes.py_object, )
+
+    def __getattribute__(self, name):
+        if name == "launch":
+            shared_library = super().__getattribute__("shared_library")
+            return getattr(shared_library, name)
+
+        return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
+
+
 def compile_module_from_src(src, name):
     key = hashlib.sha256(src.encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
@@ -164,6 +226,12 @@ def compile_module_from_src(src, name):
                         COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), file_name, binary=True)
+
+    if name == 'arch_utils':
+        return ArchParser(cache_path)
+    elif name == '__triton_launcher':
+        return TritonLauncher(cache_path)
+
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
     mod = importlib.util.module_from_spec(spec)
@@ -310,6 +378,12 @@ def make_launcher(constants, signature):
 #include <sycl/sycl.hpp>
 { "#include <ATen/record_function.h>" if COMPILATION_HELPER.inject_pytorch_dep else "" }
 
+#if defined(_WIN32)
+#define EXPORT_FUNC __declspec(dllexport)
+#else
+#define EXPORT_FUNC __attribute__((visibility("default")))
+#endif
+
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
 #include <stdio.h>
@@ -437,8 +511,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
 }}
 // end sycl
 
-static PyObject* launch(PyObject* self, PyObject* args) {{
-
+extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   int gridX, gridY, gridZ;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
@@ -512,28 +585,6 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   Py_RETURN_NONE;
 }}
-
-static PyMethodDef ModuleMethods[] = {{
-  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
-  {{NULL, NULL, 0, NULL}} // sentinel
-}};
-
-static struct PyModuleDef ModuleDef = {{
-  PyModuleDef_HEAD_INIT,
-  \"__triton_launcher\",
-  NULL, //documentation
-  -1, //size
-  ModuleMethods
-}};
-
-PyMODINIT_FUNC PyInit___triton_launcher(void) {{
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if(m == NULL) {{
-    return NULL;
-  }}
-  PyModule_AddFunctions(m, ModuleMethods);
-  return m;
-}}
 """
     return src
 
@@ -557,13 +608,19 @@ def serialize_args(args, constants, signature):
 
     cnt = 0
     args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    # 3: stream
+    # 4: function
+    # 5: packed kernel metadata
+    assert type(args[cnt + 5]).__name__ == "KernelMetadata"
+    serialize_kernel_metadata(args[cnt + 5], args_dict)
+    # 6: launch_metadata
+    # 7: launch_enter_hook
+    # 8: launch_exit_hook
     args_dict['argument_list'] = []
     counts = {"tensors": 0, "scalars": 0, "karg_cnt": 0}
-    cnt = 4
+    cnt += 9
     for arg in args[cnt:]:
-        if type(arg).__name__ == "KernelMetadata":
-            serialize_kernel_metadata(arg, args_dict)
-
+        sig_name = list(signature.keys())[counts['karg_cnt']]
         if isinstance(arg, torch.Tensor):
             cpu_tensor = arg.cpu()
             tensor_path = os.path.join(dir_path, f"tensor_{counts['tensors']}.pt")
@@ -571,22 +628,20 @@ def serialize_args(args, constants, signature):
                 torch.save(cpu_tensor, f)
             new_arg = {
                 "name": f"tensor_{counts['tensors']}", "type": "tensor", "dtype": str(arg.dtype), "ctype":
-                signature[counts['karg_cnt']]
+                signature[sig_name]
             }
             args_dict['argument_list'].append(new_arg)
-            counts['karg_cnt'] += 1
             counts['tensors'] += 1
-
         if isinstance(arg, numbers.Number):
-            if counts['karg_cnt'] not in constants:
+            if (counts['karg_cnt'], ) not in constants.keys():
                 new_arg = {
-                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": args[cnt], "ctype":
-                    signature[counts['karg_cnt']]
+                    "name": f"scalarArg_{counts['scalars']}", "type": "scalar", "value": arg, "ctype":
+                    signature[sig_name]
                 }
                 args_dict['argument_list'].append(new_arg)
-            counts['karg_cnt'] += 1
             counts['scalars'] += 1
-        cnt += 1
+        counts['karg_cnt'] += 1
+
     # Dump argument info as a JSON file
     json_path = os.path.join(dir_path, 'args_data.json')
     with open(json_path, 'w') as json_file:
@@ -602,15 +657,14 @@ class XPULauncher(object):
         self.constants = {arg_idx(idx): value for idx, value in constants.items()}
         self.signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(self.constants, self.signature)
-        mod = compile_module_from_src(src, "__triton_launcher")
-        self.launch = mod.launch
+        self.mod = compile_module_from_src(src, "__triton_launcher")
 
     def __call__(self, *args, **kwargs):
         # Serialize KernelArguments for SPIR-V Runner
         serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
         if serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
-        self.launch(*args, **kwargs)
+        self.mod.launch(args)
 
 
 class XPUDriver(DriverBase):

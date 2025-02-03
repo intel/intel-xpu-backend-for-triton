@@ -10,7 +10,9 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -104,48 +106,49 @@ Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
                    loc, source, shape, strides, offsets, sizes, order);
 }
 
-Value addOrFold(Value lhs, Value rhs, ArithBuilder &abuilder) {
-  return ttgi::isConstant(lhs, 0)
-             ? rhs
-             : (ttgi::isConstant(rhs, 0) ? lhs : abuilder.add(lhs, rhs));
-}
+Value getFinalValue(Value value) {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp) {
+    // look init values outside the loop
+    BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp))
+      return getFinalValue(forOp.getInitArgs()[blockArg.getArgNumber() - 1]);
 
-Value mulOrFold(Value lhs, Value rhs, ArithBuilder &abuilder) {
-  if (ttgi::isConstant(lhs, 0) || ttgi::isConstant(rhs, 1))
-    return lhs;
-  if (ttgi::isConstant(rhs, 0) || ttgi::isConstant(lhs, 1))
-    return rhs;
-  return abuilder.mul(lhs, rhs);
-}
-
-Value divOrFold(Location loc, Type type, Value num, Value den,
-                OpBuilder &builder) {
-  // If the denominator has value one, return the numerator.
-  if (Operation *defOp = den.getDefiningOp()) {
-    if (auto truncOp = dyn_cast<arith::TruncIOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 1))
-        return num;
-    }
-    if (auto truncOp = dyn_cast<arith::TruncFOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 1.0))
-        return num;
-    }
+    return value;
   }
 
-  // If the numerator has value zero, return it.
-  if (Operation *defOp = num.getDefiningOp()) {
-    if (auto truncOp = dyn_cast<arith::TruncIOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 0))
-        return num;
-    }
-    if (auto truncOp = dyn_cast<arith::TruncFOp>(defOp)) {
-      if (ttgi::isConstant(truncOp.getOperand(), 0.0))
-        return num;
-    }
+  if (isa<tt::ExpandDimsOp, tt::BroadcastOp, tt::SplatOp, arith::IndexCastOp>(
+          defOp))
+    return getFinalValue(defOp->getOperand(0));
+
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+    if (ttgi::isConstant(addOp.getLhs(), 0))
+      return getFinalValue(addOp.getRhs());
+    if (ttgi::isConstant(addOp.getRhs(), 0))
+      return getFinalValue(addOp.getLhs());
+    return addOp.getResult();
   }
 
-  return builder.createOrFold<arith::DivUIOp>(loc, type, num, den);
-};
+  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+    if (ttgi::isConstant(mulOp.getLhs(), 1) ||
+        ttgi::isConstant(mulOp.getRhs(), 0))
+      return getFinalValue(mulOp.getRhs());
+    if (ttgi::isConstant(mulOp.getRhs(), 1) ||
+        ttgi::isConstant(mulOp.getLhs(), 0))
+      return getFinalValue(mulOp.getLhs());
+    return mulOp.getResult();
+  }
+
+  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
+    if (ttgi::isConstant(divOp.getRhs(), 1) ||
+        ttgi::isConstant(divOp.getLhs(), 0))
+      return getFinalValue(divOp.getLhs());
+    return divOp.getResult();
+  }
+
+  return value;
+}
 
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
@@ -215,21 +218,28 @@ struct PtrState {
 
     source = lhsState.source ? lhsState.source : rhsState.source;
     Location loc = op->getLoc();
-    ArithBuilder abuilder(builder, loc);
 
-    if (lhsState.scalar && rhsState.scalar)
-      scalar = addOrFold(lhsState.scalar, rhsState.scalar, abuilder);
-    else if (lhsState.getRank() == 0)
+    if (lhsState.scalar && rhsState.scalar) {
+      scalar =
+          builder.create<arith::AddIOp>(loc, lhsState.scalar, rhsState.scalar);
+      scalar = findOrCreateCast(loc, getFinalValue(scalar),
+                                lhsState.scalar.getType(), builder);
+
+    } else if (lhsState.getRank() == 0)
       scalar = lhsState.scalar ? lhsState.scalar : rhsState.scalar;
 
     for (unsigned i = 0; i < lhsState.getRank(); ++i) {
-      Value newOffset =
-          addOrFold(lhsState.offsets[i], rhsState.offsets[i], abuilder);
-      offsets.push_back(newOffset);
+      Value newOffset = builder.create<arith::AddIOp>(loc, lhsState.offsets[i],
+                                                      rhsState.offsets[i]);
+      offsets.push_back(findOrCreateCast(loc, getFinalValue(newOffset),
+                                         lhsState.offsets[i].getType(),
+                                         builder));
 
-      Value newStride =
-          addOrFold(lhsState.strides[i], rhsState.strides[i], abuilder);
-      strides.push_back(newStride);
+      Value newStride = builder.create<arith::AddIOp>(loc, lhsState.strides[i],
+                                                      rhsState.strides[i]);
+      strides.push_back(findOrCreateCast(loc, getFinalValue(newStride),
+                                         lhsState.strides[i].getType(),
+                                         builder));
 
       sizes.push_back(lhsState.sizes[i]);
     }
@@ -299,32 +309,43 @@ struct PtrState {
       std::swap(lhs, rhs);
 
     Location loc = op->getLoc();
-    ArithBuilder abuilder(builder, loc);
 
     for (const auto &[offset, stride, dim, size] :
          llvm::zip(lhs->offsets, lhs->strides, lhs->shape, lhs->sizes)) {
-      Value newOffset = mulOrFold(
+      Value newOffset = builder.create<arith::MulIOp>(
+          loc,
           findOrCreateCast(loc, offset, builder.getIntegerType(offsetBitwidth),
                            builder),
           findOrCreateCast(loc, rhs->scalar,
-                           builder.getIntegerType(offsetBitwidth), builder),
-          abuilder);
-      Value newStride = mulOrFold(
+                           builder.getIntegerType(offsetBitwidth), builder));
+      newOffset =
+          findOrCreateCast(loc, getFinalValue(newOffset),
+                           builder.getIntegerType(offsetBitwidth), builder);
+
+      Value newStride = builder.create<arith::MulIOp>(
+          loc,
           findOrCreateCast(loc, stride,
                            builder.getIntegerType(shapeAndStridesBitwidth),
                            builder),
           findOrCreateCast(loc, rhs->scalar,
                            builder.getIntegerType(shapeAndStridesBitwidth),
-                           builder),
-          abuilder);
-      Value newDim = mulOrFold(
+                           builder));
+      newStride = findOrCreateCast(
+          loc, getFinalValue(newStride),
+          builder.getIntegerType(shapeAndStridesBitwidth), builder);
+
+      Value newDim = builder.create<arith::MulIOp>(
+          loc,
           findOrCreateCast(loc, dim,
                            builder.getIntegerType(shapeAndStridesBitwidth),
                            builder),
           findOrCreateCast(loc, rhs->scalar,
                            builder.getIntegerType(shapeAndStridesBitwidth),
-                           builder),
-          abuilder);
+                           builder));
+      newDim = findOrCreateCast(loc, getFinalValue(newDim),
+                                builder.getIntegerType(shapeAndStridesBitwidth),
+                                builder);
+
       offsets.push_back(newOffset);
       strides.push_back(newStride);
       shape.push_back(newDim);
@@ -339,19 +360,7 @@ struct PtrState {
 
     for (const auto &[offset, stride, dim] :
          llvm::zip(offsets, strides, shape)) {
-      if (ttgi::isConstant(stride, 0)) {
-        newOffsets.push_back(
-            findOrCreateCast(loc, offset, builder.getI32Type(), builder));
-      } else {
-        auto divOffset = divOrFold(
-            loc, builder.getI32Type(),
-            findOrCreateCast(loc, offset,
-                             builder.getIntegerType(offsetBitwidth), builder),
-            findOrCreateCast(loc, stride,
-                             builder.getIntegerType(offsetBitwidth), builder),
-            builder);
-        newOffsets.push_back(divOffset);
-      }
+      newOffsets.push_back(computeOffset(offset, stride, builder, loc));
       newStrides.push_back(findOrCreateCast(
           loc, stride, builder.getIntegerType(shapeAndStridesBitwidth),
           builder));
@@ -361,6 +370,36 @@ struct PtrState {
 
     return findOrCreateMakeTensorPtr(loc, source, newShape, newStrides,
                                      newOffsets, order, sizes, builder);
+  }
+
+  Value createTTAdvanceOp(Value ptr, tt::MakeTensorPtrOp makeTPtrOp,
+                          OpBuilder &builder, Location loc) const {
+    assert(triton::isTensorPointerType(ptr.getType()) &&
+           "Expecting a block ptr");
+    SmallVector<Value> newOffsets;
+    for (const auto &[offset, stride] :
+         llvm::zip(offsets, makeTPtrOp.getStrides()))
+      newOffsets.push_back(computeOffset(offset, stride, builder, loc));
+
+    return builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(), ptr,
+                                               newOffsets);
+  }
+
+private:
+  Value computeOffset(Value offset, Value stride, OpBuilder &builder,
+                      Location loc) const {
+    if (ttgi::isConstant(stride, 0))
+      return findOrCreateCast(loc, offset,
+                              builder.getIntegerType(offsetBitwidth), builder);
+
+    Value divOffset = builder.create<arith::DivUIOp>(
+        loc, builder.getIntegerType(offsetBitwidth),
+        findOrCreateCast(loc, offset, builder.getIntegerType(offsetBitwidth),
+                         builder),
+        findOrCreateCast(loc, stride, builder.getIntegerType(offsetBitwidth),
+                         builder));
+    return findOrCreateCast(loc, getFinalValue(divOffset),
+                            builder.getIntegerType(offsetBitwidth), builder);
   }
 };
 
@@ -379,6 +418,11 @@ static llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
 
 static llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
                                      const PtrState &state) {
+  if (state.source)
+    os << "<source=" << state.source << "> ";
+  if (state.scalar)
+    os << " <scalar=" << state.scalar << "> ";
+
   return os << "<offsets=" << state.offsets << "> <sizes=" << state.sizes
             << "> <strides=" << state.strides << "> <shape=" << state.shape
             << "> <order=" << state.order << ">";
@@ -430,7 +474,7 @@ public:
             if (failed(rewriteForOp(forOp))) {
               forOp->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite ForOp");
-              return WalkResult::interrupt();
+              return WalkResult::advance();
             }
             return WalkResult::skip();
           })
@@ -443,9 +487,24 @@ public:
   LogicalResult rewriteForOp(scf::ForOp op) {
     LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
 
+    for (auto &bodyOp : op.getRegion().getOps()) {
+      if (auto forOp = dyn_cast<scf::ForOp>(bodyOp)) {
+        op->emitRemark("TritonRaiseToBlockPointer: nested loops currently "
+                       "not supported");
+        return failure();
+      }
+    }
+
     SmallVector<Value> newInitArgs;
     SmallVector<std::pair<int, Value>> initArgIndex;
     OpBuilder builder(op);
+
+    auto canBeRewrittenUsingBlockPtr = [&](Operation *op) {
+      return TypeSwitch<Operation *, bool>(op)
+          .Case<tt::AddPtrOp, tt::LoadOp, tt::StoreOp>(
+              [](auto) { return true; })
+          .Default([](auto) { return false; });
+    };
 
     // Create a new list of init args
     for (auto [i, arg] : llvm::enumerate(op.getInitArgs())) {
@@ -453,11 +512,11 @@ public:
         if (auto makeTensorPtrOp =
                 mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
           if (llvm::any_of(op.getRegionIterArgs()[i].getUsers(),
-                           [](Operation *user) {
-                             return isa<tt::ExpandDimsOp>(user);
+                           [&](Operation *user) {
+                             return !canBeRewrittenUsingBlockPtr(user);
                            })) {
-            op->emitRemark("TritonRaiseToBlockPointer: ExpandDims Ops in loops "
-                           "are currently not supported");
+            op->emitRemark("TritonRaiseToBlockPointer: Loop contains ops that "
+                           "cannot be rewritten using a block ptr");
             return failure();
           }
 
@@ -493,15 +552,6 @@ public:
 
     for (auto [i, mappedV] : initArgIndex)
       ptrMap.map(newOp.getRegionIterArgs()[i], mappedV);
-
-    for (auto &bodyOp : newOp.getRegion().getOps()) {
-      if (auto forOp = dyn_cast<scf::ForOp>(bodyOp)) {
-        newOp.erase();
-        forOp->emitRemark("TritonRaiseToBlockPointer: nested loops currently "
-                          "not supported");
-        return failure();
-      }
-    }
 
     // Update the loop body.
     if (failed(rewriteOp(newOp))) {
@@ -544,37 +594,6 @@ public:
     });
 
     return success();
-  }
-
-  Value getFinalValue(Value value) const {
-    Operation *defOp = value.getDefiningOp();
-    if (!defOp) {
-      // look init values outside the loop
-      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
-      Operation *parentOp = blockArg.getOwner()->getParentOp();
-      scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
-      return forOp ? getFinalValue(
-                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
-                   : value;
-    }
-
-    if (isa<tt::ExpandDimsOp>(defOp) || isa<tt::BroadcastOp>(defOp) ||
-        isa<tt::SplatOp>(defOp) || isa<arith::IndexCastOp>(defOp))
-      return getFinalValue(defOp->getOperand(0));
-    if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
-      if (ttgi::isConstant(addOp.getLhs(), 0))
-        return getFinalValue(addOp.getRhs());
-      if (ttgi::isConstant(addOp.getRhs(), 0))
-        return getFinalValue(addOp.getLhs());
-      return addOp.getResult();
-    } else if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
-      if (ttgi::isConstant(mulOp.getLhs(), 1))
-        return getFinalValue(mulOp.getRhs());
-      if (ttgi::isConstant(mulOp.getRhs(), 1))
-        return getFinalValue(mulOp.getLhs());
-      return mulOp.getResult();
-    }
-    return value;
   }
 
   bool lookForMultiplyingValueInDefiningPath(Value &val, Value &ref) const {
@@ -659,101 +678,94 @@ public:
   }
 
   LogicalResult rewriteAddPtrOp(tt::AddPtrOp op) {
-    LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
-
     OpBuilder builder(op);
     Location loc = op.getLoc();
-    auto ptr = op.getPtr();
+    Value ptr = op.getPtr();
 
-    auto fillOffsets = [&](Value offset, unsigned rank,
-                           SmallVector<Value> &offsets) {
-      switch (rank) {
-      case 1:
-        offsets.push_back(offset);
-        break;
-      case 2:
-        offsets.push_back(
-            findOrCreateConstant(loc, 0, offsetBitwidth, builder));
-        offsets.push_back(offset);
-        break;
-      default:
-        llvm_unreachable("unexpected rank");
-      }
-    };
-
-    auto getConstantValue = [](arith::ConstantOp cstOp) {
-      TypedAttr cstVal = cstOp.getValue();
-      APInt val;
-      if (auto attr = dyn_cast<DenseIntElementsAttr>(cstVal))
-        val = attr.getSplatValue<APInt>();
-      else if (auto attr = dyn_cast<IntegerAttr>(cstVal))
-        val = attr.getValue();
-      else
-        assert(false && "unexpected constant type");
-
-      return val;
-    };
-
-    // If the ptr has already been mapped (i.e. rewritten into a block pointer),
-    // rewrite the AddPtrOp using and AdvanceOp.
+    // Case 1: the ptr has been already been mapped.
     if (Value mappedV = ptrMap.lookupOrNull(ptr)) {
+      // Case 1a: the ptr has been mapped to a make_tensor_ptr operation.
       if (auto makeTPtrOp = mappedV.getDefiningOp<tt::MakeTensorPtrOp>()) {
-        Value finalVal = getFinalValue(op.getOffset());
-        auto offsetType = cast<RankedTensorType>(op.getOffset().getType());
-        unsigned rank = offsetType.getRank();
+        PtrState state;
+        if (failed(visitOperand(op.getOffset(), state, loc, builder)))
+          return failure();
 
-        SmallVector<Value> offsets;
-        TypeSwitch<Operation *>(op.getOffset().getDefiningOp())
-            .Case([&](tt::SplatOp splatOp) {
-              fillOffsets(splatOp.getSrc(), rank, offsets);
-            })
-            .Case([&](arith::ConstantOp cstOp) {
-              APInt val = getConstantValue(cstOp);
+        Value basePtr = tt::isTensorPointerType(ptr.getType()) ? ptr : mappedV;
+        auto advanceOp =
+            state.createTTAdvanceOp(basePtr, makeTPtrOp, builder, loc);
 
-              fillOffsets(findOrCreateConstant(loc, val.getZExtValue(),
-                                               offsetBitwidth, builder),
-                          rank, offsets);
-            })
-            .Default([](Operation *op) {
-              llvm::errs() << "Operation: " << *op << "\n";
-              llvm_unreachable("Unhandled operation");
-            });
-
-        assert(!offsets.empty() && offsets.size() == rank &&
-               "unexpected number of offsets");
-        auto advanceOp = builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(),
-                                                             ptr, offsets);
-        cleanUp.push_back(op);
+        cleanUp.insert(op);
         ptrMap.map(op.getResult(), advanceOp);
 
+        LLVM_DEBUG({
+          auto modOp =
+              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+          llvm::dbgs() << "Module:\n" << modOp << "\n";
+          llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp
+                       << "\n";
+        });
+
         return success();
-      } else {
-        llvm_unreachable("Did not find tt::MakeTensorPtrOp");
       }
+
+      // Case 1b: the ptr has been mapped to a tt.advance operation.
+      if (auto advanceOp = mappedV.getDefiningOp<tt::AdvanceOp>()) {
+        PtrState state;
+        if (failed(visitOperand(op.getOffset(), state, loc, builder)))
+          return failure();
+
+        // Skip through a chain of tt.advance operations...
+        Value ptr = advanceOp.getPtr();
+        while (auto advanceOp = ptr.getDefiningOp<tt::AdvanceOp>())
+          ptr = advanceOp.getPtr();
+
+        // ... until we find the make_tensor_ptr operation defining the block
+        // ptr feeding the first tt.advance operation.
+        auto makeTPtrOp = ptr.getDefiningOp<tt::MakeTensorPtrOp>();
+        assert(makeTPtrOp && "Expected a MakeTensorPtrOp");
+
+        Value newAdvanceOp = state.createTTAdvanceOp(advanceOp.getResult(),
+                                                     makeTPtrOp, builder, loc);
+
+        cleanUp.insert(op);
+        ptrMap.map(op.getResult(), newAdvanceOp);
+
+        LLVM_DEBUG({
+          llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << newAdvanceOp
+                       << "\n";
+          auto modOp =
+              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
+          llvm::dbgs() << "Module:\n" << modOp << "\n";
+        });
+
+        return success();
+      }
+
+      llvm_unreachable("Unexpected mappedV defining operation");
     }
 
-    // Otherwise, rewrite the AddPtrOp using PtrState.
+    // Case 2: the ptr has not previously been mapped.
+    // If the addptr operation increments a scalar pointer, give up.
+    Value result = op.getResult();
+    if (!isa<RankedTensorType>(result.getType()))
+      return failure();
+
+    // Otherwise, rewrite the AddPtrOp.
     PtrState state;
     if (failed(visitOperandAddptr(op, state, loc, builder)))
       return failure();
 
-    Value result = op.getResult();
     knownPtrs[result] = state;
 
-    Value mapped = result;
-    if (isa<RankedTensorType>(result.getType())) {
-      Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
-      knownPtrs[makePtrOp] = std::move(state);
-      mapped = makePtrOp;
-    }
+    assert(isa<RankedTensorType>(result.getType()));
+    Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
+    knownPtrs[makePtrOp] = std::move(state);
 
-    ptrMap.map(result, mapped);
-
-    // AddPtrOps that have been rewritten and no longer used in the code must
-    // be removed in the pass to avoid type matching issue.
-    cleanUp.push_back(op);
+    cleanUp.insert(op);
+    ptrMap.map(result, makePtrOp);
 
     LLVM_DEBUG({
+      llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << makePtrOp << "\n";
       auto modOp =
           builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
       llvm::dbgs() << "Module:\n" << modOp << "\n";
@@ -779,7 +791,6 @@ public:
     auto resType = cast<tt::PointerType>(makeTPtrOp.getResult().getType());
     auto pointeeType = cast<ShapedType>(resType.getPointeeType());
     ArrayRef<int64_t> shape = pointeeType.getShape();
-    ArithBuilder abuilder(builder, loc);
 
     for (int i = 0; i < pointeeType.getRank(); i++) {
       state.sizes.push_back(shape[i]);
@@ -788,9 +799,11 @@ public:
           loc, builder.getIndexType(), makeTPtrOp.getStrides()[i]);
       auto offsetCst = builder.createOrFold<arith::IndexCastOp>(
           loc, builder.getIndexType(), makeTPtrOp.getOffsets()[i]);
-      auto scaledOffset = mulOrFold(offsetCst, strideCst, abuilder);
-      state.offsets.push_back(findOrCreateCast(
-          loc, scaledOffset, builder.getIntegerType(offsetBitwidth), builder));
+      auto scaledOffset =
+          builder.createOrFold<arith::MulIOp>(loc, offsetCst, strideCst);
+      state.offsets.push_back(
+          findOrCreateCast(loc, getFinalValue(scaledOffset),
+                           builder.getIntegerType(offsetBitwidth), builder));
     }
     state.strides = makeTPtrOp.getStrides();
     state.shape = makeTPtrOp.getShape();
@@ -888,28 +901,43 @@ public:
           llvm_unreachable(
               "Unexpected operand defining operation tt.make_tensor_ptr");
         llvm_unreachable("Unexpected operand defining operation");
+      } else {
+        // If the operand is an iter-arg of an for loop, give up.
+        if (isa<scf::ForOp>(operand.getParentBlock()->getParentOp()))
+          return failure();
+
+        state.source = operand;
+        return success();
       }
-      state.source = operand;
-      return success();
     }
 
     Operation *definingOp = operand.getDefiningOp();
     if (!definingOp) {
-      llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
-                      "argument operand\n"
-                   << operand << "\n";
+      if (!knownPtrs.contains(operand)) {
+        llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
+                        "argument operand\n"
+                     << operand << "\n";
+        return failure();
+      }
+
+      // This operand must be an iter-arg of an inner-loop in a multiple-level
+      // nested loop, which means its PtrState must have already been
+      // populated during rewriteForOp of the parent loop.
+      state = knownPtrs[operand];
+      return success();
     }
 
     return TypeSwitch<Operation *, LogicalResult>(definingOp)
         .Case<arith::AddIOp, arith::ConstantOp, arith::MulIOp, arith::RemUIOp,
-              arith::RemSIOp, tt::BroadcastOp, tt::MakeRangeOp, tt::SplatOp,
-              tt::ExpandDimsOp>([this, &state, loc, &builder](auto op) {
-          return visitAddPointerOperand(op, state, loc, builder);
-        })
+              arith::RemSIOp, arith::ExtSIOp, arith::ExtUIOp, tt::BroadcastOp,
+              tt::MakeRangeOp, tt::SplatOp, tt::ExpandDimsOp>(
+            [this, &state, loc, &builder](auto op) {
+              return visitAddPointerOperand(op, state, loc, builder);
+            })
         .Default([](Operation *op) {
           llvm::errs() << "TritonRaiseBlockPointer: encountered addptr operand "
-                          "produced by an unsupported operation\n"
-                       << op << "\n";
+                          "produced by unsupported operation: "
+                       << *op << "\n";
           return failure();
         });
   }
@@ -923,6 +951,13 @@ public:
                 llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value,
                 bool> = true>
   LogicalResult visitAddPointerRemOperand(OpTy remOp, PtrState &state,
+                                          Location loc, OpBuilder &builder);
+
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, arith::ExtSIOp, arith::ExtUIOp>::value,
+                bool> = true>
+  LogicalResult visitAddPointerExtOperand(OpTy extOp, PtrState &state,
                                           Location loc, OpBuilder &builder);
 
   template <
@@ -1011,7 +1046,7 @@ public:
   }
 
 private:
-  SmallVector<Operation *> cleanUp;
+  SmallPtrSet<Operation *, 8> cleanUp;
   llvm::SmallDenseMap<Value, PtrState> knownPtrs;
   IRMapping ptrMap;
 };
@@ -1093,6 +1128,28 @@ template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::RemUIOp remOp, PtrState &state, Location loc, OpBuilder &builder) {
   return visitAddPointerRemOperand(remOp, state, loc, builder);
+}
+
+template <
+    typename OpTy,
+    std::enable_if_t<
+        llvm::is_one_of<OpTy, arith::ExtSIOp, arith::ExtUIOp>::value, bool>>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerExtOperand(
+    OpTy extOp, PtrState &state, Location loc, OpBuilder &builder) {
+  assert(state.isEmpty() && "state is a return argument");
+  return visitOperand(extOp.getIn(), state, loc, builder);
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::ExtSIOp extOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerExtOperand(extOp, state, loc, builder);
+}
+
+template <>
+LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
+    arith::ExtUIOp extOp, PtrState &state, Location loc, OpBuilder &builder) {
+  return visitAddPointerExtOperand(extOp, state, loc, builder);
 }
 
 template <>

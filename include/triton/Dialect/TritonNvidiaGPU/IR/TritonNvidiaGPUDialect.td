@@ -55,12 +55,9 @@ def TritonNvidiaGPU_Dialect : Dialect {
             "TritonGPU module should contain a ttg.num-ctas attribute");
       return cast<IntegerAttr>(mod->getAttr("ttg.num-ctas")).getInt();
     }
-    void registerTypes();
   }];
-
-  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
-
-include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUTypes.td"
 
 #endif

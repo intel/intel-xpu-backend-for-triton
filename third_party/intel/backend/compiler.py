@@ -130,7 +130,9 @@ class XPUBackend(BaseBackend):
         super().__init__(target)
         if not isinstance(target.arch, dict):
             raise TypeError("target.arch is not a dict")
-        self._dirname = os.path.dirname(os.path.realpath(__file__))
+        dirname = os.path.dirname(os.path.realpath(__file__))
+        mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
+        self.device_arch = mod.parse_device_arch(target.arch.get('architecture', 0))
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -153,14 +155,12 @@ class XPUBackend(BaseBackend):
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
 
-        mod = compile_module_from_src(Path(os.path.join(self._dirname, "arch_parser.c")).read_text(), "arch_utils")
-        device_arch = mod.parse_device_arch(tgt_prop.get('architecture', 0))
-        if device_arch and shutil.which('ocloc'):
-            if device_arch in self.device_props:
-                dev_prop.update(self.device_props[device_arch])
+        if self.device_arch and shutil.which('ocloc'):
+            if self.device_arch in self.device_props:
+                dev_prop.update(self.device_props[self.device_arch])
                 return dev_prop
             try:
-                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', device_arch]
+                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', self.device_arch]
                 with tempfile.TemporaryDirectory() as temp_dir:
                     output = subprocess.check_output(ocloc_cmd, text=True, cwd=temp_dir)
                 supported_extensions = set()
@@ -173,7 +173,7 @@ class XPUBackend(BaseBackend):
                     'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
                 ocloc_dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
                 ocloc_dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
-                self.device_props[device_arch] = ocloc_dev_prop
+                self.device_props[self.device_arch] = ocloc_dev_prop
                 dev_prop.update(ocloc_dev_prop)
             except subprocess.CalledProcessError:
                 # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.

@@ -54,7 +54,7 @@ class WallEvent():
         self.record()
 
     def record(self):
-        self.timestamp = time.time_ns() / 1_000_000
+        self.timestamp = time.perf_counter_ns() / 1_000_000
 
     def elapsed_time(self, end):
         return end.timestamp - self.timestamp

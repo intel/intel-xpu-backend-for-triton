@@ -6,6 +6,7 @@
 #include "mlir/AsmParser/AsmParser.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Signals.h"
 
@@ -272,7 +273,7 @@ public:
     ctx.getOrLoadDialect<TritonGPUDialect>();
     ctaLayout =
         triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
-    f16Ty = FloatType::getF16(&ctx);
+    f16Ty = Float16Type::get(&ctx);
   }
 
   triton::gpu::DotOperandEncodingAttr
@@ -367,6 +368,8 @@ TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
   auto dot2dOp1 = createDotOperand(1, mfma2d, 4);
   ASSERT_THAT(dot2dOp0.getWarpOrder(), mfma2d.getWarpOrder());
   ASSERT_THAT(dot2dOp1.getWarpOrder(), mfma2d.getWarpOrder());
+  ASSERT_THAT(dot2dOp0.getThreadsPerWarp(), testing::ElementsAre(32u, 2u));
+  ASSERT_THAT(dot2dOp1.getThreadsPerWarp(), testing::ElementsAre(2u, 32u));
 
   auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
   auto tdot2dOp0 = createDotOperand(0, tmfma2d, 4);
@@ -379,12 +382,28 @@ TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
   auto dot3dOp1 = createDotOperand(1, mfma3d, 4);
   ASSERT_THAT(dot3dOp0.getWarpOrder(), mfma3d.getWarpOrder());
   ASSERT_THAT(dot3dOp1.getWarpOrder(), mfma3d.getWarpOrder());
+  ASSERT_THAT(dot3dOp0.getThreadsPerWarp(), testing::ElementsAre(1u, 32u, 2u));
+  ASSERT_THAT(dot3dOp1.getThreadsPerWarp(), testing::ElementsAre(1u, 2u, 32u));
 
   auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
   auto tdot3dOp0 = createDotOperand(0, tmfma3d, 4);
   auto tdot3dOp1 = createDotOperand(1, tmfma3d, 4);
   ASSERT_THAT(tdot3dOp0.getWarpOrder(), tmfma3d.getWarpOrder());
   ASSERT_THAT(tdot3dOp1.getWarpOrder(), tmfma3d.getWarpOrder());
+
+  auto mfma16_2d = createMFMA(16, 16, {2, 4});
+  auto dot16_2dOp0 = createDotOperand(0, mfma16_2d, 4);
+  auto dot16_2dOp1 = createDotOperand(1, mfma16_2d, 4);
+  ASSERT_THAT(dot16_2dOp0.getThreadsPerWarp(), testing::ElementsAre(16u, 4u));
+  ASSERT_THAT(dot16_2dOp1.getThreadsPerWarp(), testing::ElementsAre(4u, 16u));
+
+  auto mfma16_3d = createMFMA(16, 16, {2, 4, 1});
+  auto dot16_3dOp0 = createDotOperand(0, mfma16_3d, 4);
+  auto dot16_3dOp1 = createDotOperand(1, mfma16_3d, 4);
+  ASSERT_THAT(dot16_3dOp0.getThreadsPerWarp(),
+              testing::ElementsAre(1u, 16u, 4u));
+  ASSERT_THAT(dot16_3dOp1.getThreadsPerWarp(),
+              testing::ElementsAre(1u, 4u, 16u));
 }
 
 TEST_F(AMDWmmaLayoutTest, wmmaV1) {
@@ -433,24 +452,36 @@ TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
   auto dot2dVer1Op1 = createDotOperand(1, wmma2dVer1, 16);
   ASSERT_THAT(dot2dVer1Op0.getWarpOrder(), wmma2dVer1.getWarpOrder());
   ASSERT_THAT(dot2dVer1Op1.getWarpOrder(), wmma2dVer1.getWarpOrder());
+  ASSERT_THAT(dot2dVer1Op0.getThreadsPerWarp(), testing::ElementsAre(16u, 1u));
+  ASSERT_THAT(dot2dVer1Op1.getThreadsPerWarp(), testing::ElementsAre(1u, 16u));
 
-  auto wmma3dVer1 = createWMMAv1({2, 4});
+  auto wmma3dVer1 = createWMMAv1({2, 4, 1});
   auto dot3dVer1Op0 = createDotOperand(0, wmma3dVer1, 16);
   auto dot3dVer1Op1 = createDotOperand(1, wmma3dVer1, 16);
   ASSERT_THAT(dot3dVer1Op0.getWarpOrder(), wmma3dVer1.getWarpOrder());
   ASSERT_THAT(dot3dVer1Op1.getWarpOrder(), wmma3dVer1.getWarpOrder());
+  ASSERT_THAT(dot3dVer1Op0.getThreadsPerWarp(),
+              testing::ElementsAre(1, 16u, 1u));
+  ASSERT_THAT(dot3dVer1Op1.getThreadsPerWarp(),
+              testing::ElementsAre(1, 1u, 16u));
 
   auto wmma2dVer2 = createWMMAv2(false, {2, 4});
   auto dot2dVer2Op0 = createDotOperand(0, wmma2dVer2, 16);
   auto dot2dVer2Op1 = createDotOperand(1, wmma2dVer2, 16);
   ASSERT_THAT(dot2dVer2Op0.getWarpOrder(), wmma2dVer2.getWarpOrder());
   ASSERT_THAT(dot2dVer2Op1.getWarpOrder(), wmma2dVer2.getWarpOrder());
+  ASSERT_THAT(dot2dVer2Op0.getThreadsPerWarp(), testing::ElementsAre(16u, 2u));
+  ASSERT_THAT(dot2dVer2Op1.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
 
-  auto wmma3dVer2 = createWMMAv2(false, {2, 4});
+  auto wmma3dVer2 = createWMMAv2(false, {2, 4, 1});
   auto dot3dVer2Op0 = createDotOperand(0, wmma3dVer2, 16);
   auto dot3dVer2Op1 = createDotOperand(1, wmma3dVer2, 16);
   ASSERT_THAT(dot3dVer2Op0.getWarpOrder(), wmma3dVer2.getWarpOrder());
   ASSERT_THAT(dot3dVer2Op1.getWarpOrder(), wmma3dVer2.getWarpOrder());
+  ASSERT_THAT(dot3dVer2Op0.getThreadsPerWarp(),
+              testing::ElementsAre(1, 16u, 2u));
+  ASSERT_THAT(dot3dVer2Op1.getThreadsPerWarp(),
+              testing::ElementsAre(1, 2u, 16u));
 }
 
 class LinearEncodingTest : public ::testing::Test {
@@ -525,14 +556,12 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       ASSERT_EQ(linearLayout, expandedLL);
 
       // Test that methods of DistributedEncoding return the same values
-      Type eltTy = FloatType::getF32(&ctx);
+      Type eltTy = Float32Type::get(&ctx);
 
       ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
-      ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
-                    .getTotalElemsPerThread(shape, eltTy),
+      ASSERT_EQ(distributedEncoding.getTotalElemsPerThread(shape, eltTy),
                 linearEncoding.getTotalElemsPerThread(shape, eltTy));
-      ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
-                    .getElemsPerThread(shape, eltTy),
+      ASSERT_EQ(distributedEncoding.getElemsPerThread(shape, eltTy),
                 linearEncoding.getElemsPerThread(shape, eltTy));
       ASSERT_EQ(distributedEncoding.getRepOrder(),
                 linearEncoding.getRepOrder());
@@ -566,16 +595,15 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       // block level
       // SliceEncoding is not well-defined for CGAs
       if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getCTASplitNum(),
+        auto baseEncoding = cast<LayoutEncodingTrait>(distributedEncoding);
+        ASSERT_EQ(baseEncoding.getCTASplitNum(),
                   linearEncoding.getCTASplitNum());
-        ASSERT_EQ(distributedEncoding.getCTAsPerCGA(),
-                  linearEncoding.getCTAsPerCGA());
+        ASSERT_EQ(baseEncoding.getCTAsPerCGA(), baseEncoding.getCTAsPerCGA());
         // If we are not using CGAs, the order is meaningless
-        auto useCGA = distributedEncoding.getCTAsPerCGA() !=
-                      SmallVector<unsigned>(rank, 1);
+        auto useCGA =
+            baseEncoding.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
         if (useCGA) {
-          ASSERT_EQ(distributedEncoding.getCTAOrder(),
-                    linearEncoding.getCTAOrder());
+          ASSERT_EQ(baseEncoding.getCTAOrder(), linearEncoding.getCTAOrder());
         }
       }
     }

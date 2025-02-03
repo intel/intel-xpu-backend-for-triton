@@ -19,15 +19,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::LLVM::delinearize;
-using ::mlir::LLVM::SharedMemoryObject;
-using ::mlir::triton::gpu::BlockedEncodingAttr;
-using ::mlir::triton::gpu::CTALayoutAttr;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::SliceEncodingAttr;
-namespace ttng = ::mlir::triton::nvidia_gpu;
-
 namespace mlir::triton {
 class ReduceOp;
 class ScanOp;
@@ -140,6 +131,7 @@ public:
                                   ConversionPatternRewriter &rewriter,
                                   const TargetInfoBase &targetInfo) const {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     // indices will store the index of the op operands in descending order
     // of their bitwidths
     std::vector<unsigned> indices(op.getNumOperands());
@@ -156,8 +148,8 @@ public:
     indexToBase[indices[0]] = basePtr;
     for (unsigned i = 1; i < op.getNumOperands(); ++i) {
       indexToBase[indices[i]] =
-          gep(basePtr.getType(), getElementType(op, indices[i - 1]),
-              indexToBase[indices[i - 1]], i32_val(elems));
+          b.gep(basePtr.getType(), getElementType(op, indices[i - 1]),
+                indexToBase[indices[i - 1]], b.i32_val(elems));
     }
     // smemBases[k] is the base pointer for the k-th operand
     SmallVector<Value> smemBases(op.getNumOperands());

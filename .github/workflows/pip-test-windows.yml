@@ -21,9 +21,11 @@ on:
 permissions: read-all
 
 env:
+  PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
+  SKIPLIST: --skip-list scripts/skiplist/a770
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
 
 jobs:
@@ -91,11 +93,19 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
+          pip uninstall pytest_forked -y
 
       - name: Show installed pip packages
         run: |
           .venv\Scripts\activate.ps1
           pip list -v
+
+      - name: Run unit tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
         run: |
@@ -108,6 +118,21 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           ${{ env.TRITON_TEST_CMD }} --interpreter
+
+      - name: Run tutorials
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          # Disable interactive plot window
+          $env:MPLBACKEND = "Agg"
+          ${{ env.TRITON_TEST_CMD }} --tutorial
+
+      - name: Run instrumentation tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --instrumentation
 
       - name: Pass rate
         run: |

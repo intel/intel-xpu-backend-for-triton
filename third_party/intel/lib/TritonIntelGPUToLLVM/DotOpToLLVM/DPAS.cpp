@@ -179,6 +179,7 @@ public:
     });
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
+      auto tb = TritonLLVMOpBuilder(loc, rewriter);
       Value valA = ha.at({b, m, k});
       Value valB = hb.at({b, n, k});
       Value valc = fc.at({b, m, n});
@@ -190,8 +191,8 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
       fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
-          loc, dTy, bitcast(valc, cTy), bitcast(valA, aTy), bitcast(valB, bTy),
-          pA, pB, RC);
+          loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+          tb.bitcast(valB, bTy), pA, pB, RC);
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -270,6 +271,7 @@ private:
                                               int64_t dimBatch, int64_t dimRow,
                                               int64_t dimCol,
                                               Type elemTy) const {
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     std::vector<Value> elems;
@@ -283,7 +285,7 @@ private:
               VectorType vecType = cast<mlir::VectorType>(matVal.getType());
               Type valTy = vecType.getElementType();
               for (int i = 0; i < vecType.getNumElements(); ++i) {
-                Value val = extract_element(valTy, matVal, i32_val(i));
+                Value val = tb.extract_element(valTy, matVal, tb.i32_val(i));
                 elems.push_back(val);
               }
             }
@@ -333,6 +335,7 @@ private:
         ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
 
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     int offset = 0;
     ValueTable vals;
     for (unsigned b = 0; b < batch; ++b) {
@@ -342,8 +345,8 @@ private:
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
               Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
               for (int k = 0; k < numElemsPerOperand; ++k) {
-                matVal = insert_element(dotOpTy, matVal, elems[offset++],
-                                        i32_val(k));
+                matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
+                                           tb.i32_val(k));
               }
               vals[{b, i * repClusterOuter + repOuter,
                     j * repClusterInner + repInner}] = matVal;

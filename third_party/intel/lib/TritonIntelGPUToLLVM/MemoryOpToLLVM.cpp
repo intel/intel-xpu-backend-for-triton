@@ -30,7 +30,6 @@ void lowerDistributedToShared(
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
-  auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
@@ -48,6 +47,7 @@ struct GlobalScratchAllocOpConversion
   matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
         "ttg.global_scratch_memory_offset");
@@ -59,7 +59,7 @@ struct GlobalScratchAllocOpConversion
       return failure();
     }
     Value ptr =
-        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, b.i32_val(opOffset));
 
     rewriter.replaceOp(op, ptr);
     return success();
@@ -86,7 +86,7 @@ struct LocalAllocOpConversion
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
-        cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
+        cast<triton::gpu::SharedEncodingTrait>(resultTy.getEncoding());
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
@@ -137,8 +137,8 @@ public:
       auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
       if (auto dpasLayout =
               dyn_cast_or_null<DpasEncodingAttr>(dotLayout.getParent())) {
-        auto sharedLayout =
-            cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
+        auto sharedLayout = cast<SwizzledSharedEncodingAttr>(
+            op.getSrc().getType().getEncoding());
         int K;
         if (dotLayout.getOpIdx() == 0) // $a
           K = op.getType().getShape()[sharedLayout.getOrder()[0]];
@@ -162,6 +162,7 @@ private:
       ConversionPatternRewriter &rewriter, const DpasEncodingAttr &dpasLayout,
       const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto src = op.getSrc();
     Value dst = op.getResult();
 
@@ -174,7 +175,7 @@ private:
     if (!isOuter) {
       res = SharedToDotOperandDPAS::intel::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
-          smemObj, typeConverter, tid_val());
+          smemObj, typeConverter, b.tid_val());
     } else {
       assert(false && "unsupported DPAS layout found");
     }

@@ -17,28 +17,33 @@ using namespace mlir::triton::gpu::intel;
 namespace {
 SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> values) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> results;
   for (auto v : values) {
-    auto em0 = and_(v, i8_val(0x7));
-    auto em1 = and_(v, i8_val(0x70));
-    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(6)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
-    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(2)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
+    auto em0 = b.and_(v, b.i8_val(0x7));
+    auto em1 = b.and_(v, b.i8_val(0x70));
+    Value v0 =
+        b.or_(b.shl(b.zext(i16_ty, em0), b.i16_val(6)),
+              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x8))), b.i16_val(12)));
+    Value v1 =
+        b.or_(b.shl(b.zext(i16_ty, em1), b.i16_val(2)),
+              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x80))), b.i16_val(8)));
     // Three cases:
     // 1) x is normal and non-zero: Correct bias
-    v0 = select(icmp_ne(and_(em0, i8_val(0x6)), i8_val(0)),
-                add(v0, i16_val((127 - 1) << 7)), v0);
-    v1 = select(icmp_ne(and_(em1, i8_val(0x60)), i8_val(0)),
-                add(v1, i16_val((127 - 1) << 7)), v1);
+    v0 = b.select(b.icmp_ne(b.and_(em0, b.i8_val(0x6)), b.i8_val(0)),
+                  b.add(v0, b.i16_val((127 - 1) << 7)), v0);
+    v1 = b.select(b.icmp_ne(b.and_(em1, b.i8_val(0x60)), b.i8_val(0)),
+                  b.add(v1, b.i16_val((127 - 1) << 7)), v1);
     // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
     // bf16
-    v0 = bitcast(select(icmp_eq(em0, i8_val(0x1)),
-                        or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0),
-                 bf16_ty);
-    v1 = bitcast(select(icmp_eq(em1, i8_val(0x10)),
-                        or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1),
-                 bf16_ty);
+    v0 = b.bitcast(
+        b.select(b.icmp_eq(em0, b.i8_val(0x1)),
+                 b.or_(b.i16_val(16128), b.and_(v0, b.i16_val(0x8000))), v0),
+        bf16_ty);
+    v1 = b.bitcast(
+        b.select(b.icmp_eq(em1, b.i8_val(0x10)),
+                 b.or_(b.i16_val(16128), b.and_(v1, b.i16_val(0x8000))), v1),
+        bf16_ty);
     // 3) x is zero, nothing to do
     results.push_back(v0);
     results.push_back(v1);
@@ -48,30 +53,35 @@ SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
 
 SmallVector<Value> convertMxfp4x2ToFp16x2(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> values) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> results;
   for (auto v : values) {
-    auto em0 = and_(v, i8_val(0x7));
-    auto em1 = and_(v, i8_val(0x70));
+    auto em0 = b.and_(v, b.i8_val(0x7));
+    auto em1 = b.and_(v, b.i8_val(0x70));
     // FP16 bits: sign = 1, exponent = 5, mantissa = 10
-    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(10 - 1)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
-    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(10 - 1 - 4)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
+    Value v0 =
+        b.or_(b.shl(b.zext(i16_ty, em0), b.i16_val(10 - 1)),
+              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x8))), b.i16_val(12)));
+    Value v1 =
+        b.or_(b.shl(b.zext(i16_ty, em1), b.i16_val(10 - 1 - 4)),
+              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x80))), b.i16_val(8)));
 
     // Three cases:
     // 1) x is normal and non-zero: Correct bias
-    v0 = select(icmp_ne(and_(em0, i8_val(0x6)), i8_val(0)),
-                add(v0, i16_val((15 - 1) << 10)), v0);
-    v1 = select(icmp_ne(and_(em1, i8_val(0x60)), i8_val(0)),
-                add(v1, i16_val((15 - 1) << 10)), v1);
+    v0 = b.select(b.icmp_ne(b.and_(em0, b.i8_val(0x6)), b.i8_val(0)),
+                  b.add(v0, b.i16_val((15 - 1) << 10)), v0);
+    v1 = b.select(b.icmp_ne(b.and_(em1, b.i8_val(0x60)), b.i8_val(0)),
+                  b.add(v1, b.i16_val((15 - 1) << 10)), v1);
 
     // 2) x is subnormal (x == 0bs001 where s is the sign): Map to fp16 +-0.5
-    v0 = bitcast(select(icmp_eq(em0, i8_val(0x1)),
-                        or_(i16_val(0x3800), and_(v0, i16_val(0x8000))), v0),
-                 f16_ty);
-    v1 = bitcast(select(icmp_eq(em1, i8_val(0x10)),
-                        or_(i16_val(0x3800), and_(v1, i16_val(0x8000))), v1),
-                 f16_ty);
+    v0 = b.bitcast(
+        b.select(b.icmp_eq(em0, b.i8_val(0x1)),
+                 b.or_(b.i16_val(0x3800), b.and_(v0, b.i16_val(0x8000))), v0),
+        f16_ty);
+    v1 = b.bitcast(
+        b.select(b.icmp_eq(em1, b.i8_val(0x10)),
+                 b.or_(b.i16_val(0x3800), b.and_(v1, b.i16_val(0x8000))), v1),
+        f16_ty);
     // 3) x is zero, nothing to do
     results.push_back(v0);
     results.push_back(v1);
@@ -81,22 +91,26 @@ SmallVector<Value> convertMxfp4x2ToFp16x2(RewriterBase &rewriter, Location loc,
 
 Value mxfpScaleFp16(ConversionPatternRewriter &rewriter, Location loc, Value v,
                     Value scale, bool fastMath) {
-  Value scaleF32 = bitcast(shl(zext(i32_ty, scale), i32_val(23)), f32_ty);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value scaleF32 =
+      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
   Value scaleF16 = LLVM::intel::convertFp32ToFp16(loc, rewriter, scaleF32,
                                                   RoundingMode::RTNE);
-  Value mulF16 = fmul(v, scaleF16);
+  Value mulF16 = b.fmul(v, scaleF16);
   if (fastMath)
     return mulF16;
   // Account for NaN in the scale as per the mxfp specification.
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
-  Value nanF16 = bitcast(i16_val(0x7c01), f16_ty);
-  return select(scaleIsNan, nanF16, bitcast(mulF16, f16_ty));
+  Value scaleIsNan = b.icmp_eq(scale, b.i8_val(0xff));
+  Value nanF16 = b.bitcast(b.i16_val(0x7c01), f16_ty);
+  return b.select(scaleIsNan, nanF16, b.bitcast(mulF16, f16_ty));
 };
 
 static Value mxfpScaleBf16(ConversionPatternRewriter &rewriter, Location loc,
                            Value v, Value scale, bool fastMath) {
-  Value vBf16 = bitcast(v, bf16_ty);
-  Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value vBf16 = b.bitcast(v, bf16_ty);
+  Value scaleBf16 =
+      b.bitcast(b.shl(b.zext(i16_ty, scale), b.i16_val(7)), bf16_ty);
 
   Value v0 = mlir::triton::intel::convertBf16ToFp32(loc, rewriter, vBf16);
   Value v1 = mlir::triton::intel::convertBf16ToFp32(loc, rewriter, scaleBf16);
@@ -107,9 +121,9 @@ static Value mxfpScaleBf16(ConversionPatternRewriter &rewriter, Location loc,
   if (fastMath)
     return scaledBf16;
   // Account for NaN in the scale as per the mxfp specification.
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
-  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  return select(scaleIsNan, nanBf16, scaledBf16);
+  Value scaleIsNan = b.icmp_eq(scale, b.i8_val(0xff));
+  Value nanBf16 = b.bitcast(b.i16_val(0x7fff), bf16_ty);
+  return b.select(scaleIsNan, nanBf16, scaledBf16);
 };
 
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
@@ -126,17 +140,18 @@ public:
   matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto operands = adaptor.getOperands();
     SmallVector<Value> xVals = unpackLLElements(loc, operands[0], rewriter);
     SmallVector<Value> scaleVals = unpackLLElements(loc, operands[1], rewriter);
     ScaleDotElemType fpType = op.getFpType();
 
-    Value tid = tid_val();
+    Value tid = b.tid_val();
     auto mod = op->getParentOfType<ModuleOp>();
     Value warpSize =
-        i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-    Value warpId = udiv(tid, warpSize);
-    Value laneId = urem(tid, warpSize);
+        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+    Value warpId = b.udiv(tid, warpSize);
+    Value laneId = b.urem(tid, warpSize);
 
     bool useFp16 = op.getType().getElementType().isF16();
     if (fpType == ScaleDotElemType::E2M1) {
@@ -169,11 +184,11 @@ public:
       kWidth *= 2;  // 2 fp4 are packed in one i8
     }
 
-    Value c = udiv(laneId, i32_val(numScales));
+    Value c = b.udiv(laneId, b.i32_val(numScales));
     SmallVector<Value, 16> ci;
     for (int row = 0; row < numMxfp; ++row)
       for (int col = 0; col < subTileSize; ++col)
-        ci.emplace_back(add(c, i32_val(row + 2 * col)));
+        ci.emplace_back(b.add(c, b.i32_val(row + 2 * col)));
 
     for (auto [i, scaleVal] : llvm::enumerate(scaleVals)) {
       for (int mxfp = 0; mxfp < numMxfp; ++mxfp) {

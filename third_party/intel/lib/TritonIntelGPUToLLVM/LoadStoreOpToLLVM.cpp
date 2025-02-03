@@ -24,9 +24,10 @@ namespace {
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc,
                         const triton::intel::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  Value mask = int_val(1, 1);
-  auto tid = tid_val();
+  Value mask = b.int_val(1, 1);
+  auto tid = b.tid_val();
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
@@ -38,8 +39,8 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto order = triton::gpu::getOrder(layout);
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
     Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
-    Value laneId = urem(tid, warpSize);
-    Value warpId = udiv(tid, warpSize);
+    Value laneId = b.urem(tid, warpSize);
+    Value warpId = b.udiv(tid, warpSize);
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, order);
     SmallVector<Value> multiDimThreadId =
@@ -51,14 +52,15 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
       // Otherwise, we need to mask threads that will replicate data on this
       // dimension. Calculate the thread index on this dimension for the CTA
       Value threadDim =
-          add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
-              multiDimThreadId[dim]);
-      mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
-                                 i32_val(shape[dim])));
+          b.add(b.mul(multiDimWarpId[dim], b.i32_val(threadsPerWarp[dim])),
+                multiDimThreadId[dim]);
+      mask = b.and_(mask,
+                    b.icmp_slt(b.mul(threadDim, b.i32_val(sizePerThread[dim])),
+                               b.i32_val(shape[dim])));
     }
     // Do not write duplicated data when multicast is enabled
     if (triton::gpu::getNumCTAs(layout) > 1) {
-      auto _0 = i32_val(0);
+      auto _0 = b.i32_val(0);
       auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
       auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
       auto CTAOrder = triton::gpu::getCTAOrder(layout);
@@ -72,7 +74,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
           continue;
         // This wrapping rule must be consistent with emitCTAOffsetForLayout
         unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-        Value repId = udiv(multiDimClusterCTAId[dim], i32_val(splitNum));
+        Value repId = b.udiv(multiDimClusterCTAId[dim], b.i32_val(splitNum));
         // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
         //     CTA0 and CTA2 holds data of block0,
         //     CTA1 and CTA3 holds data of block1.
@@ -82,14 +84,14 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
         // Actually in all existing cases of multicast, splitNum is always 1.
         // The mask is equivalent to:
         //     multiDimClusterCTAId[dim] == 0
-        mask = and_(mask, icmp_eq(repId, _0));
+        mask = b.and_(mask, b.icmp_eq(repId, _0));
       }
     }
   } else {
     // If the tensor is not ranked, then it is a scalar and only thread 0 of
     // CTA0 can write
-    mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
-    mask = and_(mask, icmp_eq(tid, i32_val(0)));
+    mask = b.and_(mask, b.icmp_eq(clusterCTAId, b.i32_val(0)));
+    mask = b.and_(mask, b.icmp_eq(tid, b.i32_val(0)));
   }
   return mask;
 }
@@ -196,6 +198,7 @@ struct LoadStoreConversionBase {
       ArrayRef<int32_t> boundaryCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     size_t rank = tensorType.getRank();
     // The block pointer struct is expected to have the following layout:
     //    Struct {
@@ -237,31 +240,31 @@ struct LoadStoreConversionBase {
       auto index = indices[i];
       SmallVector<Value> indicesInTensor(rank);
       for (unsigned j = 0; j < rank; ++j) {
-        indicesInTensor[j] = add(index[j], blockPtr[blockOffset + j]);
+        indicesInTensor[j] = b.add(index[j], blockPtr[blockOffset + j]);
       }
 
       // Get the LLVM values for pointers
       Value offset = linearize(
           indicesInTensor,
           {blockPtr.begin() + blockStride, blockPtr.begin() + blockBase},
-          i32_val(0),
+          b.i32_val(0),
           [&](const Value &index, const Value &stride, const Value &off) {
             // off = off + index * stride
-            return add(mul(index, trunc(i32_ty, stride)), off);
+            return b.add(b.mul(index, b.trunc(i32_ty, stride)), off);
           });
 
-      ptrElems[i] = gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
-                        valueElemTy, blockPtr[blockBase], offset);
+      ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
+                          valueElemTy, blockPtr[blockBase], offset);
 
       if (boundaryCheck.size() > 0) {
         // Get the LLVM values for mask
         maskElems.push_back(linearize(
             indicesInTensor,
             {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
-            int_val(1, 1),
+            b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
               // mask = mask && (index < shape)
-              return and_(icmp_slt(index, trunc(i32_ty, shape)), mask);
+              return b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask);
             }));
       }
     }
@@ -346,6 +349,7 @@ struct PrefetchOpConversion
 
     auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value ptr = op.getPtr();
     auto ptrType = cast<PointerType>(ptr.getType());
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
@@ -416,34 +420,34 @@ struct PrefetchOpConversion
       std::swap(colStride, rowStride);
     }
 
-    baseWidth = mul(baseWidth, i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    baseWidth = trunc(i32_ty, baseWidth);
+    baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
+    baseWidth = b.trunc(i32_ty, baseWidth);
 
-    baseHeight = trunc(i32_ty, baseHeight);
+    baseHeight = b.trunc(i32_ty, baseHeight);
 
     Value rowStrideInBytes =
-        mul(rowStride, i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    rowStrideInBytes = trunc(i32_ty, rowStrideInBytes);
+        b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
+    rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
 
     for (int row = 0; row < numReps[0]; ++row) {
       for (int col = 0; col < numReps[1]; ++col) {
         Value offsetX, offsetY;
-        offsetX = add(
+        offsetX = b.add(
             // the offset of this warp.
-            mul(multiDimWarpId[1], i32_val(shapePerWarp[1])),
+            b.mul(multiDimWarpId[1], b.i32_val(shapePerWarp[1])),
             // add the replica offset with a warp stride.
-            i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
+            b.i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
         // Round the offset into to the tensor shape
-        offsetX = urem(offsetX, i32_val(tensorShape[1]));
-        offsetX = add(offsetX, offsetBaseX);
-        offsetY = add(
+        offsetX = b.urem(offsetX, b.i32_val(tensorShape[1]));
+        offsetX = b.add(offsetX, offsetBaseX);
+        offsetY = b.add(
             // the offset of this warp.
-            mul(multiDimWarpId[0], i32_val(shapePerWarp[0])),
+            b.mul(multiDimWarpId[0], b.i32_val(shapePerWarp[0])),
             // add the replica offset with a warp stride.
-            i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
+            b.i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
         // Round the offset into to the tensor shape
-        offsetY = urem(offsetY, i32_val(tensorShape[0]));
-        offsetY = add(offsetY, offsetBaseY);
+        offsetY = b.urem(offsetY, b.i32_val(tensorShape[0]));
+        offsetY = b.add(offsetY, offsetBaseY);
 
         auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
             loc,
@@ -451,8 +455,8 @@ struct PrefetchOpConversion
             /*base_width*/ baseWidth,
             /*base_height*/ baseHeight,
             /*base_pitch*/ rowStrideInBytes,
-            /*x*/ trunc(i32_ty, offsetX),
-            /*y*/ trunc(i32_ty, offsetY),
+            /*x*/ b.trunc(i32_ty, offsetX),
+            /*y*/ b.trunc(i32_ty, offsetY),
             /*elem_size_in_bits*/ elemSizeInBits,
             /*tile_width*/ tileWidthInElem,
             /*tile_height*/ tileHeightInElem,
@@ -492,6 +496,7 @@ struct LoadOpConversion
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
@@ -581,7 +586,7 @@ struct LoadOpConversion
 
       MLIRContext *ctx = rewriter.getContext();
 
-      Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
+      Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
 
       SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
       int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
@@ -592,10 +597,10 @@ struct LoadOpConversion
       auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
             offsetBaseY] =
           getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
-      baseWidth = trunc(i32_ty, baseWidth);
-      baseHeight = trunc(i32_ty, baseHeight);
+      baseWidth = b.trunc(i32_ty, baseWidth);
+      baseHeight = b.trunc(i32_ty, baseHeight);
 
-      auto pitch = trunc(i32_ty, rowStride);
+      auto pitch = b.trunc(i32_ty, rowStride);
 
       SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
       unsigned outerDimWarpNum =
@@ -607,9 +612,9 @@ struct LoadOpConversion
                              mlir::ceil<unsigned>(tensorShape[rank - 1],
                                                   repClusterShape[rank - 1]));
       Value outerDimWarpId =
-          urem(multiDimWarpId[rank - 2], i32_val(outerDimWarpNum));
+          b.urem(multiDimWarpId[rank - 2], b.i32_val(outerDimWarpNum));
       Value innerDimWarpId =
-          urem(multiDimWarpId[rank - 1], i32_val(innerDimWarpNum));
+          b.urem(multiDimWarpId[rank - 1], b.i32_val(innerDimWarpNum));
       int64_t numRepOuter = numReps[1];
       int64_t numRepInner = numReps[2];
 
@@ -619,10 +624,10 @@ struct LoadOpConversion
       std::array<unsigned, 2> warpStride = {repClusterShape[rank - 2],
                                             repClusterShape[rank - 1]};
 
-      Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
-      Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
-      Value warpId0Offset = add(dimWarpId0, offsetBaseY);
-      Value warpId1Offset = add(dimWarpId1, offsetBaseX);
+      Value dimWarpId0 = b.mul(outerDimWarpId, b.i32_val(warpStride[0]));
+      Value dimWarpId1 = b.mul(innerDimWarpId, b.i32_val(warpStride[1]));
+      Value warpId0Offset = b.add(dimWarpId0, offsetBaseY);
+      Value warpId1Offset = b.add(dimWarpId1, offsetBaseX);
 
       ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
       unsigned valOffset = 0;
@@ -634,21 +639,21 @@ struct LoadOpConversion
           for (int repM = 0; repM < repCluster[0]; ++repM) {
 
             Value offsetY =
-                add(warpId0Offset,
-                    i32_val(m * replicaStride[0] + repM * elemsPerInstr[0]));
+                b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
+                                               repM * elemsPerInstr[0]));
             for (int repN = 0; repN < repCluster[1]; ++repN) {
               Value offsetX =
-                  add(warpId1Offset,
-                      i32_val(n * replicaStride[1] + repN * elemsPerInstr[1]));
+                  b.add(warpId1Offset, b.i32_val(n * replicaStride[1] +
+                                                 repN * elemsPerInstr[1]));
 
               auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
                   loc, load2DGenXType,
                   /*ptr*/ base,
-                  /*base_width*/ mul(baseWidth, elemSizeInBytes),
+                  /*base_width*/ b.mul(baseWidth, elemSizeInBytes),
                   /*base_height*/ baseHeight,
-                  /*base_pitch*/ mul(pitch, elemSizeInBytes),
-                  /*x*/ trunc(i32_ty, offsetX),
-                  /*y*/ trunc(i32_ty, offsetY),
+                  /*base_pitch*/ b.mul(pitch, elemSizeInBytes),
+                  /*x*/ b.trunc(i32_ty, offsetX),
+                  /*y*/ b.trunc(i32_ty, offsetY),
                   /*elem_size_in_bits*/ elemSizeInBits,
                   /*tile_width*/ elemsPerInstr[1],
                   /*tile_height*/ elemsPerInstr[0],
@@ -661,11 +666,11 @@ struct LoadOpConversion
                 return failure();
               }
 
-              Value ret = bitcast(
+              Value ret = b.bitcast(
                   load2dOp, LLVM::getFixedVectorType(eltTy, elemsPerLane));
 
               for (size_t i = 0; i < elemsPerLane; i++) {
-                Value loaded = extract_element(eltTy, ret, i32_val(i));
+                Value loaded = b.extract_element(eltTy, ret, b.i32_val(i));
                 unpackedLoadedVals.push_back(loaded);
               }
             }
@@ -739,7 +744,7 @@ struct LoadOpConversion
     unsigned outerDimWarpNum =
         std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
     Value outerDimWarpId =
-        urem(multiDimWarpId[dimOuter], i32_val(outerDimWarpNum));
+        b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
 
     auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
           offsetBaseY] =
@@ -824,15 +829,15 @@ struct LoadOpConversion
 
     Value pitch;
     if (memoryRowMajor) {
-      pitch = trunc(i32_ty, rowStride);
+      pitch = b.trunc(i32_ty, rowStride);
     } else {
       // Column major memory. We need to swap the width and height because HW
       // only support row major memory layout.
-      pitch = trunc(i32_ty, colStride);
+      pitch = b.trunc(i32_ty, colStride);
       std::swap(baseWidth, baseHeight);
     }
-    baseWidth = trunc(i32_ty, baseWidth);
-    baseHeight = trunc(i32_ty, baseHeight);
+    baseWidth = b.trunc(i32_ty, baseWidth);
+    baseHeight = b.trunc(i32_ty, baseHeight);
 
     const unsigned originalElemBits = elemSizeInBits;
     if (isTransposeRequired) {
@@ -841,7 +846,7 @@ struct LoadOpConversion
       tileWidth = tileWidth / (32 / originalElemBits);
       elemSizeInBits = 32;
     }
-    Value elemSizeInBytes = i32_val(originalElemBits / 8);
+    Value elemSizeInBytes = b.i32_val(originalElemBits / 8);
 
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
@@ -851,20 +856,25 @@ struct LoadOpConversion
           switch (opIdx) {
           case DpasEncodingAttr::OpIdx::OperandA: {
             // A
-            offsetY = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
-                          i32_val(outer * repOuterStride + rep * repStride));
-            offsetX = i32_val(k * repKStride);
+            offsetY =
+                b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                      b.i32_val(outer * repOuterStride + rep * repStride));
+            offsetX = b.i32_val(k * repKStride);
           } break;
           case DpasEncodingAttr::OpIdx::OperandB: {
             // B
-            offsetX = add(mul(outerDimWarpId, i32_val(warpOuterStride)),
-                          i32_val(outer * repOuterStride + rep * repStride));
-            offsetY = i32_val(k * repKStride);
+            offsetX =
+                b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                      b.i32_val(outer * repOuterStride + rep * repStride));
+            offsetY = b.i32_val(k * repKStride);
+          } break;
+          case DpasEncodingAttr::OpIdx::OperandC: {
+            llvm_unreachable("unexpected OpIdx::OperandC");
           } break;
           }
 
-          offsetX = add(offsetX, offsetBaseX);
-          offsetY = add(offsetY, offsetBaseY);
+          offsetX = b.add(offsetX, offsetBaseX);
+          offsetY = b.add(offsetY, offsetBaseY);
 
           if (!memoryRowMajor) {
             // Column major memory. We need to swap the X and Y because HW only
@@ -875,17 +885,17 @@ struct LoadOpConversion
           if (isTransposeRequired) {
             // adjust the block io parameter to align HW's limitations on
             // transposing load.
-            offsetX = udiv(offsetX, i32_val(32 / originalElemBits));
+            offsetX = b.udiv(offsetX, b.i32_val(32 / originalElemBits));
           }
 
           auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
               loc, load2DGenXType,
               /*ptr*/ base,
-              /*base_width*/ mul(baseWidth, elemSizeInBytes),
+              /*base_width*/ b.mul(baseWidth, elemSizeInBytes),
               /*base_height*/ baseHeight,
-              /*base_pitch*/ mul(pitch, elemSizeInBytes),
-              /*x*/ trunc(i32_ty, offsetX),
-              /*y*/ trunc(i32_ty, offsetY),
+              /*base_pitch*/ b.mul(pitch, elemSizeInBytes),
+              /*x*/ b.trunc(i32_ty, offsetX),
+              /*y*/ b.trunc(i32_ty, offsetY),
               /*elem_size_in_bits*/ elemSizeInBits,
               /*tile_width*/ tileWidth,
               /*tile_height*/ tileHeight,
@@ -933,14 +943,17 @@ struct LoadOpConversion
                   loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
                                 rep * packedRowNum + row,
                             k + vblk * packedColNumPerVBlock + col}] =
-                      bitcast(loadVal, unpackedDPASOperandType);
+                      b.bitcast(loadVal, unpackedDPASOperandType);
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
                   loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
                                 rep * packedColNum +
                                 vblk * packedColNumPerVBlock + col,
                             k + row}] =
-                      bitcast(loadVal, unpackedDPASOperandType);
+                      b.bitcast(loadVal, unpackedDPASOperandType);
+                } break;
+                case DpasEncodingAttr::OpIdx::OperandC: {
+                  llvm_unreachable("unexpected OpIdx::OperandC");
                 } break;
                 }
               }
@@ -958,7 +971,7 @@ struct LoadOpConversion
               loadVals.at({outer * repCluster[unsigned(opIdx)] + rep, k});
           VectorType loadTy = cast<VectorType>(loadVal.getType());
           for (int i = 0; i < loadTy.getNumElements(); ++i) {
-            auto val = extract_element(loadVal, i32_val(i));
+            auto val = b.extract_element(loadVal, b.i32_val(i));
             unpackedLoadedVals.push_back(val);
           }
         }
@@ -981,6 +994,7 @@ struct LoadOpConversion
         return success();
 
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
@@ -1053,38 +1067,38 @@ struct LoadOpConversion
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      Value pred = maskElems.size() ? maskElems[vecStart] : int_val(1, 1);
+      Value pred = maskElems.size() ? maskElems[vecStart] : b.int_val(1, 1);
 
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
       Type retTy = retTys.size() > 1
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
                        : retTys[0];
 
-      Value other_ = undef(retTy);
+      Value other_ = b.undef(retTy);
       if (otherElems.size()) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
 
           auto vecTy = vec_ty(valueElemTy, size);
-          Value v = undef(vecTy);
+          Value v = b.undef(vecTy);
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
                 rewriter, loc, typeConverter->getIndexType(), s);
-            v = insert_element(vecTy, v, falseVal, sVal);
+            v = b.insert_element(vecTy, v, falseVal, sVal);
           }
-          v = bitcast(v, IntegerType::get(ctx, width));
+          v = b.bitcast(v, IntegerType::get(ctx, width));
 
           if (otherIsSplatConstInt) {
             for (size_t s = 0; s < 32; s += valueElemNBits)
               splatVal |= splatVal << valueElemNBits;
-            v = int_val(width, splatVal);
+            v = b.int_val(width, splatVal);
           }
 
           Value iiVal = createIndexAttrConstant(
               rewriter, loc, typeConverter->getIndexType(), ii);
           if (nWords > 1) {
-            other_ = insert_element(retTy, other_, v, iiVal);
+            other_ = b.insert_element(retTy, other_, v, iiVal);
           } else {
             other_ = v;
           }
@@ -1098,9 +1112,9 @@ struct LoadOpConversion
       Block &endBlock = LLVM::intel::createPredicatedBlock(
           rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
             Value addrElem =
-                bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+                b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
             uint32_t alignment = nWords * width / 8;
-            Value ret = load(retTy, addrElem, alignment);
+            Value ret = b.load(retTy, addrElem, alignment);
             return SmallVector<Value, 1>{ret};
           });
       Value ret = *endBlock.args_begin();
@@ -1110,19 +1124,19 @@ struct LoadOpConversion
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
         if (isa<VectorType>(retTy)) {
-          curr =
-              extract_element(IntegerType::get(ctx, width), ret, i32_val(ii));
+          curr = b.extract_element(IntegerType::get(ctx, width), ret,
+                                   b.i32_val(ii));
         } else {
           curr = ret;
         }
-        curr = bitcast(curr, LLVM::getFixedVectorType(valueElemTy,
-                                                      width / valueElemNBits));
+        curr = b.bitcast(curr, LLVM::getFixedVectorType(
+                                   valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
         Value loaded =
-            extract_element(valueElemTy, rets[ii / tmp], i32_val(ii % tmp));
+            b.extract_element(valueElemTy, rets[ii / tmp], b.i32_val(ii % tmp));
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -1156,6 +1170,7 @@ struct StoreOpConversion
   rewriteTensorPointerStore(triton::StoreOp op, OpAdaptor adaptor,
                             ConversionPatternRewriter &rewriter) const {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type resultType = op.getValue().getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
@@ -1169,7 +1184,7 @@ struct StoreOpConversion
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    Value elemSizeInBytes = i32_val(elemSizeInBits / 8);
+    Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     size_t rank = tensorShape.size();
     unsigned numElems = getTotalElemsPerThread(tensorType);
@@ -1199,13 +1214,13 @@ struct StoreOpConversion
     auto vals = unpackLLElements(loc, adaptor.getValue(), rewriter);
     assert(vals.size() == numElems);
 
-    width = trunc(i32_ty, width);
-    height = trunc(i32_ty, height);
-    rowStride = trunc(i32_ty, rowStride);
+    width = b.trunc(i32_ty, width);
+    height = b.trunc(i32_ty, height);
+    rowStride = b.trunc(i32_ty, rowStride);
     // encoded as bytes.
-    Value baseWidth = mul(width, elemSizeInBytes);
+    Value baseWidth = b.mul(width, elemSizeInBytes);
     // encoded as bytes.
-    Value basePitch = mul(rowStride, elemSizeInBytes);
+    Value basePitch = b.mul(rowStride, elemSizeInBytes);
 
     // A warp stride for the replicates.
     SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
@@ -1216,9 +1231,9 @@ struct StoreOpConversion
         warpsPerCTA[rank - 1],
         mlir::ceil<unsigned>(tensorShape[rank - 1], repClusterShape[rank - 1]));
     Value outerDimWarpId =
-        urem(multiDimWarpId[rank - 2], i32_val(outerDimWarpNum));
+        b.urem(multiDimWarpId[rank - 2], b.i32_val(outerDimWarpNum));
     Value innerDimWarpId =
-        urem(multiDimWarpId[rank - 1], i32_val(innerDimWarpNum));
+        b.urem(multiDimWarpId[rank - 1], b.i32_val(innerDimWarpNum));
     int64_t numRepOuter = numReps[1];
     int64_t numRepInner = numReps[2];
 
@@ -1228,27 +1243,29 @@ struct StoreOpConversion
     std::array<unsigned, 2> warpStride = {repClusterShape[rank - 2],
                                           repClusterShape[rank - 1]};
 
-    Value dimWarpId0 = mul(outerDimWarpId, i32_val(warpStride[0]));
-    Value dimWarpId1 = mul(innerDimWarpId, i32_val(warpStride[1]));
-    Value warpId0Offset = add(dimWarpId0, offsetBaseY);
-    Value warpId1Offset = add(dimWarpId1, offsetBaseX);
+    Value dimWarpId0 = b.mul(outerDimWarpId, b.i32_val(warpStride[0]));
+    Value dimWarpId1 = b.mul(innerDimWarpId, b.i32_val(warpStride[1]));
+    Value warpId0Offset = b.add(dimWarpId0, offsetBaseY);
+    Value warpId1Offset = b.add(dimWarpId1, offsetBaseX);
 
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     unsigned valOffset = 0;
     for (int m = 0; m < numRepOuter; ++m) {
       for (int n = 0; n < numRepInner; ++n) {
         for (int repM = 0; repM < repCluster[0]; ++repM) {
-          Value offsetY = add(warpId0Offset, i32_val(m * replicaStride[0] +
-                                                     repM * elemsPerInstr[0]));
+          Value offsetY =
+              b.add(warpId0Offset,
+                    b.i32_val(m * replicaStride[0] + repM * elemsPerInstr[0]));
           for (int repN = 0; repN < repCluster[1]; ++repN) {
             Value offsetX =
-                add(warpId1Offset,
-                    i32_val(n * replicaStride[1] + repN * elemsPerInstr[1]));
+                b.add(warpId1Offset, b.i32_val(n * replicaStride[1] +
+                                               repN * elemsPerInstr[1]));
             Value storeVal = rewriter.create<LLVM::UndefOp>(
                 loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
                                               elemsPerLane));
             for (size_t i = 0; i < elemsPerLane; ++i) {
-              storeVal = insert_element(storeVal, vals[valOffset], i32_val(i));
+              storeVal =
+                  b.insert_element(storeVal, vals[valOffset], b.i32_val(i));
               ++valOffset;
             }
 
@@ -1258,13 +1275,13 @@ struct StoreOpConversion
                 /*base_width*/ baseWidth,
                 /*base_height*/ height,
                 /*base_pitch*/ basePitch,
-                /*x*/ trunc(i32_ty, offsetX),
-                /*y*/ trunc(i32_ty, offsetY),
+                /*x*/ b.trunc(i32_ty, offsetX),
+                /*y*/ b.trunc(i32_ty, offsetY),
                 /*elem_size_in_bits*/ elemSizeInBits,
                 /*tile_width*/ elemsPerInstr[1],
                 /*tile_height*/ elemsPerInstr[0],
                 /*v_blocks*/ 1,
-                /*stored_val*/ bitcast(storeVal, store2DGenXType));
+                /*stored_val*/ b.bitcast(storeVal, store2DGenXType));
 
             if (failed(newOp.verify())) {
               // Explicitly invoke verifier because `triton_gen` ops are
@@ -1287,6 +1304,7 @@ struct StoreOpConversion
         return success();
 
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
@@ -1349,38 +1367,40 @@ struct StoreOpConversion
       SmallVector<std::pair<Value, std::string>> asmArgs;
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         // llWord is a width-len composition
-        Value llWord = undef(wordTy);
+        Value llWord = b.undef(wordTy);
         // Insert each value element to the composition
         for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
           Value elem = valueElems[elemOffset];
           if (elem.getType().isInteger(1))
-            elem = sext(i8_ty, elem);
-          elem = bitcast(elem, valueElemTy);
+            elem = b.sext(i8_ty, elem);
+          elem = b.bitcast(elem, valueElemTy);
 
-          llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
+          llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
-        llWord = bitcast(llWord, valArgTy);
+        llWord = b.bitcast(llWord, valArgTy);
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      Value maskVal = maskElems.size() ? and_(mask, maskElems[vecStart]) : mask;
+      Value maskVal =
+          maskElems.size() ? b.and_(mask, maskElems[vecStart]) : mask;
 
       auto vecTy = vec_ty(valArgTy, nWords);
-      Value vecWord = undef(vecTy);
+      Value vecWord = b.undef(vecTy);
       for (int index = 0; index < asmArgs.size(); ++index) {
         auto llWord = asmArgs[index].first;
-        vecWord = insert_element(vecTy, vecWord, llWord, i32_val(index));
+        vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
       // Create a predicated store operation.
       LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
-        Value addrElem = bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+        Value addrElem =
+            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
-        store(vecWord, addrElem, alignment);
+        b.store(vecWord, addrElem, alignment);
         return ArrayRef<Value>();
       });
     } // for
@@ -1392,7 +1412,8 @@ struct StoreOpConversion
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
   assert(numCTAs == 1 && "Expecting numCTA to be 1");
-  barrier();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier();
 }
 
 struct AtomicCASOpConversion
@@ -1414,6 +1435,7 @@ struct AtomicCASOpConversion
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
@@ -1448,11 +1470,11 @@ struct AtomicCASOpConversion
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value casVal = undef(vecTy);
+      Value casVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = insert_element(vecTy, casVal, valElements[i + ii], iiVal);
+        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
       }
 
       Value casPtr = ptrElements[i];
@@ -1462,7 +1484,7 @@ struct AtomicCASOpConversion
       assert((valueElemNBits == 32 || valueElemNBits == 64) &&
              "Unexpected width");
 
-      Value zero = (valueElemNBits == 32) ? i32_val(0) : i64_val(0);
+      Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
       if (!atomicNeedsSharedMemory(op.getResult()))
         rewriter.create<spirv::ControlBarrierOp>(
             loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
@@ -1470,9 +1492,9 @@ struct AtomicCASOpConversion
                 spirv::MemorySemantics::CrossWorkgroupMemory);
       Block &endBlock =
           LLVM::intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
-            // casPtr = bitcast(casPtr, ptr_ty(ctx, 1));
-            casCmp = bitcast(casCmp, zero.getType());
-            casVal = bitcast(casVal, zero.getType());
+            // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
+            casCmp = b.bitcast(casCmp, zero.getType());
+            casVal = b.bitcast(casVal, zero.getType());
 
             auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
                 loc, casPtr, casCmp, casVal, LLVM::AtomicOrdering::acq_rel,
@@ -1484,12 +1506,13 @@ struct AtomicCASOpConversion
 
       Value ret = endBlock.getArgument(0);
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
-      ret = bitcast(ret, retType);
+      ret = b.bitcast(ret, retType);
 
       if (tensorTy) {
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+              vec == 1 ? ret
+                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
         }
       } else {
         if (!atomicNeedsSharedMemory(op.getResult())) {
@@ -1498,10 +1521,10 @@ struct AtomicCASOpConversion
         }
         Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, mask);
         createBarrier(rewriter, loc, numCTAs);
-        Value ret = load(valueElemTy, atomPtr);
+        Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -1535,6 +1558,7 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
@@ -1581,15 +1605,15 @@ struct AtomicRMWOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value rmwVal = undef(vecTy);
+      Value rmwVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        rmwVal = insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
+        rmwVal = b.insert_element(vecTy, rmwVal, valElements[i + ii], iiVal);
       }
 
       Value rmwPtr = ptrElements[i];
-      Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
+      Value rmwMask = llMask ? b.and_(mask, maskElements[i]) : mask;
 
       assert((valueElemNBits == 16 || valueElemNBits == 32 ||
               valueElemNBits == 64) &&
@@ -1598,10 +1622,10 @@ struct AtomicRMWOpConversion
       Value zero;
       llvm::TypeSwitch<mlir::Type>(valueElemTy)
           .Case<mlir::IntegerType>(
-              [&](auto ty) { zero = int_val(valueElemNBits, 0); })
-          .Case<mlir::Float16Type>([&](auto ty) { zero = f16_val(0); })
-          .Case<mlir::Float32Type>([&](auto ty) { zero = f32_val(0); })
-          .Case<mlir::Float64Type>([&](auto ty) { zero = f64_val(0); });
+              [&](auto ty) { zero = b.int_val(valueElemNBits, 0); })
+          .Case<mlir::Float16Type>([&](auto ty) { zero = b.f16_val(0); })
+          .Case<mlir::Float32Type>([&](auto ty) { zero = b.f32_val(0); })
+          .Case<mlir::Float64Type>([&](auto ty) { zero = b.f64_val(0); });
 
       Block *endBlock = nullptr;
       // TODO: check device capabilities to avoid unnecessary emulation or
@@ -1656,7 +1680,7 @@ struct AtomicRMWOpConversion
                 break;
               }
 
-              rmwVal = bitcast(rmwVal, valueElemTy);
+              rmwVal = b.bitcast(rmwVal, valueElemTy);
               auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
                   loc, rmwKind, rmwPtr, rmwVal, LLVM::AtomicOrdering::acq_rel);
               return SmallVector<Value, 1>{atomRMW.getRes()};
@@ -1665,12 +1689,13 @@ struct AtomicRMWOpConversion
 
       Value ret = endBlock->getArgument(0);
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
-      ret = bitcast(ret, retType);
+      ret = b.bitcast(ret, retType);
 
       if (tensorTy) {
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+              vec == 1 ? ret
+                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
         }
       } else {
         if (!atomicNeedsSharedMemory(op.getResult())) {
@@ -1679,11 +1704,11 @@ struct AtomicRMWOpConversion
         }
         Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, ret, rmwMask);
         createBarrier(rewriter, loc, numCTAs);
-        Value loadVal = load(valueElemTy, atomPtr);
+        Value loadVal = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {loadVal});
       }
     }
@@ -1702,6 +1727,7 @@ struct AtomicRMWOpConversion
                               mlir::triton::RMWOp atomicOp, Type valueElemTy,
                               Value rmwPtr, Value rmwVal, Value rmwMask,
                               ArrayRef<Value> ops) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Block *insertionBlock = rewriter.getInsertionBlock();
     Block *headerBlock =
         rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
@@ -1710,19 +1736,19 @@ struct AtomicRMWOpConversion
     rewriter.create<cf::CondBranchOp>(loc, rmwMask, headerBlock, endBlock, ops);
     rewriter.setInsertionPointToStart(headerBlock);
 
-    rmwVal = bitcast(rmwVal, valueElemTy);
+    rmwVal = b.bitcast(rmwVal, valueElemTy);
 
     // Align pointer by 4 bytes by zeroing lower address bits. Atomically read
     // a vector of two fp16 values as a single i32. The second lowest bit is
     // extracted to later be used as an index to extract the required vector
     // element.
     assert(isa<LLVM::LLVMPointerType>(rmwPtr.getType()));
-    auto intPtr = ptrtoint(i64_ty, rmwPtr);
-    auto lowPtrBits = and_(intPtr, i64_val(3));
-    auto elemIndex = trunc(i32_ty, lshr(lowPtrBits, i64_val(1)));
-    auto alignPtr = inttoptr(rmwPtr.getType(), sub(intPtr, lowPtrBits));
-    auto firstValInt = load(i32_ty, alignPtr, 4, false, false, false, false,
-                            LLVM::AtomicOrdering::acquire);
+    auto intPtr = b.ptrtoint(i64_ty, rmwPtr);
+    auto lowPtrBits = b.and_(intPtr, b.i64_val(3));
+    auto elemIndex = b.trunc(i32_ty, b.lshr(lowPtrBits, b.i64_val(1)));
+    auto alignPtr = b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits));
+    auto firstValInt = b.load(i32_ty, alignPtr, 4, false, false, false, false,
+                              LLVM::AtomicOrdering::acquire);
 
     // Create a loop body block. It has a single parameter which holds the
     // latest loaded i32 value.
@@ -1736,8 +1762,8 @@ struct AtomicRMWOpConversion
     rewriter.setInsertionPointToEnd(bodyBlock);
 
     // Extract value for modification.
-    auto origValVec = bitcast(origValInt, vec_ty(valueElemTy, 2));
-    Value origVal = extract_element(origValVec, elemIndex);
+    auto origValVec = b.bitcast(origValInt, vec_ty(valueElemTy, 2));
+    Value origVal = b.extract_element(origValVec, elemIndex);
 
     // Apply operation.
     Value newVal = nullptr;
@@ -1760,16 +1786,16 @@ struct AtomicRMWOpConversion
 
     // Use modified value to form a new i32 value to write to memory.
     assert(newVal);
-    Value newValVec = insert_element(origValVec, newVal, elemIndex);
-    Value newValInt = bitcast(newValVec, i32_ty);
+    Value newValVec = b.insert_element(origValVec, newVal, elemIndex);
+    Value newValInt = b.bitcast(newValVec, i32_ty);
 
     // Execute cmpxchg and loop back if it fails.
     auto successOrdering = LLVM::AtomicOrdering::acq_rel;
     auto failureOrdering = LLVM::AtomicOrdering::monotonic;
     auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
         loc, alignPtr, origValInt, newValInt, successOrdering, failureOrdering);
-    auto newLoaded = extract_val(cmpxchg, 0);
-    auto done = extract_val(cmpxchg, 1);
+    auto newLoaded = b.extract_val(cmpxchg, 0);
+    auto done = b.extract_val(cmpxchg, 1);
     assert(ops.size() == (size_t)1);
     SmallVector<Value, 1> endOps = {origVal};
     rewriter.create<cf::CondBranchOp>(loc, done, endBlock, endOps, bodyBlock,

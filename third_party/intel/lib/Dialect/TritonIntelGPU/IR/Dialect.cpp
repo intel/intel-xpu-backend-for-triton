@@ -245,18 +245,21 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
             std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
                                                     warpsPerCTA[rank - 1]))};
   } break;
+  case OpIdx::OperandC: {
+    auto shapePerWarp = getShapeC();
+    int64_t numRepBatch =
+        rank == 3 ? std::max<int64_t>(1, shape[0] /
+                                             (shapePerWarp[0] * warpsPerCTA[0]))
+                  : 1;
+    return {numRepBatch,
+            std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
+                                                    warpsPerCTA[rank - 2])),
+            std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
+                                                    warpsPerCTA[rank - 1]))};
+  } break;
   }
 
-  auto shapePerWarp = getShapeC();
-  int64_t numRepBatch =
-      rank == 3
-          ? std::max<int64_t>(1, shape[0] / (shapePerWarp[0] * warpsPerCTA[0]))
-          : 1;
-  return {numRepBatch,
-          std::max<int64_t>(1, shape[rank - 2] / (shapePerWarp[rank - 2] *
-                                                  warpsPerCTA[rank - 2])),
-          std::max<int64_t>(1, shape[rank - 1] / (shapePerWarp[rank - 1] *
-                                                  warpsPerCTA[rank - 1]))};
+  llvm_unreachable("unexpected opIdx");
 }
 
 unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
@@ -278,6 +281,9 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
     auto totalElem = product<unsigned>(shapeB);
     // dpas operands scalar are evenly sharded to each work item.
     return (totalElem / threadsPerWar) * product<int64_t>(rep);
+  } break;
+  case OpIdx::OperandC: {
+    llvm_unreachable("unexpected OpIdx::OperandC");
   } break;
   }
   llvm_unreachable("unexpected opIdx");
@@ -350,6 +356,9 @@ DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
     return {shapeB[rank - 2] / threadsPerWarp[0],
             shapeB[rank - 1] / threadsPerWarp[1] * repCluster[rank - 1]};
   } break;
+  case OpIdx::OperandC: {
+    llvm_unreachable("unexpected OpIdx::OperandC");
+  } break;
   }
   llvm_unreachable("unexpected opIdx");
 }
@@ -396,7 +405,7 @@ unsigned DpasEncodingAttr::getOpsPerChannel(Type elemType) {
   assert(elemType.isIntOrFloat() && "unsupported type for DpasEncodingAttr");
 
   unsigned dpasElemBitWidths = elemType.getIntOrFloatBitWidth();
-  if (elemType.isFloat8E5M2() || elemType.isFloat8E4M3FN())
+  if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(elemType))
     dpasElemBitWidths *= 2; // We are upcasting FP8 to FP16.
 
   return DPASCapability::opsChanBitWidths / dpasElemBitWidths;
@@ -672,8 +681,8 @@ struct TritonIntelGPUInferLayoutInterface
       return success();
     }
     // Check whether the encodings are structurally the same.
-    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
-    auto gotLL = triton::gpu::toLinearLayout(shape, got);
+    const auto &expectedLL = triton::gpu::toLinearLayout(shape, expected);
+    const auto &gotLL = triton::gpu::toLinearLayout(shape, got);
     if (expectedLL != gotLL) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);

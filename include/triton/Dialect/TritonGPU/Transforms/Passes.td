@@ -23,6 +23,24 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
+def TritonGPUTC05MMAPipeline : Pass<"tritongpu-tc05mma-pipeline", "mlir::ModuleOp"> {
+  let summary = "Test pass calling TC05MMA pipeline";
+
+  let description = [{
+    This pass is used to test the TC05MMA pipelining under LIT. Internally it calls
+    `getTC05MMASchedule` to get the schedule and then applies the pipelining.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"disableExpander", "disable-expander", "bool", /*default*/"false", "Run only loop pre-process">
+  ];
+}
+
 def TritonGPUTestPipelineAssignLatencies : Pass<"tritongpu-test-pipeline-assign-latencies", "mlir::ModuleOp"> {
   let summary = "test assigning latencies to interesting ops ahead of pipelining";
 
@@ -53,6 +71,22 @@ def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-l
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+}
+
+def TritonGPUFuseNestedLoops : Pass<"tritongpu-fuse-nested-loops", "mlir::ModuleOp"> {
+  let summary = "fuse nested loops for pipelining";
+
+  let description = [{
+    The `tritongpu-fuse-nested-loops` pass will analyze loop nests in the module
+    that need to be pipelined and fuse them into a single loop. This composes
+    with the pipeliner to pipeline loop nests.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::ub::UBDialect",
+  ];
 }
 
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {

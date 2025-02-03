@@ -190,10 +190,12 @@ def filter_traceback(e: BaseException):
         filter_traceback(e.__context__)
 
     # If a user has a file that matches one of these, they're out of luck.
+    sep = os.sep
     BAD_FILES = [
-        "/triton/compiler/code_generator.py",
-        "/ast.py",
+        f"{sep}triton{sep}compiler{sep}code_generator.py",
+        f"{sep}ast.py",
     ]
+    BAD_FILES = [bad_file.replace("/", os.sep) for bad_file in BAD_FILES]
 
     tb = e.__traceback__
     frames = []
@@ -273,11 +275,11 @@ def compile(src, target=None, options=None):
 
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
-    # try:
-    module = src.make_ir(options, codegen_fns, module_map, context)
-    # except Exception as e:
-    #     filter_traceback(e)
-    #     raise
+    try:
+        module = src.make_ir(options, codegen_fns, module_map, context)
+    except Exception as e:
+        filter_traceback(e)
+        raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
@@ -398,6 +400,11 @@ class CompiledKernel:
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
+        if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
+            # Use blackwell max tmem size for now, this should be moved in device properties
+            max_tmem_size = 512  # tmem size in number of columns
+            if self.metadata.tmem_size > max_tmem_size:
+                raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device)

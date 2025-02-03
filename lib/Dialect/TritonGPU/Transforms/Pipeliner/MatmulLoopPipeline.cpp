@@ -37,11 +37,12 @@ namespace {
 
 struct LoadInfo {
   // Layout of the data in shared memory.
-  ttg::SharedEncodingAttr sharedEncoding = nullptr;
+  ttg::SharedEncodingTrait sharedEncoding = nullptr;
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   bool isMMAv3Shared = false;
   bool isMMAv3Registers = false;
+  bool isMMAv5Scale = false;
   int distToUse = 0;
   bool usedByDot = false;
 };
@@ -231,11 +232,13 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
 }
 
 static void
-createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
-                   Value alloc, Value insertIdx, Value extractIdx,
-                   Value barrier, Operation *waitOp, Value phase,
-                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
-  assert(phase && "Phase value is required for TMA async copy.");
+createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc, Value alloc,
+                   Value insertIdx, Value extractIdx, Value barrier,
+                   Operation *waitOp,
+                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
+                   function_ref<void(OpBuilderWithStage &, int, int, Value,
+                                     Value, Value, Value)>
+                       createCopy) {
   OpBuilderWithStage builder(forOp);
   auto [stage, clusterId] = tt::getStageCluster(loadOp);
   auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
@@ -243,10 +246,10 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
 
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
-  Value zero = builder.createWithStage<arith::ConstantIntOp>(
-      forOp.getLoc(), stage, clusterId, 0, 32);
+  Location loc = loadOp->getLoc();
+
+  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
   builder.setInsertionPoint(loadOp);
-  Location loc = loadOp.getLoc();
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
@@ -261,9 +264,8 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
                                                              clusterId, 1, 1);
   Value tmaPtr =
       builder.createWithStage<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
-          loc, stage, clusterId, loadOp.getDesc());
-  Operation *copy = builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
-      loc, stage, clusterId, tmaPtr, loadOp.getIndices(), barrier, view, pred);
+          loc, stage, clusterId, desc);
+  createCopy(builder, stage, clusterId, tmaPtr, barrier, view, pred);
 
   auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
 
@@ -291,12 +293,43 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
 
     builder.setInsertionPointAfter(viewLoad);
     auto sharedLoad = builder.createWithStage<ttg::LocalLoadOp>(
-        loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(),
-        viewLoad /*,wait->getResult(0)*/);
+        loc, stageForFirstUse, clusterForFirstUse,
+        loadOp->getResultTypes().front(), viewLoad /*,wait->getResult(0)*/);
     auto result = sharedLoad->getResults();
     loadOp->replaceAllUsesWith(result);
   }
-  loadOp.erase();
+  loadOp->erase();
+}
+
+static void
+createTMAAsyncLoad(scf::ForOp forOp, tt::ExperimentalDescriptorLoadOp loadOp,
+                   Value alloc, Value insertIdx, Value extractIdx,
+                   Value barrier, Operation *waitOp,
+                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
+  return createTMAAsyncCopy(
+      forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
+      waitOp, loadToInfo,
+      [&](OpBuilderWithStage &builder, int stage, int clusterId, Value tmaPtr,
+          Value barrier, Value view, Value pred) {
+        builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
+            loadOp.getLoc(), stage, clusterId, tmaPtr, loadOp.getIndices(),
+            barrier, view, pred);
+      });
+}
+
+static void createTMAAsyncGather(
+    scf::ForOp forOp, tt::ExperimentalDescriptorGatherOp gatherOp, Value alloc,
+    Value insertIdx, Value extractIdx, Value barrier, Operation *waitOp,
+    llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
+  return createTMAAsyncCopy(
+      forOp, gatherOp, gatherOp.getDesc(), alloc, insertIdx, extractIdx,
+      barrier, waitOp, loadToInfo,
+      [&](OpBuilderWithStage &builder, int stage, int clusterId, Value tmaPtr,
+          Value barrier, Value view, Value pred) {
+        builder.createWithStage<ttng::AsyncTMAGatherOp>(
+            gatherOp.getLoc(), stage, clusterId, tmaPtr, gatherOp.getXOffsets(),
+            gatherOp.getYOffset(), barrier, view, pred);
+      });
 }
 
 static ttg::BlockedEncodingAttr
@@ -318,8 +351,8 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
                                        threadsPerWarp, ctaLayout);
 }
 
-static std::optional<ttg::SharedEncodingAttr>
-getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
+static std::optional<ttg::SharedEncodingTrait>
+getSharedEncoding(Operation *loadOp, bool isTMALoad) {
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto blockedOrder = ttg::getOrder(ty.getEncoding());
@@ -334,9 +367,12 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
   } else {
     order = blockedOrder;
   }
-  if (isMMAV3Shared) {
-    return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
-                                        ctaLayout, ty.getElementType());
+
+  if (isTMALoad) {
+    // For TMA, the encoding compatible with it takes precedence over local
+    // alloc created for the MMA operand.
+    return ttg::NVMMASharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
   }
 
   // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
@@ -344,12 +380,12 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
   if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
         return isa<ttg::LocalAllocOp>(user);
       })) {
-    ttg::SharedEncodingAttr localAllocEnc;
+    ttg::SharedEncodingTrait localAllocEnc;
     for (auto user : loadOp->getUsers()) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
         continue;
-      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
+      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
           localAlloc.getType().getEncoding());
       if (!localAllocEnc) {
         localAllocEnc = enc;
@@ -362,32 +398,8 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
 
   // Use non-swizzled layout for loads that do not feed into dot ops.
   // TODO: This won't be optimal for 2D tensors.
-  return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                      ctaLayout);
-}
-
-static bool hasSharedEncodingHelper(Operation *loadOp) {
-  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
-  // If the allocs don't all have the same encoding, bail.
-  if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
-        return isa<ttg::LocalAllocOp>(user);
-      })) {
-    ttg::SharedEncodingAttr localAllocEnc;
-    for (auto user : loadOp->getUsers()) {
-      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
-      if (!localAlloc)
-        continue;
-      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
-          localAlloc.getType().getEncoding());
-      if (!localAllocEnc) {
-        localAllocEnc = enc;
-      }
-      if (enc != localAllocEnc)
-        return false;
-    }
-    return true;
-  }
-  return true;
+  return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                              ctaLayout);
 }
 
 static llvm::SmallVector<Operation *> getDirectUserInBlock(Operation *loadOp) {
@@ -420,7 +432,8 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
             users.push_back(op);
             return;
           }
-          if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op) ||
+          if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
+                  tt::ExperimentalDescriptorGatherOp>(op) ||
               op->hasTrait<OpTrait::DotLike>()) {
             // Stop recursion when hitting a LoadOp or a DotOp.
             users.push_back(op);
@@ -451,7 +464,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
   // Go through all loads in the loop, check to see if they are pipelined.
   llvm::DenseSet<Operation *> loadsToPipeline;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!isa<tt::LoadOp>(op) && !isa<tt::ExperimentalDescriptorLoadOp>(op))
+    if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
+             tt::ExperimentalDescriptorGatherOp>(op))
       continue;
     if (loadToInfo.count(&op))
       // TODO pawel: err, we'd need to verify that the distance is the same
@@ -459,23 +473,14 @@ assignMemoryLayouts(scf::ForOp &forOp,
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
 
-    // Check stage for uses. If any direct use is in a different stage, treat it
+    // Check stage for uses. If the first use is in a different stage, treat it
     // as a pipelined load.
-    bool isPipelined = false;
     auto [sLoad, _cLoad] = tt::getStageCluster(&op);
-    auto directUsers = getDirectUserInBlock(&op);
-    LDBG("DirectUser for load " << op);
-    for (auto user : directUsers) {
-      LDBG("  - use: " << *user);
-      if (!user->hasAttr(mlir::triton::kLoopStageAttrName))
-        continue;
-      auto [stage, _cluster] = tt::getStageCluster(user);
-      if (stage != sLoad) {
-        isPipelined = true;
-        break;
-      }
-    }
-    if (!isPipelined)
+    Operation *firstUse = getFirstUseOfPipelinedLoad(&op);
+    LDBG("first use for load " << op);
+    LDBG("  - use: " << *firstUse);
+    auto firstUseStageCluster = tt::maybeGetStageCluster(firstUse);
+    if (!firstUseStageCluster || firstUseStageCluster->first == sLoad)
       continue;
 
     // Try to set shared encoding etc for the pipelined load.
@@ -487,6 +492,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
       }
     });
 
+    bool isTMALoad = isa<tt::ExperimentalDescriptorLoadOp,
+                         tt::ExperimentalDescriptorGatherOp>(op);
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
@@ -501,12 +508,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
         loadInfo.isMMAv3Registers =
             (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
 
-        if (loadInfo.isMMAv3Shared) {
+        if (loadInfo.isMMAv3Shared || isTMALoad) {
           loadInfo.sharedEncoding =
-              getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
-        } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
-          loadInfo.sharedEncoding =
-              getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
+              getSharedEncoding(&op, isTMALoad).value_or(nullptr);
         } else if (loadInfo.isMMAv3Registers || dot) {
           bool incompatible = false;
           loadInfo.sharedEncoding =
@@ -520,8 +524,10 @@ assignMemoryLayouts(scf::ForOp &forOp,
       if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
-            getSharedEncoding(&op, /*isMMAV3=*/loadInfo.isMMAv3Shared)
-                .value_or(nullptr);
+            getSharedEncoding(&op, isTMALoad).value_or(nullptr);
+        if (isa<ttng::TCGen5MMAScaledOp>(use)) {
+          loadInfo.isMMAv5Scale = true;
+        }
         if (auto loadOp = dyn_cast<tt::LoadOp>(op))
           loadInfo.blockedEncoding =
               getBlockedEncoding(loadOp, axisInfoAnalysis);
@@ -539,7 +545,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
-                         ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
+                         ttg::SharedEncodingTrait sharedEnc,
+                         unsigned distance) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
@@ -564,8 +571,8 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   auto barrierCTALayout =
       ttg::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
                               /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-  auto barrierEncoding =
-      ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, barrierCTALayout);
+  auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
+      context, 1, 1, 1, {0}, barrierCTALayout);
   auto barrierMemDescType = ttg::MemDescType::get(
       {distance}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
@@ -649,7 +656,8 @@ static void createTMABarrierAndWait(
     while (nextOp) {
       if (users.count(nextOp) || visited.count(nextOp))
         break;
-      if (isa<tt::ExperimentalDescriptorLoadOp>(nextOp)) {
+      if (isa<tt::ExperimentalDescriptorLoadOp,
+              tt::ExperimentalDescriptorGatherOp>(nextOp)) {
         auto it = loadToAsyncLoad.find(nextOp);
         if (it != loadToAsyncLoad.end() && it->second->isTMALoad) {
           if (it->second->numBuffers != numBuffers)
@@ -884,11 +892,13 @@ createAsyncOps(scf::ForOp &forOp,
     bool isTMALoad = false;
     int numBuffers = info.distToUse;
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma
-    // pipelining post-processing.
-    if (info.isMMAv3Shared || info.isMMAv3Registers) {
+    // pipelining post-processing. Additionally, SMEM for scales in MMAv5
+    // should get the same number of buffers as the operand SMEM.
+    if (info.isMMAv3Shared || info.isMMAv5Scale) {
       ++numBuffers;
     }
-    if (isa<tt::ExperimentalDescriptorLoadOp>(loadOp)) {
+    if (isa<tt::ExperimentalDescriptorLoadOp,
+            tt::ExperimentalDescriptorGatherOp>(loadOp)) {
       isTMALoad = true;
       asyncLoad.isTMALoad = isTMALoad;
     }
@@ -1009,11 +1019,17 @@ createAsyncOps(scf::ForOp &forOp,
     if (auto loadOp = dyn_cast<tt::LoadOp>(asyncLoad.loadOp)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       loadToInfo, maxClusterId);
-    } else {
-      auto descLoad = cast<tt::ExperimentalDescriptorLoadOp>(asyncLoad.loadOp);
-      createTMAAsyncCopy(forOp, descLoad, asyncLoad.alloc, insertIdx,
-                         extractIdx, asyncLoad.barrier, asyncLoad.waitOp, phase,
+    } else if (auto descLoad = dyn_cast<tt::ExperimentalDescriptorLoadOp>(
+                   asyncLoad.loadOp)) {
+      createTMAAsyncLoad(forOp, descLoad, asyncLoad.alloc, insertIdx,
+                         extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
                          loadToInfo);
+    } else {
+      auto descGather =
+          cast<tt::ExperimentalDescriptorGatherOp>(asyncLoad.loadOp);
+      createTMAAsyncGather(forOp, descGather, asyncLoad.alloc, insertIdx,
+                           extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
+                           loadToInfo);
     }
   }
   // Patch the yield with the updated counters. Subtract to account for the loop
@@ -1381,7 +1397,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
 
   // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
-    if (!isa<ttg::SharedEncodingAttr>(
+    if (!isa<ttg::SharedEncodingTrait>(
             cast<ttg::TensorOrMemDesc>(operand.getType()).getEncoding())) {
       // Rule 1a: Register operands must not be modified within the loop.
       // First, check for chained WGMMA as an exception.
