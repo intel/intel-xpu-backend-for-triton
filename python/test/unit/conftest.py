@@ -20,7 +20,6 @@ def _run_test_in_subprocess(pyfuncitem_obj, child_conn) -> object:
             res = pyfuncitem_obj()
 
     child_conn.send({"captured stdout": stdout.getvalue(), "captured stderr": stderr.getvalue()})
-    child_conn.close()
     return res
 
 
@@ -34,8 +33,14 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function):
         test_subprocess = Process(target=_run_test_in_subprocess, args=(pyfuncitem.obj, child_conn))
 
         test_subprocess.start()
-        print(f"Captured streams from isolated process: '{parent_conn.recv()}'")
         test_subprocess.join()
+
+        if parent_conn.poll(1):
+            print(f"Captured streams from isolated process: '{parent_conn.recv()}'")
+        else:
+            print("No data sent from isolated process")
+
+        child_conn.close()
 
         if test_subprocess.exitcode != 0:
             exception_message = (
