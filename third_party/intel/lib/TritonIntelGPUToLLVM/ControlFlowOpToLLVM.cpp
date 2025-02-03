@@ -38,9 +38,10 @@ struct ReturnOpConversion
         Value packedResults =
             rewriter.create<LLVM::UndefOp>(op.getLoc(), packedResultsTy);
         auto loc = op.getLoc();
+        auto b = TritonLLVMOpBuilder(loc, rewriter);
         for (auto it : llvm::enumerate(adaptor.getOperands())) {
-          packedResults = insert_val(packedResultsTy, packedResults, it.value(),
-                                     it.index());
+          packedResults = b.insert_val(packedResultsTy, packedResults,
+                                       it.value(), it.index());
         }
         newOp = rewriter.create<LLVM::ReturnOp>(op.getLoc(), packedResults);
       }

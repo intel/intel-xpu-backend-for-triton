@@ -29,8 +29,8 @@ repos:
             ^docs/conf.py$
           )
 
-  - repo: https://github.com/google/yapf
-    rev: "v0.43.0"
+  - repo: https://github.com/anmyachev/yapf
+    rev: 970dc74
     hooks:
       - id: yapf
         args: ["-p", "-i"]
