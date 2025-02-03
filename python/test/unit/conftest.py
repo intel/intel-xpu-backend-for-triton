@@ -30,7 +30,8 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function):
 
         parent_conn, child_conn = Pipe()
         # Python subprocess tasked with running this test.
-        test_subprocess = Process(target=_run_test_in_subprocess, args=(pyfuncitem.obj, child_conn))
+        test_subprocess = Process(target=_run_test_in_subprocess,
+                                  args=(pyfuncitem.obj, pyfuncitem.funcargs, child_conn))
 
         test_subprocess.start()
         test_subprocess.join()
