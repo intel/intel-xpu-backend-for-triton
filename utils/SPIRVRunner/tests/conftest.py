@@ -26,7 +26,7 @@ def pytest_runtest_makereport(item, call):
         print(f"Progress: {passed_tests}/{total_tests} tests passed ({percent:.2f}%)")
 
 
-# Optionally, you could also use a final report to show the overall result.
+# Final summary
 def pytest_terminal_summary(terminalreporter):
     global passed_tests, total_tests
     percent = (passed_tests / total_tests) * 100
