@@ -30,7 +30,6 @@ void lowerDistributedToShared(
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
-  auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
@@ -87,7 +86,7 @@ struct LocalAllocOpConversion
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
-        cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
+        cast<triton::gpu::SharedEncodingTrait>(resultTy.getEncoding());
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
@@ -138,8 +137,8 @@ public:
       auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
       if (auto dpasLayout =
               dyn_cast_or_null<DpasEncodingAttr>(dotLayout.getParent())) {
-        auto sharedLayout =
-            cast<SharedEncodingAttr>(op.getSrc().getType().getEncoding());
+        auto sharedLayout = cast<SwizzledSharedEncodingAttr>(
+            op.getSrc().getType().getEncoding());
         int K;
         if (dotLayout.getOpIdx() == 0) // $a
           K = op.getType().getShape()[sharedLayout.getOrder()[0]];
