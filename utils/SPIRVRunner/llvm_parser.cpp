@@ -14,10 +14,15 @@ command_line_parser::options command_line_parser::parse() {
       "p", llvm::cl::desc("Enable kernel time profiling"),
       llvm::cl::init(opts.get_kernel_time));
 
+  llvm::cl::list<std::string> validate_results("v", 
+      llvm::cl::desc("<Specify Expected Output Tensor Names (Ex: -v expected_tensor1.pt,expected_tensor2.pt or skip)>"),
+      llvm::cl::CommaSeparated);
+
   llvm::cl::ParseCommandLineOptions(argc, argv, "SPIRVRunner\n");
 
   opts.output_tensors.assign(output_tensors.begin(), output_tensors.end());
   opts.get_kernel_time = enable_profiling;
+  opts.validate_results.assign(validate_results.begin(), validate_results.end());
 
   return opts;
 }
