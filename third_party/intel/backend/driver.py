@@ -602,10 +602,10 @@ class XPULauncher(object):
 
     def __call__(self, *args, **kwargs):
         # Serialize KernelArguments for SPIR-V Runner
-        self.launch(*args, **kwargs)
         serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
         if serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
+        self.launch(*args, **kwargs)
 
 
 class XPUDriver(DriverBase):
