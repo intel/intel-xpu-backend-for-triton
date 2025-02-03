@@ -101,13 +101,13 @@ Run following command to execute,
 Expected output as follows:
 
 ```
-(triton) intel-xpu-backend-for-triton/utils/SPIRVRunner$ python3 -m pytest tests/test_spirv_runner.py 
+(triton) intel-xpu-backend-for-triton/utils/SPIRVRunner$ python3 -m pytest tests/test_spirv_runner.py
 ============================================================================ test session starts =============================================================================
 platform linux -- Python 3.9.18, pytest-8.3.4, pluggy-1.5.0
 rootdir: /data/kballeda/Kali/0122_ci_enable/intel-xpu-backend-for-triton
 configfile: pyproject.toml
 plugins: xdist-3.6.1, forked-1.6.0
-collected 4 items                                                                                                                                                            
+collected 4 items
 
 tests/test_spirv_runner.py Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_argument_parsing, Status: PASS
 Progress: 1/1 tests passed (100.00%)

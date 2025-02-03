@@ -358,13 +358,13 @@ void validate_results(std::vector<TensorBuffer> &output_tensors,
                       const std::vector<std::string> &expected_outputs,
                       const std::string &spirv_dump_dir) {
   if (output_tensors.size() != expected_outputs.size()) {
-    throw std::runtime_error("Output tensors and expected outputs size mismatch");
+    throw std::runtime_error(
+        "Output tensors and expected outputs size mismatch");
   }
   auto idx = 0;
   std::cout << "Validating results..." << std::endl;
   for (const auto &expected_output : expected_outputs) {
-    std::string expected_output_path =
-        spirv_dump_dir + "/" + expected_output;
+    std::string expected_output_path = spirv_dump_dir + "/" + expected_output;
     torch::Tensor expected_tensor = load_tensor(expected_output_path);
     torch::Tensor actual_tensor = output_tensors[idx++].buffer_ptr;
 
@@ -497,7 +497,8 @@ int main(int argc, char **argv) {
 
     // Validate results
     if (!cliopts.validate_results.empty()) {
-      validate_results(output_tensors, cliopts.validate_results, tritonArgDict.spirv_dump_dir);
+      validate_results(output_tensors, cliopts.validate_results,
+                       tritonArgDict.spirv_dump_dir);
     }
   } catch (const std::runtime_error &e) {
     std::cerr << "Error: " << e.what() << std::endl;

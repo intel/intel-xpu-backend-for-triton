@@ -10,12 +10,12 @@ SPIRV_RUNNER_TESTS = os.getenv("SPIRV_RUNNER_TESTS")
 if not SPIRV_RUNNER_TESTS:
     raise EnvironmentError("SPIRV_RUNNER_TESTS environment variable is not set")
 
-
 # Define CLI arguments per directory
 SPIRV_CLI_ARGS = {
     os.path.join(SPIRV_RUNNER_TESTS, "add_kernel"): ["-o", "tensor_2", "-p", "-v", "expected_output.pt"],
     os.path.join(SPIRV_RUNNER_TESTS, "dot"): ["-o", "tensor_3", "-p", "-v", "expected_output.pt"]
 }
+
 
 @pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
 def test_argument_parsing():
@@ -28,6 +28,7 @@ def test_argument_parsing():
     except subprocess.CalledProcessError as e:
         print("Error executing SPIRVRunner:", e)
         pytest.fail(f"SPIRVRunner failed to execute: {e}")
+
 
 @pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
 def test_invalid_argument():
@@ -42,16 +43,19 @@ def test_invalid_argument():
         print("Unexpected error executing SPIRVRunner:", e)
         pytest.fail(f"SPIRVRunner failed unexpectedly: {e}")
 
+
 @pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
 @pytest.mark.parametrize("spirv_test_dir", SPIRV_CLI_ARGS.keys())
 def test_spirv_execution(spirv_test_dir):
     """Test SPIRVRunner's ability to execute SPIR-V files from multiple directories with specific arguments."""
     if not os.path.exists(spirv_test_dir):
         print(f"Skipping test: Directory {spirv_test_dir} not found")
-        pytest.skip(f"Test SPIR-V directory {spirv_test_dir} not found")    
-    cli_args = SPIRV_CLI_ARGS.get(spirv_test_dir, [])   
-    result = subprocess.run([SPIRV_RUNNER_PATH] + cli_args, capture_output=True, text=True, check=True, cwd=spirv_test_dir)
+        pytest.skip(f"Test SPIR-V directory {spirv_test_dir} not found")
+    cli_args = SPIRV_CLI_ARGS.get(spirv_test_dir, [])
+    result = subprocess.run([SPIRV_RUNNER_PATH] + cli_args, capture_output=True, text=True, check=True,
+                            cwd=spirv_test_dir)
     print("SPIRVRunner output:", result.stdout)
+
 
 if __name__ == "__main__":
     # Run the tests using pytest

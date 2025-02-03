@@ -1,61 +1,61 @@
 {
-    "gridX": 1,
-    "gridY": 1,
-    "gridZ": 1,
-    "num_warps": 4,
-    "threads_per_warp": 16,
-    "shared_memory": 32768,
-    "kernel_name": "kernel",
-    "spv_name": "kernel.spv",
-    "build_flags": "",
-    "argument_list": [
-        {
-            "name": "tensor_0",
-            "type": "tensor",
-            "dtype": "torch.float32",
-            "ctype": "*fp32"
-        },
-        {
-            "name": "scalarArg_0",
-            "type": "scalar",
-            "value": 64,
-            "ctype": "i32"
-        },
-        {
-            "name": "tensor_1",
-            "type": "tensor",
-            "dtype": "torch.float32",
-            "ctype": "*fp32"
-        },
-        {
-            "name": "scalarArg_2",
-            "type": "scalar",
-            "value": 64,
-            "ctype": "i32"
-        },
-        {
-            "name": "tensor_2",
-            "type": "tensor",
-            "dtype": "torch.float32",
-            "ctype": "*fp32"
-        },
-        {
-            "name": "scalarArg_4",
-            "type": "scalar",
-            "value": 64,
-            "ctype": "i32"
-        },
-        {
-            "name": "tensor_3",
-            "type": "tensor",
-            "dtype": "torch.float32",
-            "ctype": "*fp32"
-        },
-        {
-            "name": "scalarArg_6",
-            "type": "scalar",
-            "value": 64,
-            "ctype": "i32"
-        }
-    ]
+  "gridX": 1,
+  "gridY": 1,
+  "gridZ": 1,
+  "num_warps": 4,
+  "threads_per_warp": 16,
+  "shared_memory": 32768,
+  "kernel_name": "kernel",
+  "spv_name": "kernel.spv",
+  "build_flags": "",
+  "argument_list": [
+    {
+      "name": "tensor_0",
+      "type": "tensor",
+      "dtype": "torch.float32",
+      "ctype": "*fp32"
+    },
+    {
+      "name": "scalarArg_0",
+      "type": "scalar",
+      "value": 64,
+      "ctype": "i32"
+    },
+    {
+      "name": "tensor_1",
+      "type": "tensor",
+      "dtype": "torch.float32",
+      "ctype": "*fp32"
+    },
+    {
+      "name": "scalarArg_2",
+      "type": "scalar",
+      "value": 64,
+      "ctype": "i32"
+    },
+    {
+      "name": "tensor_2",
+      "type": "tensor",
+      "dtype": "torch.float32",
+      "ctype": "*fp32"
+    },
+    {
+      "name": "scalarArg_4",
+      "type": "scalar",
+      "value": 64,
+      "ctype": "i32"
+    },
+    {
+      "name": "tensor_3",
+      "type": "tensor",
+      "dtype": "torch.float32",
+      "ctype": "*fp32"
+    },
+    {
+      "name": "scalarArg_6",
+      "type": "scalar",
+      "value": 64,
+      "ctype": "i32"
+    }
+  ]
 }

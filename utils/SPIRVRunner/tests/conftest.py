@@ -5,10 +5,12 @@ import pytest
 total_tests = 0
 passed_tests = 0
 
+
 def pytest_runtest_protocol(item, nextitem):
     global total_tests
     total_tests += 1  # Increment total test count
     return None  # Continue with the next tests
+
 
 def pytest_runtest_makereport(item, call):
     global passed_tests
@@ -23,9 +25,9 @@ def pytest_runtest_makereport(item, call):
         percent = (passed_tests / total_tests) * 100
         print(f"Progress: {passed_tests}/{total_tests} tests passed ({percent:.2f}%)")
 
+
 # Optionally, you could also use a final report to show the overall result.
 def pytest_terminal_summary(terminalreporter):
     global passed_tests, total_tests
     percent = (passed_tests / total_tests) * 100
     terminalreporter.write_sep("=", f"Test Results: {passed_tests}/{total_tests} tests passed ({percent:.2f}%)")
-
