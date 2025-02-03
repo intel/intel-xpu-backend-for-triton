@@ -54,6 +54,7 @@ General options:
   -o <string> - <Specify Output Tensor Name>
 
   -p          - Enable kernel time profiling
+  -v <string> - <Specify Expected Output Tensor Names (Ex: -v expected_tensor1.pt,expected_tensor2.pt or skip)>
  ```
 
 
@@ -64,7 +65,10 @@ Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copi
 `SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `tensor_0.pt` and `tensor_1.pt` and output `tensor_2.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
 
 SPIRVRunner Usage:
-`./build/SPIRVRunner -o tensor_2 -p`
+```
+cd tests/add_kernel
+`<abs path to SPIRVRunner executable> -o tensor_2 -p`
+```
 
 Expected output follows:
 
@@ -78,3 +82,12 @@ Output Tensor Path: /abs/path/utils/SPIRVRunner/cpp_outs.pt
 ```
 
 The GPU hardware, shape and data type of each Tensor (along with number of bytes), and kernel information are printed. The shape and data type of the output Tensor is currently printed, along with the the first cell in the output. Ensuring the value of the first cell is non-zero allows for a quick sanity check. The output Tensor is written to a file `cpp_outs.pt` which is a Tensor in PyTorch format. Typically, we will create a quick Python script to read the input Tensor, run the same computations in PyTorch, and then compare the PyTorch result with the loaded `cpp_outs.pt` Tensor using the PyTorch testing API.
+
+### Test Framework
+
+In order to use the `SPIRVRunner` framework set following environment varibles
+
+```
+   export SPIRV_RUNNER_PATH=<abs path to SPIRV Runner executable>
+   export SPIRV_RUNNER_TESTS=<abs path to SPIRV Runner tests>
+```
