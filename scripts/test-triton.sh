@@ -190,7 +190,7 @@ run_core_tests() {
 
 
   TRITON_TEST_SUITE=debug \
-    pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
+    pytest --verbose test_debug.py --forked --device xpu
 
 }
 
