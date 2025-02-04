@@ -5,6 +5,12 @@ import tempfile
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
+    worker_id = os.getenv("PYTEST_XDIST_WORKER")
+    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
+    if os.name == "nt" and worker_id:
+        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
+    if os.name == "nt":
+        pytest.mark.forked = pytest.mark.skip(reason="Windows doesn't fork")
 
 
 def pytest_addoption(parser):
@@ -27,12 +33,3 @@ def fresh_triton_cache():
             yield tmpdir
         finally:
             os.environ.pop("TRITON_CACHE_DIR", None)
-
-
-def pytest_configure(config):
-    worker_id = os.getenv("PYTEST_XDIST_WORKER")
-    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
-    if os.name == "nt" and worker_id:
-        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
-    if os.name == "nt":
-        pytest.mark.forked = pytest.mark.skip(reason="Windows doesn't fork")
