@@ -146,6 +146,7 @@ jobs:
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
 
       - name: Clean up temporary files
+        if: ${{ always() }}
         shell: bash
         run: |
           rm -rf rm -rf /tmp/triton-* /tmp/tmp*
