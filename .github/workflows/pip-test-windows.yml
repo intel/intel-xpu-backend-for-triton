@@ -45,6 +45,11 @@ jobs:
         with:
           python-version: '3.9'
 
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
       # Copy workspace to a temporary location with a shorter name.
       - name: Copy workspace
         run: |
