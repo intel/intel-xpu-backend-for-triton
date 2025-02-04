@@ -321,6 +321,8 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     arch = {"arm64": "sbsa", "aarch64": "sbsa", "AMD64": "x86_64"}.get(arch, arch)
     supported = {"Linux": "linux", "Darwin": "linux", "Windows": "windows"}
     url = url_func(supported[system], arch, version)
+    if system == "Windows":
+        url = url.replace("tar.xz", "zip")
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
