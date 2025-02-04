@@ -53,10 +53,16 @@ if [ ! -v BASE ]; then
   echo "**** Default BASE is set to $BASE ****"
 fi
 
+if [ ! -v TRITON_PROJ_NAME ]; then
+  echo "**** TRITON_PROJ_NAME is not given *****"
+  TRITON_PROJ_NAME=$(cd $(dirname "$0")/.. && pwd | xargs basename)
+  echo "**** Setting TRITON_PROJ_NAME to $TRITON_PROJ_NAME ****"
+fi
+
 export PACKAGES_DIR=$BASE/packages
 export LLVM_PROJ=$BASE/llvm
 export LLVM_PROJ_BUILD=$LLVM_PROJ/build
-export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
+export TRITON_PROJ=$BASE/$TRITON_PROJ_NAME
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 
 if [ "$CLEAN" = true ]; then
@@ -84,7 +90,7 @@ fi
 if [ ! -d "$TRITON_PROJ" ]; then
   echo "****** Cloning $TRITON_PROJ ******"
   cd $BASE
-  git clone https://github.com/intel/intel-xpu-backend-for-triton.git
+  git clone https://github.com/intel/$TRITON_PROJ_NAME.git
 fi
 
 ############################################################################
@@ -105,7 +111,7 @@ build_llvm() {
   if [ ! -d "$LLVM_PROJ" ]; then
     echo "**** Cloning $LLVM_PROJ ****"
     cd $BASE
-    LLVM_COMMIT_ID="$(<$BASE/intel-xpu-backend-for-triton/cmake/llvm-hash.txt)"
+    LLVM_COMMIT_ID="$(<$BASE/$TRITON_PROJ_NAME/cmake/llvm-hash.txt)"
     git clone --recurse-submodules --jobs 8 https://github.com/llvm/llvm-project.git llvm
     cd llvm
     git checkout $LLVM_COMMIT_ID
