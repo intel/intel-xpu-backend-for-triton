@@ -119,7 +119,6 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --instrumentation
-          # so that it is correctly taken into account while calculating pass rate
 
       - name: Pass rate
         run: |
