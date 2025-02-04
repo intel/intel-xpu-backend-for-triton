@@ -335,8 +335,14 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
         download = download or curr_version.group(1) != version
     if download:
         print(f'downloading and extracting {url} ...')
-        file = tarfile.open(fileobj=open_url(url), mode="r|*")
-        file.extractall(path=tmp_path)
+        if url.endswith(".zip"):
+            with open_url(url) as response:
+                file_bytes = BytesIO(response.read())
+                with zipfile.ZipFile(file_bytes, "r") as file:
+                    file.extractall(path=tmp_path)
+        else:
+            file = tarfile.open(fileobj=open_url(url), mode="r|*")
+            file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
     if os.path.isdir(src_path):
