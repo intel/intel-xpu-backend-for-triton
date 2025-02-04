@@ -45,6 +45,25 @@ def test_invalid_argument():
 
 
 @pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
+def test_args_json_gen():
+    """Test generation of serialized arguments in JSON format."""
+    try:
+        print("Running SPIRVRunner with an invalid argument...")
+        os.environ['TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS'] = './'
+        target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
+        os.chdir(target_dir)
+        result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True)
+        print("SPIRVRunner stderr:", result.stderr)
+        os.environ.pop("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS", None)
+        result = subprocess.run([SPIRV_RUNNER_PATH, "-o", "tensor_2", "-v", "expected_output.pt"], capture_output=True,
+                                text=True)
+        print("SPIRVRunner stderr:", result.stderr)
+    except subprocess.CalledProcessError as e:
+        print("Unexpected error executing SPIRVRunner:", e)
+        pytest.fail(f"SPIRVRunner failed unexpectedly: {e}")
+
+
+@pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
 @pytest.mark.parametrize("spirv_test_dir", SPIRV_CLI_ARGS.keys())
 def test_spirv_execution(spirv_test_dir):
     """Test SPIRVRunner's ability to execute SPIR-V files from multiple directories with specific arguments."""
