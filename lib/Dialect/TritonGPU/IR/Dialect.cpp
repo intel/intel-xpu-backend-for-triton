@@ -1927,6 +1927,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
   unsigned swizzlingByteWidth;
   bool transposed;
+  unsigned elementBitWidth;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
@@ -1937,6 +1938,9 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
         return {};
     } else if (attr.getName() == "transposed") {
       if (parseBool(parser, attr, transposed, "transposed").failed())
+        return {};
+    } else if (attr.getName() == "elementBitWidth") {
+      if (parseUInt(parser, attr, elementBitWidth, "elementBitWidth").failed())
         return {};
     } else if (attr.getName() == "CTAsPerCGA") {
       if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
@@ -1963,13 +1967,15 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   return parser.getChecked<NVMMASharedEncodingAttr>(
-      parser.getContext(), swizzlingByteWidth, transposed, *CTALayout);
+      parser.getContext(), swizzlingByteWidth, transposed, elementBitWidth,
+      *CTALayout);
 }
 
 void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "swizzlingByteWidth = " << getSwizzlingByteWidth() //
-          << ", transposed = " << getTransposed();
+          << ", transposed = " << getTransposed()               //
+          << ", elementBitWidth = " << getElementBitWidth();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/2);
   printer << "}>";
@@ -2611,7 +2617,8 @@ struct TritonGPUInferLayoutInterface
         return failure();
       }
       resultEncoding = NVMMASharedEncodingAttr::get(
-          ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(), *ctaLayout);
+          ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
+          enc.getElementBitWidth(), *ctaLayout);
       return success();
     }
 

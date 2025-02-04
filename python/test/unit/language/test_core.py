@@ -43,6 +43,7 @@ from triton._internal_testing import (
     torch_dtype_name,
     to_numpy,
 )
+from triton.runtime.errors import InterpreterError
 
 
 @contextlib.contextmanager
@@ -241,16 +242,17 @@ class SharedLayout:
 
 class NVMMASharedLayout:
 
-    def __init__(self, swizzle, transpose, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, swizzle, transpose, element_bit_width, ctas_per_cga, cta_split_num, cta_order):
         self.swizzle = swizzle
         self.transpose = transpose
+        self.element_bit_width = element_bit_width
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
 
     def __str__(self):
         transpose_str = "true" if self.transpose else "false"
-        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, elementBitWidth={self.element_bit_width}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class LinearLayout:
@@ -4895,6 +4897,7 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
+@pytest.mark.interpreter
 def test_tma_load_block_shape_err(device):
 
     @triton.jit
@@ -4903,12 +4906,14 @@ def test_tma_load_block_shape_err(device):
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
 
 
+@pytest.mark.interpreter
 def test_tma_store_block_shape_err(device):
 
     @triton.jit
@@ -4917,7 +4922,8 @@ def test_tma_store_block_shape_err(device):
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device=device)
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
@@ -5927,8 +5933,8 @@ mma_layouts = [
 
 shared_layouts = [
     SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    NVMMASharedLayout(64, False, [1, 1], [1, 1], [0, 1]),
-    NVMMASharedLayout(128, False, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(64, False, 16, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(128, False, 16, [1, 1], [1, 1], [0, 1]),
 ]
 
 
