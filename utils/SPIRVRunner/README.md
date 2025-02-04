@@ -68,6 +68,8 @@ SPIRVRunner Usage:
 ```
 cd tests/add_kernel
 `<abs path to SPIRVRunner executable> -o tensor_2 -p`
+
+Note: Prior to this run test framework to generate serialized args/tensor information
 ```
 
 Expected output follows:
