@@ -99,12 +99,14 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
@@ -113,6 +115,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           # Disable interactive plot window
           $env:MPLBACKEND = "Agg"
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Run instrumentation tests
@@ -121,14 +124,13 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --instrumentation
-          # so that it is correctly taken into account while calculating pass rate
-          Copy-Item -Path ${{ env.NEW_WORKSPACE }}\reports\instrumentation.xml -Destination ${{ github.workspace }}\reports
 
       - name: Pass rate
         run: |
           .venv\Scripts\activate.ps1
           # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
           pip install defusedxml
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
