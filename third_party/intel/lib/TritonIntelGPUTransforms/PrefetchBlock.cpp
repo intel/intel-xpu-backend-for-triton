@@ -454,7 +454,7 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
 
   // FIXME: try to use a named barrier to increase performance.
   if (injectSplitBarriers) {
-    Location loc = loop.getLoc();
+    Location loc = newLoop.getLoc();
     b.setInsertionPoint(yield);
     b.create<spirv::INTELControlBarrierWaitOp>(loc, spirv::Scope::Workgroup,
                                                spirv::Scope::Workgroup,
