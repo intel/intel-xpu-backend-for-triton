@@ -318,8 +318,8 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     system = platform.system()
     arch = platform.machine()
     # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
-    arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
-    supported = {"Linux": "linux", "Darwin": "linux", "Windows": "win"}
+    arch = {"arm64": "sbsa", "aarch64": "sbsa", "AMD64": "x86_64"}.get(arch, arch)
+    supported = {"Linux": "linux", "Darwin": "linux", "Windows": "windows"}
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
