@@ -48,7 +48,7 @@ def test_invalid_argument():
 def test_args_json_gen():
     """Test generation of serialized arguments in JSON format."""
     try:
-        print("Running SPIRVRunner with an invalid argument...")
+        print("Running SPIRVRunner to generate serialized args/Tensor data from Triton ...")
         os.environ['TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS'] = './'
         target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
         os.chdir(target_dir)
