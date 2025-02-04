@@ -12,12 +12,12 @@ def pytest_addoption(parser):
         parser.addoption("--forked", action="store_true")
 
 
-def _run_test_in_subprocess(pyfuncitem_obj, child_conn) -> object:
+def _run_test_in_subprocess(pyfuncitem_obj, funcargs, child_conn) -> object:
     temp_stdout_buffer = io.StringIO()
     temp_stderr_buffer = io.StringIO()
     with contextlib.redirect_stdout(temp_stdout_buffer) as stdout:
         with contextlib.redirect_stderr(temp_stderr_buffer) as stderr:
-            res = pyfuncitem_obj()
+            res = pyfuncitem_obj(**funcargs)
 
     child_conn.send({"captured stdout": stdout.getvalue(), "captured stderr": stderr.getvalue()})
     return res
@@ -27,6 +27,7 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function):
 
     if os.name == "nt" and "forked" in pyfuncitem.keywords:
         from multiprocessing import Process, Pipe
+        from pytest import fail
 
         parent_conn, child_conn = Pipe()
         # Python subprocess tasked with running this test.
@@ -48,7 +49,7 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function):
                 f'Test "{pyfuncitem.name}" failed in isolated subprocess with: {test_subprocess.exitcode}')
 
             # Raise a pytest-compliant exception.
-            raise pytest.fail(exception_message, pytrace=False)
+            raise fail(exception_message, pytrace=False)
 
         # Notify pytest that this hook successfully ran this test.
         return True
