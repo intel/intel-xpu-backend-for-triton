@@ -139,13 +139,18 @@ jobs:
             python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \
           "
 
+      # upload-artifacts works only for files in WORKSPACE
+      - name: Collect pass rate files
+        run: |
+          Move-Item -Path ${{ env.NEW_WORKSPACE }}\pass_rate*.json -Destination .
+
       - name: Upload pass rate report
         # upload reports only for the default branch
         if: github.ref_name == 'main'
         uses: actions/upload-artifact@v4
         with:
           name: pass_rate
-          path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
+          path: pass_rate*.json
 
       - name: Clean up workspace
         if: ${{ always() }}
