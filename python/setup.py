@@ -522,7 +522,7 @@ exe_extension = sysconfig.get_config_var("EXE")
 download_and_copy(
     name="nvcc",
     src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-    dst_path="bin/ptxas",
+    dst_path=f"bin/ptxas{exe_extension}",
     variable="TRITON_PTXAS_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
     url_func=lambda system, arch, version:
@@ -532,7 +532,7 @@ download_and_copy(
 download_and_copy(
     name="nvcc",
     src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-    dst_path="bin/ptxas-blackwell",
+    dst_path=f"bin/ptxas-blackwell{exe_extension}",
     variable="TRITON_PTXAS_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["ptxas-blackwell"],
     url_func=lambda system, arch, version:
@@ -542,7 +542,7 @@ download_and_copy(
     name="cuobjdump",
     src_func=lambda system, arch, version:
     f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
-    dst_path="bin/cuobjdump",
+    dst_path=f"bin/cuobjdump{exe_extension}",
     variable="TRITON_CUOBJDUMP_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
     url_func=lambda system, arch, version:
@@ -552,7 +552,7 @@ download_and_copy(
     name="nvdisasm",
     src_func=lambda system, arch, version:
     f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
-    dst_path="bin/nvdisasm",
+    dst_path=f"bin/nvdisasm{exe_extension}",
     variable="TRITON_NVDISASM_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
     url_func=lambda system, arch, version:
