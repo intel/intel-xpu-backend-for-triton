@@ -160,7 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pass_rate
-          path: pass_rate*.json
+          path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Clean up workspace
         if: ${{ always() }}
