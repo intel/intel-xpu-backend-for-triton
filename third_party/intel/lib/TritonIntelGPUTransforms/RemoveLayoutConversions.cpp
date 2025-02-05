@@ -319,6 +319,8 @@ bool isLayoutAnchor(Operation *op) {
   // AtomicCAS and UpcastMXFP ops for further performance consideration.
   if (isa<DotOp, AtomicCASOp, UpcastMXFPOp>(op))
     return true;
+  if (auto gatherOp = dyn_cast<GatherOp>(op))
+    return gatherOp.getEfficientLayout();
   if (isa<AtomicRMWOp>(op))
     if (auto tensorType =
             dyn_cast<RankedTensorType>(op->getResult(0).getType()))
@@ -441,10 +443,19 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         setEncoding(user->getResults(), info, changed, user);
       continue;
     }
+    if (auto gatherOp = dyn_cast<GatherOp>(user)) {
+      // Propagate the layout through the indices only, and if the layout does
+      // not have an efficient layout set.
+      if (!gatherOp.getEfficientLayout() &&
+          &use == &gatherOp.getIndicesMutable()) {
+        setEncoding(gatherOp.getResult(), info, changed, user);
+        continue;
+      }
+    }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+            GatherOp, ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -980,6 +991,9 @@ bool canBeRemat(Operation *op) {
     return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
+
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
