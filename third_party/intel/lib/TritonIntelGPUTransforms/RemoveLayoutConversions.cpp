@@ -1403,6 +1403,22 @@ class TritonIntelGPURemoveLayoutConversionsPass
     : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
           TritonIntelGPURemoveLayoutConversionsPass> {
 public:
+  // Cleanup convert ops.
+  void cleanupConvertOps() {
+    MLIRContext *context = &getContext();
+    ModuleOp m = getOperation();
+    RewritePatternSet cleanUpPatterns(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
+    if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
+      signalPassFailure();
+    }
+
+    LLVM_DEBUG({
+      DBGS() << "Module after canonicalizing:\n";
+      m.dump();
+    });
+  }
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1421,16 +1437,7 @@ public:
       m.dump();
     });
 
-    RewritePatternSet cleanUpPatterns(context);
-    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
-      signalPassFailure();
-    }
-
-    LLVM_DEBUG({
-      DBGS() << "Module after canonicalizing:\n";
-      m.dump();
-    });
+    cleanupConvertOps();
 
     // 2. For remaining convert ops, try to rematerialize the slice of producer
     // operation to avoid having to convert.
@@ -1439,6 +1446,9 @@ public:
       DBGS() << "Module after backward remat:\n";
       m.dump();
     });
+
+    // Cleanup dummy converts created during backward remat.
+    cleanupConvertOps();
 
     // 3. For remaining converts, try to hoist them above cast generating larger
     // size types in order to reduce the cost of the convert op.
