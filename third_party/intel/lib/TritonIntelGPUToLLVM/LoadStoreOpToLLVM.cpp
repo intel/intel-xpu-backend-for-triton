@@ -1049,22 +1049,70 @@ struct LoadOpConversion
       }
     }
 
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    unsigned opIdx;
+    // Use the block IO to aggressively load the data.
+    if (blockIOAttr) {
+      // fallback to gather load.
+      auto tensorType = cast<RankedTensorType>(op.getType());
+      auto dotLayout =
+          dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding());
+      if (dotLayout) {
+        opIdx = dotLayout.getOpIdx();
+        if (opIdx == 0) {
+          // A
+          vec = 8;
+        } else {
+          // B
+          vec = 16;
+        }
+      }
+    }
+
     // vectorized iteration through all the pointer/mask/other elements
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    //    auto mod = op->getParentOfType<ModuleOp>();
+    //    int threadsPerWarp =
+    //    triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod); Value warpSize
+    //    = i32_val(threadsPerWarp); Value warpId = udiv(getThreadId(rewriter,
+    //    loc), warpSize); Value laneId = urem(getThreadId(rewriter, loc),
+    //    warpSize); Value programId =
+    //        targetInfo.programId(rewriter, loc,
+    //        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+    //        0);
+
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
+      size_t totalWidth;
+      size_t width;
+      size_t nWords;
+      size_t wordNElems;
 
-      const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
-      const size_t totalWidth = valueElemNBits * vec;
-      const size_t width = std::min(totalWidth, maxWordWidth);
-      const size_t nWords = std::max<size_t>(1, totalWidth / width);
-      const size_t wordNElems = width / valueElemNBits;
-      const size_t movWidth = width < 16 ? 16 : width;
+      if (blockIOAttr) {
+        if (opIdx == 0) {
+          totalWidth = valueElemNBits * vec;
+          width = 16;
+          nWords = std::max<size_t>(1, totalWidth / width);
+          wordNElems = width / valueElemNBits;
+        } else {
+          totalWidth = valueElemNBits * vec;
+          width = 32;
+          nWords = std::max<size_t>(1, totalWidth / width);
+          wordNElems = width / valueElemNBits;
+        }
+      } else {
+        const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+        totalWidth = valueElemNBits * vec;
+        width = std::min(totalWidth, maxWordWidth);
+        nWords = std::max<size_t>(1, totalWidth / width);
+        wordNElems = width / valueElemNBits;
+      }
       assert(wordNElems * nWords * numVecs == numElems);
 
       Value pred = maskElems.size() ? maskElems[vecStart] : b.int_val(1, 1);
@@ -1108,16 +1156,53 @@ struct LoadOpConversion
                                                    rewriter.getZeroAttr(retTy));
       }
 
-      // Create a predicated load operation.
-      Block &endBlock = LLVM::intel::createPredicatedBlock(
-          rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-            Value addrElem =
-                b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-            uint32_t alignment = nWords * width / 8;
-            Value ret = b.load(retTy, addrElem, alignment);
-            return SmallVector<Value, 1>{ret};
-          });
-      Value ret = *endBlock.args_begin();
+      Value ret;
+      if (blockIOAttr) {
+        std::function<SmallVector<Value, 1>()> predLoadFunc = [&]() {
+          // Use the top-left address of the block to load the data.
+          Value pitch = b.sub(b.ptrtoint(i64_ty, ptrElems[vecStart + 1]),
+                              b.ptrtoint(i64_ty, ptrElems[vecStart]));
+          Value addrElem =
+              b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+          addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+
+          auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+              loc, retTy,
+              /*ptr*/ addrElem,
+              /*base_width*/
+              b.mul(b.i32_val((opIdx == 0 ? 16 : 16)),
+                    b.i32_val(valueElemNBits)),
+              /*base_height*/ b.i32_val((opIdx == 0 ? 8 : 16)),
+              /*base_pitch*/
+              b.mul(b.trunc(i32_ty, pitch), b.i32_val(valueElemNBits)),
+              /*x*/ b.i32_val(0),
+              /*y*/ b.i32_val(0),
+              /*elem_size_in_bits*/ valueElemNBits,
+              /*tile_width*/ (opIdx == 0 ? 16 : 16),
+              /*tile_height*/ (opIdx == 0 ? 8 : 16),
+              /*v_blocks*/ 1,
+              /*transpose*/ false,
+              /*vnni_transform*/ opIdx != 0);
+
+          return SmallVector<Value, 1>{load2dOp};
+        };
+        ret = predLoadFunc()[0];
+
+        ret = rewriter.create<LLVM::SelectOp>(loc, pred, ret, other_);
+      } else {
+        // Create a predicated load operation.
+        std::function<SmallVector<Value, 1>()> predLoadFunc = [&]() {
+          Value addrElem =
+              b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+          uint32_t alignment = nWords * width / 8;
+          Value ret = b.load(retTy, addrElem, alignment);
+          return SmallVector<Value, 1>{ret};
+        };
+        // Create a predicated load operation.
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, SmallVector<Value, 1>{other_}, predLoadFunc);
+        ret = *endBlock.args_begin();
+      }
 
       // Extract and store return values
       SmallVector<Value> rets;
@@ -1134,16 +1219,28 @@ struct LoadOpConversion
         rets.push_back(curr);
       }
       int tmp = width / valueElemNBits;
+      //      size_t loaded_cnt = loadedVals.size();
       for (size_t ii = 0; ii < vec; ++ii) {
         Value loaded =
             b.extract_element(valueElemTy, rets[ii / tmp], b.i32_val(ii % tmp));
         loadedVals.push_back(loaded);
       }
+
+      //      targetInfo.printf(rewriter, "A pid=%d sgid=%d,tid=%d, load
+      //      addr=%p, val=%f",
+      //                            ValueRange{programId, warpId,
+      //                                laneId, ptrElems[vecStart],
+      //                                loadedVals[loaded_cnt],
+      //                        });
     } // end vec
 
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
+    //    static int count = 0;
+    //    std::string msg = "johnlu load tensor cnt " + std::to_string(count++)
+    //    + ": "; LLVM::intel::printTensor(msg, resultStruct, op.getType(),
+    //    rewriter, targetInfo);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
