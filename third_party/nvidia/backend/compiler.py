@@ -391,14 +391,14 @@ class CUDABackend(BaseBackend):
             ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
-                if os.path.exists(fsrc.name):
+                if os.path.exists(fsrc.name) and os.name != "nt":
                     os.remove(fsrc.name)
-                if os.path.exists(flog.name):
+                if os.path.exists(flog.name) and os.name != "nt":
                     os.remove(flog.name)
             except subprocess.CalledProcessError as e:
                 with open(flog.name) as log_file:
                     log = log_file.read()
-                if os.path.exists(flog.name):
+                if os.path.exists(flog.name) and os.name != "nt":
                     os.remove(flog.name)
 
                 if e.returncode == 255:
