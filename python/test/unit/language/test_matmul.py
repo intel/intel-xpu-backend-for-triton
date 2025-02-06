@@ -822,8 +822,12 @@ def mxfp8_mxfp4_matmul(  #
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("B_TRANS", [True, False])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
+@pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
+                    reason="Requires compute capability >= 10")
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, device):
+    if is_xpu():
+        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
+
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
 
