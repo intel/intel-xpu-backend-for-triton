@@ -75,6 +75,7 @@ struct TruncBF16 : ConvertOpToLLVMPattern<arith::TruncFOp> {
 namespace mlir::triton::intel {
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (auto definingOp = v.getDefiningOp()) {
     auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
     if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
@@ -86,19 +87,20 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
       auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
                                                                 inTy, outTy);
       auto call = triton::gpu::intel::createSPIRVBuiltinCall(
-          loc, rewriter, ext_func, bitcast(v, inTy).getResult());
+          loc, rewriter, ext_func, b.bitcast(v, inTy).getResult());
       return call.getResult();
     }
   }
 
-  auto as_int16 = bitcast(v, i16_ty);
-  auto as_int32 = zext(i32_ty, as_int16);
-  auto shifted = shl(i32_ty, as_int32, i32_val(16));
-  return (bitcast(shifted, f32_ty));
+  auto as_int16 = b.bitcast(v, i16_ty);
+  auto as_int32 = b.zext(i32_ty, as_int16);
+  auto shifted = b.shl(i32_ty, as_int32, b.i32_val(16));
+  return (b.bitcast(shifted, f32_ty));
 }
 
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v, RoundingMode rounding) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (auto definingOp = v.getDefiningOp()) {
     auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
     if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
@@ -114,36 +116,36 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
           moduleOp, name, inTy, funcOutTy);
       auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
                                                              trunc_func, v);
-      return bitcast(call.getResult(), outTy);
+      return b.bitcast(call.getResult(), outTy);
     }
   }
 
   assert(!isa<VectorType>(v.getType()) && "Not yet supported");
 
-  auto as_uint32 = bitcast(v, i32_ty);
+  auto as_uint32 = b.bitcast(v, i32_ty);
   auto check_exponent =
-      and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
-           i32_val(0x7f800000));
-  auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
-  auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
+      b.and_(i32_ty, b.xor_(i32_ty, as_uint32, b.i32_val(0xffffffff)),
+             b.i32_val(0x7f800000));
+  auto exponent_not_all1s = b.icmp_ne(check_exponent, b.i32_val(0));
+  auto exponent_all1s = b.icmp_eq(check_exponent, b.i32_val(0));
   Value rounded = as_uint32;
   if (rounding == RoundingMode::RTNE) {
-    rounded =
-        add(i32_ty, i32_val(0x7fff),
-            and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)));
-    rounded = add(i32_ty, rounded, as_uint32);
-    rounded = select(exponent_not_all1s, rounded, as_uint32);
+    rounded = b.add(
+        i32_ty, b.i32_val(0x7fff),
+        b.and_(i32_ty, b.lshr(i32_ty, as_uint32, b.i32_val(16)), b.i32_val(1)));
+    rounded = b.add(i32_ty, rounded, as_uint32);
+    rounded = b.select(exponent_not_all1s, rounded, as_uint32);
   }
 
-  auto preserve_nan =
-      and_(i1_ty, exponent_all1s,
-           icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)));
-  auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-  Value res = select(preserve_nan, nan, rounded);
+  auto preserve_nan = b.and_(
+      i1_ty, exponent_all1s,
+      b.icmp_ne(b.and_(i32_ty, as_uint32, b.i32_val(0xffff)), b.i32_val(0)));
+  auto nan = b.or_(i32_ty, as_uint32, b.i32_val(0x10000));
+  Value res = b.select(preserve_nan, nan, rounded);
 
-  auto shifted = lshr(i32_ty, res, i32_val(16));
-  auto truncated = trunc(i16_ty, shifted);
-  return bitcast(truncated, bf16_ty);
+  auto shifted = b.lshr(i32_ty, res, b.i32_val(16));
+  auto truncated = b.trunc(i16_ty, shifted);
+  return b.bitcast(truncated, bf16_ty);
 }
 
 void populateBF16CastsLLVMPatterns(LLVMTypeConverter &typeConverter,

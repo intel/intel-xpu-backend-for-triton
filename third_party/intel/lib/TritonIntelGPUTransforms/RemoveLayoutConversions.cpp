@@ -1,9 +1,11 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -15,6 +17,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include <deque>
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREMOVELAYOUTCONVERSIONS
@@ -35,45 +38,6 @@ namespace {
 // -----------------------------------------------------------------------------
 //
 // -----------------------------------------------------------------------------
-
-// dot(a, b, load(ptr)) -> add(load(ptr), dot(a, b, 0))
-class ConvertDotConvert : public RewritePattern {
-public:
-  ConvertDotConvert(MLIRContext *context)
-      : RewritePattern(ConvertLayoutOp::getOperationName(), 1, context) {}
-
-  LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const override {
-    auto dstOp = cast<ConvertLayoutOp>(op);
-    auto dotOp = dstOp.getSrc().getDefiningOp<DotOp>();
-    if (!dotOp)
-      return failure();
-    if (std::distance(dstOp->user_begin(), dstOp->user_end()) != 1 ||
-        std::distance(dotOp->user_begin(), dotOp->user_end()) != 1)
-      return failure();
-    auto cvtOp = dotOp.getOperand(2).getDefiningOp<ConvertLayoutOp>();
-    if (!cvtOp)
-      return failure();
-    if (!cvtOp.getSrc().getDefiningOp<LoadOp>())
-      return failure();
-    RankedTensorType dstTy = dstOp.getType();
-    RankedTensorType srcTy = cvtOp.getSrc().getType();
-    if (dstTy != srcTy)
-      return failure();
-
-    auto _0f = rewriter.create<arith::ConstantOp>(
-        op->getLoc(), dstTy.getElementType(),
-        rewriter.getZeroAttr(dstTy.getElementType()));
-    auto _0 = rewriter.create<SplatOp>(op->getLoc(), dotOp.getType(), _0f);
-    auto newDot = rewriter.create<DotOp>(
-        op->getLoc(), dotOp.getType(), dotOp.getOperand(0), dotOp.getOperand(1),
-        _0, dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-    auto newCvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), dstTy,
-                                                   newDot.getResult());
-    rewriter.replaceOpWithNewOp<arith::AddFOp>(op, newCvt, cvtOp.getSrc());
-    return success();
-  }
-};
 
 // The current algorithm works by analyzing the IR and doing a one-shot rewrite
 // based on the analysis. The algorithm is as follows.
@@ -154,26 +118,38 @@ private:
 class LayoutRematerialization {
 public:
   LayoutRematerialization(FuncOp F) : funcOp(F) {}
+
   // Map the original value to the remat'ed one.
   void addRematValue(Value old, Attribute encoding, Value newV);
-  bool hasRematValue(Value value, Attribute encoding) {
-    return rematMapping.contains({value, encoding});
+  // Get the remat'ed value in the given encoding, if one already exists and
+  // is different then the layout conversion root.
+  Value getRematValue(Value value, Attribute encoding) const {
+    return rematMapping.lookup({value, encoding});
   }
-  // Return the remat'ed value in the given encoding.
-  Value getRematValue(Value value, Attribute encoding) {
-    auto it = rematMapping.find({value, encoding});
-    assert(it != rematMapping.end());
-    return it->second;
-  }
+
   void cleanup();
   void backwardRematerialization();
   void backwardRematerialization(ConvertLayoutOp convertOp);
+  // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
+  void hoistConvertDotOperand();
+  void hoistConvertDotOperand(ConvertLayoutOp convertOp);
   void hoistConvertOnTopOfExtOrBroadcast();
   void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ConvertLayoutOp convertOp);
+
+  LogicalResult
+  getConvertBackwardSlice(OpOperand &root, Attribute rootEncoding,
+                          SetVector<Value> &slice,
+                          DenseMap<Value, Attribute> &layout,
+                          std::function<bool(Operation *)> stopPropagation);
+
+  LogicalResult getRematerializableSlice(
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
+      DenseMap<Value, Attribute> &layout,
+      std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -186,6 +162,7 @@ private:
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
   SetVector<Operation *> opToDelete;
   FuncOp funcOp;
+  DominanceInfo domInfo;
 };
 
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
@@ -199,107 +176,6 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
 void LayoutRematerialization::cleanup() {
   for (Operation *op : llvm::reverse(opToDelete))
     op->erase();
-}
-
-// Look ahead to at the transitive uses and see if there is a convert to mma
-// operations.
-bool hasConvertToMMATransisitiveUse(Operation *op, Attribute encoding) {
-  SmallVector<Value> queue = {op->getResult(0)};
-  SetVector<Operation *> forwardSlice;
-  llvm::SmallDenseSet<Value> seen;
-  while (!queue.empty()) {
-    Value currentValue = queue.back();
-    queue.pop_back();
-    getForwardSlice(currentValue, &forwardSlice);
-    for (Operation *op : forwardSlice) {
-      // HACK: Stop propagation if the ReduceOp is using mma layout but is
-      // producing tensor smaller than the layout we would like to propagate.
-      // This is to avoid stepping into the known bug.
-      if (isa<mlir::triton::ReduceOp>(op)) {
-        auto tensorType =
-            dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-        if (tensorType &&
-            isa<NvidiaMmaEncodingAttr>(tensorType.getEncoding())) {
-          auto mmaInstrShape =
-              cast<NvidiaMmaEncodingAttr>(encoding).getInstrShape();
-          if (tensorType.getShape()[tensorType.getRank() - 2] <
-                  mmaInstrShape[0] ||
-              tensorType.getShape()[tensorType.getRank() - 1] <
-                  mmaInstrShape[1]) {
-            return false;
-          }
-        }
-      }
-
-      if (auto convertOp = dyn_cast<ConvertLayoutOp>(op)) {
-        Attribute dstEncoding = convertOp.getType().getEncoding();
-        if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(dstEncoding))
-          return (mmaLayout.getVersionMajor() > 1) ? true
-                                                   : mmaLayout == encoding;
-        if (isa<ttgi::DpasEncodingAttr>(dstEncoding))
-          return true;
-        if (isa<triton::gpu::AMDMfmaEncodingAttr,
-                triton::gpu::AMDWmmaEncodingAttr>(dstEncoding))
-          return true;
-        if (isa<triton::gpu::DotOperandEncodingAttr>(dstEncoding)) {
-          if (auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(encoding)) {
-            return mmaLayout.getVersionMajor() > 1;
-          } else if (isa<ttgi::DpasEncodingAttr>(encoding)) {
-            return true;
-          } else {
-            assert((mlir::isa<triton::gpu::AMDMfmaEncodingAttr,
-                              triton::gpu::AMDWmmaEncodingAttr>(encoding)));
-            return true;
-          }
-        }
-      }
-
-      // HACK: we want to propagate mma layout to the atomic_rmw op, so we do
-      // not need an extra ConvertLayout Op to convert layout from mma to other
-      // layouts, which may consume excessive shared local memory.
-      // TODO: we need to investigate the performance impact of atomic_rmw op
-      // with mma layout, compared with ConvertLayout Op + atomic_rmw op with
-      // blocked layout.
-      if (auto atomicOp = dyn_cast<AtomicRMWOp>(op)) {
-        auto tensorType =
-            dyn_cast<RankedTensorType>(atomicOp.getResult().getType());
-        if (tensorType && isa<MmaEncodingTrait>(tensorType.getEncoding()))
-          return true;
-      }
-      bool isMMAV3 =
-          isa<NvidiaMmaEncodingAttr>(encoding) &&
-          cast<NvidiaMmaEncodingAttr>(encoding).getVersionMajor() == 3;
-      if (isMMAV3 && isa<LocalAllocOp>(op))
-        return true;
-      auto yield = dyn_cast<scf::YieldOp>(op);
-      if (!yield)
-        continue;
-      if (auto ifOp = dyn_cast<scf::IfOp>(yield->getParentOp())) {
-        for (OpOperand &operand : yield->getOpOperands()) {
-          Operation *def = operand.get().getDefiningOp();
-          if (def &&
-              (forwardSlice.count(def) || operand.get() == currentValue) &&
-              (seen.insert(operand.get()).second == true))
-            queue.push_back(ifOp.getResult(operand.getOperandNumber()));
-        }
-      }
-      auto forOp = dyn_cast<scf::ForOp>(yield.getOperation()->getParentOp());
-      if (!forOp)
-        continue;
-      for (OpOperand &operand : forOp.getResult(0).getUses()) {
-        Operation *def = operand.get().getDefiningOp();
-        if (def && (seen.insert(operand.get()).second == true))
-          queue.push_back(operand.get());
-      }
-      for (OpOperand &operand : yield->getOpOperands()) {
-        Operation *def = operand.get().getDefiningOp();
-        if (def && (forwardSlice.count(def) || operand.get() == currentValue) &&
-            (seen.insert(operand.get()).second == true))
-          queue.push_back(forOp.getRegionIterArg(operand.getOperandNumber()));
-      }
-    }
-  }
-  return false;
 }
 
 // Return true if the op is an op with a layout we don't want to change. We will
@@ -328,18 +204,8 @@ bool isLayoutAnchor(Operation *op) {
 }
 
 void LayoutPropagation::initAnchorLayout() {
-  auto maybeAddAnchor = [&](Value v) {
+  auto addAnchor = [&](Value v) {
     if (auto tensorType = dyn_cast<RankedTensorType>(v.getType())) {
-      // Workaround, don't popagate MMA layout unless there is a convert
-      // back to mma further down to avoid generating reduction with MMA
-      // layout that may have lower performance.
-      // This can be improved with more aggressive backward propagation.
-      if (isa<MmaEncodingTrait>(tensorType.getEncoding()) &&
-          v.getDefiningOp() &&
-          !hasConvertToMMATransisitiveUse(v.getDefiningOp(),
-                                          tensorType.getEncoding())) {
-        return;
-      }
       layouts.insert({v, LayoutInfo(tensorType.getEncoding())});
     }
   };
@@ -348,13 +214,13 @@ void LayoutPropagation::initAnchorLayout() {
   // you can pass a tensor with an encoding as an arg, instead of explicitly
   // calling tt.load.
   for (auto arg : funcOp.getArguments()) {
-    maybeAddAnchor(arg);
+    addAnchor(arg);
   }
 
   funcOp.walk([&](Operation *op) {
     if (isLayoutAnchor(op)) {
       for (auto result : op->getResults()) {
-        maybeAddAnchor(result);
+        addAnchor(result);
       }
     }
   });
@@ -403,17 +269,14 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp>(parent))
+      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
         valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
             forOp.getRegionIterArg(use.getOperandNumber()));
-      if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+      if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
         valuesToPropagate.push_back(
             whileOp.getBeforeArguments()[use.getOperandNumber()]);
-        valuesToPropagate.push_back(
-            whileOp->getOperand(use.getOperandNumber()));
-      }
       if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
         setEncoding(valuesToPropagate, info, changed, user);
       continue;
@@ -516,10 +379,10 @@ bool reduceToScalar(Operation *op) {
 }
 
 void LayoutPropagation::rewriteRegion(Region &region) {
-  SmallVector<Region *> queue = {&region};
+  std::deque<Region *> queue = {&region};
   while (!queue.empty()) {
-    Region *currentRegion = queue.back();
-    queue.pop_back();
+    Region *currentRegion = queue.front();
+    queue.pop_front();
     for (Operation &op : currentRegion->getOps()) {
       bool needRewrite = false;
       SmallVector<Value> results = op.getResults();
@@ -1013,12 +876,17 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
+  // Keep these around to remove them from the slice after our collection pass
+  // This ensures we don't duplicate them during an for rewrite or causing the
+  // for/yield to fall out of sync
+  SetVector<Value> valuesWithExistingRemat;
   for (Value v : slice) {
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
     // If we already have a remat value for this value, use it.
-    if (hasRematValue(v, layoutIt->second)) {
-      mapping.map(v, getRematValue(v, layoutIt->second));
+    if (Value remat = getRematValue(v, layoutIt->second)) {
+      mapping.map(v, remat);
+      valuesWithExistingRemat.insert(v);
       continue;
     }
     if (v.getDefiningOp()) {
@@ -1042,6 +910,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       }
     }
   }
+  slice.set_subtract(valuesWithExistingRemat);
   opsToRewrite = multiRootTopologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
@@ -1188,12 +1057,47 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-LogicalResult getRematerializableSlice(
-    Value root, Attribute rootEncoding, SetVector<Value> &slice,
+LogicalResult LayoutRematerialization::getConvertBackwardSlice(
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr) {
-  LogicalResult result = ttgi::getConvertBackwardSlice(
-      root, slice, rootEncoding, layout, std::move(stopPropagation));
+    std::function<bool(Operation *)> stopPropagation) {
+  // Allow re-using existing conversions for a value. Check dominance of any
+  // reusable materializations against the root value. This is sufficient
+  // because the conversions are processed in post-order.
+  auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
+    Value remat = getRematValue(value.get(), encoding);
+    if (!remat)
+      return Value();
+    // `value` can be replaced with an existing rematerialization if it
+    // dominates the current use of value.
+    Operation *user = value.getOwner();
+    if (domInfo.properlyDominates(remat, user)) {
+      return remat;
+    }
+    // FIXME: If the current user is a conversion, then we know it will become
+    // a no-op when its operand is replaced with `remat`, but we need to check
+    // that its users are all dominated by `remat` so the IR is valid.
+    // if (isa<ConvertLayoutOp>(user) && remat.getDefiningOp() &&
+    //     domInfo.properlyDominates(user, remat.getDefiningOp())) {
+    //   for (Operation *op : user->getUsers()) {
+    //     if (!domInfo.dominates(remat, op))
+    //       return Value();
+    //   }
+    //   return remat;
+    // }
+    return Value();
+  };
+
+  return ttgi::getConvertBackwardSlice(root, slice, rootEncoding, layout,
+                                       stopPropagation, getExistingConversion);
+}
+
+LogicalResult LayoutRematerialization::getRematerializableSlice(
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation) {
+  LogicalResult result = getConvertBackwardSlice(
+      root, rootEncoding, slice, layout, std::move(stopPropagation));
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1214,6 +1118,12 @@ void LayoutRematerialization::backwardRematerialization() {
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
     backwardRematerialization(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for reuse in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
   }
 }
 
@@ -1224,6 +1134,12 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
     hoistConvertOnTopOfExtOrBroadcast(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for reuse in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
   }
 }
 
@@ -1236,14 +1152,14 @@ void LayoutRematerialization::backwardRematerialization(
           dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding()))
     if (isa<BlockedEncodingAttr>(dotLayout.getParent()))
       return;
-  Value oldV = convertOp->getOperand(0);
+  Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
   // Check to see if there are existing remat'ed values for the pair of oldValue
-  // and encoding.
-  if (hasRematValue(oldV, targetType.getEncoding())) {
+  // and encoding. Make sure it dominates the current conversion.
+  Value newV = getRematValue(oldV, targetType.getEncoding());
+  if (newV && domInfo.properlyDominates(newV, convertOp)) {
     // Replace it with the remat'ed value.
-    Value newV = getRematValue(oldV, targetType.getEncoding());
     convertOp.replaceAllUsesWith(newV);
     opToDelete.insert(convertOp);
     LDBG("found remat'ed value" << newV);
@@ -1255,7 +1171,7 @@ void LayoutRematerialization::backwardRematerialization(
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   LogicalResult result = getRematerializableSlice(
-      convertOp.getSrc(), targetType.getEncoding(), slice, layout);
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
     return;
@@ -1270,12 +1186,108 @@ void LayoutRematerialization::backwardRematerialization(
   rewriteSlice(slice, layout, convertOp);
 }
 
+void LayoutRematerialization::hoistConvertDotOperand() {
+  // Go through each ConvertLayoutOp.
+  SmallVector<ConvertLayoutOp> convertOps;
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    hoistConvertDotOperand(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for reuse in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
+  }
+}
+
+void LayoutRematerialization::hoistConvertDotOperand(
+    ConvertLayoutOp convertOp) {
+  auto targetType = convertOp.getType();
+  // The pass is targeted to Nvidia mma/wgmma dot operands
+  // We move convert #dot_operand next to their loads. This is done
+  // so that it's then easy to pipeline these loads
+  // TODO: Perhaps we should do this whenever convertOp is within a loop
+
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
+  if (!(dotEnc && isa<NvidiaMmaEncodingAttr>(dotEnc.getParent())))
+    return;
+
+  // We hoist over any operation that can be done without data movement between
+  // threads We do views and elementwise pure ops for now
+  // UpcastMXFPOp is here temporarily until
+  // https://github.com/triton-lang/triton/pull/5475 lands
+  auto noDataMovement = [](Operation *op) {
+    return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
+           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, UpcastMXFPOp,
+               ConvertLayoutOp>(op);
+  };
+  // Stop the slice as soon as we find an operation that cannot be done without
+  // data movement between threads
+  auto stop = std::not_fn(noDataMovement);
+
+  SetVector<Value> slice;
+  DenseMap<Value, Attribute> layout;
+  // Set-up the conversion "cache"
+  LogicalResult result = getConvertBackwardSlice(
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop);
+  if (result.failed())
+    return;
+
+  IRMapping mapping;
+  OpBuilder builder(convertOp.getContext());
+  SetVector<Value> innerSlice;
+  for (Value v : slice) {
+    if (!v.getDefiningOp()) {
+      LLVM_DEBUG(
+          { DBGS() << "  Block arguments not supported. Got " << v << "\n"; });
+      return;
+    }
+    auto loadOp = dyn_cast<LoadOp>(v.getDefiningOp());
+    // We expect the leaves of the slice to be Load or arith::Constant
+    // This could be generalised if necessary
+    if (!loadOp) {
+      auto op = v.getDefiningOp();
+      if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
+        innerSlice.insert(v);
+        continue;
+      } else {
+        LLVM_DEBUG({
+          DBGS() << "  Leaves must be Load or Constant. Got " << v << "\n";
+        });
+        return;
+      }
+    }
+    builder.setInsertionPointAfter(loadOp);
+    auto type = dyn_cast<RankedTensorType>(loadOp.getType());
+    if (!type)
+      continue;
+    auto newType = RankedTensorType::get(type.getShape(), type.getElementType(),
+                                         layout[loadOp]);
+    auto newConvertOp = builder.create<ConvertLayoutOp>(
+        convertOp.getLoc(), newType, loadOp.getResult());
+    mapping.map(loadOp.getResult(), newConvertOp.getResult());
+  }
+
+  if (innerSlice.empty()) {
+    return;
+  }
+
+  LLVM_DEBUG({
+    DBGS() << "  Hoisting " << convertOp << '\n';
+    for (Value v : innerSlice)
+      DBGS() << "    " << v << '\n';
+  });
+
+  rewriteSlice(innerSlice, layout, convertOp, mapping);
+}
+
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
-  // we don't handle conversions to DotOperandEncodingAttr
-  // this is a heuristics to accommodate fused attention
+  // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (mlir::isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
@@ -1287,9 +1299,9 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  LogicalResult result =
-      getRematerializableSlice(convertOp.getSrc(), targetType.getEncoding(),
-                               slice, layout, isExtOrBroadcastOp);
+  LogicalResult result = getRematerializableSlice(
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
+      isExtOrBroadcastOp);
   if (result.failed())
     return;
 
@@ -1307,7 +1319,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       if (!srcEncoding)
         return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), srcEncoding, tempSlice, tempLayout);
+          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -1366,6 +1378,10 @@ void hoistConvert(ModuleOp module) {
     LayoutRematerialization layoutRemat(funcOp);
     layoutRemat.hoistConvertOnTopOfExtOrBroadcast();
     layoutRemat.cleanup();
+
+    layoutRemat = LayoutRematerialization(funcOp);
+    layoutRemat.hoistConvertDotOperand();
+    layoutRemat.cleanup();
   });
 }
 
@@ -1373,6 +1389,22 @@ class TritonIntelGPURemoveLayoutConversionsPass
     : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
           TritonIntelGPURemoveLayoutConversionsPass> {
 public:
+  // Cleanup convert ops.
+  void cleanupConvertOps() {
+    MLIRContext *context = &getContext();
+    ModuleOp m = getOperation();
+    RewritePatternSet cleanUpPatterns(context);
+    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
+    if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
+      signalPassFailure();
+    }
+
+    LLVM_DEBUG({
+      DBGS() << "Module after canonicalizing:\n";
+      m.dump();
+    });
+  }
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
@@ -1391,16 +1423,7 @@ public:
       m.dump();
     });
 
-    RewritePatternSet cleanUpPatterns(context);
-    ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
-      signalPassFailure();
-    }
-
-    LLVM_DEBUG({
-      DBGS() << "Module after canonicalizing:\n";
-      m.dump();
-    });
+    cleanupConvertOps();
 
     // 2. For remaining convert ops, try to rematerialize the slice of producer
     // operation to avoid having to convert.
@@ -1410,21 +1433,14 @@ public:
       m.dump();
     });
 
+    // Cleanup dummy converts created during backward remat.
+    cleanupConvertOps();
+
     // 3. For remaining converts, try to hoist them above cast generating larger
     // size types in order to reduce the cost of the convert op.
     hoistConvert(m);
     LLVM_DEBUG({
       DBGS() << "Module after hoisting converts:\n";
-      m.dump();
-    });
-
-    RewritePatternSet decomposePatterns(context);
-    decomposePatterns.add<ConvertDotConvert>(context);
-    if (applyPatternsGreedily(m, std::move(decomposePatterns)).failed()) {
-      signalPassFailure();
-    }
-    LLVM_DEBUG({
-      DBGS() << "Module after decomposing dot-converts:\n";
       m.dump();
     });
 

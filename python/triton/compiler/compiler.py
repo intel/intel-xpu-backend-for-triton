@@ -190,10 +190,12 @@ def filter_traceback(e: BaseException):
         filter_traceback(e.__context__)
 
     # If a user has a file that matches one of these, they're out of luck.
+    sep = os.sep
     BAD_FILES = [
-        "/triton/compiler/code_generator.py",
-        "/ast.py",
+        f"{sep}triton{sep}compiler{sep}code_generator.py",
+        f"{sep}ast.py",
     ]
+    BAD_FILES = [bad_file.replace("/", os.sep) for bad_file in BAD_FILES]
 
     tb = e.__traceback__
     frames = []
@@ -273,11 +275,11 @@ def compile(src, target=None, options=None):
 
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
-    # try:
-    module = src.make_ir(options, codegen_fns, module_map, context)
-    # except Exception as e:
-    #     filter_traceback(e)
-    #     raise
+    try:
+        module = src.make_ir(options, codegen_fns, module_map, context)
+    except Exception as e:
+        filter_traceback(e)
+        raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)

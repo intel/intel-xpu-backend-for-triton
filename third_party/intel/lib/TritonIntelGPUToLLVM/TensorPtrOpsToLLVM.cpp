@@ -71,6 +71,7 @@ struct AdvanceOpConversion
     // struct { offset0, offset1, shape0, shape1, stride0,
     // stride1, base_ptr};
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto ptrType = op.getPtr().getType();
     auto tensorPtr = adaptor.getPtr();
 
@@ -80,7 +81,7 @@ struct AdvanceOpConversion
     SmallVector<Value, 2> newOffsets;
 
     for (auto [offset, oldOffset] : llvm::zip_first(offsets, elems)) {
-      newOffsets.push_back((add(offset, oldOffset)));
+      newOffsets.push_back((b.add(offset, oldOffset)));
     }
 
     for (size_t i = 0; i < newOffsets.size(); ++i) {

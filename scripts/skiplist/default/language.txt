@@ -1,3 +1,4 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/2968
-test/unit/language/test_core.py::test_scaled_dot[128-64-64-False-False-True-e5m2-fp16-4-16-1]
-test/unit/language/test_core.py::test_scaled_dot[32-64-128-False-False-True-e5m2-bf16-4-16-1]
+test/unit/language/test_core.py::test_scaled_dot[32-64-128-False-True-True-e5m2-bf16-4-16-1]
+test/unit/language/test_core.py::test_scaled_dot[128-32-64-True-True-True-e4m3-fp16-4-16-1]
+test/unit/language/test_core.py::test_scaled_dot[128-32-64-True-False-True-e4m3-bf16-4-16-1]

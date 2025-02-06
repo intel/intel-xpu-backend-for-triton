@@ -58,7 +58,7 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
     return nullptr;
 
   Attribute layout = tensorType.getEncoding();
-  return isa<ttg::SharedEncodingAttr, ttg::BlockedEncodingAttr>(layout)
+  return isa<ttg::SharedEncodingTrait, ttg::BlockedEncodingAttr>(layout)
              ? allTransitiveUsesHaveDotEncoding(res)
              : llvm::dyn_cast_or_null<ttg::DotOperandEncodingAttr>(layout);
 }

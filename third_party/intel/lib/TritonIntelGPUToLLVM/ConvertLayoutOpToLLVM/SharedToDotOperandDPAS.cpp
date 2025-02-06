@@ -6,7 +6,7 @@
 using ValueTable = std::map<std::array<int, 3>, Value>;
 using mlir::triton::gpu::getShapePerCTA;
 using mlir::triton::gpu::MemDescType;
-using mlir::triton::gpu::SharedEncodingAttr;
+using mlir::triton::gpu::SwizzledSharedEncodingAttr;
 using mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace {
@@ -23,15 +23,16 @@ public:
       : dpasLayout(dpasLayout), descTy(descTy), smemStrides(smemStrides),
         multiDimWarpId(std::move(multiDimWarpId)), rewriter(rewriter),
         loc(loc) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     size_t rank = warpShape.size();
     unsigned kDim = bool(opIdx) ? rank - 2 : rank - 1;
     unsigned nonKDim = bool(opIdx) ? rank - 1 : rank - 2;
     // Assume that smem is created with layout offset {2, 1, 0}
     repBatchDimStride = smemStrides[0];
-    repKDimStride = mul(i32_val(warpShape[kDim]), smemStrides[kDim]);
-    repNonKDimStride =
-        mul(i32_val(warpShape[nonKDim] * warpsPerTile), smemStrides[nonKDim]);
-    warpMatStride = mul(i32_val(warpShape[nonKDim]), smemStrides[nonKDim]);
+    repKDimStride = b.mul(b.i32_val(warpShape[kDim]), smemStrides[kDim]);
+    repNonKDimStride = b.mul(b.i32_val(warpShape[nonKDim] * warpsPerTile),
+                             smemStrides[nonKDim]);
+    warpMatStride = b.mul(b.i32_val(warpShape[nonKDim]), smemStrides[nonKDim]);
 
     unsigned threadsPerWarp = getThreadsPerWarp();
 
@@ -79,6 +80,7 @@ template <DpasEncodingAttr::OpIdx opIdx>
 SmallVector<Value>
 DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
                                            Value cSwizzleOffset) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned systolicDepth = dpasLayout.getSystolicDepth();
   unsigned repeatCount = dpasLayout.getRepeatCount();
   unsigned executionSize = dpasLayout.getExecutionSize();
@@ -101,9 +103,9 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
            "be smaller than the threads required per row for A operand.");
     rowsPerWarp = threadsPerWarp / packedColNum;
     rowsPerInst = repeatCount / rowsPerWarp;
-    laneRowIndex = udiv(laneId, i32_val(packedColNum));
-    laneColIndex = urem(laneId, i32_val(packedColNum));
-    laneColIndex = mul(laneColIndex, i32_val(packedOpsPerLane));
+    laneRowIndex = b.udiv(laneId, b.i32_val(packedColNum));
+    laneColIndex = b.urem(laneId, b.i32_val(packedColNum));
+    laneColIndex = b.mul(laneColIndex, b.i32_val(packedOpsPerLane));
   } break;
   case DpasEncodingAttr::OpIdx::OperandB: {
     assert(threadsPerWarp >= executionSize &&
@@ -113,26 +115,25 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
     rowsPerWarp = threadsPerWarp / executionSize;
     rowsPerInst = systolicDepth / rowsPerWarp;
     rowsPerWarp = rowsPerWarp * opsPerChannel;
-    laneRowIndex = udiv(laneId, i32_val(executionSize));
-    laneRowIndex = mul(laneRowIndex, i32_val(opsPerChannel));
-    laneColIndex = urem(laneId, i32_val(executionSize));
+    laneRowIndex = b.udiv(laneId, b.i32_val(executionSize));
+    laneRowIndex = b.mul(laneRowIndex, b.i32_val(opsPerChannel));
+    laneColIndex = b.urem(laneId, b.i32_val(executionSize));
   } break;
   }
 
   // outer index offset
-  Value iOff = mul(warpId, warpMatStride);
+  Value iOff = b.mul(warpId, warpMatStride);
 
-  SharedEncodingAttr sharedLayout =
-      cast<SharedEncodingAttr>(descTy.getEncoding());
+  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(descTy.getEncoding());
   const int perPhase = sharedLayout.getPerPhase();
   const int maxPhase = sharedLayout.getMaxPhase();
   const int vec = sharedLayout.getVec();
 
-  Value rowsPerWarpVal = i32_val(rowsPerWarp);
-  Value zeroVal = i32_val(0);
-  Value perPhaseVal = i32_val(perPhase);
-  Value maxPhaseVal = i32_val(maxPhase);
-  Value vecVal = i32_val(vec);
+  Value rowsPerWarpVal = b.i32_val(rowsPerWarp);
+  Value zeroVal = b.i32_val(0);
+  Value perPhaseVal = b.i32_val(perPhase);
+  Value maxPhaseVal = b.i32_val(maxPhase);
+  Value vecVal = b.i32_val(vec);
   SmallVector<unsigned> instShape = (opIdx == DpasEncodingAttr::OpIdx::OperandA)
                                         ? dpasLayout.getDPASInstShapeA()
                                         : dpasLayout.getDPASInstShapeB();
@@ -146,45 +147,45 @@ DpasMatmulLoader<opIdx>::computeLdsMatOffs(Value warpId, Value laneId,
   for (unsigned repIdx = 0; repIdx < repClusterSize; ++repIdx) {
     unsigned repIndex = repIdx * instShape[unsigned(opIdx)];
     for (int rowIdx = 0; rowIdx < rowsPerInst; ++rowIdx) {
-      Value rowIndex = mul(i32_val(rowIdx), rowsPerWarpVal);
+      Value rowIndex = b.mul(b.i32_val(rowIdx), rowsPerWarpVal);
       for (unsigned opsIdx = 0; opsIdx < packedOpsPerLane; ++opsIdx) {
         // inner index base
         Value jBase = laneColIndex;
         // outer index base
-        Value iBase = add(rowIndex, laneRowIndex);
+        Value iBase = b.add(rowIndex, laneRowIndex);
         switch (opIdx) {
         case DpasEncodingAttr::OpIdx::OperandA:
-          iBase = add(iBase, i32_val(repIndex));
-          jBase = add(jBase, i32_val(opsIdx));
+          iBase = b.add(iBase, b.i32_val(repIndex));
+          jBase = b.add(jBase, b.i32_val(opsIdx));
           break;
         case DpasEncodingAttr::OpIdx::OperandB:
-          iBase = add(iBase, i32_val(opsIdx));
-          jBase = add(jBase, i32_val(repIndex));
+          iBase = b.add(iBase, b.i32_val(opsIdx));
+          jBase = b.add(jBase, b.i32_val(repIndex));
           break;
         }
 
         // round the offset into the tensor's shape limitation. (Rounded
         // broadcast)
-        iBase = urem(iBase, i32_val(shareMemoryShape[rank - 2]));
-        jBase = urem(jBase, i32_val(shareMemoryShape[rank - 1]));
+        iBase = b.urem(iBase, b.i32_val(shareMemoryShape[rank - 2]));
+        jBase = b.urem(jBase, b.i32_val(shareMemoryShape[rank - 1]));
 
         // inner index offset
         Value jOff = zeroVal;
         // swizzle: col_swizzled = (col / vec) ^ phase * vec
-        Value phase = urem(udiv(iBase, perPhaseVal), maxPhaseVal);
-        jOff = add(jOff, udiv(cSwizzleOffset, vecVal));
-        jOff = mul(xor_(jOff, phase), vecVal);
+        Value phase = b.urem(b.udiv(iBase, perPhaseVal), maxPhaseVal);
+        jOff = b.add(jOff, b.udiv(cSwizzleOffset, vecVal));
+        jOff = b.mul(b.xor_(jOff, phase), vecVal);
 
-        Value i = add(mul(iBase, smemStrides[rank - 2]), iOff);
-        Value j = add(mul(jBase, smemStrides[rank - 1]), jOff);
+        Value i = b.add(b.mul(iBase, smemStrides[rank - 2]), iOff);
+        Value j = b.add(b.mul(jBase, smemStrides[rank - 1]), jOff);
 
         Value baseOff;
         if (shapePerCTA.size() == 3 && shapePerCTA[0] > 1) {
-          Value batchOffset =
-              mul(multiDimWarpId[0], i32_val(shapePerCTA[1] * shapePerCTA[2]));
-          offs[index++] = add(batchOffset, add(i, j));
+          Value batchOffset = b.mul(multiDimWarpId[0],
+                                    b.i32_val(shapePerCTA[1] * shapePerCTA[2]));
+          offs[index++] = b.add(batchOffset, b.add(i, j));
         } else {
-          offs[index++] = add(i, j);
+          offs[index++] = b.add(i, j);
         }
       }
     }
@@ -202,23 +203,24 @@ Value DpasMatmulLoader<opIdx>::loadMatrix(
       llvm::any_of(structTy.getBody(), [&](Type ty) { return ty == elemTy; }) &&
       "The struct should have the same element types.");
 
-  Value offsetOuter = mul(i32_val(repOuter), repNonKDimStride);
-  Value offsetInner = mul(i32_val(repInner), repKDimStride);
-  Value offset = add(offsetOuter, offsetInner);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value offsetOuter = b.mul(b.i32_val(repOuter), repNonKDimStride);
+  Value offsetInner = b.mul(b.i32_val(repInner), repKDimStride);
+  Value offset = b.add(offsetOuter, offsetInner);
   if (repBatch > 0) {
     SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     Value offsetBatch =
-        mul(i32_val(repBatch * warpsPerCTA[0]), repBatchDimStride);
-    offset = add(offset, offsetBatch);
+        b.mul(b.i32_val(repBatch * warpsPerCTA[0]), repBatchDimStride);
+    offset = b.add(offset, offsetBatch);
   }
 
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
   size_t elemNum = structTy.getBody().size();
   for (int i = 0; i < elemNum; i++) {
     Value readPtr =
-        gep(ptr_ty(rewriter.getContext(), 3), smemTy, ptrs[i], offset);
+        b.gep(ptr_ty(rewriter.getContext(), 3), smemTy, ptrs[i], offset);
     Value val = rewriter.create<LLVM::LoadOp>(loc, elemTy, readPtr);
-    llvmStruct = insert_val(structTy, llvmStruct, val, i);
+    llvmStruct = b.insert_val(structTy, llvmStruct, val, i);
   }
 
   return llvmStruct;
@@ -228,6 +230,7 @@ Value composeValuesToDotOperandLayoutStruct(
     const ValueTable &vals, int batch, int n0, int n1,
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   std::vector<Value> elems;
   for (int b = 0; b < batch; ++b) {
     for (int m = 0; m < n0; ++m) {
@@ -236,7 +239,7 @@ Value composeValuesToDotOperandLayoutStruct(
         auto matType = cast<LLVM::LLVMStructType>(matVal.getType());
         Type valTy = matType.getBody()[0];
         for (int i = 0; i < matType.getBody().size(); ++i) {
-          auto val = extract_val(valTy, matVal, i);
+          auto val = tb.extract_val(valTy, matVal, i);
           elems.push_back(val);
         }
       }
@@ -280,13 +283,14 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   SmallVector<int64_t> shapePerCTA = getShapePerCTA(descTy);
   Type eltTy = descTy.getElementType();
 
-  auto sharedLayout = cast<SharedEncodingAttr>(descTy.getEncoding());
+  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(descTy.getEncoding());
   ArrayRef<unsigned> order = sharedLayout.getOrder();
   size_t rank = order.size();
 
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &smemObj, &shapePerWarp, &multiDimWarpId,
                &vals](int batch, int outer, int inner) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto smemStrides = smemObj.getStrides(descTy, loc, rewriter);
     DpasMatmulLoader<opIdx> loader(dpasLayout, descTy, warpsPerTile,
                                    smemStrides, shapePerWarp, multiDimWarpId,
@@ -305,7 +309,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
     Type smemTy = getSharedMemTy(eltTy);
     for (int i = 0; i < numPtrs; ++i)
       ptrs[i] =
-          gep(ptr_ty(rewriter.getContext(), 3), smemTy, smemBase, offs[i]);
+          b.gep(ptr_ty(rewriter.getContext(), 3), smemTy, smemBase, offs[i]);
 
     // Load from shared memory.
     unsigned totalElem = product<unsigned>(shapePerWarp);
@@ -327,6 +331,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
                   MemDescType descTy, DotOperandEncodingAttr encoding,
                   const SharedMemoryObject &smemObj,
                   const LLVMTypeConverter *typeConverter, Value threadId) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<int64_t> shapePerCTA = getShapePerCTA(descTy);
   auto dpasLayout = cast<DpasEncodingAttr>(encoding.getParent());
   const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
@@ -342,9 +347,9 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<int64_t> numReps =
       dpasLayout.getDPASRepetitions(shapePerCTA, opIdx);
 
-  Value warpSize = i32_val(triton::gpu::getWarpSize(dpasLayout));
-  Value warpId = udiv(threadId, warpSize);
-  Value laneId = urem(threadId, warpSize);
+  Value warpSize = b.i32_val(triton::gpu::getWarpSize(dpasLayout));
+  Value warpId = b.udiv(threadId, warpSize);
+  Value laneId = b.urem(threadId, warpSize);
 
   SmallVector<Value> multiDimWarpId =
       LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
@@ -353,7 +358,7 @@ Value loadOperand(ConversionPatternRewriter &rewriter, Location loc,
   unsigned dimOuter = bool(opIdx) ? (rank - 1) : (rank - 2);
   unsigned ceilRes =
       mlir::ceil<unsigned>(shapePerCTA[dimOuter], shape[dimOuter]);
-  Value outerWarpDim = urem(multiDimWarpId[dimOuter], i32_val(ceilRes));
+  Value outerWarpDim = b.urem(multiDimWarpId[dimOuter], b.i32_val(ceilRes));
   unsigned warpsPerTile = std::min<unsigned>(warpsPerCTA[dimOuter], ceilRes);
 
   // Get the function to use to load the operand.

@@ -18,7 +18,6 @@ public:
                                const TargetInfoBase &targetInfo,
                                const DataLayoutAnalysis *analysis = nullptr);
 
-  Type convertTritonPointerType(triton::PointerType type);
   Type convertTritonTensorType(RankedTensorType type,
                                const TargetInfoBase &targetInfo);
   Type convertMemDescType(triton::gpu::MemDescType type,

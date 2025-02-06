@@ -317,9 +317,12 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     base_dir = os.path.dirname(__file__)
     system = platform.system()
     arch = platform.machine()
-    arch = {"arm64": "aarch64"}.get(arch, arch)
-    supported = {"Linux": "linux", "Darwin": "linux", "Windows": "win"}
+    # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
+    arch = {"arm64": "sbsa", "aarch64": "sbsa", "AMD64": "x86_64"}.get(arch, arch)
+    supported = {"Linux": "linux", "Darwin": "linux", "Windows": "windows"}
     url = url_func(supported[system], arch, version)
+    if system == "Windows":
+        url = url.replace("tar.xz", "zip")
     src_path = src_func(supported[system], arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
@@ -332,8 +335,14 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
         download = download or curr_version.group(1) != version
     if download:
         print(f'downloading and extracting {url} ...')
-        file = tarfile.open(fileobj=open_url(url), mode="r|*")
-        file.extractall(path=tmp_path)
+        if url.endswith(".zip"):
+            with open_url(url) as response:
+                file_bytes = BytesIO(response.read())
+                with zipfile.ZipFile(file_bytes, "r") as file:
+                    file.extractall(path=tmp_path)
+        else:
+            file = tarfile.open(fileobj=open_url(url), mode="r|*")
+            file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
     if os.path.isdir(src_path):
@@ -409,11 +418,7 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
-        cupti_lib_dir = get_env_with_keys(["TRITON_CUPTI_LIB_PATH"])
-        if cupti_lib_dir == "":
-            cupti_lib_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "lib", "cupti")
-        cmake_args += ["-DCUPTI_LIB_DIR=" + cupti_lib_dir]
-        roctracer_include_dir = get_env_with_keys(["ROCTRACER_INCLUDE_PATH"])
+        roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
         if roctracer_include_dir == "":
             roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
         cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]
@@ -514,83 +519,81 @@ with open(nvidia_version_path, "r") as nvidia_version_file:
     NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
 
 exe_extension = sysconfig.get_config_var("EXE")
-# FIXME: urllib.error.HTTPError: HTTP Error 404: Not Found
-if platform.system() != "Windows":
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas",
-        variable="TRITON_PTXAS_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas-blackwell",
-        variable="TRITON_PTXAS_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["ptxas-blackwell"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cuobjdump",
-        src_func=lambda system, arch, version:
-        f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
-        dst_path="bin/cuobjdump",
-        variable="TRITON_CUOBJDUMP_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/{system}-{arch}/cuda_cuobjdump-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="nvdisasm",
-        src_func=lambda system, arch, version:
-        f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
-        dst_path="bin/nvdisasm",
-        variable="TRITON_NVDISASM_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        variable="TRITON_CUDACRT_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cudart",
-        src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        variable="TRITON_CUDART_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/include",
-        dst_path="include",
-        variable="TRITON_CUPTI_INCLUDE_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-    )
-    download_and_copy(
-        name="cupti",
-        src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
-        dst_path="lib/cupti",
-        variable="TRITON_CUPTI_LIB_PATH",
-        version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
-        url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
-    )
+download_and_copy(
+    name="nvcc",
+    src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
+    dst_path=f"bin/ptxas{exe_extension}",
+    variable="TRITON_PTXAS_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["ptxas"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+)
+# We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
+download_and_copy(
+    name="nvcc",
+    src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
+    dst_path=f"bin/ptxas-blackwell{exe_extension}",
+    variable="TRITON_PTXAS_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["ptxas-blackwell"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+)
+download_and_copy(
+    name="cuobjdump",
+    src_func=lambda system, arch, version:
+    f"cuda_cuobjdump-{system}-{arch}-{version}-archive/bin/cuobjdump{exe_extension}",
+    dst_path=f"bin/cuobjdump{exe_extension}",
+    variable="TRITON_CUOBJDUMP_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["cuobjdump"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/{system}-{arch}/cuda_cuobjdump-{system}-{arch}-{version}-archive.tar.xz",
+)
+download_and_copy(
+    name="nvdisasm",
+    src_func=lambda system, arch, version:
+    f"cuda_nvdisasm-{system}-{arch}-{version}-archive/bin/nvdisasm{exe_extension}",
+    dst_path=f"bin/nvdisasm{exe_extension}",
+    variable="TRITON_NVDISASM_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["nvdisasm"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
+)
+download_and_copy(
+    name="nvcc",
+    src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
+    dst_path="include",
+    variable="TRITON_CUDACRT_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+)
+download_and_copy(
+    name="cudart",
+    src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
+    dst_path="include",
+    variable="TRITON_CUDART_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
+)
+download_and_copy(
+    name="cupti",
+    src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/include",
+    dst_path="include",
+    variable="TRITON_CUPTI_INCLUDE_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
+)
+download_and_copy(
+    name="cupti",
+    src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
+    dst_path="lib/cupti",
+    variable="TRITON_CUPTI_LIB_PATH",
+    version=NVIDIA_TOOLCHAIN_VERSION["cupti"],
+    url_func=lambda system, arch, version:
+    f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cupti/{system}-{arch}/cuda_cupti-{system}-{arch}-{version}-archive.tar.xz",
+)
 backends = [*BackendInstaller.copy(["intel", "nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 
