@@ -45,6 +45,8 @@ on:
         default: false
 
   pull_request:
+    branches-ignore:
+      - arunjose696/ir-compare
     branches:
       - main
       - release/**
