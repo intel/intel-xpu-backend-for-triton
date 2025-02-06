@@ -391,6 +391,8 @@ class CUDABackend(BaseBackend):
             ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
+                # Skip deleting on Windows to avoid
+                # PermissionError: [WinError 32] The process cannot access the file because it is being used by another process
                 if os.path.exists(fsrc.name) and os.name != "nt":
                     os.remove(fsrc.name)
                 if os.path.exists(flog.name) and os.name != "nt":
