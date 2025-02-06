@@ -110,7 +110,7 @@ Value getFinalValue(Value value) {
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
     // look init values outside the loop
-    BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+    auto blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp))
       return getFinalValue(forOp.getInitArgs()[blockArg.getArgNumber() - 1]);
@@ -654,7 +654,7 @@ public:
     Operation *defOp = value.getDefiningOp();
     if (!defOp) {
       // look init values outside the loop
-      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      auto blockArg = cast<BlockArgument>(value);
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
       return forOp ? hasExpandOpInDefiningPath(
