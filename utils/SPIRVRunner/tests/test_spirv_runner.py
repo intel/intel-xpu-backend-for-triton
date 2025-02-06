@@ -6,10 +6,6 @@ import os
 SPIRV_RUNNER_PATH = os.getenv("SPIRV_RUNNER_PATH")
 SPIRV_RUNNER_TESTS = os.getenv("SPIRV_RUNNER_TESTS")
 
-# Check if SPIRV_RUNNER_TESTS is set
-if not SPIRV_RUNNER_TESTS:
-    raise EnvironmentError("SPIRV_RUNNER_TESTS environment variable is not set")
-
 # Define CLI arguments per directory
 SPIRV_CLI_ARGS = {
     os.path.join(SPIRV_RUNNER_TESTS, "add_kernel"): ["-o", "tensor_2", "-p", "-v", "expected_output.pt"],
@@ -76,7 +72,15 @@ def test_spirv_execution(spirv_test_dir):
     print("SPIRVRunner output:", result.stdout)
 
 
+def main():
+    # Check if SPIRV_RUNNER_TESTS is set
+    if not SPIRV_RUNNER_TESTS:
+        raise EnvironmentError("SPIRV_RUNNER_TESTS environment variable is not set")
+    """Main function to run all tests."""
+    pytest.main()
+
+
 if __name__ == "__main__":
     # Run the tests using pytest
     print("Starting pytest execution...")
-    pytest.main()
+    main()
