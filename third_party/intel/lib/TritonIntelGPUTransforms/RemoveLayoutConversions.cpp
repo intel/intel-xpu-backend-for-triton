@@ -1293,8 +1293,16 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
-    return isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
-               ExpandDimsOp>(op);
+    if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
+            ExpandDimsOp>(op)) {
+      return true;
+    }
+    if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
+      auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
+      return getElementBitWidth(srcType) <
+             getElementBitWidth(cast<RankedTensorType>(fpToFpOp.getType()));
+    }
+    return false;
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
