@@ -68,9 +68,9 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
-  Value getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace, Location loc,
+  Value getScrathMemoryPtr(mlir::gpu::AddressSpace addressSpace, Location loc,
                            RewriterBase &rewriter, Operation *op,
-                           Value allocOffset = {},
+                           FunctionOpInterface funcOp, Value allocOffset = {},
                            bool getstackptr = false) const override;
 
 private:

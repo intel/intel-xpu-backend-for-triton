@@ -1083,8 +1083,8 @@ struct AtomicCASOpConversion
           // Extract the new_loaded value from the pair.
           Value newLoaded = b.extract_val(valueElemTy, cmpxchg, 0);
           Value atomPtr = targetInfo.getScrathMemoryPtr(
-              ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter,
-              op.getOperation());
+              mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+              op->template getParentOfType<FunctionOpInterface>());
           b.store(newLoaded, atomPtr);
         }
 
@@ -1102,9 +1102,9 @@ struct AtomicCASOpConversion
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         b.barrier();
-        Value atomPtr =
-            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
-                                          loc, rewriter, op.getOperation());
+        Value atomPtr = targetInfo.getScrathMemoryPtr(
+            mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+            op->template getParentOfType<FunctionOpInterface>());
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
@@ -1407,8 +1407,8 @@ struct AtomicRMWOpConversion
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
           Value atomPtr = targetInfo.getScrathMemoryPtr(
-              ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter,
-              op.getOperation());
+              mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+              op->template getParentOfType<FunctionOpInterface>());
           b.store(atom, atomPtr);
         }
       }
@@ -1443,9 +1443,9 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr =
-            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
-                                          loc, rewriter, op.getOperation());
+        Value atomPtr = targetInfo.getScrathMemoryPtr(
+            mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+            op->template getParentOfType<FunctionOpInterface>());
         b.barrier();
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});

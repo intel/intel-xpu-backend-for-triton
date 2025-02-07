@@ -92,9 +92,10 @@ public:
 
   virtual bool supportVectorizedAtomics() const = 0;
 
-  virtual Value getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
+  virtual Value getScrathMemoryPtr(mlir::gpu::AddressSpace addressSpace,
                                    Location loc, RewriterBase &rewriter,
-                                   Operation *op, Value allocOffset = {},
+                                   Operation *op, FunctionOpInterface funcOp,
+                                   Value allocOffset = {},
                                    bool getstackptr = false) const = 0;
 
   virtual ~TargetInfoBase() {}

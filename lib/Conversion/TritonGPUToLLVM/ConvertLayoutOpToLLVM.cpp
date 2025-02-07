@@ -164,7 +164,8 @@ private:
     }
 
     Value smemBase = targetInfo.getScrathMemoryPtr(
-        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op.getOperation());
+        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+        op->template getParentOfType<FunctionOpInterface>());
 
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
@@ -508,7 +509,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         collectRegsForIter(ctx, shmemLoadLayout);
 
     Value smemBase = targetInfo.getScrathMemoryPtr(
-        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op.getOperation());
+        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+        op->template getParentOfType<FunctionOpInterface>());
 
     auto sharedPtrTy = smemBase.getType();
     Type elemTy = inVals[0].getType();

@@ -21,6 +21,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -564,20 +565,19 @@ inline bool isKernel(FunctionOpInterface funcOp) {
 }
 
 // Return ScrathMemoryPtr from shared or global memory
-// This function rewritten by targetInfo to deal with different impl of targets.
-inline Value getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
+// This function is rewritten by targetInfo to deal with different impl of
+// targets.
+inline Value getScrathMemoryPtr(mlir::gpu::AddressSpace addressSpace,
                                 Location loc, RewriterBase &rewriter,
-                                Operation *op, Value allocOffset,
-                                bool getstackptr) {
-  FunctionOpInterface funcOp = op->getParentOfType<FunctionOpInterface>();
+                                Operation *op, FunctionOpInterface funcOp,
+                                Value allocOffset, bool getstackptr) {
   switch (addressSpace) {
-  case ::mlir::gpu::AddressSpace::Workgroup: {
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-    auto mod = funcOp->getParentOfType<ModuleOp>();
-    Value stackPtr, offVal;
+  case mlir::gpu::AddressSpace::Workgroup: {
+    Value stackPtr;
     if (!isKernel(funcOp)) {
       stackPtr = funcOp.getArgument(funcOp.getNumArguments() - 2);
     } else {
+      auto mod = funcOp->getParentOfType<ModuleOp>();
       auto globalBase =
           dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
       assert(globalBase);
@@ -587,16 +587,17 @@ inline Value getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
     if (getstackptr) {
       return stackPtr;
     }
+    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
     assert(op->hasAttr("allocation.offset"));
     size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                         .getValue()
                         .getZExtValue();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    offVal = b.i32_val(offset);
+    Value offVal = b.i32_val(offset);
     return b.gep(ptrTy, i8_ty, stackPtr, offVal);
     break;
   }
-  case ::mlir::gpu::AddressSpace::Global: {
+  case mlir::gpu::AddressSpace::Global: {
     // See NOTE: [Additional Function Arguments]
     if (!isKernel(funcOp)) {
       // Base for this function
