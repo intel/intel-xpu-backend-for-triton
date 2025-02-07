@@ -86,13 +86,15 @@ private:
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
       auto base = targetInfo.getScrathMemoryPtr(
-          ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp, {},
+          mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp,
+          callOp->template getParentOfType<FunctionOpInterface>(), {},
           /*getstackptr=*/true);
       promotedOperands.push_back(base);
 
     } else {
       auto base = targetInfo.getScrathMemoryPtr(
-          ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp);
+          mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp,
+          callOp->template getParentOfType<FunctionOpInterface>());
       promotedOperands.push_back(base);
     }
 
@@ -105,7 +107,8 @@ private:
     }
 
     promotedOperands.push_back(targetInfo.getScrathMemoryPtr(
-        ::mlir::gpu::AddressSpace::Global, loc, rewriter, callOp, opOffsetVal));
+        mlir::gpu::AddressSpace::Global, loc, rewriter, callOp,
+        callOp->template getParentOfType<FunctionOpInterface>(), opOffsetVal));
     return promotedOperands;
   }
 

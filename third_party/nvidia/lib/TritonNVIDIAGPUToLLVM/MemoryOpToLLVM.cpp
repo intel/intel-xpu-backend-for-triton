@@ -220,7 +220,8 @@ struct LocalAllocOpConversion
     RankedTensorType srcTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
     Value smemBase = targetInfo.getScrathMemoryPtr(
-        ::mlir::gpu::AddressSpace::Workgroup, op.getLoc(), rewriter, op);
+        mlir::gpu::AddressSpace::Workgroup, op.getLoc(), rewriter, op,
+        op->template getParentOfType<FunctionOpInterface>());
 
     if (lowerDistributedToSharedStmatrix(op.getLoc(), op.getSrc(), memDescType,
                                          adaptor.getSrc(), smemBase,

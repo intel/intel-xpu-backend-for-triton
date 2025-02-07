@@ -325,17 +325,17 @@ Value TargetInfo::getGlobalStringStart(Location loc, RewriterBase &rewriter,
   return b.gep(globalPtrType, i8_ty, globalPtr, LLVM::GEPArg{0});
 }
 
-Value TargetInfo::getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
+Value TargetInfo::getScrathMemoryPtr(mlir::gpu::AddressSpace addressSpace,
                                      Location loc, RewriterBase &rewriter,
-                                     Operation *op, Value allocOffset,
+                                     Operation *op, FunctionOpInterface funcOp,
+                                     Value allocOffset,
                                      bool getstackptr) const {
-  FunctionOpInterface funcOp = op->getParentOfType<FunctionOpInterface>();
   switch (addressSpace) {
-  case ::mlir::gpu::AddressSpace::Workgroup: {
+  case mlir::gpu::AddressSpace::Workgroup: {
     auto ptrTy = LLVM::LLVMPointerType::get(
         rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
     auto mod = funcOp->getParentOfType<ModuleOp>();
-    Value stackPtr, offVal;
+    Value stackPtr;
     if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0) {
       stackPtr = rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
     } else {
@@ -348,11 +348,13 @@ Value TargetInfo::getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
     size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                         .getValue()
                         .getZExtValue();
-    offVal = i32_val(offset);
-    return gep(ptrTy, i8_ty, stackPtr, offVal);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value offVal = b.i32_val(offset);
+    return b.gep(ptrTy, i8_ty, stackPtr, offVal);
     break;
   }
-  case ::mlir::gpu::AddressSpace::Global: {
+  case mlir::gpu::AddressSpace::Global: {
+    // See NOTE: [Additional Function Arguments]
     if (!LLVM::isKernel(funcOp)) {
       // Base for this function
       auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
@@ -361,7 +363,8 @@ Value TargetInfo::getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
       }
 
       auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
-      return gep(ptrTy, i8_ty, gmemBase, allocOffset);
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
     }
 
     // Base for entire kernel
@@ -383,21 +386,22 @@ Value TargetInfo::getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
       gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
     }
 
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value linearId = gridIdx[2];
     for (int k = 0; k < 2; ++k) {
-      linearId = add(gridIdx[1 - k], mul(linearId, gridDim[1 - k]));
+      linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
     }
 
     auto allocSize = allocSizeAttr.getValue().getZExtValue();
 
-    Value offset = mul(linearId, i32_val(allocSize));
+    Value offset = b.mul(linearId, b.i32_val(allocSize));
     if (allocOffset) {
-      offset = add(offset, allocOffset);
+      offset = b.add(offset, allocOffset);
     }
 
     auto *ctx = rewriter.getContext();
-    auto res =
-        gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
+    auto res = b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase,
+                     offset);
     return res;
     break;
   }

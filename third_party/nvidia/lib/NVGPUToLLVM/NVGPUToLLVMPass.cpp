@@ -9,6 +9,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
@@ -650,7 +651,10 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
   PTXBuilder ptxBuilder;
   Location loc = func.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
+  Value sharedMem =
+      LLVM::getScrathMemoryPtr(mlir::gpu::AddressSpace::Workgroup, loc,
+                               rewriter, func.getOperation(), func, {},
+                               /*getstackptr=*/true);
   std::string ptxString =
       "@$0 tcgen05.alloc.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
       ".sync.aligned.shared::cta.b32 [$1], " + std::to_string(size) + ";";
