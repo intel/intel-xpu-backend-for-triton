@@ -160,7 +160,8 @@ class XPUBackend(BaseBackend):
                 dev_prop.update(self.device_props[self.device_arch])
                 return dev_prop
             try:
-                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', self.device_arch]
+                xpu_arch_list = os.environ.get("TORCH_XPU_ARCH_LIST", self.device_arch)
+                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', xpu_arch_list]
                 with tempfile.TemporaryDirectory() as temp_dir:
                     output = subprocess.check_output(ocloc_cmd, text=True, cwd=temp_dir)
                 supported_extensions = set()
@@ -357,8 +358,9 @@ class XPUBackend(BaseBackend):
                 fsrc.flush()
                 fbin = fsrc.name + '.o'
 
+                xpu_arch_list = os.environ.get("TORCH_XPU_ARCH_LIST", "pvc")
                 ocloc_cmd = [
-                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options',
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', xpu_arch_list, '-options',
                     metadata["build_flags"]
                 ]
 
