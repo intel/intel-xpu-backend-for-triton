@@ -633,12 +633,13 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return computeCapability >= 90 && ptxVersion >= 81;
 }
 
-Value TargetInfo::getScrathMemoryPtr(::mlir::gpu::AddressSpace addressSpace,
+Value TargetInfo::getScrathMemoryPtr(mlir::gpu::AddressSpace addressSpace,
                                      Location loc, RewriterBase &rewriter,
-                                     Operation *op, Value allocOffset,
+                                     Operation *op, FunctionOpInterface funcOp,
+                                     Value allocOffset,
                                      bool getstackptr) const {
-  return LLVM::getScrathMemoryPtr(addressSpace, loc, rewriter, op, allocOffset,
-                                  getstackptr);
+  return LLVM::getScrathMemoryPtr(addressSpace, loc, rewriter, op, funcOp,
+                                  allocOffset, getstackptr);
 }
 
 } // namespace mlir::triton::NVIDIA

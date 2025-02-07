@@ -88,7 +88,8 @@ void GatherOpConversion::emitGatherInShared(
 
   // Get the base pointer to the scratch memory.
   Value smemBase = targetInfo.getScrathMemoryPtr(
-      ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op);
+      mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+      op->template getParentOfType<FunctionOpInterface>());
 
   // For each src element owned by the thread, index into the scratch memory and
   // then store it.
