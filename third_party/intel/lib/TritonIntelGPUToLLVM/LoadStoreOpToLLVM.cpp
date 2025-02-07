@@ -1001,6 +1001,16 @@ struct LoadOpConversion
     Value mask = op.getMask();
     Value llMask = adaptor.getMask();
 
+    auto mod = op->getParentOfType<ModuleOp>();
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    Value warpSize = b.i32_val(threadsPerWarp);
+    Value warpId = b.udiv(getThreadId(rewriter, loc), warpSize);
+    Value laneId = b.urem(getThreadId(rewriter, loc), warpSize);
+    Value programId = targetInfo.programId(
+        rewriter, loc,
+        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+        0);
+
     // Determine the vectorization size
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
@@ -1028,6 +1038,16 @@ struct LoadOpConversion
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
       assert(ptrElems.size() == numElems);
 
+#if 0
+      if (count == 1) {
+        std::string msg = " johnlu load tensor ptr " + std::to_string(count)
+                          + ": "; LLVM::intel::printTensor(msg, llPtr, ptr.getType(),
+                                 rewriter, targetInfo);
+        // for (Value v : ptrElems) {
+        //   targetInfo.printf(rewriter, "A pid=%d warp %d lane %d johnlu unpacked addr=%p", ValueRange{programId, warpId,laneId, v});
+        // }
+      }
+#endif
       // Get the LLVM values for mask
       if (llMask) {
         maskElems = unpackLLElements(loc, llMask, rewriter);
@@ -1074,16 +1094,6 @@ struct LoadOpConversion
     const int valueElemNBits =
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
-
-    //    auto mod = op->getParentOfType<ModuleOp>();
-    //    int threadsPerWarp =
-    //    triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod); Value warpSize
-    //    = i32_val(threadsPerWarp); Value warpId = udiv(getThreadId(rewriter,
-    //    loc), warpSize); Value laneId = urem(getThreadId(rewriter, loc),
-    //    warpSize); Value programId =
-    //        targetInfo.programId(rewriter, loc,
-    //        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
-    //        0);
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -1162,19 +1172,33 @@ struct LoadOpConversion
           // Use the top-left address of the block to load the data.
           Value pitch = b.sub(b.ptrtoint(i64_ty, ptrElems[vecStart + 1]),
                               b.ptrtoint(i64_ty, ptrElems[vecStart]));
+          pitch = targetInfo.shuffleIdx(rewriter, loc, pitch, 0);
+
           Value addrElem =
               b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
           addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+
+          Value baseWidth = b.mul(b.i32_val((opIdx == 0 ? 16 : 16)),
+                                  b.i32_val(valueElemNBits / 8));
+          Value baseHeight = b.i32_val((opIdx == 0 ? 8 : 16));
+
+          if (opIdx == 1) {
+            targetInfo.printf(
+                rewriter,
+                "A pid=%d warp %d lane %d johnlu 2d load addr=%p, pitch "
+                "(bytes)=%d, base_width (bytes)=%d, base_height=%d",
+                ValueRange{programId, warpId, laneId, addrElem, pitch,
+                           baseWidth, baseHeight});
+          }
 
           auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
               loc, retTy,
               /*ptr*/ addrElem,
               /*base_width*/
-              b.mul(b.i32_val((opIdx == 0 ? 16 : 16)),
-                    b.i32_val(valueElemNBits)),
-              /*base_height*/ b.i32_val((opIdx == 0 ? 8 : 16)),
+              baseWidth,
+              /*base_height*/ baseHeight,
               /*base_pitch*/
-              b.mul(b.trunc(i32_ty, pitch), b.i32_val(valueElemNBits)),
+              b.trunc(i32_ty, pitch),
               /*x*/ b.i32_val(0),
               /*y*/ b.i32_val(0),
               /*elem_size_in_bits*/ valueElemNBits,
@@ -1237,10 +1261,15 @@ struct LoadOpConversion
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
-    //    static int count = 0;
-    //    std::string msg = "johnlu load tensor cnt " + std::to_string(count++)
-    //    + ": "; LLVM::intel::printTensor(msg, resultStruct, op.getType(),
-    //    rewriter, targetInfo);
+    if (opIdx == 1) {
+      std::string msg = " johnlu load tensor B: ";
+      LLVM::intel::printTensor(msg, resultStruct, op.getType(), rewriter,
+                               targetInfo);
+    } else if (opIdx == 0) {
+      //      std::string msg = " johnlu load tensor A: ";
+      //      LLVM::intel::printTensor(msg, resultStruct, op.getType(),
+      //                               rewriter, targetInfo);
+    }
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
