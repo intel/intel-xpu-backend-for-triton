@@ -120,7 +120,7 @@ warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
   // to facilitate use cases like flash attention, allowing reductions within
   // the same warp.
   if (llvm::find_if(slices, [](Operation *op) {
-        return op->hasTrait<OpTrait::DotLike>();
+        return isa<mlir::triton::DotOpInterface>(op);
       }) != slices.end())
     return {(unsigned)numWarps, 1};
 
@@ -338,20 +338,6 @@ public:
     bool bFromLoad = comesFromLoadOrBlockArg(dotOp.getB());
     bool transpose = false;
     auto origDotOp = dotOp;
-    if (aFromLoad && !bFromLoad) {
-      // If the lhs is not a load and the rhs is, we transpose the inputs
-      // and the result provided this allows us to use mmav3
-      // We transpose the result at the end of the rewrite
-      DotOp transDot = transposeDotOp(rewriter, dotOp);
-      if (getMMAVersionSafe(computeCapability, transDot) == 3) {
-        dotOp = transDot;
-        versionMajor = 3;
-        transpose = true;
-      }
-      std::swap(aFromLoad, bFromLoad);
-    }
-    // If !aFromLoad && !bFromLoad, we just accept a shmem roundtrip
-    // for versionMajor == 3
 
     Value a = dotOp.getA();
     Value b = dotOp.getB();
