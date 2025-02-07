@@ -360,8 +360,8 @@ class XPUBackend(BaseBackend):
 
                 xpu_arch_list = os.environ.get("TORCH_XPU_ARCH_LIST", "pvc")
                 ocloc_cmd = [
-                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', xpu_arch_list, '-options',
-                    metadata["build_flags"]
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', xpu_arch_list,
+                    '-options', metadata["build_flags"]
                 ]
 
                 try:
