@@ -254,7 +254,8 @@ struct ExperimentalTensormapCreateOpConversion
 
     bool needsStrideWorkaround = targetInfo.getPtxVersion() <= 85;
     auto smemBase = targetInfo.getScrathMemoryPtr(
-        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op);
+        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+        op->template getParentOfType<FunctionOpInterface>());
     zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
     tensormap_replace_global_address(loc, ctx, rewriter, smemBase,
                                      adaptor.getGlobalAddress());
