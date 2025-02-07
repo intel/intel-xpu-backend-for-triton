@@ -69,7 +69,8 @@ private:
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
 
     Value smemBase = targetInfo.getScrathMemoryPtr(
-        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op.getOperation());
+        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+        op->template getParentOfType<FunctionOpInterface>());
     smemBase = b.bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 
