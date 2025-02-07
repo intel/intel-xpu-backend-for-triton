@@ -185,7 +185,8 @@ public:
     // data in the default blocked layout.
 
     Value baseSharedMemPtr = targetInfo.getScrathMemoryPtr(
-        ::mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op.getOperation());
+        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+        op->template getParentOfType<FunctionOpInterface>());
     auto dstType = op.getType();
     Attribute dstEncoding = dstType.getEncoding();
     auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstEncoding,

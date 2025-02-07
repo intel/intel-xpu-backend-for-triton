@@ -666,9 +666,9 @@ struct AtomicCASOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr =
-            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
-                                          loc, rewriter, op.getOperation());
+        Value atomPtr = targetInfo.getScrathMemoryPtr(
+            mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+            op->template getParentOfType<FunctionOpInterface>());
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with mask = True store the result
         PTXBuilder ptxBuilderStore;
@@ -871,8 +871,9 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
+        Value atomPtr = targetInfo.getScrathMemoryPtr(
+            mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+            op->template getParentOfType<FunctionOpInterface>());
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, loadAcquireOp, pred);
@@ -1001,9 +1002,9 @@ struct AtomicRMWOpConversion
           rewriter.eraseOp(op);
           return success();
         }
-        Value atomPtr =
-            targetInfo.getScrathMemoryPtr(::mlir::gpu::AddressSpace::Workgroup,
-                                          loc, rewriter, op.getOperation());
+        Value atomPtr = targetInfo.getScrathMemoryPtr(
+            mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
+            op->template getParentOfType<FunctionOpInterface>());
         atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, old, pred);
