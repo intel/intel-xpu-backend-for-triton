@@ -1205,72 +1205,6 @@ struct LoadOpConversion
           llvm::errs() << "packedColNumPerVBlock = " << packedColNumPerVBlock
                        << "\n";
 
-#if 0
-        // covers all dpas iterations for this load (including vBlocks)
-        // TODO: for transpose layout this is likely not taking into account the vnni transform
-        llvm::errs() << "offset dim size: " << dpasToBlockLoadLayout.getOutDimSize(kOffset) << "\n";
-#if 1
-          for (int vblk = 0; vblk < vBlocks; ++vblk)
-            for (int row = 0; row < packedRowNum; ++row)
-              for (int col = 0; col < packedColNumPerVBlock; ++col)
-                llvm::errs() << "vblk, row, col = " << vblk << ", " << row << ", " << col << "\n";
-
-        const auto num_shuffle_vecs = packedRowNum * packedRowNum;
-        // assert(num_shuffle_vecs == tileLayout.getInDimSize(kIteration));
-        for (size_t i = 0; i < num_shuffle_vecs/*dpasToBlockLoadLayout.getOutDimSize(kIteration)*/ + 1; i++) {
-#endif
-            llvm::errs() << "processing dpas iteration " << i << "\n";
-#if 0
-            auto iterationStartCoord = ll.apply({{kWarp, 0}, {kLane, 0}, {kRegister, i}, {kBlock, 0}});
-            assert(iterationStartCoord.size() == 2);
-
-            auto offsetIterationAndLoad = dpasToBlockLoadLayout.apply({{iterationStartCoord[0]}, {iterationStartCoord[1]}});
-            assert(offsetIterationAndLoad.size() > 0);
-            assert(offsetIterationAndLoad[0].first == kOffset);
-            auto vectorOffset = offsetIterationAndLoad[0].second / vBlocks;
-#endif
-            SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
-            for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
-                  ++elemIdx) {
-              auto iterationStartCoord = ll.apply({{kWarp, 0}, {kLane, 0}, {kRegister, i*packedElemsPerLanePerDPASInst + elemIdx}, {kBlock, 0}});
-              assert(iterationStartCoord.size() == 2);
-              llvm::errs() << "register offset: " << i*packedElemsPerLanePerDPASInst + elemIdx << "\n";
-              // llvm::errs() << "register offset: " << i*packedElemsPerLanePerDPASInst + elemIdx << "\n";
-              llvm::errs() << "\titeration start: " << iterationStartCoord[0].second << ", " << iterationStartCoord[1].second << "\n";
-
-              auto offsetIterationAndLoad = dpasToBlockLoadLayout.apply({{iterationStartCoord[0]}, {iterationStartCoord[1]}});
-              assert(offsetIterationAndLoad.size() == 3);
-              assert(offsetIterationAndLoad[0].first == kOffset);
-              llvm::errs() << "\toffset: " << offsetIterationAndLoad[0].second << "\n";
-              assert(offsetIterationAndLoad[1].first == kIteration);
-              llvm::errs() << "\titeration: " << offsetIterationAndLoad[1].second << "\n";
-              assert(offsetIterationAndLoad[2].first == kLoad);
-              llvm::errs() << "\tload: " << offsetIterationAndLoad[2].second << "\n";
-              // TODO:
-              // (1) - incorporate load into this calculation
-              // (2) - figure out how to incorporate values/load to set the iteration properly
-              // this doesn't work for vnni because
-              auto vectorOffset = (offsetIterationAndLoad[0].second + (offsetIterationAndLoad[1].second*dpasToBlockLoadLayout.getOutDimSize(kOffset))) / tileWidth;
-
-              indices[elemIdx] = vectorOffset; //+ elemIdx; // +iteration?
-              llvm::errs() << "indices[" << elemIdx << "]" << " = " << indices[elemIdx] << "\n";
-            }
-            DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
-            Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
-                loc, packedDPASOperandType, load2dOp, load2dOp, attr);
-
-            auto tensorCoord = tileLayout.apply({{kLoad, 0}, {kOffset, 0},  {kIteration, i}});
-            assert(tensorCoord.size() == 2);
-            auto tensorRowCoord = tensorCoord[0].second / elemsPerDPASInst[0] + (outer * numRepOuter);
-            llvm::errs() << "row: " << tensorRowCoord << " = " << tensorCoord[0].second << " / " << elemsPerDPASInst[0] << "\n";
-            auto tensorColCoord = tensorCoord[1].second / elemsPerDPASInst[1];
-            llvm::errs() << "col: "  << tensorColCoord << " = " << tensorCoord[1].second << " / " << elemsPerDPASInst[1] << "\n";
-
-            // llvm::errs() << i << " : " << tensorRowCoord << ", " << tensorColCoord << "\n";
-            loadVals[{tensorRowCoord, tensorColCoord}] = bitcast(loadVal, unpackedDPASOperandType);
-        }
-
-#else
           // Decompose the return value to multiple operands.
           for (int vblk = 0; vblk < vBlocks; ++vblk)
             for (int row = 0; row < packedRowNum; ++row)
@@ -1336,7 +1270,6 @@ struct LoadOpConversion
                 } break;
                 }
               }
-#endif
         }
       }
     }
