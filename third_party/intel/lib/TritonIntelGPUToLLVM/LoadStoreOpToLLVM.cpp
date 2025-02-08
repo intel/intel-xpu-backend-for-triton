@@ -1213,6 +1213,16 @@ struct LoadOpConversion
               for (int col = 0; col < packedColNumPerVBlock; ++col)
                 llvm::errs() << "vblk, row, col = " << vblk << ", " << row << ", " << col << "\n";
 
+#if 0
+        // covers all dpas iterations for this load (including vBlocks)
+        // TODO: for transpose layout this is likely not taking into account the vnni transform
+        llvm::errs() << "offset dim size: " << dpasToBlockLoadLayout.getOutDimSize(kOffset) << "\n";
+#if 1
+          for (int vblk = 0; vblk < vBlocks; ++vblk)
+            for (int row = 0; row < packedRowNum; ++row)
+              for (int col = 0; col < packedColNumPerVBlock; ++col)
+                llvm::errs() << "vblk, row, col = " << vblk << ", " << row << ", " << col << "\n";
+
         const auto num_shuffle_vecs = packedRowNum * packedRowNum;
         // assert(num_shuffle_vecs == tileLayout.getInDimSize(kIteration));
         for (size_t i = 0; i < num_shuffle_vecs/*dpasToBlockLoadLayout.getOutDimSize(kIteration)*/ + 1; i++) {
