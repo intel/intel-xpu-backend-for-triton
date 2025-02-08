@@ -54,6 +54,7 @@ General options:
   -o <string> - <Specify Output Tensor Name>
 
   -p          - Enable kernel time profiling
+  -v <string> - <Specify Expected Output Tensor Names (Ex: -v expected_tensor1.pt,expected_tensor2.pt or skip)>
  ```
 
 
@@ -64,7 +65,12 @@ Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copi
 `SPIRVRunner` is configured to run the `add_kernel.spv` SPIRV binary with inputs `tensor_0.pt` and `tensor_1.pt` and output `tensor_2.pt`. `add_kernel.spv` was generated from the `01-vector-add.py` tutorial.
 
 SPIRVRunner Usage:
-`./build/SPIRVRunner -o tensor_2 -p`
+```
+cd tests/add_kernel
+`<abs path to SPIRVRunner executable> -o tensor_2 -p`
+
+Note: Prior to this run test framework to generate serialized args/tensor information
+```
 
 Expected output follows:
 
@@ -78,3 +84,39 @@ Output Tensor Path: /abs/path/utils/SPIRVRunner/cpp_outs.pt
 ```
 
 The GPU hardware, shape and data type of each Tensor (along with number of bytes), and kernel information are printed. The shape and data type of the output Tensor is currently printed, along with the the first cell in the output. Ensuring the value of the first cell is non-zero allows for a quick sanity check. The output Tensor is written to a file `cpp_outs.pt` which is a Tensor in PyTorch format. Typically, we will create a quick Python script to read the input Tensor, run the same computations in PyTorch, and then compare the PyTorch result with the loaded `cpp_outs.pt` Tensor using the PyTorch testing API.
+
+### Test Framework
+
+In order to use the `SPIRVRunner` test framework set following environment varibles
+
+```
+   export SPIRV_RUNNER_PATH=<abs path to SPIRV Runner executable>
+   export SPIRV_RUNNER_TESTS=<abs path to SPIRV Runner tests>
+```
+
+Run following command to execute,
+
+```
+    python3 -m pytest tests/test_spirv_runner.py
+```
+
+Expected output as follows:
+
+```
+(triton) intel-xpu-backend-for-triton/utils/SPIRVRunner$ python3 -m pytest tests/test_spirv_runner.py
+============================================================================ test session starts =============================================================================
+platform linux -- Python 3.9.18, pytest-8.3.4, pluggy-1.5.0
+rootdir: /data/kballeda/Kali/0122_ci_enable/intel-xpu-backend-for-triton
+configfile: pyproject.toml
+plugins: xdist-3.6.1, forked-1.6.0
+collected 4 items
+
+tests/test_spirv_runner.py Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_argument_parsing, Status: PASS
+Progress: 1/1 tests passed (100.00%)
+.Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_invalid_argument, Status: PASS
+Progress: 2/2 tests passed (100.00%)
+.Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_spirv_execution[intel-xpu-backend-for-triton/utils/SPIRVRunner/tests/add_kernel], Status: PASS
+Progress: 3/3 tests passed (100.00%)
+.Test: utils/SPIRVRunner/tests/test_spirv_runner.py::test_spirv_execution[/intel-xpu-backend-for-triton/utils/SPIRVRunner/tests/dot], Status: PASS
+Progress: 4/4 tests passed (100.00%)
+```

@@ -170,7 +170,6 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
 
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                                                NVMMASharedEncodingAttr shared,
-                                               int32_t elemBitWidth,
                                                bool disableSwizzle) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
@@ -180,7 +179,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
-
+  int elemBitWidth = shared.getElementBitWidth();
   int tileWidthBytes = shared.getSwizzlingByteWidth();
   int vec = 128 / elemBitWidth;
   int perPhase = 0;
@@ -198,14 +197,23 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   auto outDimNames = standardOutDimNames(ctx, rank);
 
   // Construct bases for a the layout's 2-dimensional tile.
-  assert(shape.size() >= 2);
-  int colDim = shared.getTransposed() ? 0 : 1;
-  int rowDim = shared.getTransposed() ? 1 : 0;
+  assert(rank >= 2);
+  int batchDims = rank - 2;
+  int colDim = batchDims + (shared.getTransposed() ? 0 : 1);
+  int rowDim = batchDims + (shared.getTransposed() ? 1 : 0);
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  bool isFp4Padded = false;
+  if (auto sharedMMALayout =
+          dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(shared)) {
+    if (sharedMMALayout.getFp4Padded()) {
+      isFp4Padded = true;
+    }
+  }
+  int packingFactor = isFp4Padded ? 2 : 1;
 
-  if (shape[colDim] < tileCols || shape[rowDim] < tileRows) {
+  if (shape[colDim] * packingFactor < tileCols || shape[rowDim] < tileRows) {
     llvm::errs() << "Illegal shared layout; expected shape to be at least ["
                  << tileRows << ", " << tileCols << "], shape: ["
                  << shape[rowDim] << ", " << shape[colDim] << "]\n";
@@ -217,7 +225,18 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
   std::vector<std::vector<int>> bases2D;
   for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
+    if (isFp4Padded) {
+      int colPadded = 1 << logCol;
+      // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
+      // We represent the padded layout by mapping 8 padded offsets to the same
+      // coordinates as the real ones. When computing the inverse of this LL,
+      // the offsets correspoding to the real ones are picked in the image by
+      // invertAndCompose.
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      bases2D.push_back({0, colPacked});
+    } else {
+      bases2D.push_back({0, 1 << logCol});
+    }
   }
   for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
     int row = 1 << logRow;
@@ -225,14 +244,19 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       bases2D.push_back({row, 0});
       continue;
     }
-    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    if (isFp4Padded) {
+      int colPadded = vec * ((row / perPhase) % maxPhase);
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      bases2D.push_back({row, colPacked});
+    } else {
+      bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    }
   }
   LinearLayout tileLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
 
   // Add the remaining dimensions.
-  for (int i = 2; i < rank; i++) {
-    int dim = shared.getTransposed() ? i : 1 - i;
+  for (int dim = batchDims - 1; dim >= 0; --dim) {
     tileLayout *=
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
@@ -869,11 +893,9 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return ret;
 }
 
-LinearLayout
-TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                                 std::optional<int32_t> elemBitWidth) {
-  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout,
-               elemBitWidth};
+LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
+                                              Attribute layout) {
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
   if (auto result = llCache.get(key)) {
     return *result;
   }
@@ -887,8 +909,7 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      assert(elemBitWidth.has_value());
-      result = sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
+      result = sharedToLinearLayoutLeadingOffset(shape, shared);
     } else {
       assert(0 && "unknown layout");
     }
@@ -898,12 +919,10 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   return result;
 }
 
-LinearLayout
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
-  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
-      shape, layout, elemBitWidth);
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
+                                                                   layout);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

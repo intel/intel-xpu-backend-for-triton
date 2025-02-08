@@ -1,8 +1,15 @@
 import os
-import io
+import sys
 import pytest
 import tempfile
-import contextlib
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
+    worker_id = os.getenv("PYTEST_XDIST_WORKER")
+    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
+    if os.name == "nt" and worker_id:
+        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
 
 
 def pytest_addoption(parser):
@@ -12,44 +19,40 @@ def pytest_addoption(parser):
         parser.addoption("--forked", action="store_true")
 
 
-def _run_test_in_subprocess(pyfuncitem_obj, funcargs, child_conn) -> object:
-    temp_stdout_buffer = io.StringIO()
-    temp_stderr_buffer = io.StringIO()
-    with contextlib.redirect_stdout(temp_stdout_buffer) as stdout:
-        with contextlib.redirect_stderr(temp_stderr_buffer) as stderr:
-            res = pyfuncitem_obj(**funcargs)
-
-    child_conn.send({"captured stdout": stdout.getvalue(), "captured stderr": stderr.getvalue()})
-    return res
-
-
 def pytest_pyfunc_call(pyfuncitem: pytest.Function):
 
     if os.name == "nt" and "forked" in pyfuncitem.keywords:
-        from multiprocessing import Process, Pipe
-        from pytest import fail
+        # Avoid recursion
+        if os.getenv("_PYTEST_SUBPROCESS_RUNNING"):
+            return None
 
-        parent_conn, child_conn = Pipe()
-        # Python subprocess tasked with running this test.
-        test_subprocess = Process(target=_run_test_in_subprocess,
-                                  args=(pyfuncitem.obj, pyfuncitem.funcargs, child_conn))
+        import subprocess
 
-        test_subprocess.start()
-        test_subprocess.join()
+        test_name = pyfuncitem.nodeid
+        python_executable = sys.executable
+        pytest_args = [python_executable, "-m", "pytest", "-s", test_name]
 
-        if parent_conn.poll(1):
-            print(f"Captured streams from isolated process: '{parent_conn.recv()}'")
-        else:
-            print("No data sent from isolated process")
+        config = pyfuncitem.config
+        device = config.getoption("--device")
+        if device:
+            pytest_args.extend(["--device", device])
 
-        child_conn.close()
+        # Avoid recursion
+        env = os.environ.copy()
+        env["_PYTEST_SUBPROCESS_RUNNING"] = "1"
 
-        if test_subprocess.exitcode != 0:
-            exception_message = (
-                f'Test "{pyfuncitem.name}" failed in isolated subprocess with: {test_subprocess.exitcode}')
+        result = subprocess.run(pytest_args, capture_output=True, text=True, env=env)
+
+        # Update main streams with data from subprocess
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+
+        if result.returncode != 0:
+            # Human-readable exception message to be raised.
+            exception_message = (f'Test "{pyfuncitem.name}" failed in isolated subprocess with: {result.returncode}')
 
             # Raise a pytest-compliant exception.
-            raise fail(exception_message, pytrace=False)
+            raise pytest.fail(exception_message, pytrace=False)
 
         # Notify pytest that this hook successfully ran this test.
         return True
@@ -72,10 +75,3 @@ def fresh_triton_cache():
             yield tmpdir
         finally:
             os.environ.pop("TRITON_CACHE_DIR", None)
-
-
-def pytest_configure(config):
-    worker_id = os.getenv("PYTEST_XDIST_WORKER")
-    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
-    if os.name == "nt" and worker_id:
-        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
