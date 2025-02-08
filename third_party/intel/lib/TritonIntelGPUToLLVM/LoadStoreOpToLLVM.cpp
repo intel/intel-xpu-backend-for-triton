@@ -3,9 +3,9 @@
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "triton/Tools/LayoutUtils.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
@@ -535,7 +535,8 @@ struct LoadOpConversion
     };
     auto opIdx = getOpIdx();
 
-    llvm::errs() << "Tensor type for op " << int(opIdx) << ": " << tensorType << "\n";
+    llvm::errs() << "Tensor type for op " << int(opIdx) << ": " << tensorType
+                 << "\n";
 
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
@@ -757,7 +758,8 @@ struct LoadOpConversion
         b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
     unsigned innerDimWarpNum = std::min<unsigned>(
         warpsPerCTA[dimInner],
-        mlir::ceil<unsigned>(tensorShape[dimInner], repCluster[dimInner]));;
+        mlir::ceil<unsigned>(tensorShape[dimInner], repCluster[dimInner]));
+    ;
 
     auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
           offsetBaseY] =
@@ -765,8 +767,10 @@ struct LoadOpConversion
 
     unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
     unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
-    llvm::errs() << "width (elemsPerDPASInst[" << threadOrder[rank - 2] << "]): " << elemsPerDPASInst[threadOrder[rank - 2]] << "\n";
-    llvm::errs() << "height: (elemsPerDPASInst[" << threadOrder[rank - 1] << "]): " << elemsPerDPASInst[threadOrder[rank - 1]] << "\n";
+    llvm::errs() << "width (elemsPerDPASInst[" << threadOrder[rank - 2]
+                 << "]): " << elemsPerDPASInst[threadOrder[rank - 2]] << "\n";
+    llvm::errs() << "height: (elemsPerDPASInst[" << threadOrder[rank - 1]
+                 << "]): " << elemsPerDPASInst[threadOrder[rank - 1]] << "\n";
     unsigned vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
@@ -775,21 +779,25 @@ struct LoadOpConversion
     auto dimOuterStr = S("dim" + std::to_string(dimOuter));
     auto dimInnerStr = S("dim" + std::to_string(dimInner));
 
-    StringAttr kOffset = S("offset"); // Row-major offset into the data from a single block load 
-    StringAttr kIteration = S("iteration"); // DPAS invocation operating on a sub-block from the loaded data 
-    StringAttr kLoad = S("load"); // 2D block load invocation 
-    auto createSimpleLinearLayout = [&](const SmallVector<unsigned>& threadOrder, const SmallVector<unsigned>& tileShape) {
+    StringAttr kOffset =
+        S("offset"); // Row-major offset into the data from a single block load
+    StringAttr kIteration = S("iteration"); // DPAS invocation operating on a
+                                            // sub-block from the loaded data
+    StringAttr kLoad = S("load");           // 2D block load invocation
+    auto createSimpleLinearLayout =
+        [&](const SmallVector<unsigned> &threadOrder,
+            const SmallVector<unsigned> &tileShape) {
           auto outDimNames = standardOutDimNames(ctx, tensorShape.size());
           LinearLayout layout = LinearLayout::empty();
           SmallVector<StringAttr> kOffsetDims;
           auto totalIters = 1;
           auto totalOffsets = 1;
-          assert(tileShape.size() == 2); // TODO: dot 3d support? 
+          assert(tileShape.size() == 2); // TODO: dot 3d support?
 
-          if (isTransposeRequired && opIdx == DpasEncodingAttr::OpIdx::OperandB) {
+          if (isTransposeRequired &&
+              opIdx == DpasEncodingAttr::OpIdx::OperandB) {
             // Adjust the layout to handle the VNNI values
-            layout *=
-              LinearLayout::identity1D(2, kOffset, outDimNames[0]);
+            layout *= LinearLayout::identity1D(2, kOffset, outDimNames[0]);
             totalOffsets *= 2;
             kOffsetDims.push_back(kOffset);
           }
@@ -801,13 +809,14 @@ struct LoadOpConversion
             kOffsetDims.push_back(kOffset);
 
             assert(llvm::isPowerOf2_32(tileShape[dim]));
-            if (dim == 0 && isTransposeRequired && opIdx == DpasEncodingAttr::OpIdx::OperandB) {
-              layout *=
-                LinearLayout::identity1D(tileShape[dim]/2, kOffset, outDimNames[dim]);
-              totalOffsets *= tileShape[dim]/2;
+            if (dim == 0 && isTransposeRequired &&
+                opIdx == DpasEncodingAttr::OpIdx::OperandB) {
+              layout *= LinearLayout::identity1D(tileShape[dim] / 2, kOffset,
+                                                 outDimNames[dim]);
+              totalOffsets *= tileShape[dim] / 2;
             } else {
-              layout *=
-                LinearLayout::identity1D(tileShape[dim], kOffset, outDimNames[dim]);
+              layout *= LinearLayout::identity1D(tileShape[dim], kOffset,
+                                                 outDimNames[dim]);
               totalOffsets *= tileShape[dim];
             }
           }
@@ -815,18 +824,18 @@ struct LoadOpConversion
           SmallVector<StringAttr> newDims;
           newDims.append(kOffsetDims.begin(), kOffsetDims.end());
           auto ret = layout.transposeIns(newDims);
-          ret = ret.transposeOuts(outDimNames);  
-          return ret.reshapeIns(
-              {{kOffset, totalOffsets}}); 
+          ret = ret.transposeOuts(outDimNames);
+          return ret.reshapeIns({{kOffset, totalOffsets}});
         };
     auto tileLayout = createSimpleLinearLayout(threadOrder, elemsPerDPASInst);
-    
+
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout: " << tileLayout << "\n";
-      for(size_t i = 0; i < elemsPerDPASInst[0] * elemsPerDPASInst[1]; i++) {
+      for (size_t i = 0; i < elemsPerDPASInst[0] * elemsPerDPASInst[1]; i++) {
         auto tensorVals = tileLayout.apply({{kOffset, i}});
         assert(tensorVals.size() == 2);
-        llvm::dbgs() << i << " : " << tensorVals[0].second << ", " << tensorVals[1].second << "\n";
+        llvm::dbgs() << i << " : " << tensorVals[0].second << ", "
+                     << tensorVals[1].second << "\n";
       }
       llvm::dbgs() << "tile layout done\n";
     });
@@ -863,15 +872,20 @@ struct LoadOpConversion
       numOperandsPer2DloadN = 1;
     }
 
-    // begin LL duplicate code 
-    if (isOperandA || !isTransposeRequired) { // TODO: hack to avoid duplicating operandA layout code
+    // begin LL duplicate code
+    if (isOperandA || !isTransposeRequired) { // TODO: hack to avoid duplicating
+                                              // operandA layout code
       if (isOperandA) {
         assert(!isTransposeRequired);
-        tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration, dimOuterStr); 
-        tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2], kIteration, dimInnerStr);
+        tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration,
+                                               dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
+                                               kIteration, dimInnerStr);
       } else {
-        tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration, dimOuterStr);
-        tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2], kIteration, dimInnerStr); 
+        tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration,
+                                               dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
+                                               kIteration, dimInnerStr);
       }
     } else {
       if (isOperandA)
@@ -892,18 +906,24 @@ struct LoadOpConversion
         // operand per inst.
         // Note: the tileHeight and numOperandsPer2DLoadM are the column size
         // now.
-        tileLayout *= LinearLayout::identity1D((threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1, kIteration, dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(
+            (threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1,
+            kIteration, dimOuterStr);
       }
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
       numOperandsPer2DloadN = 1;
-      // this give us the right value below when we compare to the B_AxB HW layout. But are we taking into account the vnni transform in addition to vblocks? 
-      tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2], kIteration, dimInnerStr); 
+      // this give us the right value below when we compare to the B_AxB HW
+      // layout. But are we taking into account the vnni transform in addition
+      // to vblocks?
+      tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
+                                             kIteration, dimInnerStr);
     }
-    // end LL duplicate code 
+    // end LL duplicate code
 
     LLVM_DEBUG({
-      llvm::dbgs() << "Block load tile layout after adding iterations: " << tileLayout << "\n";
+      llvm::dbgs() << "Block load tile layout after adding iterations: "
+                   << tileLayout << "\n";
     });
 
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
@@ -937,7 +957,7 @@ struct LoadOpConversion
 
     // The stride for the replicates.
     unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
-   
+
     unsigned repStride =
         elemsPerDPASInst[dimOuter] * numOperandsOuterDimPerLoad;
     unsigned warpOuterStride = warpShape[dimOuter];
@@ -947,42 +967,64 @@ struct LoadOpConversion
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
 
     LLVM_DEBUG({
-      llvm::dbgs() << "numRepOuter: " << numRepOuter << ", repOuterStride: " << repOuterStride << "\n";
-      llvm::dbgs() << "numLoadPerOutRepCluster: " << numLoadPerOutRepCluster << ", repStride: " << repStride << "\n";
-      llvm::dbgs() << "numRepInner: " << numRepInner << ", numOperandsInnerDimPerLoad: " << numOperandsInnerDimPerLoad << "\n";
+      llvm::dbgs() << "numRepOuter: " << numRepOuter
+                   << ", repOuterStride: " << repOuterStride << "\n";
+      llvm::dbgs() << "numLoadPerOutRepCluster: " << numLoadPerOutRepCluster
+                   << ", repStride: " << repStride << "\n";
+      llvm::dbgs() << "numRepInner: " << numRepInner
+                   << ", numOperandsInnerDimPerLoad: "
+                   << numOperandsInnerDimPerLoad << "\n";
 
-      llvm::dbgs() << "numOperandsOuterDimPerLoad: " << numOperandsOuterDimPerLoad << "\n";
-      llvm::dbgs() << "numOperandsInnerDimPerLoad: " << numOperandsInnerDimPerLoad << "\n";
-      llvm::dbgs() << "repOuterStride = " << repOuterStride << " (warpShape[dimOuter] * outerDimWarpNum : " << warpShape[dimOuter] << " * " << outerDimWarpNum << ")\n";
-      llvm::dbgs() << "repStride = " << repStride << " (elemsPerDPASInst[dimOuter] * numOperandsOuterDimPerLoad) " << elemsPerDPASInst[dimOuter] << " * " << numOperandsOuterDimPerLoad << "\n";
+      llvm::dbgs() << "numOperandsOuterDimPerLoad: "
+                   << numOperandsOuterDimPerLoad << "\n";
+      llvm::dbgs() << "numOperandsInnerDimPerLoad: "
+                   << numOperandsInnerDimPerLoad << "\n";
+      llvm::dbgs() << "repOuterStride = " << repOuterStride
+                   << " (warpShape[dimOuter] * outerDimWarpNum : "
+                   << warpShape[dimOuter] << " * " << outerDimWarpNum << ")\n";
+      llvm::dbgs()
+          << "repStride = " << repStride
+          << " (elemsPerDPASInst[dimOuter] * numOperandsOuterDimPerLoad) "
+          << elemsPerDPASInst[dimOuter] << " * " << numOperandsOuterDimPerLoad
+          << "\n";
     });
 
-  // handle loads 
-  if (isOperandA) {
-    tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
-  } else {
-    auto loadIdentityLayout = LinearLayout::identity1D(numRepOuter, kLoad, dimInnerStr) * LinearLayout::identity1D(numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
-    tileLayout *= loadIdentityLayout;
-  }
+    // handle loads
+    if (isOperandA) {
+      tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
+    } else {
+      auto loadIdentityLayout =
+          LinearLayout::identity1D(numRepOuter, kLoad, dimInnerStr) *
+          LinearLayout::identity1D(numRepInner / numOperandsInnerDimPerLoad,
+                                   kLoad, dimOuterStr);
+      tileLayout *= loadIdentityLayout;
+    }
 
     LLVM_DEBUG({
-      llvm::dbgs() << "Block load tile layout after adding: " << tileLayout << "\n";
-    for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
-      for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
-        {
-          size_t offset = 0;
-          auto tensorVals = tileLayout.apply({{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
-          assert(tensorVals.size() == 2);
-          llvm::dbgs() << load << ", " << itr << ", " << offset << " : " << tensorVals[0].second << ", " << tensorVals[1].second << "\n";
-        }
-        {
-          size_t offset = tileLayout.getInDimSize(kOffset) - 1;
-          auto tensorVals = tileLayout.apply({{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
-          assert(tensorVals.size() == 2);
-          llvm::dbgs() << load << ", " << itr << ", " << offset << " : " << tensorVals[0].second << ", " << tensorVals[1].second << "\n";
+      llvm::dbgs() << "Block load tile layout after adding: " << tileLayout
+                   << "\n";
+      for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
+        for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
+          {
+            size_t offset = 0;
+            auto tensorVals = tileLayout.apply(
+                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
+            assert(tensorVals.size() == 2);
+            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
+                         << tensorVals[0].second << ", " << tensorVals[1].second
+                         << "\n";
+          }
+          {
+            size_t offset = tileLayout.getInDimSize(kOffset) - 1;
+            auto tensorVals = tileLayout.apply(
+                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
+            assert(tensorVals.size() == 2);
+            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
+                         << tensorVals[0].second << ", " << tensorVals[1].second
+                         << "\n";
+          }
         }
       }
-    }
     });
 
     Value pitch;
@@ -1012,24 +1054,28 @@ struct LoadOpConversion
     StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
     StringAttr kBlock = StringAttr::get(ctx, "block");
- 
+
     LLVM_DEBUG(llvm::dbgs() << "DPAS Linear Layout: " << ll << "\n");
 
     auto dpasToBlockLoadLayout = tileLayout.pseudoinvert();
-    LLVM_DEBUG(llvm::dbgs() << "Inverted block load layout: " << dpasToBlockLoadLayout << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Inverted block load layout: "
+                            << dpasToBlockLoadLayout << "\n");
 
 #define USE_TILE_LL_FOR_OFFSETS 1
 
     LLVM_DEBUG({
       llvm::dbgs() << "tileWidth: " << tileWidth << "\n";
       llvm::dbgs() << "tileHeight: " << tileHeight << "\n";
-      
-      llvm::dbgs() << "offset dim size: " << tileLayout.getInDimSize(kOffset) << "\n";
-      llvm::dbgs() << "iteration dim size: " << tileLayout.getInDimSize(kIteration) << "\n";
+
+      llvm::dbgs() << "offset dim size: " << tileLayout.getInDimSize(kOffset)
+                   << "\n";
+      llvm::dbgs() << "iteration dim size: "
+                   << tileLayout.getInDimSize(kIteration) << "\n";
 
       llvm::dbgs() << "ll lane size: " << ll.getInDimSize(kLane) << "\n";
       llvm::dbgs() << "ll warp size: " << ll.getInDimSize(kWarp) << "\n";
-      llvm::dbgs() << "ll register size: " << ll.getInDimSize(kRegister) << "\n";
+      llvm::dbgs() << "ll register size: " << ll.getInDimSize(kRegister)
+                   << "\n";
       llvm::dbgs() << "ll block size: " << ll.getInDimSize(kBlock) << "\n";
 
       llvm::dbgs() << "outerDimWarpNum: " << outerDimWarpNum << "\n";
@@ -1041,17 +1087,24 @@ struct LoadOpConversion
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
         for (int k = 0; k < numRepInner; k += numOperandsInnerDimPerLoad) {
-          LLVM_DEBUG({llvm::dbgs() << "outer, rep, k: " << outer << ", " << rep << ", " << k << "\n";});
+          LLVM_DEBUG({
+            llvm::dbgs() << "outer, rep, k: " << outer << ", " << rep << ", "
+                         << k << "\n";
+          });
 
           Value offsetX, offsetY;
           switch (opIdx) {
           case DpasEncodingAttr::OpIdx::OperandA: {
             LLVM_DEBUG({
               llvm::dbgs() << "x offset: " << k * repKStride << "\n";
-              llvm::dbgs() << "y offset: " << outer * repOuterStride + rep * repStride << "\n";
+              llvm::dbgs() << "y offset: "
+                           << outer * repOuterStride + rep * repStride << "\n";
             });
 #ifdef USE_TILE_LL_FOR_OFFSETS
-            auto offset = tileLayout.apply({{kOffset, 0}, {kIteration, 0}, {kLoad, outer + k * numRepOuter}});
+            auto offset = tileLayout.apply({{kOffset, 0},
+                                            {kIteration, 0},
+                                            { kLoad,
+                                              outer + k * numRepOuter }});
             assert(offset.size() == 2);
             const auto localOffsetX = offset[0].second * outerDimWarpNum;
             const auto localOffsetY = offset[1].second / numRepOuter;
@@ -1060,21 +1113,26 @@ struct LoadOpConversion
               llvm::dbgs() << "y offset ll: " << localOffsetY << "\n";
             });
             offsetY = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                          b.i32_val(localOffsetY));
+                            b.i32_val(localOffsetY));
             offsetX = b.i32_val(localOffsetX);
 #else
-            offsetY = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                          b.i32_val(outer * repOuterStride + rep * repStride));
+            offsetY =
+                b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                      b.i32_val(outer * repOuterStride + rep * repStride));
             offsetX = b.i32_val(k * repKStride);
 #endif
           } break;
           case DpasEncodingAttr::OpIdx::OperandB: {
-          LLVM_DEBUG({
-            llvm::errs() << "x offset: " << outer * repOuterStride + rep * repStride << "\n";
-            llvm::errs() << "y offset: " << k * repKStride << "\n";
-          });
+            LLVM_DEBUG({
+              llvm::errs() << "x offset: "
+                           << outer * repOuterStride + rep * repStride << "\n";
+              llvm::errs() << "y offset: " << k * repKStride << "\n";
+            });
 #ifdef USE_TILE_LL_FOR_OFFSETS
-            auto offset = tileLayout.apply({{kOffset, 0}, {kIteration, 0}, {kLoad, outer + k * numRepOuter}});
+            auto offset = tileLayout.apply({{kOffset, 0},
+                                            {kIteration, 0},
+                                            { kLoad,
+                                              outer + k * numRepOuter }});
             assert(offset.size() == 2);
             const auto localOffsetX = offset[0].second * outerDimWarpNum;
             const auto localOffsetY = offset[1].second / numRepOuter;
@@ -1083,11 +1141,12 @@ struct LoadOpConversion
               llvm::errs() << "y offset ll: " << localOffsetY << "\n";
             });
             offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                          b.i32_val(localOffsetX));
+                            b.i32_val(localOffsetX));
             offsetY = b.i32_val(localOffsetY);
 #else
-            offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                          b.i32_val(outer * repOuterStride + rep * repStride));
+            offsetX =
+                b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                      b.i32_val(outer * repOuterStride + rep * repStride));
             offsetY = b.i32_val(k * repKStride);
 #endif
           } break;
@@ -1143,7 +1202,8 @@ struct LoadOpConversion
 
           llvm::errs() << "packedRowNum = " << packedRowNum << "\n";
           llvm::errs() << "packedColNum = " << packedColNum << "\n";
-          llvm::errs() << "packedColNumPerVBlock = " << packedColNumPerVBlock << "\n";
+          llvm::errs() << "packedColNumPerVBlock = " << packedColNumPerVBlock
+                       << "\n";
 
 #if 0
         // covers all dpas iterations for this load (including vBlocks)
@@ -1151,14 +1211,14 @@ struct LoadOpConversion
         llvm::errs() << "offset dim size: " << dpasToBlockLoadLayout.getOutDimSize(kOffset) << "\n";
 #if 1
           for (int vblk = 0; vblk < vBlocks; ++vblk)
-            for (int row = 0; row < packedRowNum; ++row) 
-              for (int col = 0; col < packedColNumPerVBlock; ++col) 
+            for (int row = 0; row < packedRowNum; ++row)
+              for (int col = 0; col < packedColNumPerVBlock; ++col)
                 llvm::errs() << "vblk, row, col = " << vblk << ", " << row << ", " << col << "\n";
 
         const auto num_shuffle_vecs = packedRowNum * packedRowNum;
         // assert(num_shuffle_vecs == tileLayout.getInDimSize(kIteration));
         for (size_t i = 0; i < num_shuffle_vecs/*dpasToBlockLoadLayout.getOutDimSize(kIteration)*/ + 1; i++) {
-#endif 
+#endif
             llvm::errs() << "processing dpas iteration " << i << "\n";
 #if 0
             auto iterationStartCoord = ll.apply({{kWarp, 0}, {kLane, 0}, {kRegister, i}, {kBlock, 0}});
@@ -1168,7 +1228,7 @@ struct LoadOpConversion
             assert(offsetIterationAndLoad.size() > 0);
             assert(offsetIterationAndLoad[0].first == kOffset);
             auto vectorOffset = offsetIterationAndLoad[0].second / vBlocks;
-#endif 
+#endif
             SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
             for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                   ++elemIdx) {
@@ -1186,19 +1246,19 @@ struct LoadOpConversion
               llvm::errs() << "\titeration: " << offsetIterationAndLoad[1].second << "\n";
               assert(offsetIterationAndLoad[2].first == kLoad);
               llvm::errs() << "\tload: " << offsetIterationAndLoad[2].second << "\n";
-              // TODO: 
+              // TODO:
               // (1) - incorporate load into this calculation
               // (2) - figure out how to incorporate values/load to set the iteration properly
-              // this doesn't work for vnni because 
+              // this doesn't work for vnni because
               auto vectorOffset = (offsetIterationAndLoad[0].second + (offsetIterationAndLoad[1].second*dpasToBlockLoadLayout.getOutDimSize(kOffset))) / tileWidth;
 
-              indices[elemIdx] = vectorOffset; //+ elemIdx; // +iteration? 
+              indices[elemIdx] = vectorOffset; //+ elemIdx; // +iteration?
               llvm::errs() << "indices[" << elemIdx << "]" << " = " << indices[elemIdx] << "\n";
             }
             DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
             Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
                 loc, packedDPASOperandType, load2dOp, load2dOp, attr);
-                
+
             auto tensorCoord = tileLayout.apply({{kLoad, 0}, {kOffset, 0},  {kIteration, i}});
             assert(tensorCoord.size() == 2);
             auto tensorRowCoord = tensorCoord[0].second / elemsPerDPASInst[0] + (outer * numRepOuter);
@@ -1215,7 +1275,10 @@ struct LoadOpConversion
           for (int vblk = 0; vblk < vBlocks; ++vblk)
             for (int row = 0; row < packedRowNum; ++row)
               for (int col = 0; col < packedColNumPerVBlock; ++col) {
-                LLVM_DEBUG({llvm::dbgs() << "Generating shuffle vector " << vblk << ", " << row << ", " << col << "\n";});
+                LLVM_DEBUG({
+                  llvm::dbgs() << "Generating shuffle vector " << vblk << ", "
+                               << row << ", " << col << "\n";
+                });
                 unsigned operandStartOffset = (vblk * packedRowNum + row) *
                                               packedColNumPerVBlock *
                                               packedElemsPerLanePerDPASInst;
@@ -1225,7 +1288,10 @@ struct LoadOpConversion
                      ++elemIdx) {
                   indices[elemIdx] = operandStartOffset +
                                      elemIdx * packedColNumPerVBlock + col;
-                  LLVM_DEBUG({llvm::dbgs() << "indices[" << elemIdx << "]" << " = " << indices[elemIdx] << "\n";});
+                  LLVM_DEBUG({
+                    llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                                 << indices[elemIdx] << "\n";
+                  });
                 }
                 DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
                 Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
@@ -1234,17 +1300,31 @@ struct LoadOpConversion
                 // Save the decomposed vals to the map;
                 switch (opIdx) {
                 case DpasEncodingAttr::OpIdx::OperandA: {
-                  LLVM_DEBUG({llvm::dbgs() << "load vals index: " << std::to_string(outer * packedRowNum * numLoadPerOutRepCluster +
-                                rep * packedRowNum + row) << ", " << std::to_string(k + vblk * packedColNumPerVBlock + col) << "\n";});
+                  LLVM_DEBUG({
+                    llvm::dbgs() << "load vals index: "
+                                 << std::to_string(outer * packedRowNum *
+                                                       numLoadPerOutRepCluster +
+                                                   rep * packedRowNum + row)
+                                 << ", "
+                                 << std::to_string(
+                                        k + vblk * packedColNumPerVBlock + col)
+                                 << "\n";
+                  });
                   loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
                                 rep * packedRowNum + row,
                             k + vblk * packedColNumPerVBlock + col}] =
                       b.bitcast(loadVal, unpackedDPASOperandType);
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
-                  LLVM_DEBUG({llvm::dbgs() << "load vals index: " << std::to_string(outer * packedColNum * numLoadPerOutRepCluster +
-                                rep * packedColNum +
-                                vblk * packedColNumPerVBlock + col) << ", " << std::to_string(k + row) << "\n";});
+                  LLVM_DEBUG({
+                    llvm::dbgs()
+                        << "load vals index: "
+                        << std::to_string(outer * packedColNum *
+                                              numLoadPerOutRepCluster +
+                                          rep * packedColNum +
+                                          vblk * packedColNumPerVBlock + col)
+                        << ", " << std::to_string(k + row) << "\n";
+                  });
                   loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
                                 rep * packedColNum +
                                 vblk * packedColNumPerVBlock + col,
@@ -1256,8 +1336,7 @@ struct LoadOpConversion
                 } break;
                 }
               }
-#endif 
-
+#endif
         }
       }
     }
