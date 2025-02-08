@@ -535,8 +535,8 @@ struct LoadOpConversion
     };
     auto opIdx = getOpIdx();
 
-    llvm::errs() << "Tensor type for op " << int(opIdx) << ": " << tensorType
-                 << "\n";
+    LLVM_DEBUG(llvm::dbgs() << "Tensor type for op " << int(opIdx) << ": "
+                             << tensorType << "\n");
 
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
@@ -747,9 +747,6 @@ struct LoadOpConversion
     unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
     unsigned dimInner = bool(opIdx) ? rank - 2 : rank - 1;
 
-    llvm::errs() << "dimOuter: " << dimOuter << "\n";
-    llvm::errs() << "dimInner: " << dimInner << "\n";
-
     unsigned outerDimRequiredWarpNum =
         mlir::ceil<unsigned>(tensorShape[dimOuter], warpShape[dimOuter]);
     unsigned outerDimWarpNum =
@@ -767,13 +764,19 @@ struct LoadOpConversion
 
     unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
     unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
-    llvm::errs() << "width (elemsPerDPASInst[" << threadOrder[rank - 2]
-                 << "]): " << elemsPerDPASInst[threadOrder[rank - 2]] << "\n";
-    llvm::errs() << "height: (elemsPerDPASInst[" << threadOrder[rank - 1]
-                 << "]): " << elemsPerDPASInst[threadOrder[rank - 1]] << "\n";
+
     unsigned vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "dimOuter: " << dimOuter << "\n";
+      llvm::dbgs() << "dimInner: " << dimInner << "\n";
+      llvm::dbgs() << "width (elemsPerDPASInst[" << threadOrder[rank - 2]
+                   << "]): " << elemsPerDPASInst[threadOrder[rank - 2]] << "\n";
+      llvm::dbgs() << "height: (elemsPerDPASInst[" << threadOrder[rank - 1]
+                   << "]): " << elemsPerDPASInst[threadOrder[rank - 1]] << "\n";
+    });
 
     MLIRContext *ctx = rewriter.getContext();
     auto dimOuterStr = S("dim" + std::to_string(dimOuter));
@@ -1124,9 +1127,9 @@ struct LoadOpConversion
           } break;
           case DpasEncodingAttr::OpIdx::OperandB: {
             LLVM_DEBUG({
-              llvm::errs() << "x offset: "
-                           << outer * repOuterStride + rep * repStride << "\n";
-              llvm::errs() << "y offset: " << k * repKStride << "\n";
+              llvm::dbgs() << "x offset: "
+                          << outer * repOuterStride + rep * repStride << "\n";
+              llvm::dbgs() << "y offset: " << k * repKStride << "\n";
             });
 #ifdef USE_TILE_LL_FOR_OFFSETS
             auto offset = tileLayout.apply({{kOffset, 0},
@@ -1137,8 +1140,8 @@ struct LoadOpConversion
             const auto localOffsetX = offset[0].second * outerDimWarpNum;
             const auto localOffsetY = offset[1].second / numRepOuter;
             LLVM_DEBUG({
-              llvm::errs() << "x offset ll: " << localOffsetX << "\n";
-              llvm::errs() << "y offset ll: " << localOffsetY << "\n";
+              llvm::dbgs() << "x offset ll: " << localOffsetX << "\n";
+              llvm::dbgs() << "y offset ll: " << localOffsetY << "\n";
             });
             offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
                             b.i32_val(localOffsetX));
