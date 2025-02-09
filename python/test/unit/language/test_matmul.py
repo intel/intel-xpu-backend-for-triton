@@ -46,7 +46,8 @@ def matmul_kernel(  #
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        a = tl.load(a_ptrs)
+        mask_a = (offs_am[:, None] < M) & (offs_k[None, :] + k * BLOCK_K < K)
+        a = tl.load(a_ptrs, mask=mask_a, other=0.0)
         if SCALE_A is not None:
             a = a * SCALE_A
         b = tl.load(b_ptrs)
