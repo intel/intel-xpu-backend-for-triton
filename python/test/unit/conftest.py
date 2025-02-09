@@ -1,5 +1,6 @@
 import os
 import sys
+import pathlib
 import pytest
 import tempfile
 
@@ -28,7 +29,9 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function):
 
         import subprocess
 
-        test_name = pyfuncitem.nodeid
+        pos = pyfuncitem.nodeid.find(str(pyfuncitem.path.relative_to(pathlib.Path(os.getcwd()))))
+        test_name = pyfuncitem.nodeid[pos:]
+
         python_executable = sys.executable
         pytest_args = [python_executable, "-m", "pytest", "-s", test_name]
 
