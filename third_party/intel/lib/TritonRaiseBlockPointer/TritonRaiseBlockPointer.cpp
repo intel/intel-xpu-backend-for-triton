@@ -432,12 +432,9 @@ struct PtrState {
 
     // Case 2: at least one offset is zero.
     assert(offsets.size() == 2 && "Expecting two offsets");
-    Value nonZeroOffset = ttgi::isConstant(getFinalValue(offsets[0]), 0)
-                              ? offsets[1]
-                              : offsets[0];
-    Value zeroOffset = ttgi::isConstant(getFinalValue(offsets[0]), 0)
-                           ? offsets[0]
-                           : offsets[1];
+    bool zeroIdx = !ttgi::isConstant(getFinalValue(offsets[0]), 0);
+    Value nonZeroOffset = offsets[!zeroIdx];
+    Value zeroOffset = offsets[zeroIdx];
 
     if (ttgi::isConstant(getFinalValue(makeTPtrOp.getStrides()[0]), 1))
       newOffsets = {nonZeroOffset, zeroOffset};
@@ -515,7 +512,7 @@ public:
     assert(rootOp && "Expected a valid operation");
 
     bool fail = false;
-    auto res = rootOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    rootOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (op == rootOp)
         return WalkResult::advance();
 
