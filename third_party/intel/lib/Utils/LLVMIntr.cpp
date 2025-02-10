@@ -15,7 +15,7 @@ LLVM::CallOp createDeviceFunctionCall(
   Location loc = UnknownLoc::get(ctx);
 
   LLVM::LLVMFuncOp funcOp =
-      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, retType);
+      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, retType).value();
   funcOp.setCConv(cc);
   funcOp.setConvergent(funcAttributeOptions.isConvergent);
   funcOp.setNoUnwind(funcAttributeOptions.isNoUnwind);

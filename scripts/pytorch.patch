@@ -31,3 +31,15 @@ index b5fb183bef5..864854261ec 100644
              call_args_str = self.generate_args_decl(
                  call_args, arg_types, arg_signatures
              )
+diff --git a/aten/src/ATen/native/DispatchStub.cpp b/aten/src/ATen/native/DispatchStub.cpp
+index db0f0f1081b..1be4ec37dfe 100644
+--- a/aten/src/ATen/native/DispatchStub.cpp
++++ b/aten/src/ATen/native/DispatchStub.cpp
+@@ -8,6 +8,7 @@
+ #if !defined(__s390x__) && !defined(__powerpc__)
+ #include <cpuinfo.h>
+ #endif
++#include <algorithm>
+ #include <cstdlib>
+ #include <cstring>
+ 

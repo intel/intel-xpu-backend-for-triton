@@ -102,8 +102,8 @@ Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
     return false;
   });
 
-  // Note: We are forcing an unknown shape to allow us to do pointer increments
-  // that may wrap around (via the tt.advance operation) .
+  // Note: We are forcing the shape to be unknown to pointer increments that may
+  // wrap around (via the tt.advance operation).
   Value zero = findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder);
   SmallVector<Value> zeros;
   for (int i = 0; i < shape.size(); ++i)
@@ -404,16 +404,20 @@ struct PtrState {
       return std::nullopt;
 
     // We can generate a tt.advance operation as follow:
-    //   Case 1: both offsets are non-zero ==> both strides must be one
+    //   Case 1: all offsets are non-zero ==> all strides must be one
     //   Case 2: one offset is zero
     //     2a) offsets: (0, off1) strides: (*, 1) ==> tt.advance ptr, (0, off1)
     //     2b) offsets: (off0, 0) strides: (*, 1) ==> tt.advance ptr, (0, off0)
 
-    bool bothOffsetsNotZero = llvm::all_of(offsets, [&](Value offset) {
+    bool allOffsetsNotZero = llvm::all_of(offsets, [&](Value offset) {
       return !ttgi::isConstant(getFinalValue(offset), 0);
     });
 
-    if (bothOffsetsNotZero) {
+    // Case 1: all offsets are non-zero.
+    if (allOffsetsNotZero) {
+      assert(offsets.size() == 1 &&
+             "TODO: can we generate tt.advance ptr, (0, off0*str0 + off1) ?");
+
       if (llvm::any_of(makeTPtrOp.getStrides(), [&](Value stride) {
             return !ttgi::isConstant(getFinalValue(stride), 1);
           }))
@@ -421,24 +425,21 @@ struct PtrState {
 
       for (Value offset : offsets)
         newOffsets.push_back(offset);
-    } else {
-      Value nonZeroOffset = ttgi::isConstant(getFinalValue(offsets[0]), 0)
-                                ? offsets[1]
-                                : offsets[0];
-      Value zeroOffset = ttgi::isConstant(getFinalValue(offsets[0]), 0)
-                             ? offsets[0]
-                             : offsets[1];
 
-      if (ttgi::isConstant(getFinalValue(makeTPtrOp.getStrides()[0]), 1)) {
-        newOffsets.push_back(nonZeroOffset);
-        newOffsets.push_back(zeroOffset);
-      } else {
-        assert(ttgi::isConstant(getFinalValue(makeTPtrOp.getStrides()[1]), 1) &&
-               "Expecting stride 1 for the second dimension");
-        newOffsets.push_back(zeroOffset);
-        newOffsets.push_back(nonZeroOffset);
-      }
+      return builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(), ptr,
+                                                 newOffsets);
     }
+
+    // Case 2: at least one offset is zero.
+    assert(offsets.size() == 2 && "Expecting two offsets");
+    bool zeroIdx = !ttgi::isConstant(getFinalValue(offsets[0]), 0);
+    Value nonZeroOffset = offsets[!zeroIdx];
+    Value zeroOffset = offsets[zeroIdx];
+
+    if (ttgi::isConstant(getFinalValue(makeTPtrOp.getStrides()[0]), 1))
+      newOffsets = {nonZeroOffset, zeroOffset};
+    else
+      newOffsets = {zeroOffset, nonZeroOffset};
 
     return builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(), ptr,
                                                newOffsets);
@@ -511,7 +512,7 @@ public:
     assert(rootOp && "Expected a valid operation");
 
     bool fail = false;
-    auto res = rootOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    rootOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (op == rootOp)
         return WalkResult::advance();
 

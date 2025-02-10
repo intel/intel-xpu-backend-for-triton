@@ -258,15 +258,16 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
     if start_pid < num_tiles % NUM_SMS:
         tiles_per_SM += 1
 
+    # NOTE: There is currently a bug in blackwell pipelining that means it can't handle a value being
+    # used in both the prologue and epilogue, so we duplicate the counters as a work-around.
     tile_id = start_pid - NUM_SMS
+    tile_id_c = start_pid - NUM_SMS
     ki = -1
 
     offs_k_for_mask = tl.arange(0, BLOCK_SIZE_K)
 
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    pid_m = 0
-    pid_n = 0
     offs_am = tl.arange(0, BLOCK_SIZE_M)
     offs_bn = tl.arange(0, BLOCK_SIZE_N)
 
@@ -293,6 +294,8 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
         accumulator = tl.dot(a, b, accumulator)
 
         if ki == k_tiles - 1:
+            tile_id_c, pid_m, pid_n = _compute_tile_and_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M,
+                                                            NUM_SMS)
             offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
             offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
             c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -366,8 +369,6 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         tiles_per_SM += 1
 
     tile_id = start_pid - NUM_SMS
-    # tile_id_c is used in the epilogue to break the dependency between
-    # the prologue and the epilogue
     tile_id_c = start_pid - NUM_SMS
 
     ki = -1
@@ -731,21 +732,20 @@ if __name__ == "__main__":
 
     if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
         print("This example requires CUDA with fp8 support.")
-        exit(1)
+    else:
+        dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
-    dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
+        if args.K and args.K_range is None:
+            args.K_range = [args.K, args.K]
+            args.K_step = 1  # doesn't matter as long as it's not 0
 
-    if args.K and args.K_range is None:
-        args.K_range = [args.K, args.K]
-        args.K_step = 1  # doesn't matter as long as it's not 0
+        torch.manual_seed(0)
 
-    torch.manual_seed(0)
+        validate(32, 32, 32, dtype)
+        validate(8192, 8192, args.K_range[0], dtype)
 
-    validate(32, 32, 32, dtype)
-    validate(8192, 8192, args.K_range[0], dtype)
-
-    proton.start("matmul", hook="triton")
-    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-        bench(K, dtype)
-    proton.finalize()
-    show_profile(args.prec, "matmul")
+        proton.start("matmul", hook="triton")
+        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+            bench(K, dtype)
+        proton.finalize()
+        show_profile(args.prec, "matmul")
