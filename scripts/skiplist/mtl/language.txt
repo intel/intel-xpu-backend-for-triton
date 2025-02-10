@@ -181,7 +181,7 @@ test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape2-4]
 test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape3-8]
 test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape4-4]
 test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape5-8]
-test/unit/language/test_pipeliner.py::test_pipeline_matmul
+test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
 
 # test_cast
 test/unit/language/test_core.py::test_cast[1-int32-int64-False-1024]
