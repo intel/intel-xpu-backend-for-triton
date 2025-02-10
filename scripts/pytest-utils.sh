@@ -6,6 +6,7 @@ TRITON_TEST_REPORTS_DIR="${TRITON_TEST_REPORTS_DIR:-$HOME/reports/$TIMESTAMP}"
 TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/default}"
 TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
 TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
+TRITON_INTEL_RAISE_BLOCK_POINTER="${TRITON_INTEL_RAISE_BLOCK_POINTER:-false}"
 
 if [[ $TEST_UNSKIP = true ]]; then
     TRITON_TEST_IGNORE_ERRORS=true
@@ -55,9 +56,9 @@ pytest() {
 run_tutorial_test() {
     echo
     echo "****** Running $1 test ******"
-    if [[ $# == 2 ]]; then
-        echo "****** With: $2 ******"
-        TRITON_TEST_REPORTS = false
+    if [[ $TRITON_INTEL_RAISE_BLOCK_POINTER = true ]]; then
+      echo "****** With: INTEL_RAISE_BLOCK_POINTER ******"
+      TRITON_TEST_REPORTS=false
     fi
     echo
 
