@@ -85,16 +85,11 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
-      auto base = targetInfo.getScrathMemoryPtr(
-          mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp,
-          callOp->template getParentOfType<FunctionOpInterface>(), {},
-          /*getstackptr=*/true);
+      auto base = targetInfo.getScratchOnSharedMemoryPtr(rewriter, caller);
       promotedOperands.push_back(base);
 
     } else {
-      auto base = targetInfo.getScrathMemoryPtr(
-          mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp,
-          callOp->template getParentOfType<FunctionOpInterface>());
+      auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, callOp);
       promotedOperands.push_back(base);
     }
 
@@ -106,9 +101,8 @@ private:
       opOffsetVal = b.i32_val(opOffset);
     }
 
-    promotedOperands.push_back(targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Global, loc, rewriter, callOp,
-        callOp->template getParentOfType<FunctionOpInterface>(), opOffsetVal));
+    promotedOperands.push_back(targetInfo.getScratchOnGlobalMemoryPtr(
+        loc, rewriter, caller, opOffsetVal));
     return promotedOperands;
   }
 

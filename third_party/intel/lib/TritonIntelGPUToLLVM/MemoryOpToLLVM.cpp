@@ -59,9 +59,8 @@ struct GlobalScratchAllocOpConversion
     if (!funcOp) {
       return failure();
     }
-    Value ptr = targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Global, loc, rewriter, funcOp.getOperation(),
-        funcOp, b.i32_val(opOffset));
+    Value ptr = targetInfo.getScratchOnGlobalMemoryPtr(loc, rewriter, funcOp,
+                                                       b.i32_val(opOffset));
     rewriter.replaceOp(op, ptr);
     return success();
   }
@@ -85,9 +84,8 @@ struct LocalAllocOpConversion
     if (!op.isSharedMemoryAlloc())
       return failure();
     Location loc = op->getLoc();
-    Value smemBase = targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
-        op->template getParentOfType<FunctionOpInterface>());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
