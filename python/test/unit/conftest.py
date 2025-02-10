@@ -11,6 +11,8 @@ def pytest_configure(config):
     # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
     if os.name == "nt" and worker_id:
         os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
+    if os.name == "nt":
+        config.addinivalue_line("markers", "forked: subprocess analogue of pytest.mark.forked on Windows")
 
 
 def pytest_addoption(parser):
@@ -33,7 +35,7 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function):
         test_name = pyfuncitem.nodeid[pos:]
 
         python_executable = sys.executable
-        pytest_args = [python_executable, "-m", "pytest", "-s", test_name]
+        pytest_args = [python_executable, "-m", "pytest", "-s", test_name, "-q"]
 
         config = pyfuncitem.config
         device = config.getoption("--device")
@@ -44,11 +46,9 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function):
         env = os.environ.copy()
         env["_PYTEST_SUBPROCESS_RUNNING"] = "1"
 
-        result = subprocess.run(pytest_args, capture_output=True, text=True, env=env)
-
-        # Update main streams with data from subprocess
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        print("\n##### start output from pytest in subprocess #####")
+        result = subprocess.run(pytest_args, text=True, env=env)
+        print("\n##### end output from pytest in subprocess #####")
 
         if result.returncode != 0:
             # Human-readable exception message to be raised.
