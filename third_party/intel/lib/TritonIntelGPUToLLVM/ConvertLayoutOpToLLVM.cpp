@@ -239,9 +239,8 @@ private:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    Value smemBase = targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
-        op->template getParentOfType<FunctionOpInterface>());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     smemBase = b.bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
@@ -907,11 +906,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type elementType = inVals.front().getType();
     auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
-    Value smemBase = targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Workgroup, loc, rewriter,
-        &*rewriter.getInsertionPoint(),
-        rewriter.getInsertionPoint()
-            ->template getParentOfType<FunctionOpInterface>());
+
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                               &*rewriter.getInsertionPoint());
     Type ptrType = smemBase.getType();
 
     int numRows = inVals.size();
