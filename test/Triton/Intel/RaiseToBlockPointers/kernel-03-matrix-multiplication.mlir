@@ -97,9 +97,9 @@ module {
     %64 = tt.broadcast %61 : tensor<64x1xi1> -> tensor<64x128xi1>
     %65 = tt.broadcast %63 : tensor<1x128xi1> -> tensor<64x128xi1>
     %66 = arith.andi %64, %65 : tensor<64x128xi1>
-    // TODO: add back once masked stores are supported  
-    // tt.store %59, %50, %66 : tensor<64x128x!tt.ptr<f16>>  
-    tt.store %59, %50 : tensor<64x128x!tt.ptr<f16>>  
+    // TODO: add back once masked stores are supported
+    // tt.store %59, %50, %66 : tensor<64x128x!tt.ptr<f16>>
+    tt.store %59, %50 : tensor<64x128x!tt.ptr<f16>>
     tt.return
   }
 }
