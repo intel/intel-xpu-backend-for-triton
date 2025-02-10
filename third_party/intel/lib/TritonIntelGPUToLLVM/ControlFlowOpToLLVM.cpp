@@ -87,16 +87,12 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
-      auto base = targetInfo.getScrathMemoryPtr(
-          mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp,
-          callOp->template getParentOfType<FunctionOpInterface>(), {},
-          /*getstackptr=*/true);
+      auto base = targetInfo.getScratchOnSharedMemoryPtr(rewriter, caller);
       promotedOperands.push_back(base);
       return promotedOperands;
     }
-    promotedOperands.push_back(targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, callOp,
-        callOp->template getParentOfType<FunctionOpInterface>()));
+    promotedOperands.push_back(LLVM::getSharedMemoryBase(
+        callOp->getLoc(), rewriter, targetInfo, callOp));
     return promotedOperands;
   }
 
