@@ -563,95 +563,88 @@ inline bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
-// Return ScrathMemoryPtr from shared or global memory,
-// this function used by targetInfo allows to handle different target's impl.
-inline Value getScrathMemoryPtr(mlir::gpu::AddressSpace addressSpace,
-                                Location loc, RewriterBase &rewriter,
-                                Operation *op, FunctionOpInterface funcOp,
-                                Value allocOffset, bool getstackptr) {
-  switch (addressSpace) {
-  case mlir::gpu::AddressSpace::Workgroup: {
-    Value stackPtr;
-    if (!isKernel(funcOp)) {
-      stackPtr = funcOp.getArgument(funcOp.getNumArguments() - 2);
-    } else {
-      auto mod = funcOp->getParentOfType<ModuleOp>();
-      auto globalBase =
-          dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
-      assert(globalBase);
-      stackPtr =
-          rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-    }
-    if (getstackptr) {
-      return stackPtr;
-    }
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-    assert(op->hasAttr("allocation.offset"));
-    size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
-                        .getValue()
-                        .getZExtValue();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value offVal = b.i32_val(offset);
-    return b.gep(ptrTy, i8_ty, stackPtr, offVal);
-    break;
+inline Value getStackPointer(RewriterBase &rewriter,
+                             FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
+  if (!isKernel(funcOp)) {
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
   }
-  case mlir::gpu::AddressSpace::Global: {
-    // See NOTE: [Additional Function Arguments]
-    if (!isKernel(funcOp)) {
-      // Base for this function
-      auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-      if (!allocOffset) {
-        return gmemBase;
-      }
 
-      auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
-      auto b = TritonLLVMOpBuilder(loc, rewriter);
-      return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
-    }
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+  assert(globalBase);
+  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
 
-    // Base for entire kernel
+inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                                 FunctionOpInterface funcOp,
+                                 Value allocOffset = {}) {
+  // See NOTE: [Additional Function Arguments]
+  if (!isKernel(funcOp)) {
+    // Base for this function
     auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-
-    ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
-    auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-        "ttg.global_scratch_memory_size");
-    if (!allocSizeAttr) {
+    if (!allocOffset) {
       return gmemBase;
     }
 
-    Value gridIdx[3];
-    Value gridDim[2];
-    for (int k = 0; k < 3; ++k) {
-      gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
-    }
-    for (int k = 0; k < 2; ++k) {
-      gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
-    }
-
+    auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value linearId = gridIdx[2];
-    for (int k = 0; k < 2; ++k) {
-      linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
-    }
-
-    auto allocSize = allocSizeAttr.getValue().getZExtValue();
-
-    Value offset = b.mul(linearId, b.i32_val(allocSize));
-    if (allocOffset) {
-      offset = b.add(offset, allocOffset);
-    }
-
-    auto *ctx = rewriter.getContext();
-    auto res = b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase,
-                     offset);
-    return res;
-    break;
+    return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
   }
-  default: {
-    llvm_unreachable("not avaiable addspace type in getScrathMemoryPtr");
-    break;
+
+  // Base for entire kernel
+  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+
+  ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
+  auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
+      "ttg.global_scratch_memory_size");
+  if (!allocSizeAttr) {
+    return gmemBase;
   }
+
+  Value gridIdx[3];
+  Value gridDim[2];
+  for (int k = 0; k < 3; ++k) {
+    gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
   }
+  for (int k = 0; k < 2; ++k) {
+    gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
+  }
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value linearId = gridIdx[2];
+  for (int k = 0; k < 2; ++k) {
+    linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
+  }
+
+  auto allocSize = allocSizeAttr.getValue().getZExtValue();
+
+  Value offset = b.mul(linearId, b.i32_val(allocSize));
+  if (allocOffset) {
+    offset = b.add(offset, allocOffset);
+  }
+
+  auto *ctx = rewriter.getContext();
+  auto res =
+      b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
+  return res;
+}
+
+inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
+                                 const TargetInfoBase &target, Operation *op) {
+  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
+                                          target.getSharedAddressSpace());
+  FunctionOpInterface func =
+      op->template getParentOfType<FunctionOpInterface>();
+  assert(op->hasAttr("allocation.offset"));
+  size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
+                      .getValue()
+                      .getZExtValue();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value offVal = b.i32_val(offset);
+  Value base = b.gep(
+      ptrTy, i8_ty, target.getScratchOnSharedMemoryPtr(rewriter, func), offVal);
+  return base;
 }
 
 // -----------------------------------------------------------------------
