@@ -32,8 +32,9 @@ void lowerDistributedToShared(
 struct GlobalScratchAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::GlobalScratchAllocOp> {
   GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit) {}
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
@@ -50,12 +51,14 @@ struct GlobalScratchAllocOpConversion
     if (!funcOp) {
       return failure();
     }
-    Value ptr =
-        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, b.i32_val(opOffset));
-
+    Value ptr = targetInfo.getScratchOnGlobalMemoryPtr(loc, rewriter, funcOp,
+                                                       b.i32_val(opOffset));
     rewriter.replaceOp(op, ptr);
     return success();
   }
+
+private:
+  const TargetInfoBase &targetInfo;
 };
 
 struct LocalAllocOpConversion
@@ -74,6 +77,7 @@ struct LocalAllocOpConversion
     Location loc = op->getLoc();
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
 
@@ -196,7 +200,8 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks) {
-  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
+                                               benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
