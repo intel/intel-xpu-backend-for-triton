@@ -169,11 +169,10 @@ LogicalResult getConvertBackwardSlice(
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert(isTensorOrTensorPointerType(value.getType()));
     slice.insert(value);
-    if (layout.find(value) != layout.end()) {
-      if (layout[value] != encoding)
-        return failure();
-    }
-    layout[value] = encoding;
+    Attribute &existing = layout[value];
+    if (existing && existing != encoding)
+      return failure();
+    existing = encoding;
     return success();
   };
 
@@ -199,6 +198,8 @@ LogicalResult getConvertBackwardSlice(
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
+      if (stopPropagation && stopPropagation(ifOp))
+        continue;
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       OpOperand &thenValue = ifOp.thenYield()->getOpOperand(argIdx);
