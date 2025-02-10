@@ -21,7 +21,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -564,9 +563,8 @@ inline bool isKernel(FunctionOpInterface funcOp) {
   return funcOp.getVisibility() == SymbolTable::Visibility::Public;
 }
 
-// Return ScrathMemoryPtr from shared or global memory
-// This function is rewritten by targetInfo to deal with different impl of
-// targets.
+// Return ScrathMemoryPtr from shared or global memory,
+// this function used by targetInfo allows to handle different target's impl.
 inline Value getScrathMemoryPtr(mlir::gpu::AddressSpace addressSpace,
                                 Location loc, RewriterBase &rewriter,
                                 Operation *op, FunctionOpInterface funcOp,
