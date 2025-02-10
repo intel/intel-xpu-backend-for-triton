@@ -85,7 +85,7 @@ module {
 // CHECK-DAG:       [[VAR_3_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[CST_0_i64]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<1x256xbf16>>
 // CHECK-DAG:       [[VAR_4_:%.+]] = tt.addptr [[VAR_2_]], [[VAR_1_]] : tensor<1x256x!tt.ptr<bf16>>, tensor<1x256xi32>
 // CHECK-DAG:       [[VAR_5_:%.+]] = tt.load [[VAR_3_]] : !tt.ptr<tensor<1x256xbf16>>
-// CHECK-DAG:       [[VAR_6_:%.+]] = tt.advance [[VAR_3_]], {{\[}}[[PARAM_1_]], [[CST_0_i32]]] : <tensor<1x256xbf16>>
+// CHECK-DAG:       [[VAR_6_:%.+]] = tt.advance [[VAR_3_]], {{\[}}[[CST_0_i32]], [[PARAM_1_]]] : <tensor<1x256xbf16>>
 // CHECK:           tt.store [[VAR_6_]], [[VAR_5_]] : !tt.ptr<tensor<1x256xbf16>>
 // CHECK:           [[VAR_7_:%.+]]:2 = scf.for [[VAR_arg2_:%.+]] = {{.*}} iter_args([[VAR_arg3_:%.+]] = [[CST_0_]], [[VAR_arg4_:%.+]] = [[VAR_4_]]) -> (tensor<4x256xbf16>, tensor<1x256x!tt.ptr<bf16>>) {
 // CHECK:             [[VAR_9_:%.+]] = tt.broadcast [[VAR_arg4_]] : tensor<1x256x!tt.ptr<bf16>> -> tensor<4x256x!tt.ptr<bf16>>
