@@ -698,8 +698,9 @@ struct LoadOpConversion
     SmallVector<unsigned> dpasInstShape = isOperandA
                                               ? dpasLayout.getDPASInstShapeA()
                                               : dpasLayout.getDPASInstShapeB();
-    SmallVector<unsigned> elemsPerDPASInst = {dpasInstShape[0],
+    const SmallVector<unsigned> elemsPerDPASInst = {dpasInstShape[0],
                                               dpasInstShape[1]};
+    LLVM_DEBUG(llvm::dbgs() << "Elements per DPAS Instruction: " << elemsPerDPASInst[0] << ", " << elemsPerDPASInst[1] << "\n");
     unsigned elemsPerLanePerDPASInst =
         product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
     TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
@@ -1004,7 +1005,7 @@ struct LoadOpConversion
     }
 
     LLVM_DEBUG({
-      llvm::dbgs() << "Block load tile layout after adding: " << tileLayout
+      llvm::dbgs() << "Block load tile layout after adding loads: " << tileLayout
                    << "\n";
       for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
         for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
@@ -1064,6 +1065,9 @@ struct LoadOpConversion
     LLVM_DEBUG(llvm::dbgs() << "Inverted block load layout: "
                             << dpasToBlockLoadLayout << "\n");
 
+    auto llInvert = ll.pseudoinvert();
+    LLVM_DEBUG(llvm::dbgs() << "Inverted DPAS layout: " << llInvert << "\n");
+
     LLVM_DEBUG({
       llvm::dbgs() << "tileWidth: " << tileWidth << "\n";
       llvm::dbgs() << "tileHeight: " << tileHeight << "\n";
@@ -1092,10 +1096,13 @@ struct LoadOpConversion
                          << k << "\n";
           });
 
+          // TODO: handle rep 
+          const int loadIdx = outer + k * numRepOuter;
+
           Value offsetX, offsetY;
           auto offset = tileLayout.apply({{kOffset, 0},
                                           {kIteration, 0},
-                                          {kLoad, outer + k * numRepOuter}});
+                                          {kLoad, loadIdx}});
           assert(offset.size() == 2);
           // adjust the load offset to compensate for strides related to the
           // DPAS layout
@@ -1147,6 +1154,9 @@ struct LoadOpConversion
             offsetX = b.udiv(offsetX, b.i32_val(32 / originalElemBits));
           }
 
+          const bool vnni_transform = usePackedType && !isOperandA && !isTransposeRequired &&
+               originalElemBits != 32;
+
           auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
               loc, load2DGenXType,
               /*ptr*/ base,
@@ -1160,9 +1170,7 @@ struct LoadOpConversion
               /*tile_height*/ tileHeight,
               /*v_blocks*/ vBlocks,
               /*transpose*/ isTransposeRequired,
-              /*vnni_transform*/
-              (usePackedType && !isOperandA && !isTransposeRequired &&
-               originalElemBits != 32));
+              /*vnni_transform*/ vnni_transform);
           if (failed(load2dOp.verify())) {
             // Explicitly invoke verifier because `triton_gen` ops are
             // immediately lowered further to a builtin call.
@@ -1176,6 +1184,9 @@ struct LoadOpConversion
                                       ? numOperandsInnerDimPerLoad
                                       : numOperandsOuterDimPerLoad;
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
+          llvm::errs() << "packedRowNum: " << packedRowNum << "\n";
+          llvm::errs() << "packedColNum: " << packedColNum << "\n";
+          llvm::errs() << "packedColNumPerVBlock: " << packedColNumPerVBlock << "\n";
 #if 0
         // covers all dpas iterations for this load (including vBlocks)
         // TODO: for transpose layout this is likely not taking into account the vnni transform
@@ -1203,6 +1214,7 @@ struct LoadOpConversion
             SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
             for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                   ++elemIdx) {
+              // TODO: incorporate load here 
               auto iterationStartCoord = ll.apply({{kWarp, 0}, {kLane, 0}, {kRegister, i*packedElemsPerLanePerDPASInst + elemIdx}, {kBlock, 0}});
               assert(iterationStartCoord.size() == 2);
               llvm::errs() << "register offset: " << i*packedElemsPerLanePerDPASInst + elemIdx << "\n";
@@ -1238,10 +1250,39 @@ struct LoadOpConversion
             llvm::errs() << "col: "  << tensorColCoord << " = " << tensorCoord[1].second << " / " << elemsPerDPASInst[1] << "\n";
 
             // llvm::errs() << i << " : " << tensorRowCoord << ", " << tensorColCoord << "\n";
-            loadVals[{tensorRowCoord, tensorColCoord}] = bitcast(loadVal, unpackedDPASOperandType);
+            loadVals[{tensorRowCoord, tensorColCoord}] = b.bitcast(loadVal, unpackedDPASOperandType);
         }
 
 #else
+
+          llvm::errs() << "num vblocks: " << vBlocks << "\n";
+          for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
+            llvm::errs() << "Emitting shuffle vector for iteration " << i << "\n";
+
+            SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
+            for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
+                  ++elemIdx) {
+            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1]}, {kIteration, i}, {kLoad, 0}});
+            assert(blockLayoutOffset.size() == 2);
+            llvm::errs() << "block load offset: " << blockLayoutOffset[0].second << ", " << blockLayoutOffset[1].second << "\n";
+            indices[elemIdx] = blockLayoutOffset[0].second  + packedElemsPerLanePerDPASInst * (blockLayoutOffset[1].second / elemsPerDPASInst[1]); 
+
+            LLVM_DEBUG({
+                llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                              << indices[elemIdx] << "\n";
+              });
+            }
+
+            auto tensorCoord = tileLayout.apply({{kLoad, loadIdx}, {kOffset, 0},  {kIteration, i}});
+            assert(tensorCoord.size() == 2);
+            llvm::errs() << "tensorCoord: " << tensorCoord[0].second << ", " << tensorCoord[1].second << "\n";
+            auto tensorRowCoord = tensorCoord[0].second / elemsPerDPASInst[0] + (outer * numRepOuter);
+            llvm::errs() << "row: " << tensorRowCoord << " = " << tensorCoord[0].second << " / " << elemsPerDPASInst[0] << "\n";
+            auto tensorColCoord = tensorCoord[1].second / elemsPerDPASInst[1];
+            llvm::errs() << "col: "  << tensorColCoord << " = " << tensorCoord[1].second << " / " << elemsPerDPASInst[1] << "\n";
+
+          }
+
           // Decompose the return value to multiple operands.
           for (int vblk = 0; vblk < vBlocks; ++vblk)
             for (int row = 0; row < packedRowNum; ++row)
@@ -1253,6 +1294,7 @@ struct LoadOpConversion
                 unsigned operandStartOffset = (vblk * packedRowNum + row) *
                                               packedColNumPerVBlock *
                                               packedElemsPerLanePerDPASInst;
+                llvm::errs() << "operandStartOffset: " << operandStartOffset << "\n";
 
                 SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
                 for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
