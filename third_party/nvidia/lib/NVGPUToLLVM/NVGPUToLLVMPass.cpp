@@ -9,7 +9,6 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
