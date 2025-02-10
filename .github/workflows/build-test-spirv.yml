@@ -1,0 +1,21 @@
+name: Build and test SPIR-V backend
+
+on:
+  workflow_dispatch:
+
+  pull_request:
+    branches:
+      - main
+      - release/**
+
+permissions: read-all
+
+jobs:
+  integration-tests:
+    name: Integration tests matrix
+    uses: ./.github/workflows/build-test-reusable.yml
+    with:
+      python_version: "3.9"
+      skip_list: default
+      build_llvm: true
+      use_spirv_backend: true

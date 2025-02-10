@@ -1,11 +1,16 @@
 # Builds and installs Triton. Uses git clone in the current directory.
 # Sets the following environment variables:
 # * LLVM_COMMIT_ID
+# * TRITON_USE_SPIRV_BACKEND (if use_spirv_backend is true)
+name: setup-triton
 description: Build and install Triton
 inputs:
   build_llvm:
     description: Build LLVM
-    default: false
+    default: "false"
+  use_spirv_backend:
+    description: Use SPIR-V backend
+    default: "false"
   command:
     description: Command to execute
     default: DEBUG=1 pip install -v --no-build-isolation '.[build,tests,tutorials]'
@@ -37,6 +42,12 @@ runs:
         ref: ${{ env.LLVM_COMMIT_ID }}
         path: llvm
         submodules: recursive
+
+    - name: Use SPIR-V backend
+      if: ${{ inputs.use_spirv_backend == 'true' }}
+      shell: bash
+      run: |
+        echo "TRITON_USE_SPIRV_BACKEND=1" | tee -a $GITHUB_ENV
 
     - name: Build LLVM
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
