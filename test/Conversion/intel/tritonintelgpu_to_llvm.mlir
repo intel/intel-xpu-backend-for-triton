@@ -4,7 +4,7 @@
 
 // COM: check that the spirv target env is inserted
 // CHECK: module attributes {{{.*}}spirv.target_env{{.*}}#spirv.resource_limits<subgroup_size = 16>
-module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32 } {
+module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32, triton_intel_gpu.target_arch = "spir64" } {
   // As the assert message is shared, a single instance is emitted.
 
   // CHECK-DAG:         llvm.mlir.global internal constant @assertFunc_("unknown\00") {addr_space = 1 : i32}
