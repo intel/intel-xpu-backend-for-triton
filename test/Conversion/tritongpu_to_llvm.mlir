@@ -507,7 +507,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_alloc_tensor
   tt.func @basic_alloc_tensor() {
     // CHECK: llvm.mlir.addressof @global_smem
-    // CHECK-NEXT: llvm.mlir.constant
     // CHECK-NEXT: llvm.getelementptr
     // CHECK-NEXT: llvm.mlir.constant
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared0, #smem, mutable>
@@ -2130,7 +2129,6 @@ tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4x
   // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
 
   // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
-  // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
   // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
   // CHECK: store [[S0]]
   // CHECK-NEXT: nvvm.barrier0
@@ -2166,7 +2164,6 @@ tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: te
   // CHECK: [[S3:%.*]] = llvm.extractvalue %arg1[3]
 
   // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
-  // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
   // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
   // CHECK: store [[S0]]
   // CHECK: store [[S1]]

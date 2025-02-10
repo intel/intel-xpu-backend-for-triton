@@ -163,10 +163,8 @@ private:
       return success();
     }
 
-    Value smemBase = targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
-        op->template getParentOfType<FunctionOpInterface>());
-
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
     SmallVector<unsigned> numReplicates(rank);
@@ -508,10 +506,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     SmallVector<SmallVector<int>> outRegsForIter =
         collectRegsForIter(ctx, shmemLoadLayout);
 
-    Value smemBase = targetInfo.getScrathMemoryPtr(
-        mlir::gpu::AddressSpace::Workgroup, loc, rewriter, op,
-        op->template getParentOfType<FunctionOpInterface>());
-
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto sharedPtrTy = smemBase.getType();
     Type elemTy = inVals[0].getType();
     auto outSize = shmemLoadLayout.getInDimSize(kRegister);
