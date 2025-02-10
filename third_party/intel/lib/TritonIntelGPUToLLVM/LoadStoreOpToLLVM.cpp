@@ -1069,61 +1069,77 @@ struct LoadOpConversion
       }
     }
 
+    // vectorized iteration through all the pointer/mask/other elements
+    const int valueElemNBits =
+        std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+
+    // TODO: optimization when ptr is GEP with constant offset
+    size_t totalWidth;
+    size_t width;
+    size_t nWords;
+    size_t wordNElems;
+    size_t tileWidth;
+    size_t tileHeight;
+
+    const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+    totalWidth = valueElemNBits * vec;
+    width = std::min(totalWidth, maxWordWidth);
+    nWords = std::max<size_t>(1, totalWidth / width);
+    wordNElems = width / valueElemNBits;
+
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     unsigned opIdx;
-    // Use the block IO to aggressively load the data.
     if (blockIOAttr) {
-      // fallback to gather load.
+      // Use the block IO to load the data if possible.
       auto tensorType = cast<RankedTensorType>(op.getType());
+      // TODO: use the linear layout for general tensor layout.
       auto dotLayout =
           dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding());
       if (dotLayout) {
-        opIdx = dotLayout.getOpIdx();
-        if (opIdx == 0) {
-          // A
-          vec = 8;
-        } else {
-          // B
-          vec = 16;
+        auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
+        if (dpasLayout) {
+          opIdx = dotLayout.getOpIdx();
+          if (opIdx == 0) {
+            // A
+            unsigned repCluster = dpasLayout.getRepCluster()[0];
+            vec = dpasLayout.getRepeatCount() * repCluster;
+
+            totalWidth = valueElemNBits * vec;
+
+            unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+            if ((opsPerChannel == 4 && valueElemNBits == 8) ||
+                (opsPerChannel == 2 && valueElemNBits == 16) ||
+                (opsPerChannel == 1 && valueElemNBits == 32)) {
+              width = (opIdx == 0 && valueElemNBits != 32) ? 16 : 32;
+            } else {
+              width = valueElemNBits;
+            }
+
+            nWords = std::max<size_t>(1, totalWidth / width);
+            wordNElems = width / valueElemNBits;
+
+            tileWidth = 16;
+            tileHeight = vec;
+          } else {
+            // B
+            vec = 16;
+            totalWidth = valueElemNBits * vec;
+            width = 32;
+            nWords = std::max<size_t>(1, totalWidth / width);
+            wordNElems = width / valueElemNBits;
+            tileWidth = 16;
+            tileHeight = vec;
+          }
         }
       }
     }
 
-    // vectorized iteration through all the pointer/mask/other elements
-    const int valueElemNBits =
-        std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
+    assert(wordNElems * nWords * numVecs == numElems);
 
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      // TODO: optimization when ptr is GEP with constant offset
-      size_t in_off = 0;
-      size_t totalWidth;
-      size_t width;
-      size_t nWords;
-      size_t wordNElems;
-
-      if (blockIOAttr) {
-        if (opIdx == 0) {
-          totalWidth = valueElemNBits * vec;
-          width = 16;
-          nWords = std::max<size_t>(1, totalWidth / width);
-          wordNElems = width / valueElemNBits;
-        } else {
-          totalWidth = valueElemNBits * vec;
-          width = 32;
-          nWords = std::max<size_t>(1, totalWidth / width);
-          wordNElems = width / valueElemNBits;
-        }
-      } else {
-        const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
-        totalWidth = valueElemNBits * vec;
-        width = std::min(totalWidth, maxWordWidth);
-        nWords = std::max<size_t>(1, totalWidth / width);
-        wordNElems = width / valueElemNBits;
-      }
-      assert(wordNElems * nWords * numVecs == numElems);
 
       Value pred = maskElems.size() ? maskElems[vecStart] : b.int_val(1, 1);
 
@@ -1178,32 +1194,32 @@ struct LoadOpConversion
               b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
           addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
-          Value baseWidth = b.mul(b.i32_val((opIdx == 0 ? 16 : 16)),
-                                  b.i32_val(valueElemNBits / 8));
-          Value baseHeight = b.i32_val((opIdx == 0 ? 8 : 16));
+          Value baseWidth = b.i32_val(tileWidth * (valueElemNBits / 8));
+          Value baseHeight = b.i32_val(tileHeight);
 
           if (opIdx == 1) {
-            targetInfo.printf(
-                rewriter,
-                "A pid=%d warp %d lane %d johnlu 2d load addr=%p, pitch "
-                "(bytes)=%d, base_width (bytes)=%d, base_height=%d",
-                ValueRange{programId, warpId, laneId, addrElem, pitch,
-                           baseWidth, baseHeight});
+            //            targetInfo.printf(
+            //                rewriter,
+            //                "A pid=%d warp %d lane %d johnlu 2d load addr=%p,
+            //                pitch "
+            //                "(bytes)=%d, base_width (bytes)=%d,
+            //                base_height=%d", ValueRange{programId, warpId,
+            //                laneId, addrElem, pitch,
+            //                           baseWidth, baseHeight});
           }
 
           auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
               loc, retTy,
               /*ptr*/ addrElem,
-              /*base_width*/
-              baseWidth,
+              /*base_width*/ baseWidth,
               /*base_height*/ baseHeight,
               /*base_pitch*/
               b.trunc(i32_ty, pitch),
               /*x*/ b.i32_val(0),
               /*y*/ b.i32_val(0),
               /*elem_size_in_bits*/ valueElemNBits,
-              /*tile_width*/ (opIdx == 0 ? 16 : 16),
-              /*tile_height*/ (opIdx == 0 ? 8 : 16),
+              /*tile_width*/ tileWidth,
+              /*tile_height*/ tileHeight,
               /*v_blocks*/ 1,
               /*transpose*/ false,
               /*vnni_transform*/ opIdx != 0);
@@ -1262,9 +1278,10 @@ struct LoadOpConversion
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
     if (opIdx == 1) {
-      std::string msg = " johnlu load tensor B: ";
-      LLVM::intel::printTensor(msg, resultStruct, op.getType(), rewriter,
-                               targetInfo);
+      //      std::string msg = " johnlu load tensor B: ";
+      //      LLVM::intel::printTensor(msg, resultStruct, op.getType(),
+      //      rewriter,
+      //                               targetInfo);
     } else if (opIdx == 0) {
       //      std::string msg = " johnlu load tensor A: ";
       //      LLVM::intel::printTensor(msg, resultStruct, op.getType(),
