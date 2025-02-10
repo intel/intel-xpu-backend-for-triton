@@ -262,21 +262,16 @@ tt.func @test_addptr_broadcast_rank_3(%arg0 : !tt.ptr<f32>) -> tensor<128x2x128x
 // CHECK-DAG:   [[CST_2_i32:%.+]] = arith.constant 2 : i32
 // CHECK:       [[VAR_0_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
 // CHECK:       [[VAR_1_:%.+]] = arith.extsi [[PARAM_3_]] : i32 to i64
-// CHECK:       [[VAR_2_:%.+]] = arith.index_cast [[PARAM_2_]] : i32 to index
-// CHECK:       [[VAR_3_:%.+]] = arith.index_cast [[PARAM_4_]] : i32 to index
-// CHECK:       [[VAR_4_:%.+]] = arith.index_cast [[VAR_3_]] : index to i64
-// CHECK:       [[VAR_5_:%.+]] = arith.muli [[PARAM_4_]], [[CST_6_i32]] : i32
-// CHECK:       [[VAR_6_:%.+]] = arith.extsi [[PARAM_4_]] : i32 to i64
-// CHECK:       [[VAR_7_:%.+]] = arith.index_cast [[VAR_2_]] : index to i64
-// CHECK:       [[VAR_8_:%.+]] = arith.muli [[VAR_7_]], [[VAR_4_]] : i64
-// CHECK:       [[VAR_9_:%.+]] = arith.divui [[VAR_0_]], [[PARAM_3_]] : i32
-// CHECK:       [[VAR_10_:%.+]] = arith.divui [[VAR_5_]], [[PARAM_4_]] : i32
-// CHECK:       [[VAR_11_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[VAR_8_]]], {{\[}}[[VAR_1_]], [[VAR_6_]]], {{\[}}[[VAR_9_]], [[VAR_10_]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_12_:%.+]] = arith.extsi [[PARAM_5_]] : i32 to i64
-// CHECK:       [[VAR_13_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
-// CHECK:       [[VAR_14_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_12_]], [[VAR_13_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_15_:%.+]] = tt.load [[VAR_11_]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<4x4xf32>>
-// CHECK:	      tt.store [[VAR_14_]], [[VAR_15_]] : !tt.ptr<tensor<4x4xf32>>
+// CHECK:       [[VAR_2_:%.+]] = arith.muli [[PARAM_4_]], [[CST_6_i32]] : i32
+// CHECK:       [[VAR_3_:%.+]] = arith.extsi [[PARAM_4_]] : i32 to i64
+// CHECK:       [[VAR_4_:%.+]] = arith.divui [[VAR_0_]], [[PARAM_3_]] : i32
+// CHECK:       [[VAR_5_:%.+]] = arith.divui [[VAR_2_]], [[PARAM_4_]] : i32
+// CHECK:       [[VAR_6_:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_1_]], [[VAR_3_]]], {{\[}}[[VAR_4_]], [[VAR_5_]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_7_:%.+]] = arith.extsi [[PARAM_5_]] : i32 to i64
+// CHECK:       [[VAR_8_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
+// CHECK:       [[VAR_9_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_7_]], [[VAR_8_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_10_:%.+]] = tt.load [[VAR_6_]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<4x4xf32>>
+// CHECK:	      tt.store [[VAR_9_]], [[VAR_10_]] : !tt.ptr<tensor<4x4xf32>>
 // CHECK:       tt.return
 module {
 tt.func public @wrap_side_by_side_masked(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32) {
@@ -415,23 +410,18 @@ module {
 // CHECK-DAG:   [[CST_2_i32:%.+]] = arith.constant 2 : i32
 // CHECK-DAG:   [[CST_0_i64:%.+]] = arith.constant 0 : i64
 // CHECK-DAG:   [[CST_0_i32:%.+]] = arith.constant 0 : i32
-// CHECK:       [[VAR_0_:%.+]] = arith.index_cast [[PARAM_2_]] : i32 to index
-// CHECK:       [[VAR_1_:%.+]] = arith.index_cast [[PARAM_3_]] : i32 to index
-// CHECK:       [[VAR_2_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
-// CHECK:       [[VAR_3_:%.+]] = arith.index_cast [[VAR_1_]] : index to i64
-// CHECK:       [[VAR_4_:%.+]] = arith.extsi [[PARAM_3_]] : i32 to i64
-// CHECK:       [[VAR_5_:%.+]] = arith.index_cast [[VAR_0_]] : index to i64
-// CHECK:       [[VAR_6_:%.+]] = arith.muli [[VAR_5_]], [[VAR_3_]] : i64
-// CHECK:       [[VAR_7_:%.+]] = arith.muli [[PARAM_4_]], [[CST_3_i32]] : i32
-// CHECK:       [[VAR_8_:%.+]] = arith.extsi [[PARAM_4_]] : i32 to i64
-// CHECK:       [[VAR_9_:%.+]] = arith.divui [[VAR_2_]], [[PARAM_3_]] : i32
-// CHECK:       [[VAR_10_:%.+]] = arith.divui [[VAR_7_]], [[PARAM_4_]] : i32
-// CHECK:       [[VAR_11:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[VAR_6_]], [[CST_0_i64]]], {{\[}}[[VAR_4_]], [[VAR_8_]]], {{\[}}[[VAR_9_]], [[VAR_10_]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_12_:%.+]] = arith.extsi [[PARAM_5_]] : i32 to i64
-// CHECK:       [[VAR_13_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
-// CHECK:       [[VAR_14:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_12_]], [[VAR_13_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {order = array<i32>} : <tensor<4x4xf32>>
-// CHECK:       [[VAR_15:%.+]] = tt.load [[VAR_11]] {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<4x4xf32>>
-// CHECK:     	tt.store [[VAR_14]], [[VAR_15]] : !tt.ptr<tensor<4x4xf32>>
+// CHECK:       [[VAR_0_:%.+]] = arith.muli [[PARAM_3_]], [[CST_2_i32]] : i32
+// CHECK:       [[VAR_1_:%.+]] = arith.extsi [[PARAM_3_]] : i32 to i64
+// CHECK:       [[VAR_2_:%.+]] = arith.muli [[PARAM_4_]], [[CST_3_i32]] : i32
+// CHECK:       [[VAR_3_:%.+]] = arith.extsi [[PARAM_4_]] : i32 to i64
+// CHECK:       [[VAR_4_:%.+]] = arith.divui [[VAR_0_]], [[PARAM_3_]] : i32
+// CHECK:       [[VAR_5_:%.+]] = arith.divui [[VAR_2_]], [[PARAM_4_]] : i32
+// CHECK:       [[VAR_6:%.+]] = tt.make_tensor_ptr [[PARAM_0_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_1_]], [[VAR_3_]]], {{\[}}[[VAR_4_]], [[VAR_5_]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_7_:%.+]] = arith.extsi [[PARAM_5_]] : i32 to i64
+// CHECK:       [[VAR_8_:%.+]] = arith.extsi [[PARAM_6_]] : i32 to i64
+// CHECK:       [[VAR_9:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_7_]], [[VAR_8_]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {order = array<i32>} : <tensor<4x4xf32>>
+// CHECK:       [[VAR_10:%.+]] = tt.load [[VAR_6]] {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<4x4xf32>>
+// CHECK:     	tt.store [[VAR_9]], [[VAR_10]] : !tt.ptr<tensor<4x4xf32>>
 // CHECK:       tt.return
 module {
   tt.func public @wrap_stacked_masked_loop(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32) {

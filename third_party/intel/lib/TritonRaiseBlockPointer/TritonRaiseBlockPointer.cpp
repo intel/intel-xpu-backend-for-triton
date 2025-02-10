@@ -13,9 +13,11 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include <optional>
 #include <set>
 
@@ -100,10 +102,17 @@ Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
     return false;
   });
 
+  // Note: We are forcing an unknown shape to allow us to do pointer increments
+  // that may wrap around (via the tt.advance operation) .
+  Value zero = findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder);
+  SmallVector<Value> zeros;
+  for (int i = 0; i < shape.size(); ++i)
+    zeros.push_back(zero);
+
   return (it != insertPoint)
              ? cast<tt::MakeTensorPtrOp>(*it)
              : builder.createOrFold<tt::MakeTensorPtrOp>(
-                   loc, source, shape, strides, offsets, sizes, order);
+                   loc, source, zeros, strides, offsets, sizes, order);
 }
 
 Value getFinalValue(Value value) {
@@ -372,14 +381,64 @@ struct PtrState {
                                      newOffsets, order, sizes, builder);
   }
 
-  Value createTTAdvanceOp(Value ptr, tt::MakeTensorPtrOp makeTPtrOp,
-                          OpBuilder &builder, Location loc) const {
+  std::optional<Value> createTTAdvanceOp(Value ptr,
+                                         tt::MakeTensorPtrOp makeTPtrOp,
+                                         OpBuilder &builder,
+                                         Location loc) const {
     assert(triton::isTensorPointerType(ptr.getType()) &&
            "Expecting a block ptr");
     SmallVector<Value> newOffsets;
-    for (const auto &[offset, stride] :
-         llvm::zip(offsets, makeTPtrOp.getStrides()))
-      newOffsets.push_back(computeOffset(offset, stride, builder, loc));
+
+    // We need to generate a `tt.advance` operation as follows:
+    //   tt.advance ptr, (x0, x1)
+    // where:
+    //   x0 = off0 / (stride0 * stride0)
+    //   x1 = off1 / stride1
+    // The integer the divisions above are correct only if `num % denom == 0`,
+    // therefore we give up if none of the strides is one.
+
+    bool noStrideIsOne = llvm::all_of(makeTPtrOp.getStrides(), [&](Value str) {
+      return !ttgi::isConstant(getFinalValue(str), 1);
+    });
+    if (noStrideIsOne)
+      return std::nullopt;
+
+    // We can generate a tt.advance operation as follow:
+    //   Case 1: both offsets are non-zero ==> both strides must be one
+    //   Case 2: one offset is zero
+    //     2a) offsets: (0, off1) strides: (*, 1) ==> tt.advance ptr, (0, off1)
+    //     2b) offsets: (off0, 0) strides: (*, 1) ==> tt.advance ptr, (0, off0)
+
+    bool bothOffsetsNotZero = llvm::all_of(offsets, [&](Value offset) {
+      return !ttgi::isConstant(getFinalValue(offset), 0);
+    });
+
+    if (bothOffsetsNotZero) {
+      if (llvm::any_of(makeTPtrOp.getStrides(), [&](Value stride) {
+            return !ttgi::isConstant(getFinalValue(stride), 1);
+          }))
+        return std::nullopt;
+
+      for (Value offset : offsets)
+        newOffsets.push_back(offset);
+    } else {
+      Value nonZeroOffset = ttgi::isConstant(getFinalValue(offsets[0]), 0)
+                                ? offsets[1]
+                                : offsets[0];
+      Value zeroOffset = ttgi::isConstant(getFinalValue(offsets[0]), 0)
+                             ? offsets[0]
+                             : offsets[1];
+
+      if (ttgi::isConstant(getFinalValue(makeTPtrOp.getStrides()[0]), 1)) {
+        newOffsets.push_back(nonZeroOffset);
+        newOffsets.push_back(zeroOffset);
+      } else {
+        assert(ttgi::isConstant(getFinalValue(makeTPtrOp.getStrides()[1]), 1) &&
+               "Expecting stride 1 for the second dimension");
+        newOffsets.push_back(zeroOffset);
+        newOffsets.push_back(nonZeroOffset);
+      }
+    }
 
     return builder.createOrFold<tt::AdvanceOp>(loc, ptr.getType(), ptr,
                                                newOffsets);
@@ -448,24 +507,30 @@ public:
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
-  LogicalResult rewriteOp(Operation *rootOp) {
+  LogicalResult rewriteOp(Operation *rootOp, bool isNested = false) {
     assert(rootOp && "Expected a valid operation");
 
-    rootOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    bool fail = false;
+    auto res = rootOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (op == rootOp)
         return WalkResult::advance();
 
       return TypeSwitch<Operation *, WalkResult>(op)
-          .Case([this](tt::AddPtrOp addptr) {
-            if (failed(rewriteAddPtrOp(addptr)))
+          .Case([&](tt::AddPtrOp addptr) {
+            if (failed(rewriteAddPtrOp(addptr))) {
               addptr->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite AddPtrOp");
+              if (isNested)
+                fail = true;
+            }
             return WalkResult::advance();
           })
-          .Case<tt::LoadOp, tt::StoreOp>([this](auto loadstore) {
+          .Case<tt::LoadOp, tt::StoreOp>([&](auto loadstore) {
             if (failed(rewriteLoadStoreOp(loadstore))) {
               loadstore->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite load/store");
+              if (isNested)
+                fail = true;
               return WalkResult::advance();
             }
             return WalkResult::skip();
@@ -474,12 +539,17 @@ public:
             if (failed(rewriteForOp(forOp))) {
               forOp->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite ForOp");
+              if (isNested)
+                fail = true;
               return WalkResult::advance();
             }
             return WalkResult::skip();
           })
           .Default([&](auto) { return WalkResult::advance(); });
     });
+
+    if (fail)
+      return failure();
 
     return success();
   }
@@ -554,7 +624,8 @@ public:
       ptrMap.map(newOp.getRegionIterArgs()[i], mappedV);
 
     // Update the loop body.
-    if (failed(rewriteOp(newOp))) {
+    constexpr bool isNested = true;
+    if (failed(rewriteOp(newOp, isNested))) {
       newOp->erase();
       op->emitRemark("TritonRaiseToBlockPointer: update loop body failed when "
                      "rewriting for op");
@@ -682,6 +753,8 @@ public:
     Location loc = op.getLoc();
     Value ptr = op.getPtr();
 
+    LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
+
     // Case 1: the ptr has been already been mapped.
     if (Value mappedV = ptrMap.lookupOrNull(ptr)) {
       // Case 1a: the ptr has been mapped to a make_tensor_ptr operation.
@@ -691,18 +764,22 @@ public:
           return failure();
 
         Value basePtr = tt::isTensorPointerType(ptr.getType()) ? ptr : mappedV;
-        auto advanceOp =
+        std::optional<Value> advanceOp =
             state.createTTAdvanceOp(basePtr, makeTPtrOp, builder, loc);
+        if (!advanceOp.has_value()) {
+          LLVM_DEBUG(llvm::dbgs() << "Rewriting failed for: " << *op << "\n");
+          return failure();
+        }
 
         cleanUp.insert(op);
-        ptrMap.map(op.getResult(), advanceOp);
+        ptrMap.map(op.getResult(), *advanceOp);
 
         LLVM_DEBUG({
+          llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp
+                       << "\n";
           auto modOp =
               builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
           llvm::dbgs() << "Module:\n" << modOp << "\n";
-          llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp
-                       << "\n";
         });
 
         return success();
@@ -724,11 +801,15 @@ public:
         auto makeTPtrOp = ptr.getDefiningOp<tt::MakeTensorPtrOp>();
         assert(makeTPtrOp && "Expected a MakeTensorPtrOp");
 
-        Value newAdvanceOp = state.createTTAdvanceOp(advanceOp.getResult(),
-                                                     makeTPtrOp, builder, loc);
+        std::optional<Value> newAdvanceOp = state.createTTAdvanceOp(
+            advanceOp.getResult(), makeTPtrOp, builder, loc);
+        if (!newAdvanceOp.has_value()) {
+          LLVM_DEBUG(llvm::dbgs() << "Rewriting failed for: " << *op << "\n");
+          return failure();
+        }
 
         cleanUp.insert(op);
-        ptrMap.map(op.getResult(), newAdvanceOp);
+        ptrMap.map(op.getResult(), *newAdvanceOp);
 
         LLVM_DEBUG({
           llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << newAdvanceOp
@@ -747,17 +828,22 @@ public:
     // Case 2: the ptr has not previously been mapped.
     // If the addptr operation increments a scalar pointer, give up.
     Value result = op.getResult();
-    if (!isa<RankedTensorType>(result.getType()))
+    if (!isa<RankedTensorType>(result.getType())) {
+      LLVM_DEBUG(llvm::dbgs() << "Rewriting failed for: " << *op << "\n");
       return failure();
+    }
 
-    // Otherwise, rewrite the AddPtrOp.
+    // Otherwise, attempt to rewrite the AddPtrOp into a MakeTensorPtrOp.
     PtrState state;
-    if (failed(visitOperandAddptr(op, state, loc, builder)))
+    if (failed(visitOperandAddptr(op, state, loc, builder))) {
+      LLVM_DEBUG(llvm::dbgs() << "Rewriting failed for: " << *op << "\n");
       return failure();
+    }
+
+    assert(!state.isBlockPtr() && "Expected tensor of pointers");
 
     knownPtrs[result] = state;
 
-    assert(isa<RankedTensorType>(result.getType()));
     Value makePtrOp = state.createTTMakeTensorPtrOp(builder, loc);
     knownPtrs[makePtrOp] = std::move(state);
 
@@ -966,10 +1052,8 @@ public:
                        bool> = true>
   LogicalResult rewriteLoadStoreOp(OpTy op) {
     // If the pointer is already a block pointer, there is nothing to do.
-    if (tt::isTensorPointerType(op.getPtr().getType())) {
-      LLVM_DEBUG(llvm::dbgs() << "Ptr is a tensor\n");
+    if (tt::isTensorPointerType(op.getPtr().getType()))
       return success();
-    }
 
     // If the pointer doesn't have a corresponding block pointer, there is
     // nothing to do.
@@ -1115,6 +1199,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
     return failure();
   }
 
+  LLVM_DEBUG(llvm::dbgs().indent(2) << "RemOp state: " << state << "\n";);
   return success();
 }
 
@@ -1284,6 +1369,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   for (int dim : resultType.getShape())
     state.sizes.push_back(dim);
 
+  LLVM_DEBUG(llvm::dbgs().indent(2) << "ConstantOp state: " << state << "\n";);
   return success();
 }
 

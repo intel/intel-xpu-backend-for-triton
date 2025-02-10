@@ -55,6 +55,10 @@ pytest() {
 run_tutorial_test() {
     echo
     echo "****** Running $1 test ******"
+    if [[ $# == 2 ]]; then
+        echo "****** With: $2 ******"
+        TRITON_TEST_REPORTS = false
+    fi
     echo
 
     TUTORIAL_RESULT=TODO
