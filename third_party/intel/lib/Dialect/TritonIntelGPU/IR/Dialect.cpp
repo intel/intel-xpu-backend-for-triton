@@ -164,38 +164,6 @@ DpasEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
   return {};
 }
 
-SmallVector<unsigned>
-DpasEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
-  size_t rank = shape.size();
-  assert((rank == 2 || rank == 3) && "Unexpected rank of mma layout");
-
-  SmallVector<unsigned> elemsPerThread(rank, 1);
-  SmallVector<unsigned> shapeC = getShapeC();
-  SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
-  SmallVector<unsigned> shapePerCTATile(rank);
-  llvm::transform(
-      llvm::zip_equal(shapeC, warpsPerCTA), shapePerCTATile.begin(),
-      [](auto entry) { return std::get<0>(entry) * std::get<1>(entry); });
-
-  unsigned tilesRow =
-      ceil<unsigned>(shape[rank - 2], shapePerCTATile[rank - 2]);
-  unsigned tilesCol =
-      ceil<unsigned>(shape[rank - 1], shapePerCTATile[rank - 1]);
-  SmallVector<unsigned> sizePerThread = getSizePerThread();
-  if (rank == 3)
-    elemsPerThread[0] =
-        sizePerThread[0] * ceil<unsigned>(shape[0], shapePerCTATile[0]);
-  elemsPerThread[rank - 2] = sizePerThread[rank - 2] * tilesRow;
-  elemsPerThread[rank - 1] = sizePerThread[rank - 1] * tilesCol;
-
-  return elemsPerThread;
-}
-
-unsigned DpasEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                  Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
