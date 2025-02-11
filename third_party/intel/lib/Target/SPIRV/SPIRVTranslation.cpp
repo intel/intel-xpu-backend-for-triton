@@ -19,25 +19,14 @@ namespace llvm {
 using namespace llvm;
 using namespace SPIRV;
 
-// TODO: The LLVM SPIR-V backend API has changed in
-// https://github.com/llvm/llvm-project/pull/124745 to improve the way SPIR-V
-// Backend API works with user facing options and allow for multithreading
-// within the host application. This PR in llvm-project breaks existing API
-// contract in how options are being interpreted inside the call, and we need to
-// update this file accordingly. After this change is visible in the LLVM
-// version from cmake/llvm-hash.txt we will need to update the call to
-// SPIRVTranslateModule(M, Result, ErrMsg, AllowExtNames, Opts) in a style of
-// SPIRVTranslate(M, Result, ErrMsg, {"all"}, CodeGenOptLevel::Aggressive,
-// Triple("spirv64v1.6-unknown-unknown")).
-
 // The LLVM SPIR-V backend exposes an API call that translates LLVM module to
 // SPIR-V and writes results into a string as binary SPIR-V output, providing
-// diagnostics on fail and means of configuring translation
-// (https://github.com/llvm/llvm-project/pull/107216).
-extern "C" bool
-SPIRVTranslateModule(Module *M, std::string &SpirvObj, std::string &ErrMsg,
-                     const std::vector<std::string> &AllowExtNames,
-                     const std::vector<std::string> &Opts);
+// diagnostics on fail and means of configuring translation.
+extern "C" bool SPIRVTranslate(Module *M, std::string &SpirvObj,
+                               std::string &ErrMsg,
+                               const std::vector<std::string> &AllowExtNames,
+                               llvm::CodeGenOptLevel OLevel,
+                               Triple TargetTriple);
 
 static inline Triple::SubArchType
 spirvVersionToSubArch(SPIRV::VersionNumber VN) {
@@ -63,10 +52,7 @@ spirvVersionToSubArch(SPIRV::VersionNumber VN) {
 bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
                      const SPIRV::TranslatorOpts &TranslatorOpts) {
   static const std::string DefaultTriple = "spirv64v1.6-unknown-unknown";
-  static const std::vector<std::string> Opts{
-      "--avoid-spirv-capabilities", "Shader", "--translator-compatibility-mode",
-      "--spirv-ext=all", "-spirv-O3"};
-  static const std::vector<std::string> AllowExtNames;
+  static const std::vector<std::string> AllowExtNames{"all"};
 
   // Correct the Triple value if needed
   Triple TargetTriple(M->getTargetTriple());
@@ -79,16 +65,17 @@ bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
     // We need to reset Data Layout to conform with the TargetMachine
     M->setDataLayout("");
   }
+  if (TargetTriple.getTriple().empty())
+    TargetTriple.setTriple(DefaultTriple);
   if (TranslatorOpts.getMaxVersion() != VersionNumber::MaximumVersion) {
-    if (TargetTriple.getTriple().empty())
-      TargetTriple.setTriple(DefaultTriple);
     TargetTriple.setArch(TargetTriple.getArch(),
                          spirvVersionToSubArch(TranslatorOpts.getMaxVersion()));
     M->setTargetTriple(TargetTriple.str());
   }
 
   // Translate the Module into SPIR-V
-  return SPIRVTranslateModule(M, Result, ErrMsg, AllowExtNames, Opts);
+  return SPIRVTranslate(M, Result, ErrMsg, AllowExtNames,
+                        CodeGenOptLevel::Aggressive, TargetTriple);
 }
 
 bool runSpirvBackend(Module *M, std::ostream &OS, std::string &ErrMsg,
