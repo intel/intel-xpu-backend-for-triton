@@ -2042,13 +2042,6 @@ test/unit/language/test_core.py::test_cast[1-uint32-uint64-False-1024]
 test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
 
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3388
-# test_lhs_in_tmem
-test/unit/language/test_matmul.py::test_lhs_in_tmem[float32-False-128-128-128-128-128-128]
-test/unit/language/test_matmul.py::test_lhs_in_tmem[float32-True-128-128-128-128-128-128]
-test/unit/language/test_matmul.py::test_lhs_in_tmem[float16-False-128-128-128-128-128-128]
-test/unit/language/test_matmul.py::test_lhs_in_tmem[float16-True-128-128-128-128-128-128]
-test/unit/language/test_matmul.py::test_lhs_in_tmem[float8e5-False-128-128-128-128-128-128]
-test/unit/language/test_matmul.py::test_lhs_in_tmem[float8e5-True-128-128-128-128-128-128]
 # test_simple_matmul
 test/unit/language/test_matmul.py::test_simple_matmul[8-1-128-128-16-4-float16-float16]
 test/unit/language/test_matmul.py::test_simple_matmul[4-1-64-128-32-4-float16-float16]
