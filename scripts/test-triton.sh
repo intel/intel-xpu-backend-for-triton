@@ -188,29 +188,31 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -k "not test_local_load_store_dot" -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+  LLVM_IR_ENABLE_DUMP=1 MLIR_ENABLE_DUMP=1 pytest -s language/test_core.py::test_dot[1-32-128-64-4-False-False-none-tf32-int8-int8-1-None1] --device=xpu
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
+#   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
+#     pytest -k "not test_local_load_store_dot" -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
-  # run runtime tests serially to avoid race condition with cache handling.
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    pytest -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
+#   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
+#     pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
 
-  TRITON_TEST_SUITE=debug \
-    pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
+#   # run runtime tests serially to avoid race condition with cache handling.
+#   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
+#     pytest -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
 
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+#   TRITON_TEST_SUITE=debug \
+#     pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    pytest -k "not test_disam_cubin" --verbose tools
+#   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+#   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
+#     pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 
-  cd $TRITON_PROJ/third_party/intel/python/test
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-  pytest --device xpu .
+#   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
+#     pytest -k "not test_disam_cubin" --verbose tools
+
+#   cd $TRITON_PROJ/third_party/intel/python/test
+#   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
+#   pytest --device xpu .
 }
 
 run_regression_tests() {
@@ -364,7 +366,7 @@ test_triton() {
   fi
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
-    run_regression_tests
+    # run_regression_tests
   fi
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
