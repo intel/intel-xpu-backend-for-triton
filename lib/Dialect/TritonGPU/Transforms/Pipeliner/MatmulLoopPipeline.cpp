@@ -41,7 +41,6 @@ struct LoadInfo {
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   bool isMMAv3Shared = false;
-  bool isMMAv3Registers = false;
   bool isMMAv5Scale = false;
   int distToUse = 0;
   bool usedByDot = false;
@@ -449,7 +448,7 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
           }
           if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
                   tt::ExperimentalDescriptorGatherOp>(op) ||
-              op->hasTrait<OpTrait::DotLike>()) {
+              isa<mlir::triton::DotOpInterface>(op)) {
             // Stop recursion when hitting a LoadOp or a DotOp.
             users.push_back(op);
             return;
@@ -475,6 +474,16 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
     dfs(baseOp, baseOp, true /*anyOp*/);
   }
   return users;
+}
+
+static bool isMMAv3Buffer(Operation *loadOp) {
+  if (!loadOp->hasOneUse())
+    return false;
+  Operation *user = *loadOp->getUsers().begin();
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+    return isa<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
+  }
+  return false;
 }
 
 static llvm::MapVector<Operation *, LoadInfo>
@@ -518,22 +527,19 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
-      if (use->hasTrait<OpTrait::DotLike>()) {
+      if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
-        auto mmaLoadType = getMMALoadType(&op);
         auto dot = dyn_cast<tt::DotOp>(use);
-        auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
-
+        bool mmav3Shmem = isMMAv3Buffer(&op);
         loadInfo.usedByDot = true;
-        loadInfo.isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
-        loadInfo.isMMAv3Registers =
-            (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
+        loadInfo.isMMAv3Shared = mmav3Shmem;
 
-        if (loadInfo.isMMAv3Shared || isTMALoad) {
+        if (mmav3Shmem || isTMALoad) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, isTMALoad).value_or(nullptr);
-        } else if (loadInfo.isMMAv3Registers || dot) {
+        } else if (!mmav3Shmem || dot) {
           bool incompatible = false;
+
           loadInfo.sharedEncoding =
               getSharedEncIfAllUsersAreDotEnc(op.getResult(0), incompatible)
                   .value_or(nullptr);
@@ -542,7 +548,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
       // If we still don't have a shared encoding, try a "generic" shared
       // encoding.
-      if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
+      if (!loadInfo.sharedEncoding) {
+        assert(!loadInfo.isMMAv3Shared &&
+               "For MMAv3 pipelining we should have shared encoding");
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
             getSharedEncoding(&op, isTMALoad).value_or(nullptr);

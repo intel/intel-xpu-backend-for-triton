@@ -197,9 +197,10 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   auto outDimNames = standardOutDimNames(ctx, rank);
 
   // Construct bases for a the layout's 2-dimensional tile.
-  assert(shape.size() >= 2);
-  int colDim = shared.getTransposed() ? 0 : 1;
-  int rowDim = shared.getTransposed() ? 1 : 0;
+  assert(rank >= 2);
+  int batchDims = rank - 2;
+  int colDim = batchDims + (shared.getTransposed() ? 0 : 1);
+  int rowDim = batchDims + (shared.getTransposed() ? 1 : 0);
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
@@ -255,8 +256,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
 
   // Add the remaining dimensions.
-  for (int i = 2; i < rank; i++) {
-    int dim = shared.getTransposed() ? i : 1 - i;
+  for (int dim = batchDims - 1; dim >= 0; --dim) {
     tileLayout *=
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
@@ -872,25 +872,8 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
   bases[S("register")] = newRegBases;
 
-  LinearLayout ret =
-      LinearLayout(std::move(bases), llvm::to_vector(sliceLL.getOutDimNames()));
-
-  // The triton generate the homogeneous kernel run on every thread.
-  // The multiple threads of the parent layout which are distributed on the
-  // sliced dim are squeezed to hold the same value of tensor redundantly. The
-  // multiple values of sizePerThreads[dim] of the parent are reduced to the
-  // only one. We need to fix up the number of registers in case we just removed
-  // all zeros aggressively.
-  auto sizePerThreads = triton::gpu::getSizePerThread(getParent());
-  unsigned expectedNumRegisters =
-      parentLL.getInDimSize(S("register")) / sizePerThreads[getDim()];
-  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
-    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
-    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
-    // output dimension would work.
-    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
-  }
-  return ret;
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,

@@ -47,11 +47,10 @@ def matmul_kernel(  #
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         mask_a = (offs_am[:, None] < M) & (offs_k[None, :] + k * BLOCK_K < K)
-        mask_b = ((offs_k[:, None] + k * BLOCK_K) < K) & (offs_bn[None, :] < N)
         a = tl.load(a_ptrs, mask=mask_a, other=0.0)
         if SCALE_A is not None:
             a = a * SCALE_A
-        b = tl.load(b_ptrs, mask=mask_b, other=0.0)
+        b = tl.load(b_ptrs)
         accumulator = tl.dot(a, b, acc=accumulator, out_dtype=output_ptr.dtype.element_ty, input_precision=PRECISION)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
@@ -88,10 +87,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("HIP path requires less than 64KB of shared memory")
     if is_hip_mi200() and dtype_src_str == "tensorfloat32":
         pytest.skip("HIP MI200 does not support tensorfloat32")
-    if BLOCK_M == 64 and BLOCK_N == 16 and BLOCK_K == 16 and NUM_STAGES == 4 and dtype_src_str == "float16":
-        pytest.skip(
-            "Skipping tests failing due to suspected ptxas bug: https://triton-lang.slack.com/archives/C07FLUE9U8N/p1730443207543549"
-        )
     if dtype_src_str == "float8e5" and BLOCK_K == 16:
         pytest.skip("Skipping cases small K for float8")
     if dtype_src_str == "float8e5" and device == "cuda" and torch.cuda.get_device_capability()[0] < 9:
@@ -568,8 +563,7 @@ def lhs_in_tmem_kernel(  #
     tl.store(output_ptrs, accumulator, mask=mask_c)
 
 
-@pytest.mark.parametrize("M, N, K", [(128, 64, 64), (128, 64, 32), (64, 128, 64), (64, 128, 32), (128, 128, 128),
-                                     (1024, 512, 256)])
+@pytest.mark.parametrize("M, N, K", [(128, 64, 64), (1024, 512, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("a_trans", [False, True])
@@ -721,7 +715,7 @@ def block_scale_fp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (128, 128, 128), (2, 4, 64)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (2, 4, 64)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
@@ -782,6 +776,7 @@ def mxfp8_mxfp4_matmul(  #
         BLOCK_N: tl.constexpr,  #
         BLOCK_K: tl.constexpr,  #
         NUM_STAGES: tl.constexpr):  #
+    tensor_scale: tl.constexpr = isinstance(a_scale.dtype, tl.pointer_type)
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
@@ -802,7 +797,10 @@ def mxfp8_mxfp4_matmul(  #
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
-        scale_a = tl.load(a_scale_ptr)
+        if tensor_scale:
+            scale_a = tl.load(a_scale_ptr)
+        else:
+            scale_a = tl.full(a_scale_ptr.shape, a_scale.to(tl.int8), dtype=tl.int8)
         scale_b = tl.load(b_scale_ptr)
         accumulator = tl.dot_scaled(a, scale_a, "e5m2", b, scale_b, "e2m1", accumulator)
         a_ptrs += BLOCK_K * stride_ak
@@ -817,14 +815,15 @@ def mxfp8_mxfp4_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (128, 256, 256)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("B_TRANS", [True, False])
+@pytest.mark.parametrize("CONST_SCALE", [True, False])
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
                     reason="Requires compute capability >= 10")
-def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, device):
+def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, CONST_SCALE, device):
     if is_xpu():
         pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
 
@@ -851,12 +850,15 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     b_scale = b_scale_mxfp4.data
 
     a_scale_ref = a_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1)[:M, :K]
+    if CONST_SCALE:
+        a_scale_ref = torch.full_like(a_scale_ref, 2.0)
+        a_scale = 128  # 2.0 in e8m0
     b_scale_ref = b_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1).T.contiguous()[:K, :N]
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
 
     output = a.new_empty((M, N), dtype=torch.float32)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    out = mxfp8_mxfp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
+    out = mxfp8_mxfp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, b_scale.stride(0), a.stride(0), a.stride(1),
                                    b.stride(0), b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N,
                                    BLOCK_K, NUM_STAGES=NUM_STAGES)
     ttgir = out.asm["ttgir"]

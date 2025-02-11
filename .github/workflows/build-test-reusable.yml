@@ -60,6 +60,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      use_spirv_backend:
+        description: Use SPIR-V backend
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -125,6 +129,7 @@ jobs:
         uses: ./.github/actions/setup-triton
         with:
           build_llvm: ${{ inputs.build_llvm }}
+          use_spirv_backend: ${{ inputs.use_spirv_backend }}
 
       - name: Create test-triton command line
         run: |

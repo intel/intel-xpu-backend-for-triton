@@ -1416,6 +1416,21 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
   b.barrier();
 }
 
+static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return LLVM::AtomicOrdering::acq_rel;
+  }
+}
+
 struct AtomicCASOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -1469,6 +1484,9 @@ struct AtomicCASOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
+    MemSemantic memSem = op.getSem();
+    LLVM::AtomicOrdering successOrdering = getMemoryOrdering(memSem);
+    LLVM::AtomicOrdering failureOrdering = LLVM::AtomicOrdering::monotonic;
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value casVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
@@ -1497,8 +1515,7 @@ struct AtomicCASOpConversion
             casVal = b.bitcast(casVal, zero.getType());
 
             auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-                loc, casPtr, casCmp, casVal, LLVM::AtomicOrdering::acq_rel,
-                LLVM::AtomicOrdering::monotonic);
+                loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
             Value newLoaded =
                 rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
             return SmallVector<Value, 1>{newLoaded};
@@ -1566,6 +1583,8 @@ struct AtomicRMWOpConversion
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
+    MemSemantic memSem = op.getSem();
+    LLVM::AtomicOrdering llvmMemOrdering = getMemoryOrdering(memSem);
 
     Value val = op.getVal();
     Value ptr = op.getPtr();
@@ -1682,7 +1701,7 @@ struct AtomicRMWOpConversion
 
               rmwVal = b.bitcast(rmwVal, valueElemTy);
               auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
-                  loc, rmwKind, rmwPtr, rmwVal, LLVM::AtomicOrdering::acq_rel);
+                  loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
               return SmallVector<Value, 1>{atomRMW.getRes()};
             });
       }

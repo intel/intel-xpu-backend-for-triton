@@ -87,11 +87,6 @@ bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
   if (isa<tt::ExperimentalDescriptorLoadOp, tt::ExperimentalDescriptorGatherOp>(
           op))
     return true;
-  if (isa<ttng::WarpGroupDotOp>(finalUser) &&
-      getMMALoadType(op) == MMALoadType::DoNotPipeline) {
-    LDBG("Load " << *op << " used by WarpGroupDotOp with incompatible layout");
-    return false;
-  }
   if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
     LDBG("Load " << *op << " cannot have shared encoding");
     return false;
@@ -170,7 +165,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           distance++;
         }
         for (Value operand : op->getOperands()) {
-          if (op->hasTrait<OpTrait::DotLike>()) {
+          if (isa<mlir::triton::DotOpInterface>(op)) {
             // Heuristic: only pipeline A and B operands of the dot op.
             if (operand == op->getOperand(2))
               continue;
@@ -195,7 +190,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
+    if (!isa<mlir::triton::DotOpInterface>(op))
       continue;
     seenDot = true;
     seen.clear();
