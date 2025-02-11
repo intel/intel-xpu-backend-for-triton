@@ -77,7 +77,6 @@ struct LocalAllocOpConversion
     Location loc = op->getLoc();
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
 

@@ -337,7 +337,7 @@ Value TargetInfo::getScratchOnGlobalMemoryPtr(Location loc,
                                               RewriterBase &rewriter,
                                               FunctionOpInterface funcOp,
                                               Value allocOffset) const {
-  return LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, allocOffset);
+  llvm::report_fatal_error("IntelGPU does not support getScratchOnGlobalMem");
 }
 
 LLVM::GlobalOp TargetInfo::getGlobalString(Location loc, RewriterBase &rewriter,
