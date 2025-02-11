@@ -38,6 +38,8 @@ jobs:
 
       - name: Build SPIRVRunner
         run: |
+          source /opt/intel/oneapi/setvars.sh
+          set -x
           export LLVM_DIR="$HOME/.triton/llvm/llvm-ubuntu-x64"
           export CMAKE_PREFIX_PATH="$(python scripts/torch_cmake.py)"
           cd utils/SPIRVRunner
@@ -48,8 +50,9 @@ jobs:
 
       - name: Test SPIRVRunner
         run: |
+          source /opt/intel/oneapi/setvars.sh
+          set -x
           export SPIRV_RUNNER_PATH="$GITHUB_WORKSPACE/utils/SPIRVRunner/build/SPIRVRunner"
           export SPIRV_RUNNER_TESTS="$GITHUB_WORKSPACE/utils/SPIRVRunner/tests"
           cd utils/SPIRVRunner
-          pip install pytest
           pytest tests/test_spirv_runner.py
