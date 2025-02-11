@@ -13,7 +13,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
-# A hard-coded cache version that can be updated when we know that the cached file is no valid and
+# A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
 # library has been updated as a result of updated dependencies.
 # See https://github.com/intel/intel-xpu-backend-for-triton/issues/3095.
