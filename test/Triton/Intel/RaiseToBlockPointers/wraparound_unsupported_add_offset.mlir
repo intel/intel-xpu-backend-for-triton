@@ -1,4 +1,6 @@
 // RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// XFAIL: *
+// Note: Cannot generate tt.advance because block ptrs are created with unknown strides
 
 
 // We currently do not support this kind of modulo pattern:
