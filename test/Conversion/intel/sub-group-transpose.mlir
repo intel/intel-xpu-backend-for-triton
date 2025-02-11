@@ -5,7 +5,7 @@
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f16(
   // CHECK-SAME:                                      , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_f16(%arg0: tensor<16x16xf16, #blocked>) -> tensor<16x16xf16, #blocked1> {
@@ -206,7 +206,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 1], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<32x16xf32, #blocked>) -> tensor<32x16xf32, #blocked1> {
@@ -243,7 +243,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 2], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 2], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<16x32xf32, #blocked>) -> tensor<16x32xf32, #blocked1> {
@@ -280,7 +280,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 4], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x64xf32, #blocked>) -> tensor<64x64xf32, #blocked1> {
@@ -317,7 +317,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 #blocked = #ttg.blocked<{sizePerThread = [16, 1, 1], threadsPerWarp = [1, 16, 1], warpsPerCTA = [4, 4, 1], order = [0, 1, 2]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16, 1], threadsPerWarp = [16, 1, 1], warpsPerCTA = [4, 4, 1], order = [0, 1, 2]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x64x1xf32, #blocked>) -> tensor<64x64x1xf32, #blocked1> {
@@ -353,7 +353,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 #blocked = #ttg.blocked<{sizePerThread = [16, 1, 1], threadsPerWarp = [1, 16, 1], warpsPerCTA = [4, 4, 1], order = [0, 1, 2]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 4], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x64xf32, #ttg.slice<{dim = 2, parent = #blocked}>>) -> tensor<64x64xf32, #blocked1> {
@@ -390,7 +390,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 #blocked = #ttg.blocked<{sizePerThread = [16, 1, 1, 1, 1], threadsPerWarp = [1, 16, 1, 1, 1], warpsPerCTA = [1, 1, 1, 1, 1], order = [1, 2, 3, 4, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16, 1], threadsPerWarp = [16, 1, 1], warpsPerCTA = [1, 1, 1], order = [1, 2, 0]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<16x16x1xf32, #ttg.slice<{dim = 2, parent = #ttg.slice<{dim = 4, parent = #blocked}>}>>) -> tensor<16x16x1xf32, #blocked1> {
@@ -427,7 +427,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [16, 1, 1, 1, 1], threadsPerWarp = [1, 16, 1, 1, 1], warpsPerCTA = [4, 1, 1, 4, 1], order = [1, 2, 3, 4, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16, 1], threadsPerWarp = [16, 1, 1], warpsPerCTA = [4, 1, 4], order = [1, 2, 0]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x16x4xf32, #ttg.slice<{dim = 2, parent = #ttg.slice<{dim = 4, parent = #blocked}>}>>) -> tensor<64x16x4xf32, #blocked1> {
@@ -464,7 +464,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test(%arg0: tensor<32x16xf32, #blocked>) -> tensor<32x16xf32, #blocked1> {
@@ -502,7 +502,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test(%arg0: tensor<16x32xf32, #blocked>) -> tensor<16x32xf32, #blocked1> {
@@ -540,7 +540,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
   // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test(%arg0: tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked1> {
@@ -578,7 +578,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @test_back_to_back
   // CHECK-NOT: barrier
   tt.func @test_back_to_back(%arg0: tensor<32x64xf32, #blocked>, %arg1: tensor<32x64xf32, #blocked>) -> (tensor<32x64xf32, #blocked1>, tensor<32x64xf32, #blocked1>) {
@@ -595,7 +595,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_32(
   // CHECK-SAME:                                   , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test_32(%arg0: tensor<64x64xf32, #blocked>) -> tensor<64x64xf32, #blocked1> {
@@ -637,7 +637,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [1, 16], warpsPerCTA = [4, 2], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_2_cont(
   // CHECK-SAME:                                   , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test_2_cont(%arg0: tensor<64x64xf32, #blocked>) -> tensor<64x64xf32, #blocked1> {
@@ -678,7 +678,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [1, 16], warpsPerCTA = [4, 2], order = [0, 1]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_2_cont_back_2_back(
   tt.func @test_2_cont_back_2_back(%arg0: tensor<64x64xf32, #blocked>, %arg1: tensor<64x64xf32, #blocked>) -> (tensor<64x64xf32, #blocked1>, tensor<64x64xf32, #blocked1>) {
     // CHECK-NOT: barrier

@@ -59,8 +59,10 @@ public:
     addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
-    addDynamicallyLegalOp<ModuleOp>(
-        [](ModuleOp op) { return spirv::lookupTargetEnv(op) != nullptr; });
+    addDynamicallyLegalOp<ModuleOp>([](ModuleOp op) {
+      return !triton::gpu::intel::hasSpirvTargetArch(op) ||
+             spirv::lookupTargetEnv(op) != nullptr;
+    });
   }
 };
 

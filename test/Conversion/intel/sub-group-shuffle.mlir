@@ -7,7 +7,7 @@
 #sliced = #ttg.slice<{dim = 1, parent = #blocked}>
 #sliced1 = #ttg.slice<{dim = 1, parent = #blocked1}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f16(
   // CHECK-SAME:                                      %[[VAL_0:.*]]: !llvm.struct<(f16)>)
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f16)>
@@ -184,7 +184,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #sliced = #ttg.slice<{dim = 1, parent = #blocked}>
 #sliced1 = #ttg.slice<{dim = 1, parent = #blocked1}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f32(
   // CHECK-SAME:                                       %[[VAL_0:.*]]: !llvm.struct<(f32)>)
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f32)>
@@ -267,7 +267,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #sliced = #ttg.slice<{dim = 1, parent = #blocked}>
 #sliced1 = #ttg.slice<{dim = 1, parent = #blocked1}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_non_sliced_multi_register(
   // CHECK-SAME:                                                            %[[VAL_0:.*]]: !llvm.struct<(f64, f64)>)
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f64, f64)>
@@ -352,7 +352,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #sliced = #ttg.slice<{dim = 1, parent = #blocked}>
 #sliced1 = #ttg.slice<{dim = 1, parent = #blocked1}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:     llvm.func spir_kernelcc @test_non_sliced_multi_register_multi_warp
   // CHECK-COUNT-64:    llvm.call spir_funccc @_Z17sub_group_shuffleij
   tt.func @test_non_sliced_multi_register_multi_warp(%arg0: tensor<128xi32, #sliced>) -> tensor<128xi32, #sliced1> {
@@ -368,7 +368,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 // Case of more than one contiguous element per work-item.
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.target_arch = "spir64"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_contiguous(
   // CHECK-SAME:                                             %[[VAL_0:.*]]: !llvm.struct<(f16, f16)>)
   tt.func @test_contiguous(%arg0: tensor<32xf16, #ttg.slice<{dim = 1, parent = #blocked}>>) -> tensor<32xf16, #ttg.slice<{dim = 1, parent = #blocked1}>> {
