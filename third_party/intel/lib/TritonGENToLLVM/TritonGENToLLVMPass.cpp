@@ -444,16 +444,27 @@ struct TritonMatrix2DBlockLoadLowering
     fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
     fnName +=
         intel::getTypeMangling(resType.getElementType(), /*isUnsigned=*/true);
+
+    // compensate the non-64 byte aligned base.
+    Value baseAddr = op.getPtr();
+    Value offset =
+        b.trunc(i32_ty, b.and_(b.ptrtoint(i64_ty, baseAddr), b.i64_val(0x3f)));
+    // In number of bytes.
+    Value baseWidth = b.add(op.getBaseWidth(), offset);
+    // In number of scalar elements.
+    Value offsetX =
+        b.add(op.getX(), b.udiv(offset, b.i32_val(op.getElemSizeInBits() / 8)));
+
     VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = b.insert_element(
         vecType,
-        b.insert_element(vecType, b.undef(vecType), op.getX(), b.i32_val(0)),
+        b.insert_element(vecType, b.undef(vecType), offsetX, b.i32_val(0)),
         op.getY(), b.i32_val(1));
     SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty,  i32_ty,
                                i32_ty,         vecType, ptr_ty(ctx)};
-    SmallVector<Value> args{op.getPtr(),        op.getBaseWidth(),
-                            op.getBaseHeight(), op.getBasePitch(),
-                            byteCoord,          dest};
+
+    SmallVector<Value> args{baseAddr,          baseWidth, op.getBaseHeight(),
+                            op.getBasePitch(), byteCoord, dest};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 4> paramAttrs{
         std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName()),
