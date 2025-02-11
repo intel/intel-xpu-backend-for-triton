@@ -82,23 +82,18 @@ jobs:
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
 
-<<<<<<< HEAD
-=======
       # - name: Run unit tests
       #   run: |
       #     .venv\Scripts\activate.ps1
       #     Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
       #     cd ${{ env.NEW_WORKSPACE }}
       #     ${{ env.TRITON_TEST_CMD }} --unit
-
->>>>>>> e1e097d14 (Test dot)
       - name: Run core tests
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           ${{ env.TRITON_TEST_CMD }} --core
 
-<<<<<<< HEAD
       - name: Run interpreter tests
         run: |
           .venv\Scripts\activate.ps1
@@ -125,7 +120,7 @@ jobs:
         with:
           name: pass_rate
           path: pass_rate*.json
-=======
+
       # - name: Run interpreter tests
       #   run: |
       #     .venv\Scripts\activate.ps1
@@ -170,7 +165,6 @@ jobs:
       #   with:
       #     name: pass_rate
       #     path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
->>>>>>> e1e097d14 (Test dot)
 
       - name: Clean up workspace
         if: ${{ always() }}
