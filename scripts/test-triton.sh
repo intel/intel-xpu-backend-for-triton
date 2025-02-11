@@ -188,7 +188,7 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  LLVM_IR_ENABLE_DUMP=1 MLIR_ENABLE_DUMP=1 pytest -s language/test_core.py::test_dot[1-32-128-64-4-False-False-none-tf32-int8-int8-1-None1] --device=xpu
+  LLVM_IR_ENABLE_DUMP=0 MLIR_ENABLE_DUMP=0 pytest -s language/test_core.py::test_dot[1-32-128-64-4-False-False-none-tf32-int8-int8-1-None1] --device=xpu
 
 #   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
 #     pytest -k "not test_local_load_store_dot" -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
