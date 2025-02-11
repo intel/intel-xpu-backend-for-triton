@@ -6670,6 +6670,8 @@ def test_tl_range(device):
 
 
 def test_tl_range_fuse():
+    if is_xpu():
+        pytest.skip("loop fusion is not enabled on XPU")
     if is_hip():
         pytest.skip("loop fusion is not enabled on AMD")
 
