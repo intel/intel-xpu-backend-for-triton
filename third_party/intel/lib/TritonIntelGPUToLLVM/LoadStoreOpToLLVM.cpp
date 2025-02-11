@@ -736,6 +736,9 @@ struct LoadOpConversion
       usePackedType = true;
     }
 
+    LLVM_DEBUG(llvm::dbgs() << "opsPerChannel: " << opsPerChannel << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "packedElemsPerLanePerDPASInst: " << packedElemsPerLanePerDPASInst << "\n");
+
     Type packedDPASOperandType = LLVM::getFixedVectorType(
         loadResultElemType, packedElemsPerLanePerDPASInst);
 
@@ -1258,20 +1261,8 @@ struct LoadOpConversion
           llvm::errs() << "num vblocks: " << vBlocks << "\n";
           for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
             llvm::errs() << "Emitting shuffle vector for iteration " << i << "\n";
-
-            SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
-            for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
-                  ++elemIdx) {
-            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1]}, {kIteration, i}, {kLoad, 0}});
-            assert(blockLayoutOffset.size() == 2);
-            llvm::errs() << "block load offset: " << blockLayoutOffset[0].second << ", " << blockLayoutOffset[1].second << "\n";
-            indices[elemIdx] = blockLayoutOffset[0].second  + packedElemsPerLanePerDPASInst * (blockLayoutOffset[1].second / elemsPerDPASInst[1]); 
-
-            LLVM_DEBUG({
-                llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
-                              << indices[elemIdx] << "\n";
-              });
-            }
+            const size_t vBlock = i % vBlocks; 
+            llvm::errs() << "vBlock: " << vBlock << "\n";
 
             auto tensorCoord = tileLayout.apply({{kLoad, loadIdx}, {kOffset, 0},  {kIteration, i}});
             assert(tensorCoord.size() == 2);
@@ -1280,6 +1271,26 @@ struct LoadOpConversion
             llvm::errs() << "row: " << tensorRowCoord << " = " << tensorCoord[0].second << " / " << elemsPerDPASInst[0] << "\n";
             auto tensorColCoord = tensorCoord[1].second / elemsPerDPASInst[1];
             llvm::errs() << "col: "  << tensorColCoord << " = " << tensorCoord[1].second << " / " << elemsPerDPASInst[1] << "\n";
+
+            SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
+            for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
+                  ++elemIdx) {
+            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1]}, {kIteration, i}, {kLoad, 0}});
+            assert(blockLayoutOffset.size() == 2);
+            llvm::errs() << "block load offset: " << blockLayoutOffset[0].second << ", " << blockLayoutOffset[1].second << "\n";
+#if 0
+            indices[elemIdx] = blockLayoutOffset[0].second + i*packedElemsPerLanePerDPASInst;
+#else
+            // create a shuffle vector corresponding to an individual dpas lane 
+            // the x coordinate tells us which register in the lane we are accessing
+            // the y coordinate tells us how many lanes to advance from the beginning 
+            indices[elemIdx] = blockLayoutOffset[0].second  + (blockLayoutOffset[1].second / elemsPerDPASInst[1]) * tileHeight; 
+#endif 
+            LLVM_DEBUG({
+                llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                              << indices[elemIdx] << "\n";
+              });
+            }
 
           }
 
