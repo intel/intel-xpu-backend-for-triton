@@ -228,6 +228,10 @@ run_interpreter_tests() {
   echo "******   Running Triton Interpreter tests    ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
+
+  TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
+    language/test_random.py language/test_line_info.py --device cpu
 }
 
 run_tutorial_tests() {
@@ -331,7 +335,7 @@ run_instrumentation_tests() {
   INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
   cd $TRITON_PROJ/python/test/unit
-  INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
+
   TRITON_TEST_SUITE=instrumentation \
     TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
     pytest -vvv --device xpu instrumentation/test_gpuhello.py
