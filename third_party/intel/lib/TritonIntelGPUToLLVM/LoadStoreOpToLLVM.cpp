@@ -906,7 +906,7 @@ struct LoadOpConversion
       if (oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
         numOperandsPer2DLoadM = 1;
-        tileLayout *= LinearLayout::identity1D(1, kIteration, dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(1, kIteration, dimInnerStr);
       } else {
         // We can decompose the matrix returned by transposed large 2d load
         // when threads per warp < column size. Otherwise we have to load one
@@ -915,7 +915,7 @@ struct LoadOpConversion
         // now.
         tileLayout *= LinearLayout::identity1D(
             (threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1,
-            kIteration, dimOuterStr);
+            kIteration, dimInnerStr);
       }
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
@@ -923,8 +923,8 @@ struct LoadOpConversion
       // this give us the right value below when we compare to the B_AxB HW
       // layout. But are we taking into account the vnni transform in addition
       // to vblocks?
-      tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
-                                             kIteration, dimInnerStr);
+      /*tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
+                                             kIteration, dimInnerStr);*/
     }
     // end LL duplicate code
 
@@ -1110,7 +1110,7 @@ struct LoadOpConversion
           // adjust the load offset to compensate for strides related to the
           // DPAS layout
           const auto loadOffsetX = offset[0].second * outerDimWarpNum;
-          const auto loadOffsetY = offset[1].second / numRepOuter;
+          const auto loadOffsetY = offset[1].second;
           LLVM_DEBUG({
             llvm::dbgs() << "x offset ll: " << loadOffsetX << "\n";
             llvm::dbgs() << "y offset ll: " << loadOffsetY << "\n";
@@ -1280,7 +1280,7 @@ struct LoadOpConversion
            const auto colOffset = tensorColCoord * packedElemsPerLanePerDPASInst * packedRowNum;
            llvm::errs() << "rowOffset: " << rowOffset << "\n";
            llvm::errs() << "colOffset: " << colOffset << "\n";
-           
+
             SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
             for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                   ++elemIdx) {
