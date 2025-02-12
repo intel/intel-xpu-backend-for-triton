@@ -26,7 +26,8 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: '3.9'
-  TRITON_TEST_CMD: "scripts/test-triton.sh --skip-pytorch-install"
+  # FIXME: temporary initialize oneapi/ccl because our pytorch build requires it
+  TRITON_TEST_CMD: "source /opt/intel/oneapi/ccl/latest/env/vars.sh && scripts/test-triton.sh --skip-pytorch-install"
 
 jobs:
   tests:
