@@ -189,7 +189,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
 namespace {
 
-Value getSmemVecAddr(const LinearLayout &regLayout,
+Value getSmemVecAddrNEW(const LinearLayout &regLayout,
                      const LinearLayout &regToSharedLayout,
                      const LinearLayout &invertAllocSharedLayout,
                      const SharedMemoryObject &smemObj,
@@ -323,7 +323,20 @@ void printLinearThing(LinearLayout layout, std::string name) {
   }
 }
 
-bool emitTransferBetweenRegistersAndShared(
+bool emitTransferBetweenRegistersAndSharedNEW(
+  RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+  Type elemLlvmTy, std::optional<int32_t> maxVecElems,
+  const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
+  const TargetInfoBase &target,
+  std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
+  bool newThing = false;
+  if (newThing) {
+    return emitTransferBetweenRegistersAndSharedNEW(registerTy, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter, target, perVectorCallback);
+  }
+  return emitTransferBetweenRegistersAndSharedOLD(registerTy, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter, target, perVectorCallback);
+}
+
+bool emitTransferBetweenRegistersAndSharedNEW(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems,
     const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
@@ -353,23 +366,16 @@ bool emitTransferBetweenRegistersAndShared(
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
   for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
        inBlock *= 2) {
-    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
-        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}})));
-    // offsetX1, ..., offsetXN must all be 0.
-    if (!llvm::all_of(ArrayRef(idx).drop_back(1),
-                      [&](auto offset) { return offset == 0; })) {
+    auto idx = regToSharedLayout.apply(
+        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}});
+    // Intra-block offset must be 0
+    int32_t offset = idx[0].second;
+    if (offset != 0) {
         return false;
     }
-    
-    // auto idx = regToSharedLayout.apply(
-    //     {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}});
-    // // Intra-block offset must be 0
-    // int32_t offset = idx[0].second;
-    // if (offset != 0) {
-    //   return false;
-    // }
+
     // Check if there's any cross CTA load.
-    int32_t outBlock = idx.back();
+    int32_t outBlock = idx[1].second;
     if (outBlock != inBlock) {
       return false;
     }
@@ -409,9 +415,10 @@ bool emitTransferBetweenRegistersAndShared(
   SmallVector<Value> ret;
   for (int i = 0; i < numElems / vecElems; i++) {
     auto regId = i32_val(i * vecElems);
-    auto vecAddr = getSmemVecAddr(
+    auto vecAddr = getSmemVecAddrNEW(
         regLayout, regToSharedLayout, invertAllocSharedLayout, smemObj,
         sharedTy, elemLlvmTy, regId, laneId, warpId, blockId, loc, rewriter);
+    vecAddr.dump();
     perVectorCallback(vecTy, vecAddr);
   }
   return true;

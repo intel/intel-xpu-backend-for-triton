@@ -133,8 +133,10 @@ class XPUBackend(BaseBackend):
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
         # breakpoint()
-        self.device_arch = mod.parse_device_arch(target.arch.get('architecture', 0))
-        self.properties = self.parse_target(target.arch)
+        # self.device_arch = mod.parse_device_arch(target.arch.get('architecture', 0))
+        # self.properties = self.parse_target(target.arch)
+        self.device_arch = "dg2"
+        self.properties = {'name': 'Intel(R) Arc(TM) A770 Graphics', 'platform_name': 'Intel(R) oneAPI Unified Runtime over Level-Zero', 'vendor': 'Intel(R) Corporation', 'version': '12.55.8', 'gpu_eu_count': 512, 'gpu_subslice_count': 32, 'max_work_group_size': 1024, 'max_num_sub_groups': 128, 'sub_group_sizes': [8, 16, 32], 'has_fp64': False, 'has_subgroup_matrix_multiply_accumulate': True, 'has_subgroup_matrix_multiply_accumulate_tensor_float32': False, 'has_subgroup_2d_block_io': False, 'has_bfloat16_conversions': True}
         print("DEVICE PROPS:")
         print(self.device_arch)
         print(self.properties)
