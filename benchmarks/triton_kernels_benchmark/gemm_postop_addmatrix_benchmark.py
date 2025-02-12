@@ -229,35 +229,66 @@ def matmul(a, b, d, c):
     return c
 
 
+X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i, dtype]
+          for i in [1, 2, 4, 8]
+          for dtype in dtypes()] + [[*shape, dtype] for shape in [  #
+              [1, 1, 5120, 13824],  #
+              [1, 4, 4096, 12288],  #
+              [1, 512, 8192, 8192],  #
+              [1, 512, 8192, 32768],  #
+              [1, 512, 32768, 8192],  #
+              [1, 1024, 16384, 8192],  #
+              [1, 1024, 28672, 8192],  #
+              [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
+              [1, 4096, 16384, 8192],  #
+              [1, 8192, 16384, 1024],  #
+              [1, 8192, 16384, 4096],  #
+              [1, 16384, 1024, 8192],  #
+              [1, 16384, 4096, 8192],  #
+              [1, 16384, 8192, 1024],  #
+              [1, 16384, 8192, 4096],  #
+              [4, 32768, 128, 4096],  #
+              [4, 32768, 4096, 128],  #
+              [32, 4096, 4096, 128],  #
+              [4096, 8, 128, 16384],  #
+              [4096, 8, 16384, 128]
+          ] for dtype in dtypes()]
+
+DEVICE_NAME = torch.xpu.get_device_name()
+DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+
+# keep in sync with `def dtypes`
+DTYPES_SIZE = {
+    torch.bfloat16: 2,
+    torch.int8: 1,
+}
+
+
+def is_enough_memory(x_val):
+    # x_val: (B, M, K, N, dtype)
+    B, M, K, N, dtype = x_val
+    # a: (B, M, K, dtype)
+    # b: (B, K, N, dtype)
+    # d: (B, M, N) float32 or int32
+    # c: (B, M, N) float32 or int32
+    size = DTYPES_SIZE[dtype]
+    required_memory = B * M * K * size + B * K * N * size + 2 * B * M * N * 4
+    enough_memory = required_memory < DEVICE_TOTAL_MEMORY
+    if not enough_memory:
+        print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
+    return enough_memory
+
+
+X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
+
+
 # Benchmark Performance
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N', 'dtype'],
         # different possible values for `x_name`
-        x_vals=[[1, 1024 * i, 1024 * i, 1024 * i, dtype] for i in [1, 2, 4, 8] for dtype in dtypes()] +  #
-        [[*shape, dtype] for shape in [  #
-            [1, 1, 5120, 13824],  #
-            [1, 4, 4096, 12288],  #
-            [1, 512, 8192, 8192],  #
-            [1, 512, 8192, 32768],  #
-            [1, 512, 32768, 8192],  #
-            [1, 1024, 16384, 8192],  #
-            [1, 1024, 28672, 8192],  #
-            [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
-            [1, 4096, 16384, 8192],  #
-            [1, 8192, 16384, 1024],  #
-            [1, 8192, 16384, 4096],  #
-            [1, 16384, 1024, 8192],  #
-            [1, 16384, 4096, 8192],  #
-            [1, 16384, 8192, 1024],  #
-            [1, 16384, 8192, 4096],  #
-            [4, 32768, 128, 4096],  #
-            [4, 32768, 4096, 128],  #
-            [32, 4096, 4096, 128],  #
-            [4096, 8, 128, 16384],  #
-            [4096, 8, 16384, 128]  #
-        ] for dtype in dtypes()],
+        x_vals=X_VALS,
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
