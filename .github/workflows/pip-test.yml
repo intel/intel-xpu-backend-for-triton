@@ -18,7 +18,7 @@ on:
   # run workflow after building nightly wheels
   workflow_run:
     workflows:
-      - nightly-wheels.yml
+      - Triton wheels
     types:
       - completed
 
