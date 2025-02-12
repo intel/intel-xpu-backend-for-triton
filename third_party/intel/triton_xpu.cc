@@ -65,8 +65,8 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_raise_block_pointer",
-                     intel::createTritonRaiseBlockPointer);
+  ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
+                         intel::createTritonRaiseBlockPointer, bool);
   ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
                          intel::createConvertTritonToTritonGPUWarp, unsigned);
 }

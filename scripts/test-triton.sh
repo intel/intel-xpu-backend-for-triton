@@ -244,8 +244,6 @@ run_tutorial_tests() {
   run_tutorial_test "01-vector-add"
   run_tutorial_test "02-fused-softmax"
   run_tutorial_test "03-matrix-multiplication"
-  TRITON_INTEL_RAISE_BLOCK_POINTER=true \
-    run_tutorial_test "03-matrix-multiplication" "TRITON_INTEL_RAISE_BLOCK_POINTER"
   run_tutorial_test "04-low-memory-dropout"
   run_tutorial_test "05-layer-norm"
   run_tutorial_test "06-fused-attention"
@@ -253,6 +251,13 @@ run_tutorial_tests() {
   run_tutorial_test "08-grouped-gemm"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
+
+  echo "\n***************************************************"
+  echo "Running with TRITON_INTEL_RAISE_BLOCK_POINTER=ignore-masks"
+  echo "***************************************************"
+
+  TRITON_TEST_REPORTS=false TRITON_INTEL_RAISE_BLOCK_POINTER=ignore-masks \
+    run_tutorial_test "03-matrix-multiplication"
 }
 
 run_microbench_tests() {

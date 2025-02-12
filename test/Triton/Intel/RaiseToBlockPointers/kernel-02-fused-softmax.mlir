@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer=ignore-masks=true -canonicalize | FileCheck %s
 
 module {
   tt.func public @softmax_kernel_012345(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32) {
@@ -12,9 +12,7 @@ module {
     %6 = tt.splat %arg4 : i32 -> tensor<128xi32>
     %7 = arith.cmpi slt, %3, %6 : tensor<128xi32>
     %8 = tt.splat %cst : f32 -> tensor<128xf32>
-    // TODO: add back once masked loads are supported
-    // %9 = tt.load %5, %7, %8 : tensor<128x!tt.ptr<f32>>
-    %9 = tt.load %5 : tensor<128x!tt.ptr<f32>>
+    %9 = tt.load %5, %7, %8 : tensor<128x!tt.ptr<f32>>
     %10 = "tt.reduce"(%9) ({
     ^bb0(%arg5: f32, %arg6: f32):
       %21 = arith.cmpf ogt, %arg5, %arg6 : f32
@@ -35,9 +33,7 @@ module {
     %18 = tt.addptr %arg0, %17 : !tt.ptr<f32>, i32
     %19 = tt.splat %18 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
     %20 = tt.addptr %19, %3 : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
-    // TODO: add back once masked stores are supported
-    // tt.store %20, %16, %7 : tensor<128x!tt.ptr<f32>>
-    tt.store %20, %16 : tensor<128x!tt.ptr<f32>>
+    tt.store %20, %16, %7 : tensor<128x!tt.ptr<f32>>
     tt.return
   }
 }
