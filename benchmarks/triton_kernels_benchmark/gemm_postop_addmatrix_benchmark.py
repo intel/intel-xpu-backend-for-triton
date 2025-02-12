@@ -271,8 +271,9 @@ def is_enough_memory(x_val):
     # b: (B, K, N, dtype)
     # d: (B, M, N) float32 or int32
     # c: (B, M, N) float32 or int32
+    # pytorch reference: (B, M, N) float32 or int32
     size = DTYPES_SIZE[dtype]
-    required_memory = B * M * K * size + B * K * N * size + 2 * B * M * N * 4
+    required_memory = B * M * K * size + B * K * N * size + 3 * B * M * N * 4
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
@@ -327,7 +328,12 @@ def benchmark(B, M, N, K, dtype, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=res_dtype)
         triton_fn = lambda: matmul(a, b, d, c)
-        torch_fn = lambda: torch.matmul(a, b) + d
+        if not dtype.is_floating_point:
+            # Torch does not support integer calculation in matmul
+            torch_fn = lambda: torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu', dtype=res_dtype)
+                                            ).to(device='xpu', dtype=res_dtype) + d
+        else:
+            torch_fn = lambda: torch.matmul(a, b) + d
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:

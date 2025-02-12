@@ -256,7 +256,8 @@ def is_enough_memory(x_val):
     # a: (B, M, K) bfloat16
     # b: (B, N, K) bfloat16
     # c: (B, M, N) float32
-    required_memory = B * M * K * 2 + B * N * K * 2 + B * M * N * 4
+    # pytorch reference: (B, M, N) float32
+    required_memory = B * M * K * 2 + B * N * K * 2 + 2 * B * M * N * 4
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
