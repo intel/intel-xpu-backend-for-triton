@@ -11,6 +11,39 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUCOALESCEASYNCCOPY
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+
+LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                                  Attribute srcEnc, Attribute dstEnc,
+                                  int elemBitWidth) {
+  StringAttr kBlock = StringAttr::get(ctx, ("block"));
+  int rank = shape.size();
+
+  LinearLayout regLayout = triton::gpu::toLinearLayout(shape, srcEnc);
+  LinearLayout sharedLayout =
+      triton::gpu::toLinearLayout(shape, dstEnc, elemBitWidth);
+  auto sharedOrder = triton::gpu::getOrder(dstEnc);
+
+  // sharedLayout's in-dims are currently (offset, block).  Reshape to
+  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
+  // shmem strides.  (The offsetX's appear in minor-to-major order.)
+  auto sharedLegacy = cast<triton::gpu::SharedEncodingAttr>(dstEnc);
+  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
+  for (int i = 0; i < rank; i++) {
+    int dim = sharedOrder[i];
+    int64_t size = std::max(
+        int64_t{1},
+        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
+    multiDimSharedSize.push_back(
+        {StringAttr::get(ctx, ("offset" + std::to_string(dim))), size});
+  }
+  multiDimSharedSize.push_back({kBlock, sharedLayout.getInDimSize(kBlock)});
+  sharedLayout = sharedLayout.reshapeIns(multiDimSharedSize);
+
+  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
+  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
+  return regLayout.invertAndCompose(sharedLayout);
+}
+
 // This pass currently only applies if the following are all true...
 //   1) Operand A for WGMMA is to be loaded in registers
 //   2) We upcast operand A in registers before the WGMMA
@@ -53,12 +86,16 @@ struct ClipAsyncCopySizePerThread
     // smaller when lowering, depending on contiguity and mask alignment
     // (see AsyncCopyGlobalToLocalOpConversion)
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
-    LinearLayout regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc, elemBitWidth);
-    auto copyContigSize =
-        regLayout.invertAndCompose(sharedLayout).getNumConsecutiveInOut();
+    auto regToSharedLayout =
+        getRegToSharedLayout(rewriter.getContext(), srcTy.getShape(), blockedEnc,
+                             sharedEnc, elemBitWidth);
+    auto copyContigSize = regToSharedLayout.getNumConsecutiveInOut();
+    // LinearLayout regLayout =
+    //     triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
+    // LinearLayout sharedLayout =
+    //     triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc, elemBitWidth);
+    // auto copyContigSize =
+    //     regLayout.invertAndCompose(sharedLayout).getNumConsecutiveInOut();
 
     // obtain block sizePerThread along contig dim
     auto sizePerThread = blockedEnc.getSizePerThread();
