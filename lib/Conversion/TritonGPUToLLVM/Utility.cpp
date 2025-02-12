@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include <iostream>
 
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
@@ -299,6 +300,29 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
 
 } // namespace
 
+void printLinearThing(LinearLayout layout, std::string name) {
+  auto bs = layout._getBases();
+  std::cout << " ============ PRINTING " << name << " \n";
+  std::cout << "printing bases...\n";
+  for (auto &pr : bs) {
+    std::cout << pr.first.data() << " : [";
+    for (auto &v : pr.second) {
+        std::cout << "[";
+        for (auto elem : v) {
+            std::cout << elem << ", ";
+        }
+        std::cout << "], ";
+    }
+    std::cout << "]" << std::endl;
+  }
+
+  auto dm = layout._getOutTims();
+  std::cout << "printing outDims...\n";
+  for (auto &pr : dm) {
+    std::cout << pr.first.data() << " : " << pr.second << std::endl;
+  }
+}
+
 bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
     Type elemLlvmTy, std::optional<int32_t> maxVecElems,
@@ -317,10 +341,13 @@ bool emitTransferBetweenRegistersAndShared(
       triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
-  // LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-  LinearLayout regToSharedLayout = getRegToSharedLayout(
+  LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  LinearLayout _regToSharedLayout = getRegToSharedLayout(
       ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
       elemLlvmTy.getIntOrFloatBitWidth());
+  printLinearThing(regToSharedLayout, "newLayout");
+  printLinearThing(regToSharedLayout, "oldLayout");
+
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.

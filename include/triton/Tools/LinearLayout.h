@@ -329,6 +329,14 @@ private:
 public:
   using BasesT = decltype(bases);
 
+ llvm::MapVector<StringAttr /*inDim*/,
+                  std::vector<std::vector<int32_t> /*size=getNumOutDims()*/>
+                  /*size=getInDimSizeLog2(inDim)*/> _getBases() { return bases; }
+
+  llvm::MapVector<StringAttr, int32_t /*size*/> _getOutTims() {
+    return outDims;
+  }
+
   // The 0-dimensional layout that maps everything to 0.  This is useful as a
   // starting point when doing something like
   //
