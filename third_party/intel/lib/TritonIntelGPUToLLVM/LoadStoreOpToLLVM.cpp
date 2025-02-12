@@ -890,9 +890,9 @@ struct LoadOpConversion
                                                kIteration, dimInnerStr);
       } else {
         tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration,
-                                               dimOuterStr);
+                                               dimInnerStr);
         tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
-                                               kIteration, dimInnerStr);
+                                               kIteration, dimOuterStr);
       }
     } else {
       if (isOperandA)
@@ -1265,10 +1265,10 @@ struct LoadOpConversion
             const size_t vBlock = i % vBlocks; 
             llvm::errs() << "vBlock: " << vBlock << "\n";
 
-            auto tensorCoord = tileLayout.apply({{kLoad, loadIdx}, {kOffset, 0},  {kIteration, i}});
+            auto tensorCoord = tileLayout.apply({{kLoad, 0}, {kOffset, 0},  {kIteration, i}});
             assert(tensorCoord.size() == 2);
             llvm::errs() << "tensorCoord: " << tensorCoord[0].second << ", " << tensorCoord[1].second << "\n";
-            auto tensorRowCoord = tensorCoord[0].second / elemsPerDPASInst[0] + (outer * numRepOuter);
+            auto tensorRowCoord = tensorCoord[0].second / elemsPerDPASInst[0];
             llvm::errs() << "row: " << tensorRowCoord << " = " << tensorCoord[0].second << " / " << elemsPerDPASInst[0] << "\n";
             auto tensorColCoord = tensorCoord[1].second / elemsPerDPASInst[1];
             llvm::errs() << "col: "  << tensorColCoord << " = " << tensorCoord[1].second << " / " << elemsPerDPASInst[1] << "\n";
@@ -1276,17 +1276,24 @@ struct LoadOpConversion
            // tensor coords give us the itr index within the load 
            // for x, just take the coordinate
            // for y, we will take the y coordinate and multiply by packedElemsPerDpas * packedRowNum
-
+           const auto rowOffset = tensorRowCoord * packedElemsPerLanePerDPASInst;
+           const auto colOffset = tensorColCoord * packedElemsPerLanePerDPASInst * packedRowNum;
+           llvm::errs() << "rowOffset: " << rowOffset << "\n";
+           llvm::errs() << "colOffset: " << colOffset << "\n";
+           
             SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
             for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                   ++elemIdx) {
-            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1]}, {kIteration, i}, {kLoad, loadIdx}});
+            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1]}, {kIteration, i}, {kLoad, 0}});
             assert(blockLayoutOffset.size() == 2);
             llvm::errs() << "block load offset: " << blockLayoutOffset[0].second << ", " << blockLayoutOffset[1].second << "\n";
             // the indices are shuffle value indices within the entire load. in the naiive case these should just be one after the other 
 
-            // working for A 
-            indices[elemIdx] = blockLayoutOffset[0].second + (blockLayoutOffset[1].second /elemsPerDPASInst[1]) * packedElemsPerLanePerDPASInst * packedRowNum;
+            // working for A but not for B 
+            // what do we know about B from the layout that tells us we should generate shuffle vectors side by side. or is it just a B matrix thing? 
+            // TODO: try diving the x value by the dpas size so it's just an index in the load. then convert the start coordinate into a grid coordinate by multiplying. but we still need to know the direction, b/c the A shuffles work differnetly. 
+            // or, it is possible my representation is wrong and the B representation should match the A ordering - need to research vblocks. also vblocks are not multiples of dpas but multiples of the tile height. does that help us?? 
+            indices[elemIdx] = rowOffset + colOffset + (blockLayoutOffset[0].second % packedElemsPerLanePerDPASInst); // - rowOffset + blockLayoutOffset[1].second - colOffset;
 
             LLVM_DEBUG({
                 llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
