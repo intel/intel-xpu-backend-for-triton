@@ -4,13 +4,26 @@ A utility program for running Triton-generated SPIR-V kernels with identical inp
 
 ## Building
 
-`SPIRVRunner` depends on Torch. If you build Triton with virtualenvs, you can easily find your torch library path by running
+`SPIRVRunner` depends on Torch.
+
+If you build Triton with venv, you can easily find your torch library path by running the following command in the top level Triton directory:
+
 ```
 find .venv -name TorchConfig.cmake
 ```
-in the top level Triton directory.
 
-`SPIRVRunner` depends on LLVM support libarary for argument parsing in order to use this run following in the top level Triton directory.
+Alternatively, you can find `TorchConfig.cmake` with the following Python script:
+
+```python
+import importlib.metadata
+
+for f in importlib.metadata.files('torch'):
+  if f.name == 'TorchConfig.cmake':
+    print(f.locate().resolve())
+```
+
+`SPIRVRunner` depends on LLVM support library for argument parsing in order to use this run following in the top level Triton directory.
+
 ```
 scripts/compile-triton.sh --llvm
 ```
@@ -20,7 +33,7 @@ SPIR-V Runner build steps:
 ```
 mkdir build
 cd build
-CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/FromAbove/ LLVM_DIR=/abs/path/to/packages/llvm cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/directory LLVM_DIR=/abs/path/to/packages/llvm cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
 make -j
 ```
 
@@ -29,7 +42,7 @@ make -j
 ### Generate Data
 
 In order to utilize this utility, Triton application must be run with following environment variables enabled
-Provide the path to the directory where the serialized JSON, tensors and SPRI-V binary stored. It is recommended to clear triton cache.
+Provide the path to the directory where the serialized JSON, tensors and SPIR-V binary stored. It is recommended to clear triton cache.
 
 ```
 export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS=< Absolute path to SPV Dumps >
