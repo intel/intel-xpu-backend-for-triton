@@ -327,12 +327,7 @@ def benchmark(B, M, N, K, dtype, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=res_dtype)
         triton_fn = lambda: matmul(a, b, d, c)
-        # Torch does not support integer calculation in matmul
-        torch_device = 'xpu' if dtype.is_floating_point else 'cpu'
-        torch_dtype = dtype if dtype.is_floating_point else res_dtype
-        torch_fn = lambda: torch.matmul(a.to(device=torch_device, dtype=torch_dtype),
-                                        b.to(device=torch_device, dtype=torch_dtype)).to(device='xpu', dtype=res_dtype
-                                                                                         ) + d
+        torch_fn = lambda: torch.matmul(a, b) + d
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
