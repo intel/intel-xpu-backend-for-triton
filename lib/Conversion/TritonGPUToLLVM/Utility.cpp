@@ -346,7 +346,7 @@ bool emitTransferBetweenRegistersAndShared(
       ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
       elemLlvmTy.getIntOrFloatBitWidth());
   printLinearThing(regToSharedLayout, "newLayout");
-  printLinearThing(regToSharedLayout, "oldLayout");
+  printLinearThing(_regToSharedLayout, "oldLayout");
 
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
