@@ -317,21 +317,32 @@ bool emitTransferBetweenRegistersAndShared(
       triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
-  LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  // LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  LinearLayout regToSharedLayout = getRegToSharedLayout(
+      ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
+      elemLlvmTy.getIntOrFloatBitWidth());
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
   for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
        inBlock *= 2) {
-    auto idx = regToSharedLayout.apply(
-        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}});
-    // Intra-block offset must be 0
-    int32_t offset = idx[0].second;
-    if (offset != 0) {
-      return false;
+    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
+        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}})));
+    // offsetX1, ..., offsetXN must all be 0.
+    if (!llvm::all_of(ArrayRef(idx).drop_back(1),
+                      [&](auto offset) { return offset == 0; })) {
+        return false;
     }
+    
+    // auto idx = regToSharedLayout.apply(
+    //     {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}});
+    // // Intra-block offset must be 0
+    // int32_t offset = idx[0].second;
+    // if (offset != 0) {
+    //   return false;
+    // }
     // Check if there's any cross CTA load.
-    int32_t outBlock = idx[1].second;
+    int32_t outBlock = idx.back();
     if (outBlock != inBlock) {
       return false;
     }
