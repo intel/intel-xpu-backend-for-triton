@@ -1494,8 +1494,8 @@ AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
                             llvm::ArrayRef<unsigned int> warpsPerCTA,
                             unsigned mDim, unsigned nDim, bool isTransposed,
                             mlir::triton::gpu::CTALayoutAttr) {
-  if (!(versionMajor >= 0 && versionMajor <= 3)) {
-    return emitError() << "major version must be in the [0, 3] range";
+  if (!(versionMajor >= 0 && versionMajor <= 4)) {
+    return emitError() << "major version must be in the [0, 4] range";
   }
   if (versionMinor != 0) {
     return emitError() << "minor version must be 0";
@@ -2249,10 +2249,11 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   assert(parentLayout && "DotOperandEncodingAttr must have a parent");
   if (auto parentMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(parentLayout)) {
     return parentMmaLayout.getSizePerThreadForOperand(getKWidth(), getOpIdx());
+  } else if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(parentLayout)) {
+    return blocked.getSizePerThread();
   } else {
     llvm::report_fatal_error(
-        "DotOperandEncodingAttr non-NvidiaMmaEncodingAttr parent not "
-        "supported yet");
+        "getSizePerThread not implemented for DotOperandEncodingAttr");
     return {};
   }
 }
