@@ -56,10 +56,6 @@ pytest() {
 run_tutorial_test() {
     echo
     echo "****** Running $1 test ******"
-    if [[ $TRITON_INTEL_RAISE_BLOCK_POINTER = true ]]; then
-      echo "****** With: INTEL_RAISE_BLOCK_POINTER ******"
-      TRITON_TEST_REPORTS=false
-    fi
     echo
 
     TUTORIAL_RESULT=TODO

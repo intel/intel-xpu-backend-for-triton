@@ -872,25 +872,8 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
   bases[S("register")] = newRegBases;
 
-  LinearLayout ret =
-      LinearLayout(std::move(bases), llvm::to_vector(sliceLL.getOutDimNames()));
-
-  // The triton generate the homogeneous kernel run on every thread.
-  // The multiple threads of the parent layout which are distributed on the
-  // sliced dim are squeezed to hold the same value of tensor redundantly. The
-  // multiple values of sizePerThreads[dim] of the parent are reduced to the
-  // only one. We need to fix up the number of registers in case we just removed
-  // all zeros aggressively.
-  auto sizePerThreads = triton::gpu::getSizePerThread(getParent());
-  unsigned expectedNumRegisters =
-      parentLL.getInDimSize(S("register")) / sizePerThreads[getDim()];
-  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
-    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
-    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
-    // output dimension would work.
-    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
-  }
-  return ret;
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
