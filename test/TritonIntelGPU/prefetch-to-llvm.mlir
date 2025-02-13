@@ -36,7 +36,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[VAL_57:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[VAL_59:.*]] = llvm.insertelement %[[COLUMN_MAJOR_WARP_OFF_X]],  {{.*}}{{\[}}%[[VAL_57]] : i32] : vector<2xi32>
     // CHECK: %[[ROW_MAJOR_COORD:.*]] = llvm.insertelement %[[COLUMN_MAJOR_WARP_OFF_Y]],  {{.*}}{{\[}}%[[VAL_56]] : i32] : vector<2xi32>
-    // CHECK: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x2cPU3AS1viiiDv2_i(%[[ROW_MAJOR_BASE]], %[[ROW_MAJOR_WIDTH]], %[[ROW_MAJOR_HEIGHT]], %[[ROW_MAJOR_STRIDE]], %[[ROW_MAJOR_COORD]]) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> ()
+    // CHECK: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x2cPU3AS1viiiDv2_i(%[[ROW_MAJOR_BASE]], %[[ROW_MAJOR_WIDTH]], %[[ROW_MAJOR_HEIGHT]], %[[ROW_MAJOR_STRIDE]], %[[ROW_MAJOR_COORD]]) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
     %rowMajorPtr = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x16xf16>>
     triton_intel_gpu.prefetch %rowMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<32x16xf16>>
 
@@ -62,7 +62,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[VAL_109:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: llvm.insertelement %[[COLUMN_MAJOR_WARP_OFF_X]], {{.*}}{{\[}}%[[VAL_109]] : i32] : vector<2xi32>
     // CHECK: %[[COLUMN_MAJOR_COORD:.*]] = llvm.insertelement %[[COLUMN_MAJOR_WARP_OFF_Y]], {{.*}}{{\[}}%[[VAL_108]] : i32] : vector<2xi32>
-    // CHECK: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x2cPU3AS1viiiDv2_i(%[[COLUMN_MAJOR_BASE]], %[[COLUMN_MAJOR_HEIGHT]], %[[COLUMN_MAJOR_WIDTH_]], %[[COLUMN_MAJOR_STRIDE]], %[[COLUMN_MAJOR_COORD]]) {{.*}} : (!llvm.ptr<1>, i32, i32, i32, vector<2xi32>) -> ()
+    // CHECK: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x2cPU3AS1viiiDv2_i(%[[COLUMN_MAJOR_BASE]], %[[COLUMN_MAJOR_HEIGHT]], %[[COLUMN_MAJOR_WIDTH_]], %[[COLUMN_MAJOR_STRIDE]], %[[COLUMN_MAJOR_COORD]]) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
     %columnMajorPtr = tt.make_tensor_ptr %arg1, [%arg4, %arg3], [%c1_i64, %arg6], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<16x32xf16>>
     triton_intel_gpu.prefetch %columnMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<16x32xf16>>
 
