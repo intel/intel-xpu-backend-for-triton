@@ -1285,26 +1285,33 @@ struct LoadOpConversion
         }
 
 #else
+          // kind of a hack for vnni transform 
+          const auto loadRowOffset = (isTransposeRequired && !isOperandA) ? 1 : packedElemsPerLanePerDPASInst;
 
           llvm::errs() << "num vblocks: " << vBlocks << "\n";
           // these iterations are dpas iterations. 
           for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
             llvm::errs() << "Emitting shuffle vector for iteration " << i << "\n";
-            const size_t vBlock = i % vBlocks; 
-            llvm::errs() << "vBlock: " << vBlock << "\n";
 
             auto tensorCoord = tileLayout.apply({{kLoad, 0}, {kOffset, 0},  {kIteration, i}});
             assert(tensorCoord.size() == 2);
             llvm::errs() << "tensorCoord: " << tensorCoord[0].second << ", " << tensorCoord[1].second << "\n";
-            auto tensorRowCoord = tensorCoord[0].second / elemsPerDPASInst[0];
-            llvm::errs() << "row: " << tensorRowCoord << " = " << tensorCoord[0].second << " / " << elemsPerDPASInst[0] << "\n";
+            auto tensorRowCoord = (tensorCoord[0].second * packedElementsPerSlot) / elemsPerDPASInst[0];
             auto tensorColCoord = tensorCoord[1].second / elemsPerDPASInst[1];
+
+#if 0
+            if (packedElementsPerSlot > 1) {
+              std::swap(tensorRowCoord, tensorColCoord); // TODO: hack 
+            }
+#endif
+            llvm::errs() << "row: " << tensorRowCoord << " = " << tensorCoord[0].second << " / " << elemsPerDPASInst[0] << "\n";
             llvm::errs() << "col: "  << tensorColCoord << " = " << tensorCoord[1].second << " / " << elemsPerDPASInst[1] << "\n";
            
            // tensor coords give us the itr index within the load 
            // for x, just take the coordinate
            // for y, we will take the y coordinate and multiply by packedElemsPerDpas * packedRowNum
-           const auto rowOffset = tensorRowCoord * packedElemsPerLanePerDPASInst;
+           // TODO: instead of multipling by packedElemsPerLanePerDPAS always, should we multiply this by the row stride in the load? or maybe we leverage the vblocks knowledge somehow. if we do not have blks then don't multiply? or multiply by vblockidx * packedElems? 
+           const auto rowOffset = tensorRowCoord * loadRowOffset;
            const auto colOffset = tensorColCoord * packedElemsPerLanePerDPASInst * packedRowNum;
            llvm::errs() << "rowOffset: " << rowOffset << "\n";
            llvm::errs() << "colOffset: " << colOffset << "\n";
@@ -1312,16 +1319,17 @@ struct LoadOpConversion
             SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
             for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                   ++elemIdx) {
-            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1] }, {kIteration, i}, {kLoad, 0}});
+            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1] * packedElementsPerSlot }, {kIteration, i}, {kLoad, 0}});
             assert(blockLayoutOffset.size() == 2);
-            llvm::errs() << "block load offset: " << blockLayoutOffset[0].second << ", " << blockLayoutOffset[1].second << "\n";
+            llvm::errs() << "\tblock load offset: " << blockLayoutOffset[0].second << ", " << blockLayoutOffset[1].second << "\n";
             // the indices are shuffle value indices within the entire load. in the naiive case these should just be one after the other 
 
             // working for A but not for B 
             // what do we know about B from the layout that tells us we should generate shuffle vectors side by side. or is it just a B matrix thing? 
             // TODO: try diving the x value by the dpas size so it's just an index in the load. then convert the start coordinate into a grid coordinate by multiplying. but we still need to know the direction, b/c the A shuffles work differnetly. 
             // or, it is possible my representation is wrong and the B representation should match the A ordering - need to research vblocks. also vblocks are not multiples of dpas but multiples of the tile height. does that help us?? 
-            indices[elemIdx] = (rowOffset + colOffset + (blockLayoutOffset[0].second % packedElemsPerLanePerDPASInst)) * packedElementsPerSlot;
+            llvm::errs() << "\tblockLayoutOffset[0].second mod packedElemsPerLanePerDPASInst: " << blockLayoutOffset[0].second % packedElemsPerLanePerDPASInst << "\n";
+            indices[elemIdx] = rowOffset + colOffset + ((blockLayoutOffset[0].second % packedElemsPerLanePerDPASInst)) * packedElementsPerSlot;
 
             LLVM_DEBUG({
                 llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
