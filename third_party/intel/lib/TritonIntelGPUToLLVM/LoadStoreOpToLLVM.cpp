@@ -737,6 +737,7 @@ struct LoadOpConversion
     }
 
     LLVM_DEBUG(llvm::dbgs() << "opsPerChannel: " << opsPerChannel << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "elemsPerLanePerDPASInst: " << elemsPerLanePerDPASInst << "\n");
     LLVM_DEBUG(llvm::dbgs() << "packedElemsPerLanePerDPASInst: " << packedElemsPerLanePerDPASInst << "\n");
 
     Type packedDPASOperandType = LLVM::getFixedVectorType(
@@ -801,13 +802,15 @@ struct LoadOpConversion
           auto totalOffsets = 1;
           assert(tileShape.size() == 2); // TODO: dot 3d support?
 
+#if 1
           if (isTransposeRequired &&
               opIdx == DpasEncodingAttr::OpIdx::OperandB) {
             // Adjust the layout to handle the VNNI values
-            layout *= LinearLayout::identity1D(2, kOffset, outDimNames[0]);
+            layout *= LinearLayout::zeros1D(2, kOffset, outDimNames[0]);
             totalOffsets *= 2;
             kOffsetDims.push_back(kOffset);
           }
+#endif 
 
           for (int i = 0; i < tileShape.size(); i++) {
             int dim = threadOrder[i];
@@ -1022,6 +1025,24 @@ struct LoadOpConversion
                          << "\n";
           }
           {
+            size_t offset = 1;
+            auto tensorVals = tileLayout.apply(
+                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
+            assert(tensorVals.size() == 2);
+            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
+                         << tensorVals[0].second << ", " << tensorVals[1].second
+                         << "\n";
+          }
+          {
+            size_t offset = tileLayout.getInDimSize(kOffset) - 2;
+            auto tensorVals = tileLayout.apply(
+                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
+            assert(tensorVals.size() == 2);
+            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
+                         << tensorVals[0].second << ", " << tensorVals[1].second
+                         << "\n";
+          }
+          {
             size_t offset = tileLayout.getInDimSize(kOffset) - 1;
             auto tensorVals = tileLayout.apply(
                 {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
@@ -1031,6 +1052,7 @@ struct LoadOpConversion
                          << "\n";
           }
         }
+        llvm::dbgs() << "\n";
       }
     });
 
@@ -1090,6 +1112,12 @@ struct LoadOpConversion
       llvm::dbgs() << "innerDimWarpNum: " << innerDimWarpNum << "\n";
     });
 
+    
+    // the transpose layout does not handle the vnni transform for us, we need to manually adjust the layout and indices to pack two elements per output buffer slot 
+    // TODO: can this also be computed as elemsPerLanePerDPASInst / packedElemsPerLanePerDPASInst?
+    unsigned packedElementsPerSlot = isTransposeRequired &&
+              opIdx == DpasEncodingAttr::OpIdx::OperandB ? 2 : 1;
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
@@ -1109,7 +1137,7 @@ struct LoadOpConversion
           assert(offset.size() == 2);
           // adjust the load offset to compensate for strides related to the
           // DPAS layout
-          const auto loadOffsetX = offset[0].second * outerDimWarpNum;
+          const auto loadOffsetX = offset[0].second * outerDimWarpNum * packedElementsPerSlot;
           const auto loadOffsetY = offset[1].second;
           LLVM_DEBUG({
             llvm::dbgs() << "x offset ll: " << loadOffsetX << "\n";
@@ -1284,7 +1312,7 @@ struct LoadOpConversion
             SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
             for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                   ++elemIdx) {
-            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1]}, {kIteration, i}, {kLoad, 0}});
+            auto blockLayoutOffset = tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1] }, {kIteration, i}, {kLoad, 0}});
             assert(blockLayoutOffset.size() == 2);
             llvm::errs() << "block load offset: " << blockLayoutOffset[0].second << ", " << blockLayoutOffset[1].second << "\n";
             // the indices are shuffle value indices within the entire load. in the naiive case these should just be one after the other 
@@ -1293,7 +1321,7 @@ struct LoadOpConversion
             // what do we know about B from the layout that tells us we should generate shuffle vectors side by side. or is it just a B matrix thing? 
             // TODO: try diving the x value by the dpas size so it's just an index in the load. then convert the start coordinate into a grid coordinate by multiplying. but we still need to know the direction, b/c the A shuffles work differnetly. 
             // or, it is possible my representation is wrong and the B representation should match the A ordering - need to research vblocks. also vblocks are not multiples of dpas but multiples of the tile height. does that help us?? 
-            indices[elemIdx] = rowOffset + colOffset + (blockLayoutOffset[0].second % packedElemsPerLanePerDPASInst); // - rowOffset + blockLayoutOffset[1].second - colOffset;
+            indices[elemIdx] = (rowOffset + colOffset + (blockLayoutOffset[0].second % packedElemsPerLanePerDPASInst)) * packedElementsPerSlot;
 
             LLVM_DEBUG({
                 llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
