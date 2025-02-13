@@ -1,6 +1,5 @@
 // RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
 
-// TODO: expand this example to 3D
 module {
   tt.func @kernel(
   %arg0 : !tt.ptr<bf16>,

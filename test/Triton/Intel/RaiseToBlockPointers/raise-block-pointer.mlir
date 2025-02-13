@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck --check-prefixes=CHECK,CHECK-DEFAULT %s
+// RUN: triton-opt %s -triton-raise-block-pointer=ignore-masks=true -canonicalize | FileCheck --check-prefixes=CHECK,CHECK-IGNORE-MASKS %s
 
 // COM: 1D PTR + LOAD
 // CHECK-LABEL:   tt.func @test_addptr_splat_make_range(
@@ -22,9 +23,12 @@ tt.func @test_addptr_splat_make_range(%arg0 : !tt.ptr<f32>) -> tensor<128xf32> {
 // CHECK-SAME:                                         %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                                         %[[VAL_1:.*]]: i32,
 // CHECK-SAME:                                         %[[VAL_2:.*]]: tensor<128xi1>) -> tensor<128xf32> {
-// CHECK:           %[[VAL_3:.*]] = tt.addptr
-// CHECK:           %[[VAL_4:.*]] = tt.load %[[VAL_3]], %[[VAL_2]] cacheModifier = ca evictionPolicy = evict_first {isVolatile = true} : tensor<128x!tt.ptr<f32>>
-// CHECK:           tt.return %[[VAL_4]] : tensor<128xf32>
+// CHECK-DEFAULT:      %[[VAL_3:.*]] = tt.addptr
+// CHECK-DEFAULT:      %[[VAL_4:.*]] = tt.load %[[VAL_3]], %[[VAL_2]] cacheModifier = ca evictionPolicy = evict_first {isVolatile = true} : tensor<128x!tt.ptr<f32>>
+// CHECK-IGNORE-MASKS: %[[CST_0_i64:.*]] = arith.constant 0 : i64
+// CHECK-IGNORE-MASKS: %[[VAL_3:.*]] = tt.make_tensor_ptr %[[VAL_0]], {{\[}}%[[CST_0_i64]]], {{\[}}%[[CST_0_i64]]], {{\[}}%[[VAL_1]]] {order = array<i32>} : <tensor<128xf32>>
+// CHECK-IGNORE-MASKS: %[[VAL_4:.*]] = tt.load %[[VAL_3]] cacheModifier = ca evictionPolicy = evict_first {isVolatile = true} : !tt.ptr<tensor<128xf32>>
+// CHECK:              tt.return %[[VAL_4]] : tensor<128xf32>
 tt.func @test_addptr_load_with_mask(%arg0 : !tt.ptr<f32>, %arg1: i32, %arg2: tensor<128xi1>) -> tensor<128xf32> {
   %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
   %1 = tt.splat %arg1 : i32 -> tensor<128xi32>
@@ -615,15 +619,15 @@ module {
 }
 
 // CHECK: tt.func @matmul_kernel
-// CHECK: tt.make_tensor_ptr %arg0
-// CHECK: tt.make_tensor_ptr %arg1
+// CHECK-IGNORE-MASKS: tt.make_tensor_ptr %arg0
+// CHECK-IGNORE-MASKS: tt.make_tensor_ptr %arg1
 // CHECK: scf.for
-// CHECK: [[LOAD1:%.*]] = tt.load [[ARG10:%.*]], {{.*}}, {{.*}} : !tt.ptr<tensor<64x32xf16>>
-// CHECK: [[LOAD2:%.*]] = tt.load [[ARG11:%.*]], {{.*}}, {{.*}} : !tt.ptr<tensor<32x128xf16>>
-// CHECK: [[DOT:%.*]] = tt.dot [[LOAD1]], [[LOAD2]]
-// CHECK: [[ADV1:%.*]] = tt.advance [[ARG10]], {{.*}} : <tensor<64x32xf16>>
-// CHECK: [[ADV2:%.*]] = tt.advance [[ARG11]], {{.*}} : <tensor<32x128xf16>>
-// CHECK: scf.yield [[DOT]], [[ADV1]], [[ADV2]]
+// CHECK-IGNORE-MASKS: [[LOAD1:%.*]] = tt.load [[ARG10:%.*]] : !tt.ptr<tensor<64x32xf16>>
+// CHECK-IGNORE-MASKS: [[LOAD2:%.*]] = tt.load [[ARG11:%.*]] : !tt.ptr<tensor<32x128xf16>>
+// CHECK-IGNORE-MASKS: [[DOT:%.*]] = tt.dot [[LOAD1]], [[LOAD2]]
+// CHECK-IGNORE-MASKS: [[ADV1:%.*]] = tt.advance [[ARG10]], {{.*}} : <tensor<64x32xf16>>
+// CHECK-IGNORE-MASKS: [[ADV2:%.*]] = tt.advance [[ARG11]], {{.*}} : <tensor<32x128xf16>>
+// CHECK-IGNORE-MASKS: scf.yield [[DOT]], [[ADV1]], [[ADV2]]
 module {
   tt.func @matmul_kernel(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16> , %arg2: !tt.ptr<f16>, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32) -> tensor<64x128xf16> {
     %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf32>

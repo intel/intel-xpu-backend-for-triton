@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer=ignore-masks=true -canonicalize | FileCheck %s
 
 module {
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) {
@@ -97,9 +97,7 @@ module {
     %64 = tt.broadcast %61 : tensor<64x1xi1> -> tensor<64x128xi1>
     %65 = tt.broadcast %63 : tensor<1x128xi1> -> tensor<64x128xi1>
     %66 = arith.andi %64, %65 : tensor<64x128xi1>
-    // TODO: add back once masked stores are supported
-    // tt.store %59, %50, %66 : tensor<64x128x!tt.ptr<f16>>
-    tt.store %59, %50 : tensor<64x128x!tt.ptr<f16>>
+    tt.store %59, %50, %66 : tensor<64x128x!tt.ptr<f16>>
     tt.return
   }
 }
@@ -119,8 +117,8 @@ module {
 // CHECK:           [[VAR_24_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_23_]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[VAR_15_]]] {{.*}} : <tensor<32x128xf16>>
 // CHECK:           [[VAR_27_:%.+]] = arith.muli [[PARAM_7_]], [[CST_32_i32]] : i32
 // CHECK:           [[VAR_28_:%.+]]:3 = scf.for {{.*}} iter_args([[VAR_arg10_:%.+]] = [[VAR_cst_]], [[VAR_arg11_:%.+]] = [[VAR_21_]], [[VAR_arg12_:%.+]] = [[VAR_24_]]) -> (tensor<64x128xf32>, !tt.ptr<tensor<64x32xf16>>, !tt.ptr<tensor<32x128xf16>>)  : i32 {
-// CHECK:             [[VAR_39_:%.+]] = tt.load [[VAR_arg11_]], {{.*}}, {{.*}} : !tt.ptr<tensor<64x32xf16>>
-// CHECK:             [[VAR_43_:%.+]] = tt.load [[VAR_arg12_]], {{.*}}, {{.*}} : !tt.ptr<tensor<32x128xf16>>
+// CHECK-DAG:         [[VAR_39_:%.+]] = tt.load [[VAR_arg11_]] : !tt.ptr<tensor<64x32xf16>>
+// CHECK-DAG:         [[VAR_43_:%.+]] = tt.load [[VAR_arg12_]] : !tt.ptr<tensor<32x128xf16>>
 // CHECK:             [[VAR_44_:%.+]] = tt.dot [[VAR_39_]], [[VAR_43_]], [[VAR_arg10_]], inputPrecision = tf32 : tensor<64x32xf16> * tensor<32x128xf16> -> tensor<64x128xf32>
 // CHECK-DAG:         [[VAR_45_:%.+]] = tt.advance [[VAR_arg11_]], {{\[}}[[CST_0_i32]], [[CST_32_i32]]] : <tensor<64x32xf16>>
 // CHECK-DAG:         [[VAR_46_:%.+]] = tt.advance [[VAR_arg12_]], {{\[}}[[CST_0_i32]], [[VAR_27_]]] : <tensor<32x128xf16>>
