@@ -103,7 +103,7 @@ def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     subprocess.run(
         ["g++"] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
-        ["-L" + COMPILATION_HELPER.libsycl_dir, "-c", "-lsycl", "-fPIC"],
+        ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl", "-fPIC"],
         check=True,
         cwd=dir,
     )
@@ -111,7 +111,8 @@ def gen_kernel_library_xpu(dir, libname):
 
     subprocess.run(["g++"] + [*o_files, "-shared", "-o", libname] +
                    ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
-                   ["-L" + COMPILATION_HELPER.libsycl_dir, "-lsycl", "-lze_loader"], check=True, cwd=dir)
+                   ["-L" + dir
+                    for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl", "-lze_loader"], check=True, cwd=dir)
 
 
 def gen_kernel_library(dir, libname):
