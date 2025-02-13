@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer=ignore-masks=true -canonicalize | FileCheck %s
 
 // IR from python/examples/sign_extend.py
 module {
@@ -15,9 +15,7 @@ module {
     %8 = arith.cmpi slt, %5, %7 : tensor<4xi64>
     %9 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
     %10 = tt.addptr %9, %5 : tensor<4x!tt.ptr<f32>>, tensor<4xi64>
-    %11 = tt.load %10 : tensor<4x!tt.ptr<f32>>
-    // TODO: uncomment once masked loads are supported
-    // %11 = tt.load %10, %8, %cst : tensor<4x!tt.ptr<f32>>
+    %11 = tt.load %10, %8, %cst : tensor<4x!tt.ptr<f32>>
     %12 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
     %13 = tt.addptr %12, %2 : tensor<4x!tt.ptr<f32>>, tensor<4xi32>
     tt.store %13, %11 : tensor<4x!tt.ptr<f32>>

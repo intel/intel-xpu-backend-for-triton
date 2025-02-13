@@ -203,13 +203,30 @@ class XPUBackend(BaseBackend):
         intel.load_dialects(ctx)
 
     @staticmethod
+    def parse_raise_block_pointer_flags() -> dict:
+        str = os.getenv("TRITON_INTEL_RAISE_BLOCK_POINTER", "0")
+        raise_block_ptr_flags = {}
+        raise_block_ptr_flags['enabled'] = False
+        raise_block_ptr_flags['ignore-masks'] = False
+        for flag in str.split(':'):
+            if (flag == "1"):
+                raise_block_ptr_flags['enabled'] = True
+            if (flag == "ignore-masks"):
+                raise_block_ptr_flags['enabled'] = True
+                raise_block_ptr_flags['ignore-masks'] = True
+        return raise_block_ptr_flags
+
+    @staticmethod
     def make_ttir(mod, metadata, opt):
+        raise_block_ptr_flags = XPUBackend.parse_raise_block_pointer_flags()
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_combine(pm)
-        if os.getenv("TRITON_INTEL_RAISE_BLOCK_POINTER", "0") == "1":
-            intel.passes.ttir.add_raise_block_pointer(pm)
+        if raise_block_ptr_flags['enabled']:
+            ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False
+            intel.passes.ttir.add_raise_block_pointer(pm, ignore_masks)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
