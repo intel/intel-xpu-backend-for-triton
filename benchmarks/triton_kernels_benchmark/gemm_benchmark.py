@@ -208,35 +208,6 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False):
     return c
 
 
-@triton.autotune(
-    configs=[
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [2, 3]
-    ] + [
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w)
-        for s in [2]
-        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
-    ] + [
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 1024, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [2, 3]
-    ] + [
-        triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [2]
-    ] + [
-        triton.Config(
-            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
-            num_stages=s, num_warps=32) for s in [2]
-    ] + [
-        triton.Config(
-            {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
-            num_stages=s, num_warps=4) for s in [2]
-    ],
-    key=['M', 'N', 'K'],
-)
 @triton.jit()
 def matmul_tensor_pointer_kernel(a_ptr, b_ptr, c_ptr,  #
                                  M, N, K,  #
@@ -294,6 +265,15 @@ def matmul_tensor_pointer_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 def matmul_tensor_pointer(a, b, c, transpose_a=False, transpose_b=False):
+    configs = {
+        torch.float8_e4m3fn: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
+            "num_warps": 8
+        }, torch.float16: {
+            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
+            "num_warps": 8
+        }
+    }
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -316,6 +296,12 @@ def matmul_tensor_pointer(a, b, c, transpose_a=False, transpose_b=False):
         b.stride(1),  #
         c.stride(0),
         c.stride(1),  #
+        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
+        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
+        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
+        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
+        num_stages=configs[dtype]["num_stages"],  #
+        num_warps=configs[dtype]["num_warps"],  #
         threads_per_warp=16,
     )
     return c
