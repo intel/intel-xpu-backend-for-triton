@@ -198,9 +198,8 @@ public:
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
     unsigned rank = repCluster.size();
 
-    auto innerLoop = [&](int b, int k, int outer, unsigned repNumM,
-                         unsigned repNumN, unsigned repInner,
-                         bool reverseLoop = false) {
+    auto innerLoop = [&](int b, int k, int outer, int inner, unsigned repNumM,
+                         unsigned repNumN) {
       auto body = [&](int b, int k, int outer, int inner) {
         if (repNumM > repNumN)
           generateDPASOp(b, inner, outer, k);
@@ -208,14 +207,7 @@ public:
           generateDPASOp(b, outer, inner, k);
       };
 
-      if (reverseLoop) {
-        for (int inner = repInner - 1; inner >= 0; --inner)
-          body(b, k, outer, inner);
-        return;
-      }
-
-      for (int inner = 0; inner < repInner; ++inner)
-        body(b, k, outer, inner);
+      body(b, k, outer, inner);
     };
 
     // Use the smaller of the two dimensions as the outer loop for better DPAS
@@ -227,13 +219,10 @@ public:
     unsigned repOuter = repNumM > repNumN ? repNumN : repNumM;
     unsigned repInner = repNumM > repNumN ? repNumM : repNumN;
     for (int b = 0; b < repBatch; ++b)
-      for (int k = 0; k < repK; ++k)
-        for (int outer = 0; outer < repOuter; ++outer) {
-          // Change the inner loop direction in odd outer loop iteration if
-          // aggressive reuse DPAS operands.
-          bool reverseLoop = aggressiveReusing && ((outer % 2) == 1);
-          innerLoop(b, k, outer, repNumM, repNumN, repInner, reverseLoop);
-        }
+      for (int outer = 0; outer < repOuter; ++outer)
+        for (int inner = 0; inner < repInner; ++inner)
+          for (int k = 0; k < repK; ++k)
+            innerLoop(b, k, outer, inner, repNumM, repNumN);
 
     Value res = composeValuesToDotOperandLayoutStruct(fc, repBatch, repM, repN,
                                                       resElemTy);
