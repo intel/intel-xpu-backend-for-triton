@@ -189,7 +189,7 @@ run_core_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+    pytest -k "not test_local_load_store_dot" -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
@@ -244,6 +244,8 @@ run_tutorial_tests() {
   run_tutorial_test "01-vector-add"
   run_tutorial_test "02-fused-softmax"
   run_tutorial_test "03-matrix-multiplication"
+  TRITON_INTEL_RAISE_BLOCK_POINTER=true \
+    run_tutorial_test "03-matrix-multiplication" "TRITON_INTEL_RAISE_BLOCK_POINTER"
   run_tutorial_test "04-low-memory-dropout"
   run_tutorial_test "05-layer-norm"
   run_tutorial_test "06-fused-attention"

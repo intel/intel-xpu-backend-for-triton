@@ -1,6 +1,18 @@
 import os
+import sys
+import pathlib
 import pytest
 import tempfile
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
+    worker_id = os.getenv("PYTEST_XDIST_WORKER")
+    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
+    if os.name == "nt" and worker_id:
+        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
+    if os.name == "nt":
+        config.addinivalue_line("markers", "forked: subprocess analogue of pytest.mark.forked on Windows")
 
 
 def pytest_addoption(parser):
@@ -8,6 +20,49 @@ def pytest_addoption(parser):
     if os.name == "nt":
         # stub, as pytest_forked doesn't work on windows
         parser.addoption("--forked", action="store_true")
+
+
+def pytest_pyfunc_call(pyfuncitem: pytest.Function):
+
+    if os.name == "nt" and "forked" in pyfuncitem.keywords:
+        # Avoid recursion
+        if os.getenv("_PYTEST_SUBPROCESS_RUNNING"):
+            return None
+
+        import subprocess
+
+        pos = pyfuncitem.nodeid.find(str(pyfuncitem.path.relative_to(pathlib.Path(os.getcwd()))))
+        test_name = pyfuncitem.nodeid[pos:]
+
+        python_executable = sys.executable
+        pytest_args = [python_executable, "-m", "pytest", "-s", test_name, "-q"]
+
+        config = pyfuncitem.config
+        device = config.getoption("--device")
+        if device:
+            pytest_args.extend(["--device", device])
+
+        # Avoid recursion
+        env = os.environ.copy()
+        env["_PYTEST_SUBPROCESS_RUNNING"] = "1"
+
+        print("\n##### start output from pytest in subprocess #####")
+        result = subprocess.run(pytest_args, text=True, env=env)
+        print("\n##### end output from pytest in subprocess #####")
+
+        if result.returncode != 0:
+            # Human-readable exception message to be raised.
+            exception_message = (f'Test "{pyfuncitem.name}" failed in isolated subprocess with: {result.returncode}')
+
+            # Raise a pytest-compliant exception.
+            raise pytest.fail(exception_message, pytrace=False)
+
+        # Notify pytest that this hook successfully ran this test.
+        return True
+
+    # Notify pytest that this hook avoided attempting to run this test, in which
+    # case pytest will continue to look for a suitable runner for this test.
+    return None
 
 
 @pytest.fixture
@@ -23,12 +78,3 @@ def fresh_triton_cache():
             yield tmpdir
         finally:
             os.environ.pop("TRITON_CACHE_DIR", None)
-
-
-def pytest_configure(config):
-    worker_id = os.getenv("PYTEST_XDIST_WORKER")
-    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
-    if os.name == "nt" and worker_id:
-        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
-    if os.name == "nt":
-        pytest.mark.forked = pytest.mark.skip(reason="Windows doesn't fork")

@@ -13,6 +13,12 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
+# A hard-coded cache version that can be updated when we know that the cached file is invalid and
+# there are no other ways to detect that the runtime environment has changed. For example, a shared
+# library has been updated as a result of updated dependencies.
+# See https://github.com/intel/intel-xpu-backend-for-triton/issues/3095.
+__CACHE_VERSION = "1"
+
 
 def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
     """
@@ -206,7 +212,9 @@ class TritonLauncher:
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
+    hasher.update(src.encode("utf-8"))
+    key = hasher.hexdigest()
     cache = get_cache_manager(key)
     file_name = f"{name}.{sysconfig.get_config_var('EXT_SUFFIX').split('.')[-1]}"
     cache_path = cache.get_file(file_name)

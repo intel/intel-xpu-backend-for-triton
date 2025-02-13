@@ -33,6 +33,11 @@ jobs:
         with:
           python-version: '3.9'
 
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
       # Copy workspace to a temporary location with a shorter name.
       - name: Copy workspace
         run: |
@@ -94,12 +99,14 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
@@ -108,6 +115,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           # Disable interactive plot window
           $env:MPLBACKEND = "Agg"
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Run instrumentation tests
@@ -122,6 +130,7 @@ jobs:
           .venv\Scripts\activate.ps1
           # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
           pip install defusedxml
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
@@ -136,7 +145,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pass_rate
-          path: pass_rate*.json
+          path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Clean up workspace
         if: ${{ always() }}
@@ -144,6 +153,7 @@ jobs:
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
 
       - name: Clean up temporary files
+        if: ${{ always() }}
         shell: bash
         run: |
           rm -rf rm -rf /tmp/triton-* /tmp/tmp*

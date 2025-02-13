@@ -38,7 +38,11 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
     check_cols([tflops_col] + [] if hbm_col is None else [hbm_col], df.columns)
     # Build json with parameters
     df_results = pd.DataFrame()
-    df_results["params"] = [json.dumps(j) for j in df[param_cols].to_dict("records")]
+    # Type conversion to int is important here, because dashboards expect
+    # int values.
+    # Changing it without changing dashboards and database will
+    # break comparison of old and new results
+    df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
     df_results["tflops"] = df[tflops_col]
     if hbm_col is not None:
         df_results["hbm_gbs"] = df[hbm_col]

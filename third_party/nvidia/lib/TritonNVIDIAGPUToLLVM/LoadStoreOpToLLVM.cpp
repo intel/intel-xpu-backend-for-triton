@@ -28,7 +28,6 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
-using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
@@ -1361,7 +1360,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
   return triton::gpu::sharedToLinearLayoutLeadingOffset(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
-      type.getElementTypeBitWidth(), /*disableSwizzle=*/true);
+      /*disableSwizzle=*/true);
 }
 
 // This function is shared between the TMA gather and scatter lowerings. It

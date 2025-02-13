@@ -8,6 +8,7 @@ public:
   struct options {
     std::vector<std::string> output_tensors;
     bool get_kernel_time = false;
+    std::vector<std::string> validate_results;
   };
 
   command_line_parser(int argc, char **argv);

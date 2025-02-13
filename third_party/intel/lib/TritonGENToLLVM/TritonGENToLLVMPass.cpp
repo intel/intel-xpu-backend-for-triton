@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Attributes.h"
+#include "Utils/LLVMIntr.h"
 #include "Utils/Mangling.h"
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
@@ -51,71 +52,6 @@ using namespace mlir::triton::gpu;
 //===----------------------------------------------------------------------===//
 // Helper Functions
 //===----------------------------------------------------------------------===//
-
-static intel::AttributeList createFunctionAttributes(
-    ArrayRef<std::pair<llvm::Attribute::AttrKind, std::optional<uint64_t>>>
-        attributes,
-    MLIRContext *ctx) {
-  intel::AttrBuilder funcAttrBuilder(*ctx);
-  for (auto [kind, optValue] : attributes) {
-    if (optValue)
-      funcAttrBuilder.addPassthroughAttribute(kind, *optValue);
-    else
-      funcAttrBuilder.addPassthroughAttribute(kind);
-  }
-
-  intel::AttributeList attrs;
-  attrs.addFnAttributes(funcAttrBuilder);
-  return attrs;
-}
-
-struct LLVMFuncAttributeOptions {
-  bool isConvergent = false;
-  bool isNoUnwind = false;
-  bool isWillReturn = false;
-  LLVM::MemoryEffectsAttr memEffectsAttr{};
-};
-
-static constexpr LLVMFuncAttributeOptions convergentAttrs = {
-    true, false, false, {}};
-static constexpr LLVMFuncAttributeOptions noUnwindAttrs = {
-    false, true, false, {}};
-static constexpr LLVMFuncAttributeOptions noUnwindWillReturnAttrs = {
-    false, true, true, {}};
-static constexpr LLVMFuncAttributeOptions convergentNoUnwindWillReturnAttrs = {
-    true, true, true, {}};
-
-static LLVM::CallOp createDeviceFunctionCall(
-    ConversionPatternRewriter &rewriter, StringRef funcName, Type retType,
-    ArrayRef<Type> argTypes, ArrayRef<Value> args,
-    mlir::ArrayRef<std::pair<unsigned, mlir::StringRef>> paramAttrs,
-    const LLVMFuncAttributeOptions &funcAttributeOptions,
-    const intel::AttributeList &passthroughAttrs = {}) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  MLIRContext *ctx = rewriter.getContext();
-  Location loc = UnknownLoc::get(ctx);
-
-  LLVM::LLVMFuncOp funcOp =
-      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, retType);
-  funcOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-  funcOp.setConvergent(funcAttributeOptions.isConvergent);
-  funcOp.setNoUnwind(funcAttributeOptions.isNoUnwind);
-  funcOp.setWillReturn(funcAttributeOptions.isWillReturn);
-
-  if (funcAttributeOptions.memEffectsAttr)
-    funcOp.setMemoryEffectsAttr(funcAttributeOptions.memEffectsAttr);
-
-  for (auto [idx, attrName] : paramAttrs)
-    funcOp.setArgAttr(idx, attrName, rewriter.getUnitAttr());
-
-  if (!passthroughAttrs.getFnAttributes().empty())
-    funcOp->setAttrs(passthroughAttrs.getFnAttributes().getDictionary(ctx));
-
-  auto callOp = rewriter.create<LLVM::CallOp>(loc, funcOp, args);
-  callOp->setAttrs(funcOp->getAttrs());
-
-  return callOp;
-}
 
 [[maybe_unused]] static std::string getGenISATypeMangling(Type ty) {
   if (auto vecTy = dyn_cast<VectorType>(ty))
@@ -230,8 +166,9 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           b.i1_val(op.getVnniTransform()),
                           b.i32_val(static_cast<int>(op.getCacheControl()))};
 
-  LLVM::CallOp call = createDeviceFunctionCall(
-      rewriter, funcName, resType, argTypes, args, {}, noUnwindWillReturnAttrs);
+  LLVM::CallOp call =
+      intel::createDeviceFunctionCall(rewriter, funcName, resType, argTypes,
+                                      args, {}, intel::noUnwindWillReturnAttrs);
   return call.getResult();
 }
 
@@ -330,9 +267,9 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                           b.i32_val(static_cast<int>(op.getCacheControl())),
                           storeVal};
 
-  LLVM::CallOp call =
-      createDeviceFunctionCall(rewriter, funcName, void_ty(ctx), argTypes, args,
-                               {}, noUnwindWillReturnAttrs);
+  LLVM::CallOp call = intel::createDeviceFunctionCall(
+      rewriter, funcName, void_ty(ctx), argTypes, args, {},
+      intel::noUnwindWillReturnAttrs);
   return call;
 }
 
@@ -374,8 +311,9 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                           b.i32_val(static_cast<int>(op.getCacheControl()))};
 
   const StringLiteral funcName = "llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid";
-  return createDeviceFunctionCall(rewriter, funcName, void_ty(ctx), {argTypes},
-                                  {args}, {}, noUnwindWillReturnAttrs);
+  return intel::createDeviceFunctionCall(rewriter, funcName, void_ty(ctx),
+                                         {argTypes}, {args}, {},
+                                         intel::noUnwindWillReturnAttrs);
 }
 
 namespace {
@@ -448,11 +386,11 @@ struct TritonMatrixDPASLowering
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
         /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = convergentNoUnwindWillReturnAttrs;
+    auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
-    Value result = createDeviceFunctionCall(rewriter, fnName, cTy, argTypes,
-                                            args, {}, funcAttrs)
+    Value result = intel::createDeviceFunctionCall(
+                       rewriter, fnName, cTy, argTypes, args, {}, funcAttrs)
                        ->getResult(0);
     if (cOrigTy != cTy)
       result = rewriter.create<LLVM::BitcastOp>(loc, cOrigTy, result);
@@ -524,9 +462,9 @@ struct TritonMatrix2DBlockLoadLowering
         std::make_pair(5, LLVM::LLVMDialect::getWriteOnlyAttrName()),
     };
 
-    LLVM::CallOp call =
-        createDeviceFunctionCall(rewriter, fnName, void_ty(ctx), argTypes, args,
-                                 paramAttrs, noUnwindWillReturnAttrs);
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
+        rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs,
+        intel::noUnwindWillReturnAttrs);
     constexpr uint32_t ptrOperandIndex = 0;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
@@ -588,9 +526,9 @@ struct TritonMatrix2DBlockStoreLowering
         std::make_pair(5, LLVM::LLVMDialect::getReadonlyAttrName()),
     };
 
-    LLVM::CallOp call =
-        createDeviceFunctionCall(rewriter, fnName, void_ty(ctx), argTypes, args,
-                                 paramAttrs, noUnwindWillReturnAttrs);
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
+        rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs,
+        intel::noUnwindWillReturnAttrs);
     constexpr uint32_t ptrOperandIndex = 0;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             storeCacheControlToCacheControls(rewriter, op.getCacheControl(),
@@ -638,10 +576,10 @@ struct TritonMatrix2DBlockPrefetchLowering
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::Ref,
         /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = noUnwindAttrs;
+    auto funcAttrs = intel::noUnwindAttrs;
     funcAttrs.memEffectsAttr = memAttr;
 
-    LLVM::CallOp call = createDeviceFunctionCall(
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs, funcAttrs);
     constexpr uint32_t ptrOperandIndex = 0;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
@@ -705,9 +643,9 @@ struct TritonSubGroupBlockReadLowering
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::Ref,
         /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = noUnwindWillReturnAttrs;
+    auto funcAttrs = intel::noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
-    LLVM::CallOp call = createDeviceFunctionCall(
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, type, {ptrTy}, {op.getPtr()}, {}, funcAttrs, {});
 
     rewriter.replaceOp(op, call.getResult());
@@ -733,9 +671,9 @@ struct TritonSubGroupBlockWriteLowering
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::ModRef,
         /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = noUnwindWillReturnAttrs;
+    auto funcAttrs = intel::noUnwindWillReturnAttrs;
     funcAttrs.memEffectsAttr = memAttr;
-    LLVM::CallOp call = createDeviceFunctionCall(
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, funcName, void_ty(ctx), {ptrTy, type},
         {op.getPtr(), op.getVal()}, {}, funcAttrs);
 

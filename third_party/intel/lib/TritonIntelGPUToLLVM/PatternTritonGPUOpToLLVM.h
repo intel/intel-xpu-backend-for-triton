@@ -84,10 +84,10 @@ void populatePrintOpToLLVMPattern(
     RewritePatternSet &patterns, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
-void populateMemoryOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit,
-    std::optional<BackendCallbacks> backendCallbacks = std::nullopt);
+void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,

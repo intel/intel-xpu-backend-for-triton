@@ -15,8 +15,8 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &options,
     const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, options, analysis) {
-  addConversion([&](triton::PointerType type) -> std::optional<Type> {
-    return convertTritonPointerType(type);
+  addConversion([ctx](triton::PointerType type) -> std::optional<Type> {
+    return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
   });
   addConversion([ctx](TensorDescType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(ctx, 1);
@@ -35,31 +35,6 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
                  mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
 }
 
-Type TritonGPUToLLVMTypeConverter::convertTritonPointerType(
-    triton::PointerType type) {
-  auto ctx = type.getContext();
-  auto pointeeType = type.getPointeeType();
-  if (isa<RankedTensorType>(pointeeType)) {
-    auto rankedTensorType = cast<RankedTensorType>(pointeeType);
-    // struct { offset0, offset1, shape0, shape1, stride0,
-    // stride1, base_ptr};
-    auto eleType = rankedTensorType.getElementType();
-    auto shape = rankedTensorType.getShape();
-    SmallVector<Type, 4> types;
-    // offsets
-    for (size_t i = 0; i < shape.size(); ++i)
-      types.push_back(IntegerType::get(ctx, 32));
-    // shapes, strides
-    for (size_t i = 0; i < 2 * shape.size(); ++i)
-      types.push_back(IntegerType::get(ctx, 64));
-
-    types.push_back(LLVM::LLVMPointerType::get(ctx, type.getAddressSpace()));
-
-    return LLVM::LLVMStructType::getLiteral(ctx, types);
-  }
-  return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
-}
-
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
@@ -72,10 +47,17 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
 Type TritonGPUToLLVMTypeConverter::convertMemDescType(
     MemDescType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
-  SmallVector<Type, 4> types;
   // base ptr
   auto ptrType =
       LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+
+  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+          triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          type.getEncoding())) {
+    return ptrType;
+  }
+
+  SmallVector<Type, 4> types;
   types.push_back(ptrType);
   auto rank = type.getRank();
   // offsets

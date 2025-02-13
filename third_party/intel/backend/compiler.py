@@ -208,6 +208,8 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_combine(pm)
+        if os.getenv("TRITON_INTEL_RAISE_BLOCK_POINTER", "0") == "1":
+            intel.passes.ttir.add_raise_block_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)

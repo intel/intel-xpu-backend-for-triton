@@ -45,6 +45,11 @@ jobs:
         with:
           python-version: '3.9'
 
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
       # Copy workspace to a temporary location with a shorter name.
       - name: Copy workspace
         run: |
@@ -111,12 +116,14 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
@@ -125,6 +132,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           # Disable interactive plot window
           $env:MPLBACKEND = "Agg"
+          cd ${{ env.NEW_WORKSPACE }}
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Run instrumentation tests
@@ -138,6 +146,7 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           pip install defusedxml
+          cd ${{ env.NEW_WORKSPACE }}
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
             python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
@@ -151,7 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pass_rate
-          path: pass_rate*.json
+          path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Clean up workspace
         if: ${{ always() }}
@@ -159,6 +168,7 @@ jobs:
           Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
 
       - name: Clean up temporary files
+        if: ${{ always() }}
         shell: bash
         run: |
           rm -rf rm -rf /tmp/triton-* /tmp/tmp*
