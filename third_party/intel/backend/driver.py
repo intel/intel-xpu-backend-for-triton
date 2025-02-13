@@ -68,7 +68,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if f.name in ["libsycl.so", "sycl8.dll"]:
+        if f.name in ["libsycl.so", "sycl.dll"]:
             sycl_dir = str(f.locate().parent.resolve())
             # should we handle `_` somehow?
             if os.name == "nt":
