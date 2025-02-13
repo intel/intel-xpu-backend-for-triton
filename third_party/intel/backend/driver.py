@@ -70,11 +70,6 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
             include_dir += [str(f.locate().parent.parent.resolve())]
         if f.name in ["libsycl.so", "sycl8.dll"]:
             sycl_dir = str(f.locate().parent.resolve())
-            if f.name in "sycl8.dll":
-                dirname = os.path.dirname(os.path.realpath(__file__))
-                if not os.path.exists(f"{sycl_dir}/sycl8.lib"):
-                    print("not exists")
-                    shutil.copy(f"{dirname}/sycl8.lib", sycl_dir)
             # should we handle `_` somehow?
             if os.name == "nt":
                 _ = os.add_dll_directory(sycl_dir)
@@ -91,11 +86,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader']
-        if os.name != "nt":
-            self.libraries += ["sycl"]
-        else:
-            self.libraries += ['sycl8']
+        self.libraries = ['ze_loader', 'sycl']
 
     @property
     def inject_pytorch_dep(self):
