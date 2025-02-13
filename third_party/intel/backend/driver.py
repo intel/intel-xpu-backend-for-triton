@@ -107,7 +107,7 @@ class CompilationHelper:
         library_dir = []
         include_dir, self._libsycl_dir = find_sycl(include_dir)
         if self._libsycl_dir:
-            library_dir += [self._libsycl_dir]
+            library_dir += self._libsycl_dir
         if os.name == "nt":
             library_dir += [os.path.join(ze_root, "lib")]
 
