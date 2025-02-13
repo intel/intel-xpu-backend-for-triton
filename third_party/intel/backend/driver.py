@@ -20,7 +20,7 @@ from triton.backends.driver import DriverBase
 __CACHE_VERSION = "1"
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     """
     Looks for the sycl library in known places.
 
@@ -34,7 +34,6 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
       AssertionError: if library was not found.
     """
     include_dir = include_dir.copy()
-    sycl_dir = None
     assertion_message = ("sycl headers not found, please install `icpx` compiler, "
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
@@ -44,7 +43,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
         compiler_root = os.path.abspath(f"{icpx_path}/../..")
         include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
         sycl_dir = os.path.join(compiler_root, "lib")
-        return include_dir, sycl_dir
+        return include_dir, [sycl_dir]
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
@@ -53,7 +52,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
         sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
-        return include_dir, sycl_dir
+        return include_dir, [sycl_dir]
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
@@ -63,18 +62,22 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
     if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
+    sycl_dirs = []
     for f in importlib.metadata.files("intel-sycl-rt"):
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if f.name in ["libsycl.so", "sycl8.dll"]:
+        if f.name in ["libsycl.so", "sycl8.dll", "sycl8.lib"]:
             sycl_dir = str(f.locate().parent.resolve())
             # should we handle `_` somehow?
             if os.name == "nt":
                 _ = os.add_dll_directory(sycl_dir)
+            sycl_dirs.append(sycl_dir)
 
-    return include_dir, sycl_dir
+    assert len(sycl_dirs) != 0
+
+    return include_dir, sycl_dirs
 
 
 class CompilationHelper:
@@ -137,7 +140,7 @@ class CompilationHelper:
         return self._include_dir
 
     @cached_property
-    def libsycl_dir(self) -> str:
+    def libsycl_dir(self) -> list[str]:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
 
@@ -221,7 +224,7 @@ def compile_module_from_src(src, name):
             extra_compiler_args = []
             if COMPILATION_HELPER.libsycl_dir:
                 if os.name == "nt":
-                    extra_compiler_args += ["/LIBPATH:" + COMPILATION_HELPER.libsycl_dir]
+                    extra_compiler_args += ["/LIBPATH:" + dir for dir in COMPILATION_HELPER.libsycl_dir]
                 else:
                     extra_compiler_args += ["-Wl,-rpath," + COMPILATION_HELPER.libsycl_dir]
 
