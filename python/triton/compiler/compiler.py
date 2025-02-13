@@ -298,14 +298,15 @@ def compile(src, target=None, options=None):
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
-    print("printing IR...")
-    for name, path in metadata_group.items():
-        print(f"==================== {name} ======================", flush=True)
-        if name.endswith("spv"):
-            content = open(path, "rb").read()
-        else:
-            content = open(path, "r").read()
-        print(content, flush=True)
+    if os.environ.get("TR_PRINT_IR", "0") == "1":
+        print("printing IR...")
+        for name, path in metadata_group.items():
+            print(f"==================== {name} ======================", flush=True)
+            if name.endswith("spv"):
+                content = open(path, "rb").read()
+            else:
+                content = open(path, "r").read()
+            print(content, flush=True)
     # Compilation completed, disabling multithreading in context.
     # This is needed to safely finalize threads pool inside context: if current process forks before
     # python GC deletes context object, thread pool in child process will be invalid, which could

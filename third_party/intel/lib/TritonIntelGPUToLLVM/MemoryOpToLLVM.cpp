@@ -78,6 +78,11 @@ struct LocalAllocOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    llvm::dbgs() << "\n\n===LocalAllocOpConversion BEFORE===\n";
+    op.dump();
+    for (auto& x : *(op->getParentRegion())) {
+        x.dump();
+    }
     if (!op.isSharedMemoryAlloc())
       return failure();
     Location loc = op->getLoc();
@@ -100,6 +105,11 @@ struct LocalAllocOpConversion
     }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
+    llvm::dbgs() << "\n\n===LocalAllocOpConversion AFTER===\n";
+    retVal.dump();
+    for (auto& x : *(retVal.getParentRegion())) {
+        x.dump();
+    }
     return success();
   }
 
@@ -185,6 +195,11 @@ private:
   lowerSharedToDistributed(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter) const {
+    llvm::dbgs() << "\n\n===lowerSharedToDistributed BEFORE===\n";
+    op.dump();
+    for (auto& x : *(op->getParentRegion())) {
+        x.dump();
+    }
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
@@ -199,7 +214,11 @@ private:
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
-
+    llvm::dbgs() << "\n\n===lowerSharedToDistributed AFTER===\n";
+    result.dump();
+    for (auto& x : *(result.getParentRegion())) {
+        x.dump();
+    }
     return success();
   }
 
