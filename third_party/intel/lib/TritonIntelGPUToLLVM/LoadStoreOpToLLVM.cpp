@@ -938,8 +938,11 @@ struct LoadOpConversion
 
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
+    llvm::errs() << "numOperandsPer2DLoadM before enlarging tile height (" << tileHeight << "): " << numOperandsPer2DLoadM << "\n";
     numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
+    llvm::errs() << "numOperandsPer2DLoadM after: " << numOperandsPer2DLoadM << "\n";
     tileHeight = tileHeight * numOperandsPer2DLoadM;
+    llvm::errs() << "tileHeight after: " << tileHeight << "\n";
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
@@ -1003,12 +1006,16 @@ struct LoadOpConversion
     if (isOperandA) {
       tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
     } else {
+      #if 0
       auto loadIdentityLayout =
-          LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);/* *
-          LinearLayout::identity1D(numRepInner / numOperandsInnerDimPerLoad,
-                                   kLoad, dimOuterStr);*/
+          LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr) *
+          LinearLayout::identity1D(numOperandsPer2DLoadM,
+                                   kLoad, dimInnerStr);
       llvm::errs() << "load identity layout: " << loadIdentityLayout << "\n";
-      tileLayout *= loadIdentityLayout;
+      #endif 
+      tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
+      tileLayout *= LinearLayout::identity1D(numOperandsPer2DLoadM,
+        kLoad, dimInnerStr);
     }
 
     LLVM_DEBUG({
@@ -1270,7 +1277,7 @@ struct LoadOpConversion
               auto tensorRowCoord = (tensorCoord[0].second * packedElementsPerSlot) / elemsPerDPASInst[0];
               auto tensorColCoord = tensorCoord[1].second / elemsPerDPASInst[1];
 
-              if (isOperandA) {
+              if (isOperandA || isTransposeRequired) {
                 llvm::errs() << "Storing " << tensorRowCoord << ", " << tensorColCoord << "\n";
                 loadVals[{tensorRowCoord, tensorColCoord}] = b.bitcast(loadVal, unpackedDPASOperandType);
               } else {
