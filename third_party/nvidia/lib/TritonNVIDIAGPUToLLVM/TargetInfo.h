@@ -67,10 +67,6 @@ public:
   Value getScratchOnSharedMemoryPtr(RewriterBase &rewriter,
                                     FunctionOpInterface funcOp) const override;
 
-  Value getScratchOnGlobalMemoryPtr(Location loc, RewriterBase &rewriter,
-                                    FunctionOpInterface funcOp,
-                                    Value allocOffset = {}) const override;
-
 private:
   int computeCapability;
   int ptxVersion;
