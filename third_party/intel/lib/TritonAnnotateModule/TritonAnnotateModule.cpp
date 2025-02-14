@@ -37,6 +37,9 @@ struct TritonAnnotateModule
           intel::TritonIntelGPUDialect::getSupportBF16ConversionAttrName(),
           builder.getUnitAttr());
 
+    mod->setAttr(intel::TritonIntelGPUDialect::getTargetArchAttrName(),
+                 builder.getStringAttr(targetArch));
+
     DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
     setThreadsPerWarp(mod, dpasAnalysis);
   }
