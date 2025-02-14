@@ -52,6 +52,7 @@ struct GlobalScratchAllocOpConversion
     }
     Value ptr =
         LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, b.i32_val(opOffset));
+
     rewriter.replaceOp(op, ptr);
     return success();
   }
