@@ -5932,6 +5932,15 @@ dot_layouts = [
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=1),
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=1),
+    DotOperandLayout(
+        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+                          warps_per_cta=[4, 1], rep_cluster=[1, 1]), op_idx=0, k_width=1),
+    DotOperandLayout(
+        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=16, ops_per_chan=2, threads_per_warp=32,
+                          warps_per_cta=[2, 1], rep_cluster=[1, 1]), op_idx=0, k_width=1),
+    DotOperandLayout(
+        parent=DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=4, threads_per_warp=32,
+                          warps_per_cta=[4, 1], rep_cluster=[1, 1]), op_idx=1, k_width=4),
 ]
 
 shared_layouts = [
