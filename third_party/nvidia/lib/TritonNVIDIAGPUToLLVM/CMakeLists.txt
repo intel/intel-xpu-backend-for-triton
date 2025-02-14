@@ -16,7 +16,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     ClusterOpsToLLVM.cpp
     PTXAsmFormat.cpp
     Utility.cpp
-    Fp4ToFpOpToLLVM.cpp
+    UpcastMXFPToLLVM.cpp
     TargetInfo.cpp
 
     DEPENDS
