@@ -68,12 +68,16 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
-  Value getStackPointer(RewriterBase &rewriter,
-                        FunctionOpInterface funcOp) const override;
-
   Value getGlobalStringStart(Location loc, RewriterBase &rewriter,
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
+
+  Value getScratchOnSharedMemoryPtr(RewriterBase &rewriter,
+                                    FunctionOpInterface funcOp) const override;
+
+  Value getScratchOnGlobalMemoryPtr(Location loc, RewriterBase &rewriter,
+                                    FunctionOpInterface funcOp,
+                                    Value allocOffset = {}) const override;
 
 private:
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
