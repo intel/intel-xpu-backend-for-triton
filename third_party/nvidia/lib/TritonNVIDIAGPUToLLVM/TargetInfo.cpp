@@ -622,9 +622,4 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return computeCapability >= 90 && ptxVersion >= 81;
 }
 
-Value TargetInfo::getScratchOnSharedMemoryPtr(
-    RewriterBase &rewriter, FunctionOpInterface funcOp) const {
-  return LLVM::getStackPointer(rewriter, funcOp);
-}
-
 } // namespace mlir::triton::NVIDIA

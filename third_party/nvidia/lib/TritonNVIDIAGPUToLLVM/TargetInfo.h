@@ -64,9 +64,6 @@ public:
 
   int getPtxVersion() const { return ptxVersion; }
 
-  Value getScratchOnSharedMemoryPtr(RewriterBase &rewriter,
-                                    FunctionOpInterface funcOp) const override;
-
 private:
   int computeCapability;
   int ptxVersion;
