@@ -343,13 +343,6 @@ Value TargetInfo::getScratchOnSharedMemoryPtr(
   return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
-Value TargetInfo::getScratchOnGlobalMemoryPtr(Location loc,
-                                              RewriterBase &rewriter,
-                                              FunctionOpInterface funcOp,
-                                              Value allocOffset) const {
-  llvm::report_fatal_error("IntelGPU does not support getScratchOnGlobalMem");
-}
-
 LLVM::GlobalOp TargetInfo::getGlobalString(Location loc, RewriterBase &rewriter,
                                            StringRef name, StringRef value,
                                            unsigned addressSpace) const {
