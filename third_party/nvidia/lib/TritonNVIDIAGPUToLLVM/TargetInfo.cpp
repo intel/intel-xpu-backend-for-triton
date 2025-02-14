@@ -627,11 +627,4 @@ Value TargetInfo::getScratchOnSharedMemoryPtr(
   return LLVM::getStackPointer(rewriter, funcOp);
 }
 
-Value TargetInfo::getScratchOnGlobalMemoryPtr(Location loc,
-                                              RewriterBase &rewriter,
-                                              FunctionOpInterface funcOp,
-                                              Value allocOffset) const {
-  return LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, allocOffset);
-}
-
 } // namespace mlir::triton::NVIDIA
