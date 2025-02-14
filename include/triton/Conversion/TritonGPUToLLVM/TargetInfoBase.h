@@ -102,11 +102,6 @@ public:
   getScratchOnSharedMemoryPtr(RewriterBase &rewriter,
                               FunctionOpInterface funcOp) const = 0;
 
-  virtual Value getScratchOnGlobalMemoryPtr(Location loc,
-                                            RewriterBase &rewriter,
-                                            FunctionOpInterface funcOp,
-                                            Value allocOffset = {}) const = 0;
-
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton
