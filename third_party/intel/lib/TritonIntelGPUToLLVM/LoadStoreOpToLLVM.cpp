@@ -366,7 +366,7 @@ struct PrefetchOpConversion
       std::swap(tensorShape[0], tensorShape[1]);
     }
 
-    unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    unsigned numWarps = triton::gpu::lookupNumWarps(op);
 
     SmallVector<unsigned, 2> shapePerWarp =
         get2DPrefetchShapePerWarp(tensorType);

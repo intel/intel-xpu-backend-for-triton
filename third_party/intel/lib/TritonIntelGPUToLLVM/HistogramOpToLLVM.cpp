@@ -170,7 +170,7 @@ public:
     assert((numThreadsPerWarp == 16 || numThreadsPerWarp == 32 ||
             numThreadsPerWarp == 64) &&
            "Only supports 16, 32 or 64 threads per warp");
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = triton::gpu::lookupNumWarps(op);
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);

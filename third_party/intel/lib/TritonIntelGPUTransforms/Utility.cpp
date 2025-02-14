@@ -102,8 +102,8 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // Loads that use more threads than elements can be presumed to have a high
   // hit-rate that makes them cheap to load.
   if (auto ptrType = getRankedTensorType(base.getType())) {
+    int numWarps = ttg::lookupNumWarps(op);
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     return ptrType.getNumElements() >= numWarps * threadsPerWarp;
   }

@@ -1062,8 +1062,7 @@ private:
 
     RankedTensorType oldRetType = dotOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);
-    auto mod = dotOp->getParentOfType<mlir::ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(dotOp);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
 
     auto instrShape = mmaVersionToInstrShape(

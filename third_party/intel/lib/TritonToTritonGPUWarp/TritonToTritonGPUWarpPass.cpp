@@ -438,11 +438,11 @@ public:
     }
 
     /// adding module attributes
-    mod->setAttr(tt::AttrNumWarpsName,
+    mod->setAttr(ttg::AttrNumWarpsName,
                  IntegerAttr::get(i32Ty, llvm::APInt(32, numWarps.getValue())));
-    mod->setAttr(tt::AttrNumThreadsPerWarp,
+    mod->setAttr(ttg::AttrNumThreadsPerWarp,
                  IntegerAttr::get(i32Ty, llvm::APInt(32, 1)));
-    mod->setAttr(tt::AttrNumCTAsName,
+    mod->setAttr(ttg::AttrNumCTAsName,
                  IntegerAttr::get(i32Ty, llvm::APInt(32, 1)));
   }
 

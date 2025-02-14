@@ -372,7 +372,7 @@ public:
       if (!refTensorType || !refTensorType.getEncoding())
         return;
 
-      int numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
+      int numWarps = ttg::lookupNumWarps(curr);
       int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
       setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
                            layoutMap);

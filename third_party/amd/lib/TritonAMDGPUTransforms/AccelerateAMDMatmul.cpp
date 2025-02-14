@@ -562,7 +562,7 @@ public:
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
-    int numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
+    int numWarps = ttg::lookupNumWarps(dotOp);
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.

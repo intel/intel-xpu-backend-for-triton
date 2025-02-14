@@ -289,7 +289,7 @@ private:
 
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     unsigned numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = triton::gpu::lookupNumWarps(op.getOperation());
     int numThreads = numLanes * numWarps;
 
     Value threadId = getThreadId(rewriter, loc);
