@@ -74,10 +74,6 @@ public:
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
 
-  Value getScratchOnSharedMemoryPtr(RewriterBase &rewriter,
-                                    FunctionOpInterface funcOp) const override;
-
-
 private:
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
                                  StringRef name, StringRef value,

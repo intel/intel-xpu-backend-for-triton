@@ -467,8 +467,5 @@ void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
                                    size_t localStoreOpCount, Type type) const {
   storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
-Value TargetInfo::getScratchOnSharedMemoryPtr(
-    RewriterBase &rewriter, FunctionOpInterface funcOp) const {
-  return LLVM::getStackPointer(rewriter, funcOp);
-}
+
 } // namespace mlir::triton::AMD

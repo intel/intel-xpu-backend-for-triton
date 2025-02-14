@@ -98,10 +98,6 @@ public:
   virtual void storeOpAnnotation(triton::gpu::LocalStoreOp op,
                                  size_t localStoreOpCount, Type type) const {}
 
-  virtual Value
-  getScratchOnSharedMemoryPtr(RewriterBase &rewriter,
-                              FunctionOpInterface funcOp) const = 0;
-
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton
