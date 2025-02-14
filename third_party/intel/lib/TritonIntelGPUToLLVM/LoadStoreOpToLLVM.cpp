@@ -265,7 +265,9 @@ struct LoadStoreConversionBase {
             [&](const Value &index, const Value &shape, const Value &mask) {
               // mask = mask && (index < shape) && idx > 0
               auto is_pos_idx = b.icmp_sge(index, b.int_val(32, 0));
-              return b.and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask), is_pos_idx);
+              return b.and_(
+                  b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                  is_pos_idx);
             }));
       }
     }
