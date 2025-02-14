@@ -159,9 +159,10 @@ DpasEncodingAttr::getRepOrderForOperand(OpIdx opIdx) const {
 
 SmallVector<unsigned>
 DpasEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error(
-      "getThreadsPerWarpForOperand not implemented for DpasEncodingAttr");
-  return {};
+  size_t rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> threadsPerWarpForOperand(rank, 1);
+  threadsPerWarpForOperand[rank - 1] = getThreadsPerWarp__();
+  return threadsPerWarpForOperand;
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
@@ -467,14 +468,18 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   ArrayRef<unsigned> rC = shapeC;
   SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
   ArrayRef<unsigned> repCluster = getRepCluster();
-  printer << "<{" << "repeatCount = " << getRepeatCount() << ", "
+  printer << "<{"
+          << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", "
           << "threadsPerWarp = " << getThreadsPerWarp__() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
-          << "repCluster = [" << repCluster << "], " << "A = [" << rA << "], "
-          << "B = [" << rB << "], " << "C = [" << rC << "]" << "}>";
+          << "repCluster = [" << repCluster << "], "
+          << "A = [" << rA << "], "
+          << "B = [" << rB << "], "
+          << "C = [" << rC << "]"
+          << "}>";
 }
 
 LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -546,9 +551,11 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
   ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp();
   ArrayRef<unsigned> sizePerThread = getSizePerThread();
-  printer << "<{" << "sizePerThread = [" << sizePerThread << "]"
-          << ", threadsPerWarp = [" << threadsPerWarp << "]" << ", order = ["
-          << getOrder() << "]" << "}>";
+  printer << "<{"
+          << "sizePerThread = [" << sizePerThread << "]"
+          << ", threadsPerWarp = [" << threadsPerWarp << "]"
+          << ", order = [" << getOrder() << "]"
+          << "}>";
 }
 
 //===----------------------------------------------------------------------===//

@@ -133,55 +133,10 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     RankedTensorType dstTy = op.getType();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<DotOperandEncodingAttr>(dstLayout)) {
-      auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
-      if (auto dpasLayout =
-              dyn_cast_or_null<DpasEncodingAttr>(dotLayout.getParent())) {
-        auto sharedLayout = cast<SwizzledSharedEncodingAttr>(
-            op.getSrc().getType().getEncoding());
-        int K;
-        if (dotLayout.getOpIdx() == 0) // $a
-          K = op.getType().getShape()[sharedLayout.getOrder()[0]];
-        else // $b
-          K = op.getType().getShape()[sharedLayout.getOrder()[1]];
-        bool isOuter = K == 1;
-        rewriter.replaceOp(op, lowerSharedToDotOperandDPAS(
-                                   op, adaptor, getTypeConverter(), rewriter,
-                                   dpasLayout, dotLayout, isOuter));
-        return success();
-      }
-    }
     return lowerSharedToDistributed(op, adaptor, getTypeConverter(), rewriter);
   }
 
 private:
-  // shared -> dot_operand if the result layout is dpas
-  Value lowerSharedToDotOperandDPAS(
-      LocalLoadOp op, LocalLoadOpAdaptor adaptor,
-      const LLVMTypeConverter *typeConverter,
-      ConversionPatternRewriter &rewriter, const DpasEncodingAttr &dpasLayout,
-      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto src = op.getSrc();
-    Value dst = op.getResult();
-
-    auto llvmElemTy =
-        typeConverter->convertType(src.getType().getElementType());
-
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                   llvmElemTy, rewriter);
-    Value res;
-    if (!isOuter) {
-      res = SharedToDotOperandDPAS::intel::convertLayout(
-          dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
-          smemObj, typeConverter, b.tid_val());
-    } else {
-      assert(false && "unsupported DPAS layout found");
-    }
-    return res;
-  }
-
   LogicalResult
   lowerSharedToDistributed(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
