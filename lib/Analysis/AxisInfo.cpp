@@ -1222,16 +1222,15 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
+  auto layout = tensorTy.getEncoding();
 
-  // FIXME: This is not as good as it could be, as we don't need to restrict
-  // the analysis to one dimension. We should determine contiguity on the
-  // flattenOuts() layout
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
-  auto order = linAttr.getOrder();
+  // Here order should be ordered by contiguous first, so the first element
+  // should have the largest contiguous.
+  auto order = triton::gpu::getOrder(layout);
   unsigned align = getPtrAlignment(ptr);
 
-  auto uniqueContigPerThread = linAttr.getContigPerThread();
+  auto uniqueContigPerThread =
+      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
@@ -1248,9 +1247,8 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto *axisInfo = getAxisInfo(ptr);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
-  auto order = linAttr.getOrder();
+  auto layout = tensorTy.getEncoding();
+  auto order = triton::gpu::getOrder(layout);
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
@@ -1277,9 +1275,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
-  auto maskOrder = linAttr.getOrder();
+  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);

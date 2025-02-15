@@ -9,6 +9,7 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::expandMatrixOrderWithBatch;
 using ::mlir::triton::gpu::expandMatrixShapeWithBatch;
+using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;

@@ -89,26 +89,14 @@ public:
   explicit ScanLoweringHelper(triton::ScanOp op) : scanOp(op) {
     auto firstTy = cast<RankedTensorType>(op.getOperands()[0].getType());
     srcShape = firstTy.getShape();
-    legacyEncoding = firstTy.getEncoding();
-    srcEncoding = triton::gpu::toLinearEncoding(legacyEncoding, srcShape);
+    srcEncoding = firstTy.getEncoding();
     srcElementTypes = op.getElementTypes();
-    // The codegen does not support different element/thread/warp order so
-    // we choose one a priori. We choose that of the blocked encoding.
-    // When we generalise this code to other layouts we'll probably need to
-    // get rid of all this logic and the *Stride auxiliary methods
-    // and replace them by transposes and reshapes on the LinearLayout
-    if (auto blockedEncoding =
-            dyn_cast<triton::gpu::BlockedEncodingAttr>(legacyEncoding)) {
-      order = llvm::to_vector(blockedEncoding.getOrder());
-    } else {
-      order = srcEncoding.getOrder();
-    }
 
     for (const auto &t : op.getInputTypes()) {
       if (t.getShape() != srcShape) {
         op.emitError() << "shape mismatch";
       }
-      if (t.getEncoding() != legacyEncoding) {
+      if (t.getEncoding() != srcEncoding) {
         op.emitError() << "encoding mismatch";
       }
     }
@@ -123,8 +111,12 @@ public:
   unsigned getNonAxisNumThreadsPerWarp();
   // Return the flat numbers of threads computing independent scan results.
   unsigned getNonAxisNumThreadsPerCTA();
+  // Return the number of warps per CTA along axis dim.
+  unsigned getAxisNumWarps();
   // Return the number of warps per CTA along axis dim with unique data.
   unsigned getAxisNumWarpsWithUniqueData();
+  // Return the number of threads per warp along axis dim.
+  unsigned getAxisNumThreadsPerWarp();
   // Return the number of threads per warp along axis dim with unique data.
   unsigned getAxisNumThreadsPerWarpWithUniqueData();
   // Return the number of blocks along axis dim.
@@ -147,20 +139,18 @@ public:
   Location getLoc() { return scanOp.getLoc(); }
   unsigned getAxis() { return scanOp.getAxis(); }
   bool getReverse() { return scanOp.getReverse(); }
-  triton::gpu::LinearEncodingAttr getEncoding() { return srcEncoding; }
+  triton::gpu::BlockedEncodingAttr getEncoding();
   llvm::ArrayRef<int64_t> getShape() { return srcShape; }
   unsigned getNumOperands() { return scanOp.getNumOperands(); }
   SmallVector<Type> getElementTypes() { return srcElementTypes; }
-  SmallVector<unsigned> getOrder() { return order; }
+  Attribute getSrcLayout() { return srcEncoding; }
   Region &getCombineOp();
 
 private:
   triton::ScanOp scanOp;
-  triton::gpu::LinearEncodingAttr srcEncoding;
-  Attribute legacyEncoding;
+  Attribute srcEncoding;
   llvm::ArrayRef<int64_t> srcShape;
   SmallVector<Type> srcElementTypes;
-  SmallVector<unsigned> order;
 };
 
 // Helper class for lowering `tt.gather` operations. This class shares lowering
