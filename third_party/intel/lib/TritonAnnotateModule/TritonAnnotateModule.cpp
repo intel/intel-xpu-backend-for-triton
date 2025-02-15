@@ -48,9 +48,6 @@ private:
   void setThreadsPerWarp(ModuleOp &mod,
                          const DPASAnalysis &dpasAnalysis) const {
     Builder builder(mod);
-    const std::string &AttrNumThreadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarpAttrName();
-
     mod.walk([&](FunctionOpInterface funcOp) {
       // FIXME: DPAS lowering only implemented for 16 threads per warp, i.e.,
       // DPAS is not used for devices like ATS.

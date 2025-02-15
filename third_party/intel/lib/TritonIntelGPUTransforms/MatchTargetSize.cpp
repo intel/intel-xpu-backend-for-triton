@@ -220,7 +220,7 @@ static void rewriteLoadWithSLM(ModuleOp &m, DenseSet<Value> &dotWithSLMOperands,
   OpBuilder b(load);
   auto type = cast<RankedTensorType>(load.getType());
   unsigned bytes = type.getNumElements() * type.getElementTypeBitWidth() / 8;
-  unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(m);
+  unsigned numWarps = ttg::lookupNumWarps(load);
   unsigned slmSize = numWarps * bytes;
 
   // TODO: use LocalAllocOp for SLM allocation
@@ -849,16 +849,13 @@ static SmallVector<Value> glueForReduction(OpBuilder &builder, Location loc,
 
 static Value allocateSLMForTransposedReduction(tt::ReduceOp op, unsigned step,
                                                OpBuilder &b) {
-  auto m = op->getParentOfType<ModuleOp>();
-
   Value src = op.getSrcs().front();
   auto srcTy = cast<RankedTensorType>(src.getType());
   Location loc = op.getLoc();
 
   // Fixed size for num_warps matrices of sg_size^2 shape.
   int64_t size = static_cast<int64_t>(step) * step *
-                 srcTy.getElementTypeBitWidth() / 8 *
-                 ttg::TritonGPUDialect::getNumWarps(m);
+                 srcTy.getElementTypeBitWidth() / 8 * ttg::lookupNumWarps(op);
   Type allocTy = cast<RankedTensorType>(src.getType()).getElementType();
   Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
   return hackAlloc(b, loc, ptrTy, size);

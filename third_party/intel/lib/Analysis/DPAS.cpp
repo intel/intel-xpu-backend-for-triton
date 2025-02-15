@@ -61,8 +61,7 @@ DPASAnalysis::canUseDPAS(FunctionOpInterface funcOp) const {
   // Verify whether the module has the correct number of threads per warp.
   // Note: if the module doesn't then return 'Result::Maybe' to allow the caller
   // to set warp size.
-  Attribute threadsPerWarpAttr =
-      mod->getDiscardableAttr(TritonGPUDialect::getThreadsPerWarpAttrName());
+  Attribute threadsPerWarpAttr = mod->getDiscardableAttr(AttrNumThreadsPerWarp);
   if (!threadsPerWarpAttr)
     return Result::Maybe;
 
