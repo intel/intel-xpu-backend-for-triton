@@ -27,7 +27,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = b.int_val(1, 1);
-  auto tid = b.tid_val();
+  auto tid = getThreadId(rewriter, loc);
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();

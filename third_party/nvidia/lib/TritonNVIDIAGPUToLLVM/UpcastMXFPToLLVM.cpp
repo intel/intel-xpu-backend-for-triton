@@ -162,7 +162,7 @@ public:
     auto fpType = op.getFpType();
     auto outType = op.getType().getElementType();
 
-    Value tid = b.tid_val();
+    Value tid = getThreadId(rewriter, loc);
     auto mod = op->getParentOfType<ModuleOp>();
     Value warpSize =
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
