@@ -18,7 +18,7 @@ from triton_kernels_benchmark import xetla_kernel
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
 use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
-SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0' and not TRANSPOSE_A
+SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
 
 @triton.autotune(
