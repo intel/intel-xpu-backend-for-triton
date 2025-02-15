@@ -410,7 +410,6 @@ public:
 
     // get MFMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
-    auto mod = dotOp->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(dotOp);
 
     // operands
@@ -506,10 +505,10 @@ public:
     auto newDot = rewriter.create<tt::DotOp>(
         dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
         dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-
     Value dotOutput =
         convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
                              oldRetType.getElementType());
+
     rewriter.replaceOp(dotOp, dotOutput);
 
     return success();
@@ -560,9 +559,9 @@ public:
 
     MLIRContext *ctx = dotOp.getContext();
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
+    int numWarps = ttg::lookupNumWarps(dotOp);
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
-    int numWarps = ttg::lookupNumWarps(dotOp);
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.
@@ -673,9 +672,9 @@ public:
       // TODO: Emit device assert to check scale tensor range fitting into fp16?
       Type outputElemType = useFp16 ? b.getF16Type() : b.getBF16Type();
       auto outputType =
-          ttg::UpcastMXFPOp::deduceOutputType(v, elemType, outputElemType);
-      return rewriter.create<ttg::UpcastMXFPOp>(dotOp.getLoc(), outputType, v,
-                                                convOp, elemType, fastMath);
+          amdgpu::UpcastMXFPOp::deduceOutputType(v, elemType, outputElemType);
+      return rewriter.create<amdgpu::UpcastMXFPOp>(
+          dotOp.getLoc(), outputType, v, convOp, elemType, fastMath);
     };
 
     Value scaledA =
@@ -739,7 +738,6 @@ public:
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6, mxfp8");
 
     MLIRContext *ctx = dotOp.getContext();
-    auto moduleOp = dotOp->getParentOfType<ModuleOp>();
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
     unsigned numWarps = ttg::lookupNumWarps(dotOp);
