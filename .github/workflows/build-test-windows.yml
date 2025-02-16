@@ -51,6 +51,7 @@ jobs:
       - name: Install PyTorch (source)
         run: |
           .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           bash -c "PYTORCH_PROJ=/c/pytorch ./scripts/install-pytorch.sh --source --check-wheel"
 
       - name: PyTorch version
