@@ -206,7 +206,6 @@ function install_pytorch {
   pip install dist/*.whl
 }
 
-# TODO: add command line option to rebuild even if pytorch wheel exists
 if [ "$CHECK_WHEEL" = false ] || ! pytorch_wheel_exists; then
   build_pytorch
 fi
