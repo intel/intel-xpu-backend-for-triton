@@ -19,7 +19,8 @@ env:
 jobs:
   build:
     name: Build and test
-    runs-on: win-a770
+    # FIXME
+    runs-on: win-b580
     steps:
       - name: Enable long paths
         run: |
