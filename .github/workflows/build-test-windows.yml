@@ -48,11 +48,10 @@ jobs:
         run:
           python -m venv .venv
 
-      # FIXME: the runner has PyTorch wheels pre-compiled from sources in a specific location
       - name: Install PyTorch (source)
         run: |
           .venv\Scripts\activate.ps1
-          pip install (Get-Item C:\pytorch\dist\*.whl)
+          bash -c "PYTORCH_PROJ=/c/pytorch ./scripts/install-pytorch.sh --source --check-wheel"
 
       - name: PyTorch version
         run: |
