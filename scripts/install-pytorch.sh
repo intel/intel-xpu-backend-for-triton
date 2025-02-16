@@ -152,10 +152,11 @@ function pytorch_wheel_exists {
   PYTORCH_COMMIT=${PYTORCH_PINNED_COMMIT:-main}
   if [[ $OSTYPE = msys ]]; then
     PYTORCH_OS=win
+    PYTORCH_ARCH="amd64"
   else
     PYTORCH_OS=linux
+    PYTORCH_ARCH="x86_64"
   fi
-  PYTORCH_ARCH="amd64"
   PYTORCH_WHEEL_NAME="torch-${PYTORCH_VERSION}+git${PYTORCH_COMMIT:0:7}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-${PYTORCH_OS}_${PYTORCH_ARCH}.whl"
   if [[ -f $PYTORCH_PROJ/dist/$PYTORCH_WHEEL_NAME ]]; then
     echo "**** $PYTORCH_WHEEL_NAME exists ****"
