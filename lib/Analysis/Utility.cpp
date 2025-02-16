@@ -302,8 +302,7 @@ bool ScanLoweringHelper::isSupported() {
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInElems() {
-  auto mod = scanOp->getParentOfType<ModuleOp>();
-  unsigned numWarps = TritonGPUDialect::getNumWarps(mod);
+  unsigned numWarps = product(getEncoding().getWarpsPerCTA());
   unsigned numNonAxisElementsPerWarp =
       getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
   unsigned numElements = numWarps * numNonAxisElementsPerWarp *
@@ -726,8 +725,7 @@ bool supportMMA(triton::DotOp op, int version) {
     auto retType = op.getType();
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(op);
     if (aElemTy.isInteger() || bElemTy.isInteger() ||
         retType.getElementType().isInteger())
       return false;
@@ -749,8 +747,7 @@ bool supportMMA(triton::DotOp op, int version) {
       return false;
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(op);
     // TODO(Keren): for now, fallback to MMAv2 if handling batch matmul.
     if (rank == 3)
       return false;

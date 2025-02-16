@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer --split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer=ignore-masks=true --split-input-file -canonicalize | FileCheck %s
 
 // These tests check that loads/stores that exhibit a cmp ge against 0 work
 // correctly with the pointer analysis pass
@@ -37,9 +37,7 @@ tt.func public @test_masked_load(%arg0: !tt.ptr<f16>) -> tensor<16x16xf16> {
   %13 = tt.expand_dims %12 {axis = 0 : i32} : tensor<16xi64> -> tensor<1x16xi64>
   %14 = arith.cmpi sge, %13, %cst : tensor<1x16xi64>
   %15 = tt.broadcast %14 : tensor<1x16xi1> -> tensor<16x16xi1>
-  %16 = tt.load %8 evictionPolicy = evict_last : tensor<16x16x!tt.ptr<f16>>
-  // TODO: Replace above with below once support for masked loads is complete.
-  // %16 = tt.load %8, %15 evictionPolicy = evict_last : tensor<16x16x!tt.ptr<f16>>
+  %16 = tt.load %8, %15 evictionPolicy = evict_last : tensor<16x16x!tt.ptr<f16>>
   tt.return %16 : tensor<16x16xf16>
 }
 
@@ -65,9 +63,7 @@ tt.func public @test_masked_store(%arg0: !tt.ptr<f16>) {
   %5 = tt.addptr %0, %4 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi64>
   %6 = arith.cmpi sge, %3, %cst : tensor<16x1xi64>
   %7 = tt.broadcast %6 : tensor<16x1xi1> -> tensor<16x16xi1>
-  // TODO: Replace above with below once support for masked stores is complete.
-  //  tt.store %5, %cst_0, %7 : tensor<16x16x!tt.ptr<f16>>
-  tt.store %5, %cst_0 : tensor<16x16x!tt.ptr<f16>>
+  tt.store %5, %cst_0, %7 : tensor<16x16x!tt.ptr<f16>>
   tt.return
 }
 

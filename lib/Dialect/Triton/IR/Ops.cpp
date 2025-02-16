@@ -922,7 +922,7 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
   if (argAttrs.empty())
     return;
   assert(type.getNumInputs() == argAttrs.size());
-  function_interface_impl::addArgAndResultAttrs(
+  call_interface_impl::addArgAndResultAttrs(
       builder, state, argAttrs, /*resultAttrs=*/std::nullopt,
       getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
 }
@@ -1237,7 +1237,19 @@ static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
                                                   TensorDescType desc,
                                                   RankedTensorType tensor) {
   RankedTensorType block = desc.getBlockType();
-  if (block.getShape() == tensor.getShape() &&
+  ArrayRef<int64_t> blockShape = block.getShape();
+  ArrayRef<int64_t> tensorShape = tensor.getShape();
+  if (blockShape.size() > tensorShape.size()) {
+    // Allow ranked reduced load if the leading dimensions are all 1s.
+    for (int i = 0; i < blockShape.size() - tensorShape.size(); ++i) {
+      if (blockShape[i] != 1)
+        return op->emitOpError(
+            "ranked reduce load only allowed for unit dimension leading dim.");
+    }
+    blockShape = blockShape.take_back(tensorShape.size());
+  }
+
+  if (blockShape == tensorShape &&
       block.getElementType() == tensor.getElementType())
     return success();
   return op->emitOpError("tensor desciptor block and tensor types must match");

@@ -65,6 +65,9 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
+        # Only kpack=1 is supported on gfx950
+        kpack = 1 if self.arch == 'gfx950' else self.kpack
+        object.__setattr__(self, 'kpack', kpack)
         libs = ["ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
@@ -99,7 +102,7 @@ class HIPBackend(BaseBackend):
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
+            if self.target.arch in ('gfx940', 'gfx941', 'gfx942', 'gfx950'):
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-raise-block-pointer=ignore-masks=true -canonicalize | FileCheck %s
 
 module {
   tt.func public @add_kernel_01234(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>, %arg3: i32) {
@@ -12,20 +12,14 @@ module {
     %6 = arith.cmpi slt, %4, %5 : tensor<1024xi32>
     %7 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
     %8 = tt.addptr %7, %4 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-    // TODO: add back once masked loads are supported
-    // %9 = tt.load %8, %6 : tensor<1024x!tt.ptr<f32>>
-    %9 = tt.load %8 : tensor<1024x!tt.ptr<f32>>
+    %9 = tt.load %8, %6 : tensor<1024x!tt.ptr<f32>>
     %10 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
     %11 = tt.addptr %10, %4 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-    // TODO: add back once masked loads are supported
-    // %12 = tt.load %11, %6 : tensor<1024x!tt.ptr<f32>>
-    %12 = tt.load %11 : tensor<1024x!tt.ptr<f32>>
+    %12 = tt.load %11, %6 : tensor<1024x!tt.ptr<f32>>
     %13 = arith.addf %9, %12 : tensor<1024xf32>
     %14 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
     %15 = tt.addptr %14, %4 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-    // TODO: add back once masked stores are supported
-    //  tt.store %15, %13, %6 : tensor<1024x!tt.ptr<f32>>
-    tt.store %15, %13 : tensor<1024x!tt.ptr<f32>>
+    tt.store %15, %13, %6 : tensor<1024x!tt.ptr<f32>>
     tt.return
   }
 }

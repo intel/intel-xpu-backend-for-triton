@@ -105,14 +105,14 @@ public:
 
     // Create DPAS encoding for the given number of warps
     ArrayRef<int64_t> retShape = oldRetType.getShape();
-    ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
-    unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    unsigned numWarps = ttg::lookupNumWarps(funcOp);
 
     TensorValue a = dotOp.getA();
     TensorValue b = dotOp.getB();
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
 
+    ModuleOp mod = funcOp->getParentOfType<ModuleOp>();
     auto dpasCap = ttgi::DpasEncodingAttr::getDPASCapability(mod);
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
@@ -295,7 +295,7 @@ private:
     assert(opDesc.scale && "Expecting valid operand & scale");
 
     MLIRContext *ctx = opDesc.op.getContext();
-    unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    unsigned numWarps = ttg::lookupNumWarps(&*rewriter.getInsertionPoint());
     unsigned warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     unsigned opsPerChannel = dpasEnc.getOpsPerChannel();
     unsigned rank = retType.getRank();
@@ -372,7 +372,7 @@ private:
         aScale ? b.getType().getElementType() : a.getType().getElementType();
     unsigned opsPerChan =
         ttg::intel::DpasEncodingAttr::getOpsPerChannel(elemType);
-    unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    unsigned numWarps = ttg::lookupNumWarps(scaledDotOp);
     SmallVector<unsigned> warpsPerTile = {numWarps, 1};
 
     ArrayRef<int64_t> retShape = scaledDotOp.getType().getShape();

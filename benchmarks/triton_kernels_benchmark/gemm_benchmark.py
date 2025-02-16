@@ -18,7 +18,7 @@ from triton_kernels_benchmark import xetla_kernel
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
 use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
-SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0' and not TRANSPOSE_A
+SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
 
 @triton.autotune(
@@ -256,7 +256,8 @@ def is_enough_memory(x_val):
     # a: (B, M, K) bfloat16
     # b: (B, N, K) bfloat16
     # c: (B, M, N) float32
-    required_memory = B * M * K * 2 + B * N * K * 2 + B * M * N * 4
+    # pytorch reference: (B, M, N) float32
+    required_memory = B * M * K * 2 + B * N * K * 2 + 2 * B * M * N * 4
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
