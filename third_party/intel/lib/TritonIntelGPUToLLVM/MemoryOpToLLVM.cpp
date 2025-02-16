@@ -175,7 +175,7 @@ private:
     if (!isOuter) {
       res = SharedToDotOperandDPAS::intel::convertLayout(
           dotOperandLayout.getOpIdx(), rewriter, loc, src, dotOperandLayout,
-          smemObj, typeConverter, b.tid_val());
+          smemObj, typeConverter, getThreadId(rewriter, loc));
     } else {
       assert(false && "unsupported DPAS layout found");
     }
