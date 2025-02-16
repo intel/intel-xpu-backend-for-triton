@@ -60,6 +60,10 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          # Required to build on Windows
+          $env:CMAKE_SHARED_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:CMAKE_MODULE_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:CMAKE_EXE_LINKER_FLAGS = "/FORCE:MULTIPLE"
           bash -c "PYTORCH_PROJ=/c/pytorch ./scripts/install-pytorch.sh --source --check-wheel"
 
       - name: PyTorch version
