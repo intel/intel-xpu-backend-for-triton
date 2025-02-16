@@ -137,7 +137,7 @@ fi
 BASE=$(cd "$ROOT/.." && pwd)
 SCRIPTS_DIR=$ROOT/scripts
 PYTORCH_PROJ=${PYTORCH_PROJ:-$BASE/pytorch}
-BASE=$(cd "$PYTORCH_PROJ/.." && pwd)
+BASE=$(dirname "$PYTORCH_PROJ")
 
 echo "**** BASE is set to $BASE ****"
 echo "**** PYTORCH_PROJ is set to $PYTORCH_PROJ ****"
