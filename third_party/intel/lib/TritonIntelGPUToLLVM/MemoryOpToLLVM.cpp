@@ -20,6 +20,18 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+static bool getBoolFromEnv(const std::string& envVar, bool defaultValue = false) {
+    const char* value = std::getenv(envVar.c_str());
+    if (value == nullptr) {
+        return defaultValue; // Return default if the variable is not set
+    }
+
+    std::string strValue(value);
+    for (char& c : strValue) c = std::tolower(c); // Convert to lowercase
+
+    return (strValue == "1" || strValue == "true" || strValue == "yes" || strValue == "on");
+}
+
 // blocked -> shared.
 // Swizzling in shared memory to avoid bank conflict. Normally used for
 // A/B operands of dots.
@@ -78,11 +90,14 @@ struct LocalAllocOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    llvm::dbgs() << "\n\n===LocalAllocOpConversion BEFORE===\n";
-    op.dump();
-    for (auto& x : *(op->getParentRegion())) {
-        x.dump();
+    if (getBoolFromEnv("TR_LONG_IR")) {
+        llvm::dbgs() << "\n\n===LocalAllocOpConversion BEFORE===\n";
+        op.dump();
+        for (auto& x : *(op->getParentRegion())) {
+            x.dump();
+        }
     }
+
     if (!op.isSharedMemoryAlloc())
       return failure();
     Location loc = op->getLoc();
@@ -99,16 +114,23 @@ struct LocalAllocOpConversion
                                       loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
+      llvm::dbgs() << "LocalAllocOp adaptor.src():\n";
+      adaptor.getSrc().dump();
+      llvm::dbgs() << "LocalAllocOp op.src() and op itself:\n";
+      op.getSrc().dump();
+      op.dump();
       lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
                                adaptor.getSrc(), smemObj, typeConverter,
                                rewriter, targetInfo);
     }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
+    if (getBoolFromEnv("TR_LONG_IR")) {
     llvm::dbgs() << "\n\n===LocalAllocOpConversion AFTER===\n";
     retVal.dump();
     for (auto& x : *(retVal.getParentRegion())) {
         x.dump();
+    }
     }
     return success();
   }
@@ -195,10 +217,12 @@ private:
   lowerSharedToDistributed(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter) const {
+    if (getBoolFromEnv("TR_LONG_IR")) {
     llvm::dbgs() << "\n\n===lowerSharedToDistributed BEFORE===\n";
     op.dump();
     for (auto& x : *(op->getParentRegion())) {
         x.dump();
+    }
     }
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
@@ -214,10 +238,12 @@ private:
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
+    if (getBoolFromEnv("TR_LONG_IR")) {
     llvm::dbgs() << "\n\n===lowerSharedToDistributed AFTER===\n";
     result.dump();
     for (auto& x : *(result.getParentRegion())) {
         x.dump();
+    }
     }
     return success();
   }

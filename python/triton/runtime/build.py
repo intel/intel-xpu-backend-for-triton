@@ -93,5 +93,13 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     if os.getenv("VERBOSE"):
         print(" ".join(cc_cmd))
 
-    subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
+    result = subprocess.run(cc_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+
+    if result.returncode != 0:
+        print(f"Error: Command failed with exit code {result.returncode}")
+        if result.stderr:
+            print("Error output:", result.stderr)
+
+    # breakpoint()
+    # subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     return so

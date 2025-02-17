@@ -367,12 +367,13 @@ Value getSmemVecAddrNEW(const LinearLayout &regLayout,
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
   if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
-    smemOffset = applyLinearLayout(loc, rewriter, regToSharedLayout,
+    auto res = applyLinearLayout(loc, rewriter, regToSharedLayout,
                                    {{kRegister, regId},
                                     {kLane, laneId},
                                     {kWarp, warpId},
-                                    {kBlock, blockId}})[0]
-                     .second;
+                                    {kBlock, blockId}});
+    std::cout << "linearLayRes.size(): " << res.size() << "\n";
+    smemOffset = res[0].second;
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
     assert(!sharedEnc.getHasLeadingOffset() &&
@@ -426,7 +427,7 @@ Value getSmemVecAddrNEW(const LinearLayout &regLayout,
 } // namespace
 
 
-bool getBoolFromEnv(const std::string& envVar, bool defaultValue = false) {
+static bool getBoolFromEnv(const std::string& envVar, bool defaultValue = false) {
     const char* value = std::getenv(envVar.c_str());
     if (value == nullptr) {
         return defaultValue; // Return default if the variable is not set
@@ -549,10 +550,18 @@ bool emitTransferBetweenRegistersAndSharedNEW(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
+  llvm::dbgs() << "registerTy enc\n";
+  registerTy.dump();
+  registerTy.getEncoding().dump();
+  llvm::dbgs() << "shape: "; for (auto &el : shape) { llvm::dbgs() << el << " ";} llvm::dbgs() << "\n";
   LinearLayout regLayout =
       triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   printLinearThing(regLayout, "regLayout");
 
+  llvm::dbgs() << "sharedTy enc\n";
+  sharedTy.dump();
+  sharedTy.getEncoding().dump();
+  llvm::dbgs() << "shape: "; for (auto &el : shape) { llvm::dbgs() << el << " ";} llvm::dbgs() << "\n";
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   printLinearThing(sharedLayout, "sharedLayout");
@@ -653,13 +662,30 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
       rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        auto vecVal = load(vecTy, vecAddr);
-        vecVal.setAlignment(vecTy.getNumElements() *
-                            elemLlvmTy.getIntOrFloatBitWidth() / 8);
+        if (vecTy.getNumElements() >= 64) {
+            assert(vecTy.getNumElements() % 64 == 0);
+            for (int i = 0; i < vecTy.getNumElements(); i+=64) {
+                auto smallVecTy = vec_ty(elemLlvmTy, 64);
+                auto vecAddrNew = gep(vecAddr.getType(), i32_ty, vecAddr, SmallVector<Value>({i32_val(i)}));
+                auto vecVal = load(smallVecTy, vecAddrNew);
+                vecVal.setAlignment(smallVecTy.getNumElements() *
+                                    elemLlvmTy.getIntOrFloatBitWidth() / 8);
 
-        for (int v = 0; v < vecTy.getNumElements(); v++) {
-          ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
+                for (int v = 0; v < 64; v++) {
+                    ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
+                }
+            }
+            
+        } else {
+            auto vecVal = load(vecTy, vecAddr);
+            vecVal.setAlignment(vecTy.getNumElements() *
+                                elemLlvmTy.getIntOrFloatBitWidth() / 8);
+
+            for (int v = 0; v < vecTy.getNumElements(); v++) {
+                ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
+            }
         }
+
       });
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from shared to register");
