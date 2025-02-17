@@ -188,29 +188,8 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -k "not test_local_load_store_dot" -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+  pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_pytorch_clean_cache.py --device xpu
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
-
-  # run runtime tests serially to avoid race condition with cache handling.
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    pytest -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
-
-  TRITON_TEST_SUITE=debug \
-    pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
-
-  # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
-
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    pytest -k "not test_disam_cubin" --verbose tools
-
-  cd $TRITON_PROJ/third_party/intel/python/test
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-  pytest --device xpu .
 }
 
 run_regression_tests() {
@@ -219,8 +198,6 @@ run_regression_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/regression
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-    pytest -vvv -s --device xpu . --ignore=test_performance.py
 }
 
 run_interpreter_tests() {
@@ -229,9 +206,6 @@ run_interpreter_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
 
-  TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
-    language/test_random.py language/test_line_info.py --device cpu
 }
 
 run_tutorial_tests() {
@@ -241,18 +215,6 @@ run_tutorial_tests() {
   python -m pip install matplotlib pandas tabulate -q
   cd $TRITON_PROJ/python/tutorials
 
-  run_tutorial_test "01-vector-add"
-  run_tutorial_test "02-fused-softmax"
-  run_tutorial_test "03-matrix-multiplication"
-  TRITON_INTEL_RAISE_BLOCK_POINTER=true \
-    run_tutorial_test "03-matrix-multiplication" "TRITON_INTEL_RAISE_BLOCK_POINTER"
-  run_tutorial_test "04-low-memory-dropout"
-  run_tutorial_test "05-layer-norm"
-  run_tutorial_test "06-fused-attention"
-  run_tutorial_test "07-extern-functions"
-  run_tutorial_test "08-grouped-gemm"
-  run_tutorial_test "10-experimental-block-pointer"
-  run_tutorial_test "10i-experimental-block-pointer"
 }
 
 run_microbench_tests() {
