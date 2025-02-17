@@ -2,6 +2,15 @@ name: Build and test on Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
+        default: win-a770
+      skip_list:
+        description: Skip list
+        type: string
+        default: a770
 
   schedule:
     - cron: "1 5 * * *"
@@ -13,13 +22,15 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  SKIPLIST: --skip-list scripts/skiplist/a770
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
+  SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
 
 jobs:
   build:
     name: Build and test
-    runs-on: win-a770
+    runs-on: ${{ inputs.runner_label || 'win-a770' }}
+    # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
+    timeout-minutes: 480
     steps:
       - name: Enable long paths
         run: |
@@ -47,11 +58,15 @@ jobs:
         run:
           python -m venv .venv
 
-      # FIXME: the runner has PyTorch wheels pre-compiled from sources in a specific location
       - name: Install PyTorch (source)
         run: |
           .venv\Scripts\activate.ps1
-          pip install (Get-Item C:\pytorch\dist\*.whl)
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          # Required to build on Windows
+          $env:CMAKE_SHARED_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:CMAKE_MODULE_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:CMAKE_EXE_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          bash -c "PYTORCH_PROJ=/c/pytorch ./scripts/install-pytorch.sh --source --check-wheel"
 
       - name: PyTorch version
         run: |
