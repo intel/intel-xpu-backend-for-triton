@@ -5,3 +5,5 @@ test/unit/language/test_core.py::test_scaled_dot[128-32-64-True-True-True-e4m3-b
 test/unit/language/test_core.py::test_scaled_dot[32-64-128-False-False-True-e5m2-bf16-4-16-1]
 test/unit/language/test_core.py::test_scaled_dot[64-32-64-False-False-True-e4m3-fp16-4-16-1]
 test/unit/language/test_core.py::test_scaled_dot[64-64-128-False-True-True-e5m2-bf16-4-16-1]
+test/unit/language/test_core.py::test_scaled_dot[128-128-128-True-False-False-e4m3-bf16-4-16-1]
+test/unit/language/test_core.py::test_scaled_dot[128-128-128-True-False-False-e4m3-fp16-4-16-1]
