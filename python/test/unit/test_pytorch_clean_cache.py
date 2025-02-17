@@ -24,6 +24,7 @@ def test_case():
                 for attr_name in m.__dict__.keys():
                     if (attr_name.startswith("triton_poi")):
                         kernel = getattr(m, attr_name)
+                        print(f"{attr_name=}")
                         print(f"{kernel.compile_results[0]=}")
                         print(f"{dir(kernel.compile_results[0])=}", flush=True)
                         del kernel.compile_results[0].kernel
