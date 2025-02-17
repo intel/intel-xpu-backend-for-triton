@@ -38,7 +38,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
     icpx_path = shutil.which("icpx")
-    if icpx_path and os.name != "nt":
+    if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
         compiler_root = os.path.abspath(f"{icpx_path}/../..")
         include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
