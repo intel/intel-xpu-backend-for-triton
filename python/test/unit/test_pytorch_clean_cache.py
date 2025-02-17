@@ -25,6 +25,7 @@ def test_case():
                     if (attr_name.startswith("triton_poi")):
                         kernel = getattr(m, attr_name)
                         print(f"{kernel.compile_results[0]=}")
+                        print(f"{dir(kernel.compile_results[0])=}", flush=True)
                         del kernel.compile_results[0].kernel
                         del kernel.launchers
                 del sys.modules[m_name]
