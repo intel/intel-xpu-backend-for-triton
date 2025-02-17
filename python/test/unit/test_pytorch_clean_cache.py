@@ -27,12 +27,9 @@ def test_case():
                         print(f"{attr_name=}")
                         print(f"{kernel.compile_results[0]=}")
                         print(f"{dir(kernel.compile_results[0])=}", flush=True)
-                        if hasattr(kernel.compile_results[0], "kernel"):
-                            del kernel.compile_results[0].kernel
-                        if hasattr(kernel, "launchers"):
-                            del kernel.launchers
-                        import gc
-                        gc.collect()
+                        kernel.launchers = []
+                        kernel.compile_results[0].kernel.run.mod.__del__()
+                        kernel.compile_results = []
                 del sys.modules[m_name]
 
     print("triton cache dir:", triton_cache_dir)
