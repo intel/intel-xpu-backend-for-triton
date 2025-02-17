@@ -11,7 +11,6 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
   // CHECK-SAME:    %[[VAL_0:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
   // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, {{.*}}} {
   tt.func @convert_dot(%A: tensor<128x64xf16, #blocked0>) {
-    // CHECK-DAG:     %[[CST_128:.*]] = llvm.mlir.constant(128 : i32) : i32
     // CHECK-DAG:     %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK-DAG:     %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK-DAG:     %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -24,52 +23,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // COM:   Start of ttg.local_load. Load the value from SLM to register.
     // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:         %[[WORK_ITEM_ID:.*]] = llvm.trunc %[[WORK_ITEM_ID_]] : i64 to i32
-    // CHECK:         %[[LINEAR_WARP_ID:.*]] = llvm.udiv %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[LANE_ID:.*]] = llvm.urem %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[VAL_471:.*]] = llvm.udiv %[[LINEAR_WARP_ID]], %[[CST_8]]  : i32
-    // CHECK:         %[[WARP_ID_M:.*]] = llvm.urem %[[VAL_471]], %[[CST_4]]  : i32
-    // CHECK:         %[[OUTER_WARP_ID:.*]] = llvm.urem %[[WARP_ID_M]], %[[CST_8]]  : i32
-    // COM:   Compute the offsets of the elements on the SLM.
-    // CHECK:         %[[repKDimStride:.*]] = llvm.mul %[[CST_16]], %[[CST_1]] : i32
-    // CHECK:         %[[repNonKDimStride:.*]] = llvm.mul %[[CST_64]], %[[CST_64]] : i32
-    // CHECK:         %[[warpMatStride:.*]] = llvm.mul %[[CST_16]], %[[CST_64]] : i32
-    // CHECK:         %[[laneRowIndex:.*]] = llvm.udiv %[[LANE_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[laneColIndex_:.*]] = llvm.urem %[[LANE_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[laneColIndex:.*]] = llvm.mul %[[laneColIndex_]], %[[CST_1]] : i32
-    // CHECK:         %[[iOff:.*]] = llvm.mul %[[OUTER_WARP_ID]], %[[warpMatStride]] : i32
-    // CHECK:         %[[rowIndex:.*]] = llvm.mul %[[CST_0]], %[[CST_1]] : i32
-    // CHECK:         %[[iBase_0:.*]] = llvm.add %[[rowIndex]], %[[laneRowIndex]] : i32
-    // CHECK:         %[[iBase_1:.*]] = llvm.add %[[iBase_0]], %[[CST_0]] : i32
-    // CHECK:         %[[jBase_0:.*]] = llvm.add %[[laneColIndex]], %[[CST_0]] : i32
-    // CHECK:         %[[iBase_Rounded:.*]] = llvm.urem %[[iBase_1]], %[[CST_128]]  : i32
-    // CHECK:         %[[jBase_Rounded:.*]] = llvm.urem %[[jBase_0]], %[[CST_64]]  : i32
-    // CHECK:         %[[VAL_487:.*]] = llvm.udiv %[[iBase_Rounded]], %[[CST_1]]  : i32
-    // CHECK:         %[[phase:.*]] = llvm.urem %[[VAL_487]], %[[CST_1]]  : i32
-    // COM: swizzle: col_swizzled = (col / vec) ^ phase * vec
-    // CHECK:         %[[VAL_489:.*]] = llvm.udiv %[[CST_0]], %[[CST_1]]  : i32
-    // CHECK:         %[[VAL_490:.*]] = llvm.add %[[VAL_489]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_491:.*]] = llvm.xor %[[VAL_490]], %[[phase]]  : i32
-    // CHECK:         %[[jOff:.*]] = llvm.mul %[[VAL_491]], %[[CST_1]] : i32
-    // CHECK:         %[[VAL_493:.*]] = llvm.mul %[[iBase_Rounded]], %[[CST_64]] : i32
-    // CHECK:         %[[OFFSET_I:.*]] = llvm.add %[[VAL_493]], %[[iOff]] : i32
-    // CHECK:         %[[VAL_495:.*]] = llvm.mul %[[jBase_Rounded]], %[[CST_1]] : i32
-    // CHECK:         %[[OFFSET_J:.*]] = llvm.add %[[VAL_495]], %[[jOff]] : i32
-    // CHECK:         %[[OFFSET:.*]] = llvm.add %[[OFFSET_I]], %[[OFFSET_J]] : i32
-    // CHECK:         %[[SLM_SWIZZLE_OFFSET:.*]] = llvm.sub %[[CST_0]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_1026:.*]] = llvm.getelementptr %[[SCRATCH_SLM]]{{\[}}%[[SLM_SWIZZLE_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-
-    // COM: Total 16 ptrs per repetition cluster [2, 1] for operand A.
-    // CHECK:         %[[VAL_1027:.*]] = llvm.getelementptr %[[VAL_1026]]{{\[}}%[[OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK-COUNT-15:{{.*}} = llvm.getelementptr %[[VAL_1026]]{{.*}} : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:         %[[offsetOuter:.*]] = llvm.mul %[[repNonKDimStride]], %[[CST_0]] : i32
-    // CHECK:         %[[offsetInner:.*]] = llvm.mul %[[repKDimStride]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_1063:.*]] = llvm.add %[[offsetOuter]], %[[offsetInner]] : i32
-
-    // COM: Total 16 scalar per repetition cluster [2, 1] for operand A.
-    // CHECK:         %[[VAL_1064:.*]] = llvm.getelementptr %[[VAL_1027]]{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:         llvm.load %[[VAL_1064]] : !llvm.ptr<3> -> f16
-    // CHECK-COUNT-15:{{.*}} = llvm.getelementptr {{.*}}{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16{{[[:space:]].*}}{{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> f16
-
+    // CHECK-COUNT-128:        %[[LD_RES:.*]] = llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<3> -> vector<1xf16>
     %AA_DOT = ttg.local_load %AA : !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory> -> tensor<128x64xf16, #dot_operand_a>
 
     %cst0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
@@ -93,7 +47,6 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
   // CHECK-SAME:    %[[VAL_0:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
   // CHECK-SAME:    %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, {{.*}}} {
   tt.func @convert_dot(%A: tensor<128x64xf16, #blocked0>) {
-    // CHECK-DAG:     %[[CST_128:.*]] = llvm.mlir.constant(128 : i32) : i32
     // CHECK-DAG:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
     // CHECK-DAG:     %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK-DAG:     %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -107,52 +60,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // COM:   Start of ttg.local_load. Load the value from SLM to register.
     // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:         %[[WORK_ITEM_ID:.*]] = llvm.trunc %[[WORK_ITEM_ID_]] : i64 to i32
-    // CHECK:         %[[LINEAR_WARP_ID:.*]] = llvm.udiv %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[LANE_ID:.*]] = llvm.urem %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[VAL_471:.*]] = llvm.udiv %[[LINEAR_WARP_ID]], %[[CST_8]]  : i32
-    // CHECK:         %[[WARP_ID_M:.*]] = llvm.urem %[[VAL_471]], %[[CST_4]]  : i32
-    // CHECK:         %[[OUTER_WARP_ID:.*]] = llvm.urem %[[WARP_ID_M]], %[[CST_4]]  : i32
-    // COM:   Compute the offsets of the elements on the SLM.
-    // CHECK:         %[[repKDimStride:.*]] = llvm.mul %[[CST_16]], %[[CST_1]] : i32
-    // CHECK:         %[[repNonKDimStride:.*]] = llvm.mul %[[CST_128]], %[[CST_64]] : i32
-    // CHECK:         %[[warpMatStride:.*]] = llvm.mul %[[CST_32]], %[[CST_64]] : i32
-    // CHECK:         %[[laneRowIndex:.*]] = llvm.udiv %[[LANE_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[laneColIndex_:.*]] = llvm.urem %[[LANE_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[laneColIndex:.*]] = llvm.mul %[[laneColIndex_]], %[[CST_1]] : i32
-    // CHECK:         %[[iOff:.*]] = llvm.mul %[[OUTER_WARP_ID]], %[[warpMatStride]] : i32
-    // CHECK:         %[[rowIndex:.*]] = llvm.mul %[[CST_0]], %[[CST_1]] : i32
-    // CHECK:         %[[iBase_0:.*]] = llvm.add %[[rowIndex]], %[[laneRowIndex]] : i32
-    // CHECK:         %[[iBase_1:.*]] = llvm.add %[[iBase_0]], %[[CST_0]] : i32
-    // CHECK:         %[[jBase_0:.*]] = llvm.add %[[laneColIndex]], %[[CST_0]] : i32
-    // CHECK:         %[[iBase_Rounded:.*]] = llvm.urem %[[iBase_1]], %[[CST_128]]  : i32
-    // CHECK:         %[[jBase_Rounded:.*]] = llvm.urem %[[jBase_0]], %[[CST_64]]  : i32
-    // CHECK:         %[[VAL_487:.*]] = llvm.udiv %[[iBase_Rounded]], %[[CST_1]]  : i32
-    // CHECK:         %[[phase:.*]] = llvm.urem %[[VAL_487]], %[[CST_1]]  : i32
-    // COM: swizzle: col_swizzled = (col / vec) ^ phase * vec
-    // CHECK:         %[[VAL_489:.*]] = llvm.udiv %[[CST_0]], %[[CST_1]]  : i32
-    // CHECK:         %[[VAL_490:.*]] = llvm.add %[[VAL_489]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_491:.*]] = llvm.xor %[[VAL_490]], %[[phase]]  : i32
-    // CHECK:         %[[jOff:.*]] = llvm.mul %[[VAL_491]], %[[CST_1]] : i32
-    // CHECK:         %[[VAL_493:.*]] = llvm.mul %[[iBase_Rounded]], %[[CST_64]] : i32
-    // CHECK:         %[[OFFSET_I:.*]] = llvm.add %[[VAL_493]], %[[iOff]] : i32
-    // CHECK:         %[[VAL_495:.*]] = llvm.mul %[[jBase_Rounded]], %[[CST_1]] : i32
-    // CHECK:         %[[OFFSET_J:.*]] = llvm.add %[[VAL_495]], %[[jOff]] : i32
-    // CHECK:         %[[OFFSET:.*]] = llvm.add %[[OFFSET_I]], %[[OFFSET_J]] : i32
-    // CHECK:         %[[SLM_SWIZZLE_OFFSET:.*]] = llvm.sub %[[CST_0]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_1026:.*]] = llvm.getelementptr %[[SCRATCH_SLM]]{{\[}}%[[SLM_SWIZZLE_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-
-    // COM: Total 32 ptrs per repetition cluster [4, 1] for operand A.
-    // CHECK:         %[[VAL_1027:.*]] = llvm.getelementptr %[[VAL_1026]]{{\[}}%[[OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK-COUNT-31:{{.*}} = llvm.getelementptr %[[VAL_1026]]{{.*}} : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:         %[[offsetOuter:.*]] = llvm.mul %[[repNonKDimStride]], %[[CST_0]] : i32
-    // CHECK:         %[[offsetInner:.*]] = llvm.mul %[[repKDimStride]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_1063:.*]] = llvm.add %[[offsetOuter]], %[[offsetInner]] : i32
-
-    // COM: Total 32 scalar per repetition cluster [4, 1] for operand A.
-    // CHECK:         %[[VAL_1064:.*]] = llvm.getelementptr %[[VAL_1027]]{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:         llvm.load %[[VAL_1064]] : !llvm.ptr<3> -> f16
-    // CHECK-COUNT-31:{{.*}} = llvm.getelementptr {{.*}}{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16{{[[:space:]].*}}{{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> f16
-
+    // CHECK-COUNT-128:        %[[LD_RES:.*]] = llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<3> -> vector<1xf16>
     %AA_DOT = ttg.local_load %AA : !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory> -> tensor<128x64xf16, #dot_operand_a>
 
     %cst0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
@@ -192,51 +100,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     // COM:   Start of ttg.local_load. Load the value from SLM to register.
     // CHECK:         %[[WORK_ITEM_ID_:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]])
     // CHECK:         %[[WORK_ITEM_ID:.*]] = llvm.trunc %[[WORK_ITEM_ID_]] : i64 to i32
-    // CHECK:         %[[LINEAR_WARP_ID:.*]] = llvm.udiv %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[LANE_ID:.*]] = llvm.urem %[[WORK_ITEM_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[WARP_ID_N:.*]] = llvm.urem %[[LINEAR_WARP_ID]], %[[CST_8]]  : i32
-    // CHECK:         %[[OUTER_WARP_ID:.*]] = llvm.urem %[[WARP_ID_N]], %[[CST_8]]  : i32
-    // COM:   Compute the offsets of the elements on the SLM.
-    // CHECK:         %[[repKDimStride:.*]] = llvm.mul %[[CST_16]], %[[CST_256]] : i32
-    // CHECK:         %[[repNonKDimStride:.*]] = llvm.mul %[[CST_256]], %[[CST_1]] : i32
-    // CHECK:         %[[warpMatStride:.*]] = llvm.mul %[[CST_32]], %[[CST_1]] : i32
-    // CHECK:         %[[laneRowIndex_:.*]] = llvm.udiv %[[LANE_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[laneRowIndex:.*]] = llvm.mul %[[laneRowIndex_]], %[[CST_2]] : i32
-    // CHECK:         %[[laneColIndex:.*]] = llvm.urem %[[LANE_ID]], %[[CST_16]]  : i32
-    // CHECK:         %[[iOff:.*]] = llvm.mul %[[OUTER_WARP_ID]], %[[warpMatStride]] : i32
-    // CHECK:         %[[rowIndex:.*]] = llvm.mul %[[CST_0]], %[[CST_2]] : i32
-    // CHECK:         %[[iBase_0:.*]] = llvm.add %[[rowIndex]], %[[laneRowIndex]] : i32
-    // CHECK:         %[[iBase_1:.*]] = llvm.add %[[iBase_0]], %[[CST_0]] : i32
-    // CHECK:         %[[jBase_0:.*]] = llvm.add %[[laneColIndex]], %[[CST_0]] : i32
-    // CHECK:         %[[iBase_Rounded:.*]] = llvm.urem %[[iBase_1]], %[[CST_64]]  : i32
-    // CHECK:         %[[jBase_Rounded:.*]] = llvm.urem %[[jBase_0]], %[[CST_256]]  : i32
-    // CHECK:         %[[VAL_487:.*]] = llvm.udiv %[[iBase_Rounded]], %[[CST_1]]  : i32
-    // CHECK:         %[[phase:.*]] = llvm.urem %[[VAL_487]], %[[CST_1]]  : i32
-    // COM: swizzle: col_swizzled = (col / vec) ^ phase * vec
-    // CHECK:         %[[VAL_489:.*]] = llvm.udiv %[[CST_0]], %[[CST_1]]  : i32
-    // CHECK:         %[[VAL_490:.*]] = llvm.add %[[VAL_489]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_491:.*]] = llvm.xor %[[VAL_490]], %[[phase]]  : i32
-    // CHECK:         %[[jOff:.*]] = llvm.mul %[[VAL_491]], %[[CST_1]] : i32
-    // CHECK:         %[[VAL_493:.*]] = llvm.mul %[[iBase_Rounded]], %[[CST_256]] : i32
-    // CHECK:         %[[OFFSET_I:.*]] = llvm.add %[[VAL_493]], %[[iOff]] : i32
-    // CHECK:         %[[VAL_495:.*]] = llvm.mul %[[jBase_Rounded]], %[[CST_1]] : i32
-    // CHECK:         %[[OFFSET_J:.*]] = llvm.add %[[VAL_495]], %[[jOff]] : i32
-    // CHECK:         %[[OFFSET:.*]] = llvm.add %[[OFFSET_I]], %[[OFFSET_J]] : i32
-    // CHECK:         %[[SLM_SWIZZLE_OFFSET:.*]] = llvm.sub %[[CST_0]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_1026:.*]] = llvm.getelementptr %[[SCRATCH_SLM]]{{\[}}%[[SLM_SWIZZLE_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-
-    // COM: Total 32 ptrs per repetition cluster [1, 2] for operand B.
-    // CHECK:         %[[VAL_1027:.*]] = llvm.getelementptr %[[VAL_1026]]{{\[}}%[[OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK-COUNT-31:{{.*}} = llvm.getelementptr %[[VAL_1026]]{{.*}} : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:         %[[offsetOuter:.*]] = llvm.mul %[[repNonKDimStride]], %[[CST_0]] : i32
-    // CHECK:         %[[offsetInner:.*]] = llvm.mul %[[repKDimStride]], %[[CST_0]] : i32
-    // CHECK:         %[[VAL_1063:.*]] = llvm.add %[[offsetOuter]], %[[offsetInner]] : i32
-
-    // COM: Total 32 scalar per repetition cluster [1, 2] for operand B.
-    // CHECK:         %[[VAL_1064:.*]] = llvm.getelementptr %[[VAL_1027]]{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
-    // CHECK:         llvm.load %[[VAL_1064]] : !llvm.ptr<3> -> f16
-    // CHECK-COUNT-31:{{.*}} = llvm.getelementptr {{.*}}{{\[}}%[[VAL_1063]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16{{[[:space:]].*}}{{.*}} = llvm.load {{.*}} : !llvm.ptr<3> -> f16
-
+    // CHECK-COUNT-128:        %[[LD_RES:.*]] = llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<3> -> vector<1xf16>
     %BB_DOT = ttg.local_load %BB : !ttg.memdesc<64x256xf16, #shared, #ttg.shared_memory> -> tensor<64x256xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %cst1 = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #dot_operand_a>
