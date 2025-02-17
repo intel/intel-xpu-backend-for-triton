@@ -188,7 +188,7 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  pytest --verbose test_pytorch_clean_cache.py --device xpu
+  pytest --verbose test_pytorch_clean_cache.py --device xpu -s
 
 }
 
