@@ -11,6 +11,7 @@ from ..runtime.driver import driver
 from ..tools.disasm import get_sass, get_spvdis
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
+from .write_ir_metadata import write_metadata
 from pathlib import Path
 import re
 import functools
@@ -302,6 +303,9 @@ def compile(src, target=None, options=None):
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
+    write_ir_metadata = os.environ.get("TRITON_WRITE_IR_METADATA", "0") == "1"
+    if write_ir_metadata:
+        write_metadata(fn_cache_manager.key, src)
     # Compilation completed, disabling multithreading in context.
     # This is needed to safely finalize threads pool inside context: if current process forks before
     # python GC deletes context object, thread pool in child process will be invalid, which could

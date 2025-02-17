@@ -196,6 +196,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   Loop strength reduction is known to cause up to 10% performance changes for
   certain kernels with register pressure.
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
+- `TRITON_WRITE_IR_METADATA=1` writes metadata about IR generated for compiled kernels. This metadata is needed to compare between IRs generated across different versions of triton.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
