@@ -134,9 +134,8 @@ fi
 ############################################################################
 # Configure, build and install PyTorch from source.
 
-BASE=$(cd "$ROOT/.." && pwd)
 SCRIPTS_DIR=$ROOT/scripts
-PYTORCH_PROJ=${PYTORCH_PROJ:-$BASE/pytorch}
+PYTORCH_PROJ=${PYTORCH_PROJ:-$ROOT/.scripts_cache}
 BASE=$(dirname "$PYTORCH_PROJ")
 
 echo "**** BASE is set to $BASE ****"
