@@ -26,8 +26,10 @@ with fresh_inductor_cache():
             for attr_name in m.__dict__.keys():
                 if (attr_name.startswith("triton_poi")):
                     kernel = getattr(m, attr_name)
-                    del kernel.compile_results[0].kernel
-                    del kernel.launchers
+                    if hasattr(kernel.compile_results[0], "kernel"):
+                        del kernel.compile_results[0].kernel
+                    if hasattr(kernel, "launchers"):
+                        del kernel.launchers
             del sys.modules[m_name]
 
 print("triton cache dir:", triton_cache_dir)
