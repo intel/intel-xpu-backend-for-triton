@@ -26,6 +26,7 @@ with fresh_inductor_cache():
             for attr_name in m.__dict__.keys():
                 if (attr_name.startswith("triton_poi")):
                     kernel = getattr(m, attr_name)
+                    print(f"{kernel.compile_results[0]=}")
                     del kernel.compile_results[0].kernel
                     del kernel.launchers
             del sys.modules[m_name]
