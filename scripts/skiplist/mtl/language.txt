@@ -174,7 +174,6 @@ test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[0-float8e5-128-2
 test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[128-float8e4nv-128-256-128-128-256-256]
 test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[32-float8e4b15-128-256-128-128-256-256]
 test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[128-float8e4b15-128-256-128-128-256-256]
-test/unit/language/test_core.py::test_tl_range
 test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape0-4]
 test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape1-8]
 test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf[shape2-4]
@@ -188,7 +187,6 @@ test/unit/language/test_core.py::test_cast[1-int32-int64-False-1024]
 test/unit/language/test_core.py::test_cast[1-int32-uint64-False-1024]
 
 # test_dot
-test/unit/language/test_core.py::test_dot[1-64-64-64-4-False-False-chain-dot-ieee-float16-float32-1-None]
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-int8-int8-1-None0]
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-int8-int8-1-None1]
 test/unit/language/test_core.py::test_dot[1-128-128-64-4-True-True-none-tf32-float16-float32-1-None0]

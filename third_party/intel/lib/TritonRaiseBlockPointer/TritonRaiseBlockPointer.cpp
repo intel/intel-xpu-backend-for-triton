@@ -497,6 +497,10 @@ public:
 
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
+
+    if (IgnoreMasks)
+      dropMasks(moduleOp);
+
     if (failed(rewriteOp(moduleOp)))
       moduleOp->emitWarning("TritonRaiseToBlockPointer failed");
 
@@ -508,6 +512,7 @@ public:
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
+private:
   LogicalResult rewriteOp(Operation *rootOp, bool isNested = false) {
     assert(rootOp && "Expected a valid operation");
 
@@ -572,8 +577,12 @@ public:
 
     auto canBeRewrittenUsingBlockPtr = [&](Operation *op) {
       return TypeSwitch<Operation *, bool>(op)
-          .Case<tt::AddPtrOp, tt::LoadOp, tt::StoreOp>(
-              [](auto) { return true; })
+          .Case<tt::AddPtrOp>([](auto) { return true; })
+          .Case<tt::LoadOp>(
+              [this](auto loadOp) { return IgnoreMasks || !loadOp.getMask(); })
+          .Case<tt::StoreOp>([this](auto storeOp) {
+            return IgnoreMasks || !storeOp.getMask();
+          })
           .Default([](auto) { return false; });
     };
 
@@ -1115,6 +1124,45 @@ public:
     });
 
     return success();
+  }
+
+  void dropMasks(ModuleOp moduleOp) const {
+    assert(IgnoreMasks && "Expecting 'IgnoreMask' flag to be set");
+
+    moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+      TypeSwitch<Operation *>(op)
+          .Case<tt::LoadOp>([&](auto loadOp) {
+            if (loadOp.getMask()) {
+              loadOp->emitWarning("TritonRaiseBlockPointer: ignoring mask");
+              OpBuilder builder(loadOp);
+              auto newLoadOp = builder.create<tt::LoadOp>(
+                  loadOp.getLoc(), loadOp.getPtr(), loadOp.getBoundaryCheck(),
+                  loadOp.getPadding(), loadOp.getCache(), loadOp.getEvict(),
+                  loadOp.getIsVolatile());
+              loadOp->replaceAllUsesWith(newLoadOp);
+              loadOp->erase();
+            }
+            return WalkResult::advance();
+          })
+          .Case<tt::StoreOp>([&](auto storeOp) {
+            if (storeOp.getMask()) {
+              storeOp->emitWarning("TritonRaiseBlockPointer: ignoring mask");
+              OpBuilder builder(storeOp);
+              auto newStoreOp = builder.createOrFold<tt::StoreOp>(
+                  storeOp.getLoc(), storeOp.getPtr(), storeOp.getValue(),
+                  storeOp.getBoundaryCheck(), storeOp.getCache(),
+                  storeOp.getEvict());
+
+              storeOp->erase();
+              if (storeOp.getMask().getUsers().empty())
+                storeOp.getMask().getDefiningOp()->erase();
+            }
+            return WalkResult::advance();
+          })
+          .Default([&](auto) { return WalkResult::advance(); });
+    });
+
+    moduleOp.dump();
   }
 
   static void dump(const IRMapping &map) {

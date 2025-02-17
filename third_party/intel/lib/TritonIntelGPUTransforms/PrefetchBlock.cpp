@@ -339,12 +339,10 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
     scf::ForOp loop, SmallVectorImpl<Value> &prefetchPtrs) const {
   assert(prefetchPtrs.empty() && "Expecting an empty vector");
 
-  ModuleOp mod = loop->getParentOfType<ModuleOp>();
   OpBuilder b(loop);
-
   for (tt::LoadOp load : loopLoads.at(loop)) {
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
-    const unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    const unsigned numWarps = ttg::lookupNumWarps(loop);
 
     b.setInsertionPoint(loadInfo.getBlockPtr());
     auto ptr = cast<tt::MakeTensorPtrOp>(

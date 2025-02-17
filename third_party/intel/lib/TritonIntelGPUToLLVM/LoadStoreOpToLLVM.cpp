@@ -27,7 +27,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = b.int_val(1, 1);
-  auto tid = b.tid_val();
+  auto tid = getThreadId(rewriter, loc);
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
@@ -263,8 +263,11 @@ struct LoadStoreConversionBase {
             {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
             b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              // mask = mask && (index < shape)
-              return b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask);
+              // mask = mask && (index < shape) && idx >= 0
+              auto is_pos_idx = b.icmp_sge(index, b.int_val(32, 0));
+              return b.and_(
+                  b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                  is_pos_idx);
             }));
       }
     }
@@ -363,7 +366,7 @@ struct PrefetchOpConversion
       std::swap(tensorShape[0], tensorShape[1]);
     }
 
-    unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    unsigned numWarps = triton::gpu::lookupNumWarps(op);
 
     SmallVector<unsigned, 2> shapePerWarp =
         get2DPrefetchShapePerWarp(tensorType);

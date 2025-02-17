@@ -47,10 +47,11 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
-#define ADD_PASS_WRAPPER_OPT_5(name, builder, ty0, ty1, ty2, ty3, ty4)         \
-  m.def(name,                                                                  \
-        [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2, ty3 val3,      \
-           ty4 val4) { pm.addPass(builder({val0, val1, val2, val3, val4})); })
+#define ADD_PASS_WRAPPER_OPT_6(name, builder, ty0, ty1, ty2, ty3, ty4, ty5)    \
+  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
+                 ty3 val3, ty4 val4, ty5 val5) {                               \
+    pm.addPass(builder({val0, val1, val2, val3, val4, val5}));                 \
+  })
 
 static uint32_t findKernels(llvm::Module &M,
                             std::set<llvm::Function *> &functions) {
@@ -65,8 +66,8 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_raise_block_pointer",
-                     intel::createTritonRaiseBlockPointer);
+  ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
+                         intel::createTritonRaiseBlockPointer, bool);
   ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
                          intel::createConvertTritonToTritonGPUWarp, unsigned);
 }
@@ -97,9 +98,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
   ADD_PASS_WRAPPER_0("add_schedule_load",
                      gpu::intel::createTritonIntelGPUScheduleLoad);
-  ADD_PASS_WRAPPER_OPT_5("add_triton_annotate_module",
+  ADD_PASS_WRAPPER_OPT_6("add_triton_annotate_module",
                          gpu::intel::createTritonAnnotateModule, unsigned, bool,
-                         bool, bool, unsigned);
+                         bool, bool, unsigned, const std::string &);
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_materialize_block_pointer",

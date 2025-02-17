@@ -1445,6 +1445,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
         return {};
     }
+
     if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
@@ -1494,8 +1495,8 @@ AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
                             llvm::ArrayRef<unsigned int> warpsPerCTA,
                             unsigned mDim, unsigned nDim, bool isTransposed,
                             mlir::triton::gpu::CTALayoutAttr) {
-  if (!(versionMajor >= 0 && versionMajor <= 3)) {
-    return emitError() << "major version must be in the [0, 3] range";
+  if (!(versionMajor >= 0 && versionMajor <= 4)) {
+    return emitError() << "major version must be in the [0, 4] range";
   }
   if (versionMinor != 0) {
     return emitError() << "minor version must be 0";
@@ -2249,10 +2250,11 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   assert(parentLayout && "DotOperandEncodingAttr must have a parent");
   if (auto parentMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(parentLayout)) {
     return parentMmaLayout.getSizePerThreadForOperand(getKWidth(), getOpIdx());
+  } else if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(parentLayout)) {
+    return blocked.getSizePerThread();
   } else {
     llvm::report_fatal_error(
-        "DotOperandEncodingAttr non-NvidiaMmaEncodingAttr parent not "
-        "supported yet");
+        "getSizePerThread not implemented for DotOperandEncodingAttr");
     return {};
   }
 }
@@ -2888,7 +2890,7 @@ struct TritonGPUVerifyTensorLayoutInterface
   using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
 
   LogicalResult verifyTensorLayout(
-      Attribute layout, RankedTensorType rankedTy, ModuleOp module,
+      Attribute layout, RankedTensorType rankedTy, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
     if (isa<triton::gpu::SharedEncodingTrait>(layout))
       return makeErr() << "Shared layout is not allowed on tensor type.";
@@ -2896,7 +2898,9 @@ struct TritonGPUVerifyTensorLayoutInterface
     // layouts also have invariants!
 
     // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
-    if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout)) {
+    if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+
       // A different verifier should have checked that the layout itself is
       // valid, including that threads-per-warp has the same rank as
       // warps-per-block etc.
@@ -2907,8 +2911,7 @@ struct TritonGPUVerifyTensorLayoutInterface
                          << rankedTy.getRank() << ".";
       }
 
-      int moduleThreadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+      int moduleThreadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
       int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
       if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
         return makeErr() << layout << ".\nLayout has a total of "
@@ -2917,19 +2920,22 @@ struct TritonGPUVerifyTensorLayoutInterface
                          << moduleThreadsPerWarp << " threads per warp.";
       }
 
-      int moduleWarpsPerCTA =
-          triton::gpu::TritonGPUDialect::getNumWarps(module);
+      std::optional<int> moduleWarpsPerCTA = maybeLookupNumWarps(op);
+      if (!moduleWarpsPerCTA) {
+        return makeErr()
+               << "Could not determine the number of warps per CTA. Operation "
+                  "is not in a context with `ttg.num-warps`.";
+      }
       int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
-      if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
+      if (layoutWarpsPerCTA != *moduleWarpsPerCTA) {
         return makeErr() << layout << ".\nLayout has a total of "
                          << layoutWarpsPerCTA
-                         << " warps per CTA, but the module specifies "
-                         << moduleWarpsPerCTA << " warps per CTA.";
+                         << " warps per CTA, but the context requires "
+                         << *moduleWarpsPerCTA << " warps per CTA.";
       }
 
       if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
-        int moduleCTAsPerCGA =
-            triton::gpu::TritonGPUDialect::getNumCTAs(module);
+        int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
         int64_t layoutCTAsPerCGA =
             product(blocked.getCTALayout().getCTAsPerCGA());
         if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
@@ -3268,6 +3274,7 @@ void mlir::triton::gpu::dumpHWLayout(RankedTensorType tensorType) {
   llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/true);
 }
 
+namespace {
 struct TensorModel
     : public triton::gpu::TensorOrMemDesc::ExternalModel<TensorModel,
                                                          RankedTensorType> {
@@ -3307,6 +3314,7 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
   }
 };
+} // namespace
 
 void TritonGPUDialect::initialize() {
   registerTypes();
@@ -3328,9 +3336,59 @@ void TritonGPUDialect::initialize() {
   MemDescType::attachInterface<MemDescModel>(*getContext());
 }
 
-// verify TritonGPU ops
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
-  // TODO: fill this.
+  // Verify that dialect attributes are attached to the right ops.
+  if (llvm::is_contained(
+          {AttrNumCTAsName, AttrTargetName, AttrNumThreadsPerWarp},
+          attr.getName()) &&
+      !isa<ModuleOp>(op)) {
+    return op->emitOpError("has unexpected attribute ")
+           << attr.getName() << " which is expected only on `module` ops";
+  }
+  if (attr.getName() == AttrNumWarpsName && !isa<ModuleOp, FuncOp>(op)) {
+    return op->emitOpError("has unexpected attribute ")
+           << attr.getName()
+           << " which is expected only on `module` or `tt.func` ops";
+  }
+
   return success();
+}
+
+int TritonGPUDialect::getNumCTAs(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumCTAsName))
+    return attr.getInt();
+  return 1;
+}
+
+int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumThreadsPerWarp))
+    return attr.getInt();
+  return 32;
+}
+
+std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
+  if (isa<ModuleOp, FuncOp>(op)) {
+    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
+      return attr.getInt();
+  } else if (auto partitions =
+                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
+    unsigned idx = op->getParentRegion()->getRegionNumber();
+    return partitions.getParentOp().getPartitionNumWarps()[idx];
+  }
+  if (Operation *parent = op->getParentOp())
+    return maybeLookupNumWarps(parent);
+  return {};
+}
+
+int triton::gpu::lookupNumWarps(Operation *op) {
+  std::optional<int> numWarps = maybeLookupNumWarps(op);
+  if (!numWarps) {
+    op->emitOpError(
+        "is not contained within a context that specifies the number of warps");
+    llvm::report_fatal_error("failed to lookup the number of warps, the "
+                             "surrounding module should contain a " +
+                             Twine(AttrNumWarpsName) + " attribute");
+  }
+  return *numWarps;
 }

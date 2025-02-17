@@ -10,6 +10,7 @@
 #define TRITON_DIALECT_TRITON_INTEL_GPU_IR_UTILS_H
 
 #include "intel/include/Analysis/AxisInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <triton/Tools/Sys/GetEnv.hpp>
@@ -45,6 +46,16 @@ inline unsigned getNumElementsPerThread(
 /// See: https://github.com/intel/intel-xpu-backend-for-triton/issues/1637
 inline bool applyTransposedReduction() {
   return tools::getBoolEnv("TRITON_INTEL_REDUCE_TRANSPOSE");
+}
+
+// Check if module's target arch is SPIRV. If there is no target arch
+// attribute, then we assume SPIRV target by default.
+inline bool hasSpirvTargetArch(Operation *op) {
+  if (!isa<ModuleOp>(op))
+    op = op->getParentOfType<ModuleOp>();
+  auto arch = op->getAttrOfType<StringAttr>(
+      triton::gpu::intel::TritonIntelGPUDialect::getTargetArchAttrName());
+  return !arch || arch.str().substr(0, 4) == "spir";
 }
 } // namespace mlir::triton::gpu::intel
 

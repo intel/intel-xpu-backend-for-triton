@@ -56,11 +56,6 @@ pytest() {
 run_tutorial_test() {
     echo
     echo "****** Running $1 test ******"
-    if [[ $TRITON_INTEL_RAISE_BLOCK_POINTER = true ]]; then
-      echo "****** With: INTEL_RAISE_BLOCK_POINTER ******"
-      PREV_TRITON_TEST_REPORTS=$TRITON_TEST_REPORTS
-      TRITON_TEST_REPORTS=false
-    fi
     echo
 
     TUTORIAL_RESULT=TODO
@@ -88,10 +83,6 @@ run_tutorial_test() {
     if [[ $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
         echo $TUTORIAL_RESULT > "$TRITON_TEST_REPORTS_DIR/tutorial-$1.txt"
-    fi
-
-    if [[ $TRITON_INTEL_RAISE_BLOCK_POINTER = true ]]; then
-      TRITON_TEST_REPORTS=$PREV_TRITON_TEST_REPORTS
     fi
 
     if [[ $TUTORIAL_RESULT = FAIL && $TRITON_TEST_IGNORE_ERRORS = false ]]; then
