@@ -292,11 +292,6 @@ def compile_module_from_src(src, name):
 
 class XPUUtils(object):
 
-    def __new__(cls):
-        if not hasattr(cls, "instance"):
-            cls.instance = super(XPUUtils, cls).__new__(cls)
-        return cls.instance
-
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
