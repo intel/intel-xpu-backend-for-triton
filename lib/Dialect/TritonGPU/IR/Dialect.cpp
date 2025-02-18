@@ -2245,7 +2245,6 @@ SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
       "getThreadsPerWarp not implemented for DotOperandEncodingAttr");
   return {};
 }
-
 SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   auto parentLayout = getParent();
   assert(parentLayout && "DotOperandEncodingAttr must have a parent");
