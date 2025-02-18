@@ -2240,8 +2240,6 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
   if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
     return mma.getThreadsPerWarpForOperand(getOpIdx());
-  } else if (auto dpas = mlir::dyn_cast<intel::DpasEncodingAttr>(getParent())) {
-    return dpas.getThreadsPerWarpForOperand(getOpIdx());
   }
   llvm::report_fatal_error(
       "getThreadsPerWarp not implemented for DotOperandEncodingAttr");
