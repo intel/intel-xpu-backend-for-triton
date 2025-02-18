@@ -22,11 +22,12 @@ def test_case():
             if m_name.startswith("torch._inductor.runtime.compile_tasks."):
                 m = sys.modules[m_name]
                 for attr_name in m.__dict__.keys():
-                    if (attr_name.startswith("triton_poi")):
+                    if attr_name.startswith("triton_poi"):
                         kernel = getattr(m, attr_name)
                         kernel.launchers = []
-                        kernel.compile_results[0].kernel.run.mod.__del__()
                         kernel.compile_results = []
+                        import gc
+                        gc.collect()
                 del sys.modules[m_name]
 
     print("triton cache dir:", triton_cache_dir)
