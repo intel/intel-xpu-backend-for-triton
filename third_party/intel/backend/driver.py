@@ -192,11 +192,18 @@ class SpirvUtils:
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_context", "init_devices", "load_binary", "wait_on_sycl_queue"):
+        if name in ("get_device_properties", "init_context", "init_devices", "wait_on_sycl_queue"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
         return super().__getattribute__(name)
+
+    def load_binary(self, *args):
+        # if we don't use parameter passing in this way,
+        # we will need to rewrite the line in the general part of the code:
+        # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
+        # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        return self.shared_library.load_binary(args)
 
     if os.name != 'nt':
 
@@ -292,13 +299,15 @@ class XPUUtils(object):
 
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
-        self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
-        self.context = mod.init_context(self.get_sycl_queue())
-        self.device_count = mod.init_devices(self.get_sycl_queue())
+        # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
+        # and can cause `Fatal Python error: Segmentation fault`
+        self.mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
+        self.load_binary = self.mod.load_binary
+        self.get_device_properties = self.mod.get_device_properties
+        self.context = self.mod.init_context(self.get_sycl_queue())
+        self.device_count = self.mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
-        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
+        self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
 
     def get_current_device(self):
         return self.current_device
