@@ -26,12 +26,12 @@ def test_case():
                         kernel = getattr(m, attr_name)
                         kernel.launchers = []
                         kernel.compile_results = []
-                        # make sure `spirv_utils` destructor is called
-                        _mod = sys.modules['triton.runtime.driver']
-                        del getattr(_mod, 'driver').active.utils
-                        import gc
-                        gc.collect()
                 del sys.modules[m_name]
+        # make sure `spirv_utils` destructor is called
+        _mod = sys.modules['triton.runtime.driver']
+        del getattr(_mod, 'driver').active.utils
+        import gc
+        gc.collect()
 
     print("triton cache dir:", triton_cache_dir)
     assert not os.path.exists(triton_cache_dir), f"{os.listdir(triton_cache_dir)}"
