@@ -29,6 +29,7 @@ def test_case():
                 del sys.modules[m_name]
         # make sure `spirv_utils` destructor is called
         _mod = sys.modules['triton.runtime.driver']
+        del type(getattr(_mod, 'driver').active.utils).instance
         del getattr(_mod, 'driver').active.utils
         import gc
         gc.collect()
