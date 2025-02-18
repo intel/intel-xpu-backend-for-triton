@@ -180,6 +180,36 @@ class ArchParser:
             ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+class SpirvUtils:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        methods = ("get_device_properties", "init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
+        for method in methods:
+            getattr(self.shared_library, method).restype = ctypes.py_object
+            getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
+
+    def __getattribute__(self, name):
+        if name in ("get_device_properties", "init_context", "init_devices", "load_binary", "wait_on_sycl_queue"):
+            shared_library = super().__getattribute__("shared_library")
+            return getattr(shared_library, name)
+
+        return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
+
+
 class TritonLauncher:
 
     def __init__(self, cache_path: str):
@@ -234,6 +264,8 @@ def compile_module_from_src(src, name):
 
     if name == 'arch_utils':
         return ArchParser(cache_path)
+    elif name == 'spirv_utils':
+        return SpirvUtils(cache_path)
     elif name == '__triton_launcher':
         return TritonLauncher(cache_path)
 
