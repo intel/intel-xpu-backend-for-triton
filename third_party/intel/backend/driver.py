@@ -184,10 +184,12 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("get_device_properties", "init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
+        methods = ("init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
+        self.shared_library.get_device_properties.restype = ctypes.py_object
+        self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
 
     def __getattribute__(self, name):
         if name in ("get_device_properties", "init_context", "init_devices", "load_binary", "wait_on_sycl_queue"):

@@ -41,11 +41,7 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
-extern "C" EXPORT_FUNC PyObject *get_device_properties(PyObject *args) {
-  int device_id;
-  if (!PyArg_ParseTuple(args, "i", &device_id))
-    return NULL;
-
+extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
   if (device_id > g_sycl_l0_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
@@ -323,11 +319,8 @@ extern "C" EXPORT_FUNC PyObject *init_context(PyObject *cap) {
   return Py_BuildValue("(K)", (uint64_t)context);
 }
 
-extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *args) {
-  PyObject *cap;
+extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
   if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
@@ -350,11 +343,8 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
-extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *args) {
-  PyObject *cap;
+extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
   if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
