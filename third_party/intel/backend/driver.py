@@ -180,6 +180,45 @@ class ArchParser:
             ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+class SpirvUtils:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        methods = ("init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
+        for method in methods:
+            getattr(self.shared_library, method).restype = ctypes.py_object
+            getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
+        self.shared_library.get_device_properties.restype = ctypes.py_object
+        self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
+
+    def __getattribute__(self, name):
+        if name in ("get_device_properties", "init_context", "init_devices", "wait_on_sycl_queue"):
+            shared_library = super().__getattribute__("shared_library")
+            return getattr(shared_library, name)
+
+        return super().__getattribute__(name)
+
+    def load_binary(self, *args):
+        # if we don't use parameter passing in this way,
+        # we will need to rewrite the line in the general part of the code:
+        # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
+        # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        return self.shared_library.load_binary(args)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
+
+
 class TritonLauncher:
 
     def __init__(self, cache_path: str):
@@ -234,6 +273,8 @@ def compile_module_from_src(src, name):
 
     if name == 'arch_utils':
         return ArchParser(cache_path)
+    elif name == 'spirv_utils':
+        return SpirvUtils(cache_path)
     elif name == '__triton_launcher':
         return TritonLauncher(cache_path)
 
@@ -258,13 +299,15 @@ class XPUUtils(object):
 
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
-        self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
-        self.context = mod.init_context(self.get_sycl_queue())
-        self.device_count = mod.init_devices(self.get_sycl_queue())
+        # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
+        # and can cause `Fatal Python error: Segmentation fault`
+        self.mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
+        self.load_binary = self.mod.load_binary
+        self.get_device_properties = self.mod.get_device_properties
+        self.context = self.mod.init_context(self.get_sycl_queue())
+        self.device_count = self.mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
-        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
+        self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
 
     def get_current_device(self):
         return self.current_device
