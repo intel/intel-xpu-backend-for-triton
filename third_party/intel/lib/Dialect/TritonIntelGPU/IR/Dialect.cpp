@@ -159,10 +159,7 @@ DpasEncodingAttr::getRepOrderForOperand(OpIdx opIdx) const {
 
 SmallVector<unsigned>
 DpasEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  size_t rank = getWarpsPerCTA().size();
-  SmallVector<unsigned> threadsPerWarpForOperand(rank, 1);
-  threadsPerWarpForOperand[rank - 1] = getThreadsPerWarp__();
-  return threadsPerWarpForOperand;
+  return getThreadsPerWarp();
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
