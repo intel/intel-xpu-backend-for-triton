@@ -159,8 +159,8 @@ struct ConvertTritonGPUToLLVM
                                                    patterns, benefit);
     mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(typeConverter,
                                                            patterns, benefit);
-    mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(
-        typeConverter, patterns, targetInfo, benefit);
+    mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
+                                                        benefit);
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
