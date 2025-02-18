@@ -45,7 +45,7 @@ struct VISAInstrExecution;
 // To get the asm code:
 // builder.dump()
 // ```
-// To get all the `mlir::Value` used in the VISA code,
+// To get all the `mlir::Value` used in the VISA code:
 // ```cpp
 // builder.getAllMlirArgs() // get {pVal, iVal, jVal, kVal}
 // ```
@@ -86,17 +86,20 @@ struct VISABuilder {
     Operand() = default;
     Operand(const Operation &) = delete;
     Operand(Value value, StringRef constraint)
-        : constraint(constraint), value(value) {}
+        : constraint(constraint), value(value) {
+      assert(!constraint.empty() && "Empty constraint");
+    }
 
     bool isList() const { return !value && constraint.empty(); }
 
     Operand *listAppend(Operand *arg) {
+      assert(arg && "Appending a null pointer as argument");
       list.push_back(arg);
       return this;
     }
 
     Operand *listGet(size_t nth) const {
-      assert(nth < list.size());
+      assert(nth < list.size() && "Operand index out of bounds");
       return list[nth];
     }
 
@@ -113,24 +116,24 @@ struct VISABuilder {
   Operand *newListOperand() { return newOperand(); }
 
   Operand *newListOperand(ArrayRef<std::pair<mlir::Value, std::string>> items) {
-    auto *list = newOperand();
-    for (auto &item : items) {
-      list->listAppend(newOperand(item.first, item.second));
+    Operand *list = newOperand();
+    for (auto &[val, constraint] : items) {
+      list->listAppend(newOperand(val, constraint));
     }
     return list;
   }
 
   Operand *newListOperand(unsigned count, mlir::Value val,
-                          const std::string &constraint) {
-    auto *list = newOperand();
+                          StringRef constraint) {
+    Operand *list = newOperand();
     for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(val, constraint));
     }
     return list;
   }
 
-  Operand *newListOperand(unsigned count, const std::string &constraint) {
-    auto *list = newOperand();
+  Operand *newListOperand(unsigned count, StringRef constraint) {
+    Operand *list = newOperand();
     for (unsigned i = 0; i < count; ++i) {
       list->listAppend(newOperand(constraint));
     }
@@ -163,7 +166,7 @@ struct VISABuilder {
   // Create a constant integer operand.
   Operand *newConstantOperand(int64_t v);
   // Create a constant operand with explicit code specified.
-  Operand *newConstantOperand(const std::string &v);
+  Operand *newConstantOperand(StringRef v);
 
   Operand *newAddrOperand(mlir::Value addr, StringRef constraint, int off = 0);
 
@@ -189,7 +192,7 @@ private:
 
   // Make the operands in argArchive follow the provided \param order.
   void reorderArgArchive(ArrayRef<Operand *> order) {
-    assert(order.size() == argArchive.size());
+    assert(order.size() == argArchive.size() && "Order and arguments size mismatch");
     // The order in argArchive is unnecessary when onlyAttachMLIRArgs=false, but
     // it does necessary when onlyAttachMLIRArgs is true for the $0, $1... are
     // determined by VISA code snippet passed from external.
@@ -197,8 +200,8 @@ private:
          [&](std::unique_ptr<Operand> &a, std::unique_ptr<Operand> &b) {
            auto ida = std::find(order.begin(), order.end(), a.get());
            auto idb = std::find(order.begin(), order.end(), b.get());
-           assert(ida != order.end());
-           assert(idb != order.end());
+           assert(ida != order.end() && "Argument A not found in new order");
+           assert(idb != order.end() && "Argument B not found in new order");
            return ida < idb;
          });
   }
