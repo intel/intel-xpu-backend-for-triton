@@ -302,11 +302,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 }
 
-extern "C" EXPORT_FUNC PyObject *init_context(PyObject *args) {
-  PyObject *cap;
+extern "C" EXPORT_FUNC PyObject *init_context(PyObject *cap) {
   void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
   if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
