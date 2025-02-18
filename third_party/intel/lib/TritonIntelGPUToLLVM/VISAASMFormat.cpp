@@ -4,7 +4,6 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
-// TODO(Superjomn): unify to llvm::raw_string_ostream
 #include <sstream>
 
 namespace mlir {
@@ -41,8 +40,8 @@ void VISABuilder::initOperand(Operand *opr) {
 
 VISABuilder::Operand *VISABuilder::newOperand(StringRef constraint, bool init) {
   // Constraint should be something like "=rw"
-  assert(constraint[0] == '=');
-  auto *opr = newOperand();
+  assert(constraint[0] == '=' && "Constraint needs to begin with '='");
+  Operand *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = constraint;
   if (init) {
@@ -53,15 +52,15 @@ VISABuilder::Operand *VISABuilder::newOperand(StringRef constraint, bool init) {
 
 VISABuilder::Operand *VISABuilder::newOperand(unsigned operandIndex) {
   assert(operandIndex < oprCounter && "operand index out of range");
-  auto *opr = newOperand();
+  Operand *opr = newOperand();
   opr->idx = oprCounter++;
   opr->constraint = std::to_string(operandIndex);
   return opr;
 }
 
-VISABuilder::Operand *VISABuilder::newConstantOperand(const std::string &v) {
+VISABuilder::Operand *VISABuilder::newConstantOperand(StringRef v) {
   argArchive.emplace_back(std::make_unique<Operand>());
-  argArchive.back()->repr = [v](int idx) { return v; };
+  argArchive.back()->repr = [v](int idx) { return v.str(); };
   return argArchive.back().get();
 }
 
