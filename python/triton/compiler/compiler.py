@@ -298,7 +298,7 @@ def compile(src, target=None, options=None):
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
-    if os.environ.get("TR_PRINT_IR", "0") == "1":
+    if os.environ.get("TR_PRINT_IR", "1") == "1":
         print("printing IR...")
         for name, path in metadata_group.items():
             print(f"==================== {name} ======================", flush=True)

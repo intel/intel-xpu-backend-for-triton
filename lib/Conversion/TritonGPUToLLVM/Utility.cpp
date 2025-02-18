@@ -666,7 +666,7 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
             assert(vecTy.getNumElements() % 64 == 0);
             for (int i = 0; i < vecTy.getNumElements(); i+=64) {
                 auto smallVecTy = vec_ty(elemLlvmTy, 64);
-                auto vecAddrNew = gep(vecAddr.getType(), i32_ty, vecAddr, SmallVector<Value>({i32_val(i)}));
+                auto vecAddrNew = gep(vecAddr.getType(), i32_ty, vecAddr, SmallVector<Value>({i32_val(i)}), true);
                 auto vecVal = load(smallVecTy, vecAddrNew);
                 vecVal.setAlignment(smallVecTy.getNumElements() *
                                     elemLlvmTy.getIntOrFloatBitWidth() / 8);
