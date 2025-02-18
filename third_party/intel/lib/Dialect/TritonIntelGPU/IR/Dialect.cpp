@@ -679,6 +679,14 @@ struct TritonIntelGPUInferLayoutInterface
     // TODO
     return failure();
   }
+
+  LogicalResult
+  inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
+                         Attribute &outEnc, bool fwdInference,
+                         std::optional<Location> loc) const override {
+    // TODO
+    return failure();
+  }
 };
 
 //===----------------------------------------------------------------------===//
