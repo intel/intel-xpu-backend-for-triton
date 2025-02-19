@@ -1,12 +1,11 @@
 diff --git a/torch/_inductor/codegen/cpp_wrapper_gpu.py b/torch/_inductor/codegen/cpp_wrapper_gpu.py
-index b5fb183bef5..864854261ec 100644
+index 9c419765da9..71137ff3086 100644
 --- a/torch/_inductor/codegen/cpp_wrapper_gpu.py
 +++ b/torch/_inductor/codegen/cpp_wrapper_gpu.py
-@@ -549,27 +549,7 @@ class CppWrapperGpu(CppWrapperCpu):
-                 device_index, call_args
+@@ -554,25 +554,10 @@ class CppWrapperGpu(CppWrapperCpu):
              )
              kernel_var_name = self.generate_load_kernel_once(kernel_name, V.graph)
--
+ 
 -            # args with value 1 are added into equal_to_1 and constants
 -            # in triton_meta (in the Python codegen) which makes them
 -            # inlined in the PTX and compiled CUBIN
@@ -26,8 +25,10 @@ index b5fb183bef5..864854261ec 100644
 -                arg_signatures = [
 -                    v for i, v in enumerate(arg_signatures) if i not in equal_to_1
 -                ]
--
-+            arg_signatures = [val for key, val in triton_meta["signature"].items() if val != 'constexpr']
++            signature = triton_meta["signature"]
++            arg_signatures = [val for key, val in signature.items() if val != 'constexpr']
++            call_args = [call_arg for call_arg, arg_name in zip(call_args, signature) if signature[arg_name] != 'constexpr']
++            arg_types = [arg_type for arg_type, arg_name in zip(arg_types, signature) if signature[arg_name] != 'constexpr']
+ 
              call_args_str = self.generate_args_decl(
                  call_args, arg_types, arg_signatures
-             )
