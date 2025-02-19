@@ -162,9 +162,26 @@ DpasEncodingAttr::getRepOrderForOperand(OpIdx opIdx) const {
 
 SmallVector<unsigned>
 DpasEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error(
-      "getThreadsPerWarpForOperand not implemented for DpasEncodingAttr");
-  return {};
+  size_t rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> res(rank, 1);
+  assert((opIdx == 0 || opIdx == 1) && "Invalid OpIdx!");
+  unsigned execSize = getExecutionSize();
+  unsigned subgroupSize = getThreadsPerWarp__();
+  unsigned systolicDepth = getSystolicDepth();
+  unsigned opsPerChannel = getOpsPerChannel();
+  if (subgroupSize < execSize) {
+    llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
+                             "be smaller than the execution size");
+  }
+  if (opIdx == 0) {
+    res[rank - 1] =
+        systolicDepth * opsPerChannel / ceil<unsigned>(opsPerChannel, 2);
+    res[rank - 2] = ceil<unsigned>(subgroupSize, res[rank - 1]);
+  } else {
+    res[rank - 1] = execSize;
+    res[rank - 2] = subgroupSize / execSize;
+  }
+  return res;
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
@@ -470,14 +487,18 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   ArrayRef<unsigned> rC = shapeC;
   SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
   ArrayRef<unsigned> repCluster = getRepCluster();
-  printer << "<{" << "repeatCount = " << getRepeatCount() << ", "
+  printer << "<{"
+          << "repeatCount = " << getRepeatCount() << ", "
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", "
           << "threadsPerWarp = " << getThreadsPerWarp__() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
-          << "repCluster = [" << repCluster << "], " << "A = [" << rA << "], "
-          << "B = [" << rB << "], " << "C = [" << rC << "]" << "}>";
+          << "repCluster = [" << repCluster << "], "
+          << "A = [" << rA << "], "
+          << "B = [" << rB << "], "
+          << "C = [" << rC << "]"
+          << "}>";
 }
 
 LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -549,9 +570,11 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
   ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp();
   ArrayRef<unsigned> sizePerThread = getSizePerThread();
-  printer << "<{" << "sizePerThread = [" << sizePerThread << "]"
-          << ", threadsPerWarp = [" << threadsPerWarp << "]" << ", order = ["
-          << getOrder() << "]" << "}>";
+  printer << "<{"
+          << "sizePerThread = [" << sizePerThread << "]"
+          << ", threadsPerWarp = [" << threadsPerWarp << "]"
+          << ", order = [" << getOrder() << "]"
+          << "}>";
 }
 
 //===----------------------------------------------------------------------===//
