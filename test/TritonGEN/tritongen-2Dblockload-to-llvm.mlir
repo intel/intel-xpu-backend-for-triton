@@ -11,14 +11,14 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK-NEXT:  [[AND:%.*]] = llvm.and [[PTRTOINT]], [[CL]] : i64
   // CHECK-NEXT:  [[TRUNC:%.*]] = llvm.trunc [[AND]] : i64 to i32
   // CHECK-NEXT:  [[ADD_0:%.*]] = llvm.add %arg1, [[TRUNC]] : i32
-  // CHECK-DAG:   [[ONE_0:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:  [[UDIV:%.*]] = llvm.udiv [[TRUNC]], [[ONE_0]] : i32
-  // CHECK-NEXT:  [[ADD_1:%.*]] = llvm.add %arg4, [[UDIV]] : i32
-  // CHECK-DAG:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-DAG:   [[ONE_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:   [[ZERO_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-NEXT:  [[SHR:%.*]] = llvm.lshr [[TRUNC]], [[ZERO_0]] : i32
+  // CHECK-NEXT:  [[ADD_1:%.*]] = llvm.add %arg4, [[SHR]] : i32
+  // CHECK-DAG:   [[ZERO_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:   [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
-  // CHECK-NEXT:  [[COORD0:%.*]] = llvm.insertelement [[ADD_1]], [[UNDEF]][[[ZERO]] : i32] : vector<2xi32>
-  // CHECK-NEXT:  [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE_1]] : i32] : vector<2xi32>
+  // CHECK-NEXT:  [[COORD0:%.*]] = llvm.insertelement [[ADD_1]], [[UNDEF]][[[ZERO_1]] : i32] : vector<2xi32>
+  // CHECK-NEXT:  [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
   // CHECK-NEXT:  llvm.call spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r32x1cPU3AS1viiiDv2_iPt(%arg0, [[ADD_0]], %arg2, %arg3, [[COORD1]], [[DEST]]) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
   // CHECK-NEXT:  llvm.load [[DEST]] : !llvm.ptr -> vector<8xi16>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi16>

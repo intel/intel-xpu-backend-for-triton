@@ -453,7 +453,8 @@ struct TritonMatrix2DBlockLoadLowering
     Value baseWidth = b.add(op.getBaseWidth(), offset);
     // In number of scalar elements.
     Value offsetX =
-        b.add(op.getX(), b.udiv(offset, b.i32_val(op.getElemSizeInBits() / 8)));
+        b.add(op.getX(),
+              b.lshr(offset, b.i32_val(std::log2(op.getElemSizeInBits() / 8))));
 
     VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = b.insert_element(

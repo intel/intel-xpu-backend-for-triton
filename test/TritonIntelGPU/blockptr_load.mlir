@@ -172,8 +172,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_52:.*]] = llvm.and %[[VAL_51]], %[[VAL_50]] : i64
     // CHECK:           %[[VAL_53:.*]] = llvm.trunc %[[VAL_52]] : i64 to i32
     // CHECK:           %[[HEIGHT_ALIGNED:.*]] = llvm.add %[[HEIGHT]], %[[VAL_53]] : i32
-    // CHECK:           %[[VAL_55:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:           %[[VAL_56:.*]] = llvm.udiv %[[VAL_53]], %[[VAL_55]] : i32
+    // CHECK:           %[[VAL_55:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[VAL_56:.*]] = llvm.lshr %[[VAL_53]], %[[VAL_55]] : i32
     // CHECK:           %[[VAL_57:.*]] = llvm.add %[[VAL_45]], %[[VAL_56]] : i32
     // CHECK:           %[[VAL_58:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[VAL_59:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -253,8 +253,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_51:.*]] = llvm.and %[[VAL_50]], %[[VAL_49]] : i64
     // CHECK:           %[[VAL_52:.*]] = llvm.trunc %[[VAL_51]] : i64 to i32
     // CHECK:           %[[HEIGHT_ALIGNED:.*]] = llvm.add %[[HEIGHT]], %[[VAL_52]] : i32
-    // CHECK:           %[[VAL_54:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK:           %[[VAL_55:.*]] = llvm.udiv %[[VAL_52]], %[[VAL_54]] : i32
+    // CHECK:           %[[VAL_54:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[VAL_55:.*]] = llvm.lshr %[[VAL_52]], %[[VAL_54]] : i32
     // CHECK:           %[[VAL_56:.*]] = llvm.add %[[VAL_44]], %[[VAL_55]] : i32
     // CHECK:           %[[VAL_57:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[VAL_58:.*]] = llvm.mlir.constant(0 : i32) : i32
