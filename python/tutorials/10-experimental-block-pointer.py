@@ -215,8 +215,8 @@ def matmul_kernel_with_block_pointers_batched(
     # Map program ids `pid` to the block of C it should compute.
     # This is done in a grouped ordering to promote L2 data reuse.
     # See the matrix multiplication tutorial for details.
-    bid = tl.program_id(axis=0)
-    pid = tl.program_id(axis=1)
+    bid = tl.program_id(axis=1)
+    pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -284,8 +284,8 @@ def matmul(a, b, accum_dtype, res_dtype):
         triton_accum_dtype = tl.dtype(str(accum_dtype)[6:].replace('bfloat', 'bf').replace('float', 'fp'))
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (
-            B,
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+            B,
         )
         matmul_kernel_with_block_pointers_batched[grid](
             a, b, c,  #

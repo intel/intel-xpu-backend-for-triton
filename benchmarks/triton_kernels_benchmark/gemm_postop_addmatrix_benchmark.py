@@ -142,8 +142,8 @@ def matmul_kernel_with_block_pointers_batched(
         ACCUMULATOR_DTYPE: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
-    bid = tl.program_id(axis=0)
-    pid = tl.program_id(axis=1)
+    bid = tl.program_id(axis=1)
+    pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -198,8 +198,8 @@ def matmul(a, b, d, c):
         B, K, N = b.shape
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (
-            B,
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+            B,
         )
         matmul_kernel_with_block_pointers_batched[grid](
             a, b, c, d,  #
@@ -293,9 +293,9 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton'],
+        line_vals=['triton', 'onednn'],
         # label name for the lines
-        line_names=['Triton'],
+        line_names=['Triton', 'OneDNN'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -320,7 +320,10 @@ def benchmark(B, M, N, K, dtype, provider):
 
     quantiles = [0.5, 0.0, 1.0]
 
-    if provider == 'triton':
+    if provider == 'onednn':
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=10,
+                                                                 n_repeat=10, quantiles=quantiles)
+    elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
             c = torch.empty((B, M, N), device='xpu', dtype=res_dtype)
