@@ -12,6 +12,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
+import psutil
 
 INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
 ALL_DTYPES_OPTION = os.getenv('ALL_DTYPES', '0') == '1'
@@ -256,6 +257,7 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i, dtype]
 
 DEVICE_NAME = torch.xpu.get_device_name()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+RAM_TOTAL = psutil.virtual_memory().total
 
 # keep in sync with `def dtypes`
 DTYPES_SIZE = {
@@ -277,6 +279,15 @@ def is_enough_memory(x_val):
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
+    if enough_memory and not dtype.is_floating_point:
+        # a: (B, M, K, int32)
+        # b: (B, K, N, int32)
+        # torch.matmul result: (B, M, N) int32
+        size = 4
+        required_memory = B * M * K * size + B * K * N * size + B * M * N * size
+        enough_memory = required_memory < RAM_TOTAL
+        if not enough_memory:
+            print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {RAM_TOTAL=}")
     return enough_memory
 
 
@@ -334,9 +345,9 @@ def benchmark(B, M, N, K, dtype, provider):
         if not dtype.is_floating_point:
             # Torch does not support integer calculation in matmul
             torch_fn = lambda: torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu', dtype=res_dtype)
-                                            ).to(device='xpu', dtype=res_dtype) + d
+                                            ).to(device='xpu', dtype=res_dtype).add_(d)
         else:
-            torch_fn = lambda: torch.matmul(a, b) + d
+            torch_fn = lambda: torch.matmul(a, b).add_(d)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
