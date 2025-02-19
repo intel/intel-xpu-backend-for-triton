@@ -150,6 +150,7 @@ COMPILATION_HELPER = CompilationHelper()
 class ArchParser:
 
     def __init__(self, cache_path: str):
+        print("ArchParser __init__ called", flush=True)
         self.shared_library = ctypes.CDLL(cache_path)
         self.shared_library.parse_device_arch.restype = ctypes.c_char_p
         self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
@@ -175,6 +176,7 @@ class ArchParser:
     else:
 
         def __del__(self):
+            print("ArchParser __del__ called", flush=True)
             handle = self.shared_library._handle
             ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
             ctypes.windll.kernel32.FreeLibrary(handle)
@@ -183,6 +185,9 @@ class ArchParser:
 class SpirvUtils:
 
     def __init__(self, cache_path: str):
+        print("SpirvUtils __init__ called", flush=True)
+        import traceback
+        print("Call Stack:\n" + "".join(traceback.format_stack()))
         self.shared_library = ctypes.PyDLL(cache_path)
         methods = ("init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
         for method in methods:
@@ -214,6 +219,7 @@ class SpirvUtils:
     else:
 
         def __del__(self):
+            print("SpirvUtils __del__ called", flush=True)
             handle = self.shared_library._handle
             ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
             ctypes.windll.kernel32.FreeLibrary(handle)
@@ -222,6 +228,7 @@ class SpirvUtils:
 class TritonLauncher:
 
     def __init__(self, cache_path: str):
+        print("TritonLauncher __init__ called", flush=True)
         self.shared_library = ctypes.PyDLL(cache_path)
         self.shared_library.launch.restype = ctypes.py_object
         self.shared_library.launch.argtypes = (ctypes.py_object, )
@@ -242,6 +249,7 @@ class TritonLauncher:
     else:
 
         def __del__(self):
+            print("TritonLauncher __del__ called", flush=True)
             handle = self.shared_library._handle
             ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
             ctypes.windll.kernel32.FreeLibrary(handle)
@@ -291,11 +299,6 @@ def compile_module_from_src(src, name):
 
 
 class XPUUtils(object):
-
-    def __new__(cls):
-        if not hasattr(cls, "instance"):
-            cls.instance = super(XPUUtils, cls).__new__(cls)
-        return cls.instance
 
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
