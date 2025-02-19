@@ -17,6 +17,7 @@ on:
           inductor/test_triton_wrapper.py
           inductor/test_triton_kernels.py
           inductor/test_gpu_cpp_wrapper.py
+          inductor/test_torchinductor.py
       runner_label:
         description: Runner label, keep empty for default
         type: string
