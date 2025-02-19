@@ -116,6 +116,7 @@ setup(
     install_requires=[
         "torch",
         "pandas",
+        "psutil",
         "tabulate",
         "matplotlib",
     ],
