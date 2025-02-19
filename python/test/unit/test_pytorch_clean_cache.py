@@ -2,6 +2,7 @@ import torch
 from torch._inductor.utils import fresh_inductor_cache
 import os
 import sys
+import time
 
 
 def test_case():
@@ -32,6 +33,7 @@ def test_case():
         del getattr(_mod, 'driver').active.utils
         import gc
         gc.collect()
+        time.sleep(5)
 
     print("triton cache dir:", triton_cache_dir)
     assert not os.path.exists(triton_cache_dir), f"{os.listdir(triton_cache_dir)}"
