@@ -85,8 +85,9 @@ private:
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
     if (!caller->hasAttr("allocation.offset")) {
-      auto base = targetInfo.getStackPointer(rewriter, caller);
+      auto base = targetInfo.getScratchOnSharedMemoryPtr(rewriter, caller);
       promotedOperands.push_back(base);
+
     } else {
       auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, callOp);
       promotedOperands.push_back(base);
@@ -100,8 +101,8 @@ private:
       opOffsetVal = b.i32_val(opOffset);
     }
 
-    promotedOperands.push_back(
-        LLVM::getGlobalScratchPtr(loc, rewriter, caller, opOffsetVal));
+    promotedOperands.push_back(targetInfo.getScratchOnGlobalMemoryPtr(
+        loc, rewriter, caller, opOffsetVal));
     return promotedOperands;
   }
 
