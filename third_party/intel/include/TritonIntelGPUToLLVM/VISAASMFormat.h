@@ -192,7 +192,8 @@ private:
 
   // Make the operands in argArchive follow the provided \param order.
   void reorderArgArchive(ArrayRef<Operand *> order) {
-    assert(order.size() == argArchive.size() && "Order and arguments size mismatch");
+    assert(order.size() == argArchive.size() &&
+           "Order and arguments size mismatch");
     // The order in argArchive is unnecessary when onlyAttachMLIRArgs=false, but
     // it does necessary when onlyAttachMLIRArgs is true for the $0, $1... are
     // determined by VISA code snippet passed from external.
