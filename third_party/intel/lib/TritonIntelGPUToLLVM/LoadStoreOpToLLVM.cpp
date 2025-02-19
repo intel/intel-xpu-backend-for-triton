@@ -1331,10 +1331,9 @@ struct LoadOpConversion
             std::swap(offsetX, offsetY);
           }
 
-          if (false && isTransposeRequired) {
+          if (isTransposeRequired) {
             // adjust the block io parameter to align HW's limitations on
             // transposing load.
-            llvm::errs() << "dividing offset x by 32 / " << originalElemBits << " = " << 32 / originalElemBits << "\n";
             offsetX = b.udiv(offsetX, b.i32_val(32 / originalElemBits));
           }
 
