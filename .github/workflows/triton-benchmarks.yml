@@ -41,6 +41,8 @@ on:
   pull_request:
     branches:
       - main
+    branches-ignore:
+      - arunjose696/ir-compare
     paths:
       - .github/workflows/triton-benchmarks.yml
       - benchmarks/**

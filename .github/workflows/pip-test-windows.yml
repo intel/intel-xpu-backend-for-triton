@@ -7,6 +7,8 @@ on:
   pull_request:
     branches:
       - main
+    branches-ignore:
+      - arunjose696/ir-compare
     paths:
       - third_party/intel/backend/driver.py
   push:
