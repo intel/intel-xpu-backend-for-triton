@@ -186,6 +186,8 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         print("SpirvUtils __init__ called", flush=True)
+        import traceback
+        print("Call Stack:\n" + "".join(traceback.format_stack()))
         self.shared_library = ctypes.PyDLL(cache_path)
         methods = ("init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
         for method in methods:
