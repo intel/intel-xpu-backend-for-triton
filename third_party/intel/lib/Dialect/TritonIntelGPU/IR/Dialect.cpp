@@ -159,7 +159,26 @@ DpasEncodingAttr::getRepOrderForOperand(OpIdx opIdx) const {
 
 SmallVector<unsigned>
 DpasEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  return getThreadsPerWarp();
+  size_t rank = getWarpsPerCTA().size();
+  SmallVector<unsigned> res(rank, 1);
+  assert((opIdx == 0 || opIdx == 1) && "Invalid OpIdx!");
+  unsigned execSize = getExecutionSize();
+  unsigned subgroupSize = getThreadsPerWarp__();
+  unsigned systolicDepth = getSystolicDepth();
+  unsigned opsPerChannel = getOpsPerChannel();
+  if (subgroupSize < execSize) {
+    llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
+                             "be smaller than the execution size");
+  }
+  if (opIdx == 0) {
+    res[rank - 1] =
+        systolicDepth * opsPerChannel / ceil<unsigned>(opsPerChannel, 2);
+    res[rank - 2] = ceil<unsigned>(subgroupSize, res[rank - 1]);
+  } else {
+    res[rank - 1] = execSize;
+    res[rank - 2] = subgroupSize / execSize;
+  }
+  return res;
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
