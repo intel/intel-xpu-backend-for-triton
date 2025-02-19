@@ -169,6 +169,7 @@ class ArchParser:
     if os.name != 'nt':
 
         def __del__(self):
+            print("ArchParser __del__ called")
             handle = self.shared_library._handle
             self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
             self.shared_library.dlclose(handle)
@@ -208,6 +209,7 @@ class SpirvUtils:
     if os.name != 'nt':
 
         def __del__(self):
+            print("SpirvUtils __del__ called")
             handle = self.shared_library._handle
             self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
             self.shared_library.dlclose(handle)
@@ -236,6 +238,7 @@ class TritonLauncher:
     if os.name != 'nt':
 
         def __del__(self):
+            print("TritonLauncher __del__ called")
             handle = self.shared_library._handle
             self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
             self.shared_library.dlclose(handle)
