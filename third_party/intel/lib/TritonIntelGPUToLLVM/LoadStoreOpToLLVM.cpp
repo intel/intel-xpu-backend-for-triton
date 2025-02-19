@@ -765,10 +765,6 @@ struct LoadOpConversion
         std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
     Value outerDimWarpId =
         b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
-    unsigned innerDimWarpNum = std::min<unsigned>(
-        warpsPerCTA[dimInner],
-        mlir::ceil<unsigned>(tensorShape[dimInner], repCluster[dimInner]));
-    ;
 
     auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
           offsetBaseY] =
@@ -1114,11 +1110,6 @@ struct LoadOpConversion
       }
     });
 
-    llvm::errs() << "width: " << baseWidth << "\n";
-    llvm::errs() << "height: " << baseHeight << "\n";
-    llvm::errs() << "rowStride: " << rowStride << "\n";
-    llvm::errs() << "colStride: " << colStride << "\n";
-
     Value pitch;
     if (memoryRowMajor) {
       pitch = b.trunc(i32_ty, rowStride);
@@ -1130,11 +1121,6 @@ struct LoadOpConversion
     }
     baseWidth = b.trunc(i32_ty, baseWidth);
     baseHeight = b.trunc(i32_ty, baseHeight);
-
-    llvm::errs() << "After adjustment:\n";
-    llvm::errs() << "width: " << baseWidth << "\n";
-    llvm::errs() << "height: " << baseHeight << "\n";
-    llvm::errs() << "pitch: " << pitch << "\n";
 
     const unsigned originalElemBits = elemSizeInBits;
     if (isTransposeRequired) {
@@ -1158,13 +1144,6 @@ struct LoadOpConversion
 
     LLVM_DEBUG(llvm::dbgs() << "DPAS Linear Layout: " << ll << "\n");
 
-    auto dpasToBlockLoadLayout = tileLayout.pseudoinvert();
-    LLVM_DEBUG(llvm::dbgs() << "Inverted block load layout: "
-                            << dpasToBlockLoadLayout << "\n");
-
-    auto llInvert = ll.pseudoinvert();
-    LLVM_DEBUG(llvm::dbgs() << "Inverted DPAS layout: " << llInvert << "\n");
-
     LLVM_DEBUG({
       llvm::dbgs() << "tileWidth: " << tileWidth << "\n";
       llvm::dbgs() << "tileHeight: " << tileHeight << "\n";
@@ -1181,14 +1160,8 @@ struct LoadOpConversion
       llvm::dbgs() << "ll block size: " << ll.getInDimSize(kBlock) << "\n";
 
       llvm::dbgs() << "outerDimWarpNum: " << outerDimWarpNum << "\n";
-      llvm::dbgs() << "innerDimWarpNum: " << innerDimWarpNum << "\n";
     });
 
-    // the transpose layout does not handle the vnni transform for us, we need
-    // to manually adjust the layout and indices to pack two elements per output
-    // buffer slot
-    // TODO: can this also be computed as elemsPerLanePerDPASInst /
-    // packedElemsPerLanePerDPASInst?
     unsigned packedElementsPerSlot =
         isTransposeRequired && opIdx == DpasEncodingAttr::OpIdx::OperandB ? 2
                                                                           : 1;
@@ -1278,10 +1251,6 @@ struct LoadOpConversion
             offsetX = b.udiv(offsetX, b.i32_val(32 / originalElemBits));
           }
 
-          const bool vnni_transform = usePackedType && !isOperandA &&
-                                      !isTransposeRequired &&
-                                      originalElemBits != 32;
-
           auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
               loc, load2DGenXType,
               /*ptr*/ base,
@@ -1295,7 +1264,9 @@ struct LoadOpConversion
               /*tile_height*/ tileHeight,
               /*v_blocks*/ vBlocks,
               /*transpose*/ isTransposeRequired,
-              /*vnni_transform*/ vnni_transform);
+              /*vnni_transform*/
+              (usePackedType && !isOperandA && !isTransposeRequired &&
+               originalElemBits != 32));
           if (failed(load2dOp.verify())) {
             // Explicitly invoke verifier because `triton_gen` ops are
             // immediately lowered further to a builtin call.
@@ -1356,16 +1327,8 @@ struct LoadOpConversion
               llvm::errs() << "row stride: " << loadRowOffset << "\n";
               llvm::errs() << "col stride: " << loadColOffset << "\n";
 
-              const auto interleavedColOffset =
-                  (isTransposeRequired && !isOperandA)
-                      ? i % packedElementsPerSlot
-                      : 0;
-              llvm::errs() << "interleaved col offset: " << interleavedColOffset
-                           << "\n";
-
               const auto rowOffset = tensorRowCoord * loadRowOffset;
-              const auto colOffset =
-                  tensorColCoord * loadColOffset; // + interleavedColOffset;
+              const auto colOffset = tensorColCoord * loadColOffset;
               llvm::errs() << "rowOffset: " << rowOffset << "\n";
               llvm::errs() << "colOffset: " << colOffset << "\n";
 
@@ -1418,15 +1381,8 @@ struct LoadOpConversion
             llvm::errs() << "row stride: " << loadRowOffset << "\n";
             llvm::errs() << "col stride: " << loadColOffset << "\n";
 
-            const auto interleavedColOffset =
-                (isTransposeRequired && !isOperandA) ? i % packedElementsPerSlot
-                                                     : 0;
-            llvm::errs() << "interleaved col offset: " << interleavedColOffset
-                         << "\n";
-
             const auto rowOffset = tensorRowCoord * loadRowOffset;
-            const auto colOffset =
-                tensorColCoord * loadColOffset; // + interleavedColOffset;
+            const auto colOffset = tensorColCoord * loadColOffset;
             llvm::errs() << "rowOffset: " << rowOffset << "\n";
             llvm::errs() << "colOffset: " << colOffset << "\n";
 
