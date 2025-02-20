@@ -1131,7 +1131,16 @@ struct LoadOpConversion
       llvm::dbgs() << "originalElemBits: " << originalElemBits << "\n";
       llvm::dbgs() << "elemSizeInBits: " << elemSizeInBits << "\n";
     });
-    const unsigned packedElementsPerSlot = elemSizeInBits / originalElemBits;
+    llvm::errs() << "dim Str: " << dimInnerStr << "\n";
+#if 0
+    const unsigned packedElementsPerSlot = isTransposeRequired ? elemSizeInBits / originalElemBits : 1;
+#else
+    LLVM_DEBUG(llvm::dbgs() << "out dim size: " << tileLayout.getOutDimSize(dimOuterStr) << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "elems per dpas: " << elemsPerDPASInst[dimInner] << "\n");
+    const unsigned packedElementsPerSlot = isTransposeRequired ? tileHeight / elemsPerDPASInst[dimInner] : 1;
+    LLVM_DEBUG(llvm::dbgs() << "other out dim size: " << tileLayout.getOutDimSize(dimInnerStr) << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "other elems per dpas: " << elemsPerDPASInst[dimOuter] << "\n");
+#endif
     LLVM_DEBUG(llvm::dbgs() << "Packed elements per slot: "
                             << packedElementsPerSlot << "\n");
 
@@ -1246,10 +1255,11 @@ struct LoadOpConversion
 
           unsigned loadColOffset;
           if (isTransposeRequired && !isOperandA) {
-            loadColOffset = 1;
+            loadColOffset = tileHeight / elemsPerDPASInst[dimOuter] - 1;
           } else {
             loadColOffset = isOperandA ? tileHeight : tileWidth;
           }
+          LLVM_DEBUG(llvm::dbgs() << "loadColOffset: " << loadColOffset << "\n");
 
           LLVM_DEBUG(llvm::dbgs() << "num vblocks: " << vBlocks << "\n");
           // these iterations are dpas iterations.
