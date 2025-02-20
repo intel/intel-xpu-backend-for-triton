@@ -1,13 +1,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/IR/Visitors.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/Debug.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -30,41 +24,39 @@ public:
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-
     auto globalSmem = mod.lookupSymbol<LLVM::GlobalOp>("global_smem");
     if (!globalSmem) {
       return;
     }
+    bool usePoison =
+        (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0);
 
-    IntegerAttr sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
-    if (!sharedAttr) {
-      return;
-    }
-    bool usePoison = (sharedAttr.getInt() == 0);
-
+    OpBuilder builder(&getContext());
     mod.walk([&](FunctionOpInterface funcOp) {
-      updatestackptr(funcOp, globalSmem, usePoison);
+      funcOp.walk([&](LLVM::AddressOfOp addressOp) {
+        updateStackptr(funcOp, addressOp, builder, usePoison);
+      });
     });
   }
 
 private:
-  void updatestackptr(FunctionOpInterface funcOp, LLVM::GlobalOp globalSmem,
-                      bool usePoison) {
+  void updateStackptr(FunctionOpInterface funcOp, LLVM::AddressOfOp addressOp,
+                      OpBuilder &builder, bool usePoison) {
     MLIRContext *ctx = funcOp.getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(
-        ctx, TritonGEN::TritonGENMemorySpace::kWorkgroup);
-
-    funcOp.walk([&](LLVM::AddressOfOp addrOp) {
-      OpBuilder builder(addrOp);
-      Value newValue;
-      if (usePoison) {
-        newValue = builder.create<LLVM::PoisonOp>(addrOp.getLoc(), ptrTy);
-      } else {
-        newValue = funcOp.getArgument(funcOp.getNumArguments() - 1);
-      }
-      addrOp.replaceAllUsesWith(newValue);
-      addrOp.erase();
-    });
+    LLVM::LLVMPointerType ptrTy =
+        ptr_ty(ctx, mlir::triton::TritonGEN::TritonGENMemorySpace::kWorkgroup);
+    Value newValue;
+    if (addressOp.getGlobalName() != "global_smem") {
+      return;
+    }
+    if (usePoison) {
+      builder.setInsertionPoint(addressOp);
+      newValue = builder.create<LLVM::PoisonOp>(addressOp.getLoc(), ptrTy);
+    } else {
+      newValue = funcOp.getArgument(funcOp.getNumArguments() - 1);
+    }
+    addressOp.replaceAllUsesWith(newValue);
+    addressOp.erase();
   }
 };
 
