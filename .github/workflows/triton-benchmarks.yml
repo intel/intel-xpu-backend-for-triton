@@ -218,6 +218,7 @@ jobs:
           python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix-bfloat16.csv $REPORTS/gemm-postop-addmatrix-bfloat16-triton-report.csv --benchmark gemm-postop-addmatrix --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix-bfloat16.csv $REPORTS/gemm-postop-addmatrix-bfloat16-onednn-report.csv --benchmark gemm-postop-addmatrix --compiler onednn --param_cols "B,M,K,N" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark int8
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_int8.py') }}
@@ -226,6 +227,7 @@ jobs:
           INT8_ONLY=1 python gemm_postop_addmatrix_benchmark.py --reports $REPORTS
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix-int8.csv $REPORTS/gemm-postop-addmatrix-int8-triton-report.csv --benchmark gemm-postop-addmatrix-int8 --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix-int8.csv $REPORTS/gemm-postop-addmatrix-int8-onednn-report.csv --benchmark gemm-postop-addmatrix-int8 --compiler onednn --param_cols "B,M,K,N" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
 
       - name: Run Triton FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_benchmark.py') }}
