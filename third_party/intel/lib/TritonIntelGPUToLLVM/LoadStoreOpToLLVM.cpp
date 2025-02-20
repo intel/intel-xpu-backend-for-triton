@@ -865,6 +865,8 @@ struct LoadOpConversion
       if (!usePackedType)
         return failure();
 
+      std::swap(tileHeight, tileWidth);
+
       if (oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
         numOperandsPer2DLoadM = 1;
@@ -883,28 +885,17 @@ struct LoadOpConversion
     }
 
     // begin LL duplicate code
-    if (isOperandA || !isTransposeRequired) { // TODO: hack to avoid duplicating
-                                              // operandA layout code
-      if (isOperandA) {
-        assert(!isTransposeRequired);
-        tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration,
-                                               dimOuterStr);
-        tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
-                                               kIteration, dimInnerStr);
-      } else {
-        tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration,
-          dimOuterStr);
-        tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
-                                               kIteration, dimInnerStr);
-      }
+    if (!isTransposeRequired) { 
+      tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration,
+                                              dimOuterStr);
+      tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
+                                              kIteration, dimInnerStr);
     } else {
       if (isOperandA)
         return failure();
 
       if (!usePackedType)
         return failure();
-
-      std::swap(tileHeight, tileWidth);
 
       if (oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
@@ -1133,16 +1124,12 @@ struct LoadOpConversion
       llvm::dbgs() << "originalElemBits: " << originalElemBits << "\n";
       llvm::dbgs() << "elemSizeInBits: " << elemSizeInBits << "\n";
     });
-    llvm::errs() << "dim Str: " << dimInnerStr << "\n";
-#if 0
-    const unsigned packedElementsPerSlot = isTransposeRequired ? elemSizeInBits / originalElemBits : 1;
-#else
+
     LLVM_DEBUG(llvm::dbgs() << "out dim size: " << tileLayout.getOutDimSize(dimOuterStr) << "\n");
     LLVM_DEBUG(llvm::dbgs() << "elems per dpas: " << elemsPerDPASInst[dimInner] << "\n");
     const unsigned packedElementsPerSlot = isTransposeRequired ? tileHeight / elemsPerDPASInst[dimInner] : 1;
     LLVM_DEBUG(llvm::dbgs() << "other out dim size: " << tileLayout.getOutDimSize(dimInnerStr) << "\n");
     LLVM_DEBUG(llvm::dbgs() << "other elems per dpas: " << elemsPerDPASInst[dimOuter] << "\n");
-#endif
     LLVM_DEBUG(llvm::dbgs() << "Packed elements per slot: "
                             << packedElementsPerSlot << "\n");
 
@@ -1256,12 +1243,14 @@ struct LoadOpConversion
                                          : packedElemsPerLanePerDPASInst;
 
           unsigned loadColOffset;
+          // detect interrleaved transposed results 
           if (isTransposeRequired && !isOperandA) {
-            loadColOffset = tileHeight / elemsPerDPASInst[dimOuter] - 1;
+            loadColOffset = ( ll.getOutDimSize(dimOuterStr) >= tileHeight) ? tileHeight / elemsPerDPASInst[dimOuter] - 1 : tileHeight;
+            LLVM_DEBUG(llvm::dbgs() << "loadColOffset transpose: " << loadColOffset << "\n");
           } else {
             loadColOffset = isOperandA ? tileHeight : tileWidth;
+            LLVM_DEBUG(llvm::dbgs() << "loadColOffset no transpose: " << loadColOffset << "\n");
           }
-          LLVM_DEBUG(llvm::dbgs() << "loadColOffset: " << loadColOffset << "\n");
 
           LLVM_DEBUG(llvm::dbgs() << "num vblocks: " << vBlocks << "\n");
           // these iterations are dpas iterations.
@@ -1305,8 +1294,11 @@ struct LoadOpConversion
               });
               for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                    elemIdx += packedElementsPerSlot) {
+                // TODO: is this stride right? 
+                // llvm::errs() << "\ttile width: " << tileWidth << " vs elems per dpas: " << elemsPerDPASInst[1] << "\n";
+                // llvm::errs() << "\toffset idx: " << elemIdx * tileWidth << "\n";
                 auto blockLayoutOffset =
-                    tileLayout.apply({{kOffset, elemIdx * elemsPerDPASInst[1]},
+                    tileLayout.apply({{kOffset, elemIdx * tileWidth * packedElementsPerSlot},
                                       {kIteration, i},
                                       {kLoad, loadIdx}});
                 assert(blockLayoutOffset.size() == 2);
