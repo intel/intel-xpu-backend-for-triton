@@ -1032,7 +1032,7 @@ struct LoadOpConversion
     } else {
       tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
       tileLayout *=
-          LinearLayout::identity1D(numOperandsPer2DLoadM, kLoad, dimInnerStr);
+          LinearLayout::identity1D(numRepInner, kLoad, dimInnerStr);
     }
 
     LLVM_DEBUG({
