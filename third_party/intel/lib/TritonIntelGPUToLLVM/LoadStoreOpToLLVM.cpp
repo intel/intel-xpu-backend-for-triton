@@ -891,9 +891,9 @@ struct LoadOpConversion
                                                kIteration, dimInnerStr);
       } else {
         tileLayout *= LinearLayout::identity1D(repCluster[dimOuter], kIteration,
-                                               dimInnerStr);
+          dimOuterStr);
         tileLayout *= LinearLayout::identity1D(numReps[unsigned(opIdx) ? 1 : 2],
-                                               kIteration, dimOuterStr);
+                                               kIteration, dimInnerStr);
       }
     } else {
       if (isOperandA)
