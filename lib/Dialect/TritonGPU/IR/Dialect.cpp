@@ -38,7 +38,7 @@ namespace gpu {
 
 LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape) {
   auto linearLayout = toLinearLayout(shape, layout);
-  return LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return LinearEncodingAttr::get(layout.getContext(), std::move(linearLayout));
 }
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
@@ -157,6 +157,7 @@ SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
   }
   return ret;
 }
+
 SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
   if (auto distributedLayout =
           mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
@@ -1241,7 +1242,7 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
 
   llvm::SetVector<unsigned> reverseRepOrder;
   auto nonZero = [](auto val) { return val != 0; };
-  auto &registers = bases[StringAttr::get(ctx, "register")];
+  auto &registers = bases[kRegister];
   while (!registers.empty()) {
     auto &basis = registers.back();
     auto it = std::find_if(basis.begin(), basis.end(), nonZero);
@@ -1300,7 +1301,6 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return scaledLayout.basesPerDim(kRegister, /*skipBroadcast=*/false);
 }
 
-// Start of Selection
 SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
   auto ll = getLinearLayout();
   const auto &regs =
@@ -2945,9 +2945,6 @@ struct TritonGPUInferLayoutInterface
     if (fwdInference) {
       auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
       newLl = split * ll;
-      // FIXME!!!!
-      // operator* transposes the output dimensions??!! WTF
-      newLl = newLl.transposeOuts(outDims);
     } else {
       // TODO This requires a division algorithm!
       // Implement manually ll.divideLeft(split)
