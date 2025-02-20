@@ -1,4 +1,5 @@
 name: Build and test on Windows
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -11,9 +12,10 @@ on:
         description: Skip list
         type: string
         default: a770
-
-  schedule:
-    - cron: "1 5 * * *"
+      run_name:
+        description: Custom run name
+        type: string
+        default: Build and test on Windows
 
   pull_request:
     branches:
@@ -26,13 +28,13 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
+  SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --ignore-errors
 
 jobs:
   build:
     name: Build and test
-    runs-on: ${{ inputs.runner_label || 'win-a770' }}
+    runs-on: ${{ inputs.runner_label }}
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
     timeout-minutes: 480
     steps:
