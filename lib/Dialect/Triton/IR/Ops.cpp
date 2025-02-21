@@ -693,6 +693,23 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 }
 
 //-- ReshapeOp --
+
+void ReshapeOp::build(OpBuilder &builder, OperationState &state,
+                      ArrayRef<int64_t> shape,
+                      TypedValue<RankedTensorType> src) {
+  auto srcTy = src.getType();
+  auto srcEnc = srcTy.getEncoding();
+  Attribute dstEnc;
+  if (srcEnc) {
+    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
+                                               dstEnc, state.location);
+    assert(succeeded(result));
+  }
+  auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
+  build(builder, state, dstTy, src);
+}
+
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
   if (op.getEfficientLayout())
     return failure();
@@ -769,6 +786,10 @@ LogicalResult ReshapeOp::verify() {
 OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
   auto srcVal = getSrc();
   auto dstTy = getType();
+  // Fold trivial cast
+  if (srcVal.getType() == dstTy) {
+    return srcVal;
+  }
 
   auto resElemType = cast<FloatType>(getElementTypeOrSelf(getType()));
   const llvm::fltSemantics &semantic = resElemType.getFloatSemantics();
@@ -1025,7 +1046,7 @@ JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   Attribute retEnc;
   if (srcEnc) {
     if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferJoinOpEncoding(srcEnc, retEnc, location)
+            ->inferJoinOpEncoding(srcEnc, retEnc, srcTy.getShape(), location)
             .failed()) {
       return failure();
     }
@@ -1058,7 +1079,7 @@ LogicalResult SplitOp::inferReturnTypes(
   Attribute retEnc;
   if (srcEnc) {
     if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferSplitOpEncoding(srcEnc, retEnc, location)
+            ->inferSplitOpEncoding(srcEnc, retEnc, srcTy.getShape(), location)
             .failed()) {
       return failure();
     }

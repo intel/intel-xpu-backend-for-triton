@@ -9,6 +9,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -37,7 +38,7 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
     return op->getParentRegion() == dotOp->getParentRegion();
   };
 
-  SetVector<Operation *> slices = getSlice(dotOp, {filter});
+  SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
   // TODO: revisit this in flash attention.
   for (Operation *op : slices)
     if (isa<tt::DotOp>(op) && (op != dotOp))
