@@ -53,7 +53,7 @@ private:
       builder.setInsertionPoint(addressOp);
       newValue = builder.create<LLVM::PoisonOp>(addressOp.getLoc(), ptrTy);
     } else {
-      newValue = funcOp.getArgument(funcOp.getNumArguments() - 1);
+      newValue = funcOp.getArgument(funcOp.getNumArguments() - 2);
     }
     addressOp.replaceAllUsesWith(newValue);
     addressOp.erase();

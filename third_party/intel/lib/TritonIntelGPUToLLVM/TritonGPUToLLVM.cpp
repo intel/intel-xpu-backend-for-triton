@@ -120,8 +120,10 @@ struct ConvertTritonGPUToLLVM
           context, option, targetInfo, isAdvancedPathEnabled);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      pipelineManager.populateFunctionConversionPatterns(
-          funcPatterns, typeConverter, numWarps);
+      mlir::triton::populateFuncOpConversionPattern(
+          typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                            funcPatterns);
 
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
@@ -132,6 +134,19 @@ struct ConvertTritonGPUToLLVM
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(typeConverter);
+
+    // Convert call and ret ops
+    {
+      mlir::LowerToLLVMOptions option(context);
+      TritonIntelGPUToLLVMTypeConverter typeConverter(
+          context, option, targetInfo, isAdvancedPathEnabled);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
+      RewritePatternSet funcPatterns(context);
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
+
     mlir::triton::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     OpBuilder::InsertPoint indexInsertPoint;
 
