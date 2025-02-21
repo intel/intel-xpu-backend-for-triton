@@ -1166,9 +1166,11 @@ private:
           .Default([&](auto) { return WalkResult::advance(); });
     });
 
+    llvm::errs() << "at line " << __LINE__ << "\n";
     for (Operation *op : opsWithMask) {
       TypeSwitch<Operation *>(op)
           .Case<tt::LoadOp>([&](auto loadOp) {
+            llvm::errs() << "at line " << __LINE__ << "\n";
             loadOp->emitWarning("TritonRaiseBlockPointer: ignoring mask");
             OpBuilder builder(loadOp);
             auto newLoadOp = builder.create<tt::LoadOp>(
@@ -1179,6 +1181,7 @@ private:
             loadOp->erase();
           })
           .Case<tt::StoreOp>([&](auto storeOp) {
+            llvm::errs() << "at line " << __LINE__ << "\n";
             storeOp->emitWarning("TritonRaiseBlockPointer: ignoring mask");
             OpBuilder builder(storeOp);
             auto newStoreOp = builder.createOrFold<tt::StoreOp>(
@@ -1187,8 +1190,10 @@ private:
                 storeOp.getEvict());
 
             storeOp->erase();
-            if (storeOp.getMask().getUsers().empty())
+            if (storeOp.getMask().getUsers().empty()) {
+              llvm::errs() << "at line " << __LINE__ << "\n";
               storeOp.getMask().getDefiningOp()->erase();
+            }
           });
     }
     //moduleOp.dump();
