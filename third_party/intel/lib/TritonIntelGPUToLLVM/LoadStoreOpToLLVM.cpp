@@ -1242,8 +1242,7 @@ struct LoadOpConversion
                        << itrOffsetCoord[1].second << "\n");
             auto itrOffsetRowCoord =
                 itrOffsetCoord[0].second / elemsPerDPASInst[0];
-            auto itrOffsetColCoord =
-                itrOffsetCoord[1].second / tileWidth; 
+            auto itrOffsetColCoord = itrOffsetCoord[1].second / tileWidth;
             LLVM_DEBUG({
               llvm::dbgs() << "row: " << itrOffsetRowCoord << "\n";
               llvm::dbgs() << "col: " << itrOffsetColCoord << "\n";
