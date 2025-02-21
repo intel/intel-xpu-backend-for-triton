@@ -13,8 +13,14 @@ from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
+# A hard-coded cache version that can be updated when we know that the cached file is invalid and
+# there are no other ways to detect that the runtime environment has changed. For example, a shared
+# library has been updated as a result of updated dependencies.
+# See https://github.com/intel/intel-xpu-backend-for-triton/issues/3095.
+__CACHE_VERSION = "1"
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
+
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     """
     Looks for the sycl library in known places.
 
@@ -28,17 +34,16 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
       AssertionError: if library was not found.
     """
     include_dir = include_dir.copy()
-    sycl_dir = None
     assertion_message = ("sycl headers not found, please install `icpx` compiler, "
                          "or provide `ONEAPI_ROOT` environment "
                          "or install `intel-sycl-rt>=2025.0.0` wheel")
     icpx_path = shutil.which("icpx")
-    if icpx_path and os.name != "nt":
+    if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
         compiler_root = os.path.abspath(f"{icpx_path}/../..")
         include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
         sycl_dir = os.path.join(compiler_root, "lib")
-        return include_dir, sycl_dir
+        return include_dir, [sycl_dir]
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
@@ -47,7 +52,7 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
             os.path.join(oneapi_root, "compiler/latest/include/sycl")
         ]
         sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
-        return include_dir, sycl_dir
+        return include_dir, [sycl_dir]
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
@@ -57,18 +62,21 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], str]:
     if sycl_rt.get("version", "0.0.0").startswith("2024"):
         raise AssertionError(assertion_message)
 
+    sycl_dirs = []
     for f in importlib.metadata.files("intel-sycl-rt"):
         # sycl/sycl.hpp and sycl/CL/sycl.hpp results in both folders
         # being add: include and include/sycl.
         if f.name == "sycl.hpp":
             include_dir += [str(f.locate().parent.parent.resolve())]
-        if f.name in ["libsycl.so", "sycl8.dll"]:
+        if f.name in ["libsycl.so", "sycl8.dll", "sycl8.lib"]:
             sycl_dir = str(f.locate().parent.resolve())
             # should we handle `_` somehow?
             if os.name == "nt":
                 _ = os.add_dll_directory(sycl_dir)
+            sycl_dirs.append(sycl_dir)
 
-    return include_dir, sycl_dir
+    assert len(sycl_dirs) != 0
+    return include_dir, sycl_dirs
 
 
 class CompilationHelper:
@@ -80,7 +88,11 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
-        self.libraries = ['ze_loader', 'sycl']
+        self.libraries = ['ze_loader']
+        if os.name != "nt":
+            self.libraries += ["sycl"]
+        else:
+            self.libraries += ['sycl8']
 
     @property
     def inject_pytorch_dep(self):
@@ -94,7 +106,7 @@ class CompilationHelper:
         library_dir = []
         include_dir, self._libsycl_dir = find_sycl(include_dir)
         if self._libsycl_dir:
-            library_dir += [self._libsycl_dir]
+            library_dir += self._libsycl_dir
         if os.name == "nt":
             library_dir += [os.path.join(ze_root, "lib")]
 
@@ -127,7 +139,7 @@ class CompilationHelper:
         return self._include_dir
 
     @cached_property
-    def libsycl_dir(self) -> str:
+    def libsycl_dir(self) -> list[str]:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
 
@@ -153,6 +165,45 @@ class ArchParser:
             return wrapper
 
         return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+            self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            handle = self.shared_library._handle
+            ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+            ctypes.windll.kernel32.FreeLibrary(handle)
+
+
+class SpirvUtils:
+
+    def __init__(self, cache_path: str):
+        self.shared_library = ctypes.PyDLL(cache_path)
+        methods = ("init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
+        for method in methods:
+            getattr(self.shared_library, method).restype = ctypes.py_object
+            getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
+        self.shared_library.get_device_properties.restype = ctypes.py_object
+        self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
+
+    def __getattribute__(self, name):
+        if name in ("get_device_properties", "init_context", "init_devices", "wait_on_sycl_queue"):
+            shared_library = super().__getattribute__("shared_library")
+            return getattr(shared_library, name)
+
+        return super().__getattribute__(name)
+
+    def load_binary(self, *args):
+        # if we don't use parameter passing in this way,
+        # we will need to rewrite the line in the general part of the code:
+        # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
+        # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        return self.shared_library.load_binary(args)
 
     if os.name != 'nt':
 
@@ -197,7 +248,9 @@ class TritonLauncher:
 
 
 def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
+    hasher.update(src.encode("utf-8"))
+    key = hasher.hexdigest()
     cache = get_cache_manager(key)
     file_name = f"{name}.{sysconfig.get_config_var('EXT_SUFFIX').split('.')[-1]}"
     cache_path = cache.get_file(file_name)
@@ -209,9 +262,9 @@ def compile_module_from_src(src, name):
             extra_compiler_args = []
             if COMPILATION_HELPER.libsycl_dir:
                 if os.name == "nt":
-                    extra_compiler_args += ["/LIBPATH:" + COMPILATION_HELPER.libsycl_dir]
+                    extra_compiler_args += ["/LIBPATH:" + dir for dir in COMPILATION_HELPER.libsycl_dir]
                 else:
-                    extra_compiler_args += ["-Wl,-rpath," + COMPILATION_HELPER.libsycl_dir]
+                    extra_compiler_args += ["-Wl,-rpath," + dir for dir in COMPILATION_HELPER.libsycl_dir]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
                         COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
@@ -220,6 +273,8 @@ def compile_module_from_src(src, name):
 
     if name == 'arch_utils':
         return ArchParser(cache_path)
+    elif name == 'spirv_utils':
+        return SpirvUtils(cache_path)
     elif name == '__triton_launcher':
         return TritonLauncher(cache_path)
 
@@ -244,13 +299,15 @@ class XPUUtils(object):
 
     def __init__(self):
         dirname = os.path.dirname(os.path.realpath(__file__))
-        mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
-        self.load_binary = mod.load_binary
-        self.get_device_properties = mod.get_device_properties
-        self.context = mod.init_context(self.get_sycl_queue())
-        self.device_count = mod.init_devices(self.get_sycl_queue())
+        # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
+        # and can cause `Fatal Python error: Segmentation fault`
+        self.mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
+        self.load_binary = self.mod.load_binary
+        self.get_device_properties = self.mod.get_device_properties
+        self.context = self.mod.init_context(self.get_sycl_queue())
+        self.device_count = self.mod.init_devices(self.get_sycl_queue())
         self.current_device = 0 if self.device_count[0] > 0 else -1
-        self.wait_on_sycl_queue = mod.wait_on_sycl_queue
+        self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
 
     def get_current_device(self):
         return self.current_device

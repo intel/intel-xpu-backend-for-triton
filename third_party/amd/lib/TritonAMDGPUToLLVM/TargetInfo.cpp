@@ -1,6 +1,7 @@
 #include "TargetInfo.h"
 #include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -63,7 +64,10 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
-int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
+int TargetInfo::getSharedMemorySize() const {
+  int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
+  return kbytes * 1024;
+}
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 
@@ -98,6 +102,11 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
                                 int swizzleByteSize) const {
   // AMD does not support stmatrix
   return false;
+}
+
+bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
+  return getISAFamily() == ISAFamily::CDNA4 &&
+         llvm::is_contained({16, 8, 4, 6}, bitwidth);
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
@@ -193,8 +202,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (numLaneToReduce != 64)
     return false;
 
-  if (auto family = getISAFamily();
-      family != ISAFamily::CDNA3 && family != ISAFamily::CDNA2) {
+  if (!llvm::is_contained(
+          {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+          getISAFamily())) {
     return false;
   }
 

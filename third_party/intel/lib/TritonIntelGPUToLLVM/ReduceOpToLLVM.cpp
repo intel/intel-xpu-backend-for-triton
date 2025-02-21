@@ -28,7 +28,7 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
-    assert(helper.isSupportedLayout() &&
+    assert(helper.isReduceWithinCTA() &&
            "Unexpected srcLayout in ReduceOpConversion");
     Location loc = op->getLoc();
 
@@ -289,7 +289,7 @@ private:
 
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
     unsigned numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = triton::gpu::lookupNumWarps(op.getOperation());
     int numThreads = numLanes * numWarps;
 
     Value threadId = getThreadId(rewriter, loc);

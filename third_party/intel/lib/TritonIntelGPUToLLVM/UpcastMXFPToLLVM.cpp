@@ -146,7 +146,7 @@ public:
     SmallVector<Value> scaleVals = unpackLLElements(loc, operands[1], rewriter);
     ScaleDotElemType fpType = op.getFpType();
 
-    Value tid = b.tid_val();
+    Value tid = getThreadId(rewriter, loc);
     auto mod = op->getParentOfType<ModuleOp>();
     Value warpSize =
         b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));

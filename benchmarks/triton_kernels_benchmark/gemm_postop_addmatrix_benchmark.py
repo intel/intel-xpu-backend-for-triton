@@ -12,6 +12,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
+import psutil
 
 INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
 ALL_DTYPES_OPTION = os.getenv('ALL_DTYPES', '0') == '1'
@@ -74,7 +75,7 @@ def matmul_kernel_with_block_pointers(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
@@ -142,15 +143,15 @@ def matmul_kernel_with_block_pointers_batched(
         ACCUMULATOR_DTYPE: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
-    bid = tl.program_id(axis=0)
-    pid = tl.program_id(axis=1)
+    bid = tl.program_id(axis=1)
+    pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     offset_a = bid.to(tl.int64) * stride_az
@@ -198,8 +199,8 @@ def matmul(a, b, d, c):
         B, K, N = b.shape
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (
-            B,
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+            B,
         )
         matmul_kernel_with_block_pointers_batched[grid](
             a, b, c, d,  #
@@ -256,6 +257,7 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i, dtype]
 
 DEVICE_NAME = torch.xpu.get_device_name()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+RAM_TOTAL = psutil.virtual_memory().total
 
 # keep in sync with `def dtypes`
 DTYPES_SIZE = {
@@ -271,11 +273,21 @@ def is_enough_memory(x_val):
     # b: (B, K, N, dtype)
     # d: (B, M, N) float32 or int32
     # c: (B, M, N) float32 or int32
+    # pytorch reference: (B, M, N) float32 or int32
     size = DTYPES_SIZE[dtype]
-    required_memory = B * M * K * size + B * K * N * size + 2 * B * M * N * 4
+    required_memory = B * M * K * size + B * K * N * size + 3 * B * M * N * 4
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
+    if enough_memory and not dtype.is_floating_point:
+        # a: (B, M, K, int32)
+        # b: (B, K, N, int32)
+        # torch.matmul result: (B, M, N) int32
+        size = 4
+        required_memory = B * M * K * size + B * K * N * size + B * M * N * size
+        enough_memory = required_memory < RAM_TOTAL
+        if not enough_memory:
+            print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {RAM_TOTAL=}")
     return enough_memory
 
 
@@ -292,9 +304,9 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton'],
+        line_vals=['triton', 'onednn'],
         # label name for the lines
-        line_names=['Triton'],
+        line_names=['Triton', 'OneDNN'],
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -319,7 +331,10 @@ def benchmark(B, M, N, K, dtype, provider):
 
     quantiles = [0.5, 0.0, 1.0]
 
-    if provider == 'triton':
+    if provider == 'onednn':
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(a, b) + d, n_warmup=10,
+                                                                 n_repeat=10, quantiles=quantiles)
+    elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
             c = torch.empty((B, M, N), device='xpu', dtype=res_dtype)
@@ -327,12 +342,12 @@ def benchmark(B, M, N, K, dtype, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=res_dtype)
         triton_fn = lambda: matmul(a, b, d, c)
-        # Torch does not support integer calculation in matmul
-        torch_device = 'xpu' if dtype.is_floating_point else 'cpu'
-        torch_dtype = dtype if dtype.is_floating_point else res_dtype
-        torch_fn = lambda: torch.matmul(a.to(device=torch_device, dtype=torch_dtype),
-                                        b.to(device=torch_device, dtype=torch_dtype)).to(device='xpu', dtype=res_dtype
-                                                                                         ) + d
+        if not dtype.is_floating_point:
+            # Torch does not support integer calculation in matmul
+            torch_fn = lambda: torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu', dtype=res_dtype)
+                                            ).to(device='xpu', dtype=res_dtype).add_(d)
+        else:
+            torch_fn = lambda: torch.matmul(a, b).add_(d)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:

@@ -189,7 +189,7 @@ run_core_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -k "not test_local_load_store_dot" -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
@@ -256,8 +256,9 @@ run_tutorial_tests() {
   echo "Running with TRITON_INTEL_RAISE_BLOCK_POINTER=ignore-masks"
   echo "***************************************************"
 
-  TRITON_TEST_REPORTS=false TRITON_INTEL_RAISE_BLOCK_POINTER=ignore-masks \
-    run_tutorial_test "03-matrix-multiplication"
+  # FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/3446
+  # TRITON_TEST_REPORTS=false TRITON_INTEL_RAISE_BLOCK_POINTER=ignore-masks \
+  #   run_tutorial_test "03-matrix-multiplication"
 }
 
 run_microbench_tests() {

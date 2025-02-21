@@ -18,7 +18,7 @@ from triton_kernels_benchmark import xetla_kernel
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
 use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
-SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0' and not TRANSPOSE_A
+SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
 
 @triton.autotune(
@@ -62,7 +62,7 @@ def matmul_kernel_with_block_pointers(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
@@ -137,7 +137,7 @@ def matmul_kernel_with_block_pointers_batched(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     offset_a = bid.to(tl.int64) * stride_az
@@ -256,7 +256,8 @@ def is_enough_memory(x_val):
     # a: (B, M, K) bfloat16
     # b: (B, N, K) bfloat16
     # c: (B, M, N) float32
-    required_memory = B * M * K * 2 + B * N * K * 2 + B * M * N * 4
+    # pytorch reference: (B, M, N) float32
+    required_memory = B * M * K * 2 + B * N * K * 2 + 2 * B * M * N * 4
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
@@ -276,9 +277,9 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton'] + (['xetla'] if use_xetla else ['onednn']),
+        line_vals=['triton', 'onednn'] + (['xetla'] if use_xetla else []),
         # label name for the lines
-        line_names=['Triton'] + (['XeTLA'] if use_xetla else ['onednn']),
+        line_names=['Triton', 'OneDNN'] + (['XeTLA'] if use_xetla else []),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis

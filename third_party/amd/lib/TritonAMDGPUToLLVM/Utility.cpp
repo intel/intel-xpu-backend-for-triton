@@ -114,9 +114,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   }
 
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Value threadId =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, threadId);
+  Value threadId = getThreadId(rewriter, loc);
+
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpSize = b.i32_val(iWarpSize);
   Value laneId = b.urem(threadId, warpSize);
@@ -131,13 +130,6 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   switch (mode) {
   case ShflKind::bfly:
     if (strideInt > 16) {
-      Value threadId =
-          rewriter
-              .create<UnrealizedConversionCastOp>(
-                  loc, TypeRange{i32_ty},
-                  ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
-                      loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
-              .getResult(0);
       Value stride = b.i32_val(32);
       Value lineId = b.xor_(threadId, stride);
       return bpermute(lineId);
@@ -145,9 +137,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       Value offset = b.i32_val(0x401F);
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
     } else {
-      if (isaFamily != ISAFamily::CDNA2 && isaFamily != ISAFamily::CDNA3) {
-        // DPP is only supportted for CDNA2 and CDNA3 right now, so we fallback
-        // to ds_swizzle for other archs.
+      if (!llvm::is_contained(
+              {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+              isaFamily)) {
+        // DPP is only supported for CDNA2/CDNA3/CDNA4 right now, so we fallback
+        // to ds_swizzle for other architectures.
         //
         // This map facilates the butterfly shuffle pattern for a stride less
         // than 16. The pattern stride is the key of the map.
@@ -290,27 +284,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, int64_t alignmentBytes,
-             triton::CacheModifier cm) {
+             Value pred, Value falseVal, triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Try to emit llvm.intr.masked.load if we can. In theory the backend should
-  // be happier because we emit less branchy code to optimize. The backend will
-  // lower it down however it wants at some point.
-  if (alignmentBytes &&
-      (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE)) {
-    // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we need
-    // to bitcast to `vector<1xelemTy>` (and back)
-    int64_t vecSize = getNumElements(elemTy);
-    Type vecType = castToVectorType(elemTy);
-    falseVal = b.bitcast(falseVal, vecType);
-    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
-    bool nt = (cm == triton::CacheModifier::CG);
-    Value vecData = rewriter.create<LLVM::MaskedLoadOp>(
-        loc, vecType, ptr, maskVal, falseVal, alignmentBytes, nt);
-    // If it is not a vector, remember to bitcast back to a scalar
-    vecData = b.bitcast(vecData, elemTy);
-    return vecData;
-  }
 
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
@@ -338,23 +313,8 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, int64_t alignmentBytes, triton::CacheModifier cm) {
+             Value pred, triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Try to emit llvm.intr.masked.store if we can. In theory the backend should
-  // be happier because we emit less branchy code to optimize. The backend will
-  // lower it down however it wants at some point.
-  if (alignmentBytes && cm == triton::CacheModifier::NONE) {
-    // `llvm.intr.masked.store` only accepts vectors. If we see a scalar we need
-    // to bitcast to `vector<1xelemTy>`
-    Type elemTy = val.getType();
-    int64_t vecSize = getNumElements(elemTy);
-    Type vecType = castToVectorType(elemTy);
-    val = b.bitcast(val, vecType);
-    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
-    auto op = rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal,
-                                                   alignmentBytes);
-    return;
-  }
 
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
@@ -414,12 +374,12 @@ static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
 // Load | .ca |   F      | F
 //      | .cg |   F      | T
 //      | .cs |   F      | T
-//      | .cv |   T      | T
+//      | .cv |   T      | X
 // -----+-----+----------+---------
 // Store| .wb |   F      | F
 //      | .cg |   F      | F
 //      | .cs |   F      | T
-//      | .wt |   T      | T
+//      | .wt |   T      | X
 // -----+-----+----------+---------
 std::pair<bool, bool>
 getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
@@ -458,35 +418,38 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // Store  | .wb |  0  |  0  | 0  |
 //        | .cg |  0  |  0  | 0  |
 //        | .cs |  0  |  1  | 1  |
-//        | .wt |  1  |  x  | x  |
+//        | .wt |  1  |  1  | x  |
 // -------+-----+-----+-----+----+--
 // Atomic | N/A |  0  |  1  | x  | Setting sc0 returns the pre-op value
 //        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
 // -------+-----+-----+-----+----+--
 static int32_t
 getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
-                                         bool isBufferLoad) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+                                         bool isLoad) {
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   switch (cm) {
   case triton::CacheModifier::CA:
     aux = 0;
     break;
   case triton::CacheModifier::CG:
-    if (isBufferLoad)
+    if (isLoad)
       aux |= sc0Bit | ntBit;
     break;
   case triton::CacheModifier::CS:
     aux |= sc0Bit | ntBit;
     break;
   case triton::CacheModifier::CV:
+    assert(isLoad);
     aux |= sc0Bit | sc1Bit;
     break;
   case triton::CacheModifier::WB:
+    assert(!isLoad);
     aux = 0;
     break;
   case triton::CacheModifier::WT:
-    aux |= sc1Bit;
+    assert(!isLoad);
+    aux |= sc0Bit | sc1Bit;
     break;
   default:
     aux = 0;
@@ -496,7 +459,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
 
 int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
                                                  bool setNT) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   if (setSC0)
     aux |= sc0Bit;
@@ -519,12 +482,12 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
 // .wb: write-back, writes back data at all cache levels
 // .wt: write-through, write data directly to system memory
 int32_t getCtrlBitsForCacheModifierOnTarget(
-    triton::CacheModifier cm, bool isBufferLoad,
+    triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
   switch (targetInfo.getGPUKind()) {
   case llvm::AMDGPU::GK_GFX942:
   case llvm::AMDGPU::GK_GFX950:
-    return getCtrlBitsForCacheModifierOnGFX_942_950(cm, isBufferLoad);
+    return getCtrlBitsForCacheModifierOnGFX_942_950(cm, isLoad);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
   }
@@ -607,6 +570,27 @@ unsigned getVectorSize(Value ptr, Value offset,
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
   auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+}
+
+Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
+  switch (t) {
+  case triton::ScaleDotElemType::FP16:
+    return Float16Type::get(ctx);
+  case triton::ScaleDotElemType::BF16:
+    return BFloat16Type::get(ctx);
+  case triton::ScaleDotElemType::E4M3:
+    return Float8E4M3FNType::get(ctx);
+  case triton::ScaleDotElemType::E5M2:
+    return Float8E5M2Type::get(ctx);
+  case triton::ScaleDotElemType::E3M2:
+    return Float6E3M2FNType::get(ctx);
+  case triton::ScaleDotElemType::E2M3:
+    return Float6E2M3FNType::get(ctx);
+  case triton::ScaleDotElemType::E2M1:
+    return Float4E2M1FNType::get(ctx);
+  default:
+    llvm_unreachable("unsupported ScaleDotElemType!");
+  }
 }
 
 } // namespace mlir::LLVM::AMD

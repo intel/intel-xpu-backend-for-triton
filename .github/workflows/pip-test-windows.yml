@@ -1,7 +1,21 @@
 name: Test with pip on Windows
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
+        default: win-a770
+      skip_list:
+        description: Skip list
+        type: string
+        default: a770
+      run_name:
+        description: Custom run name
+        type: string
+        default: Test with pip on Windows
 
   # run workflow on changes to the driver, which handles the libraries logic
   pull_request:
@@ -15,9 +29,6 @@ on:
     paths:
       - third_party/intel/backend/driver.py
 
-  schedule:
-    - cron: "3 5 * * *"
-
 permissions: read-all
 
 env:
@@ -25,13 +36,13 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
-  SKIPLIST: --skip-list scripts/skiplist/a770
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/a770 --reports-dir reports --ignore-errors
+  SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
 
 jobs:
   build:
     name: Build and test
-    runs-on: win-a770
+    runs-on: ${{ inputs.runner_label || 'win-a770' }}
     steps:
       - name: Enable long paths
         run: |
@@ -85,7 +96,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           cd python
-          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
+          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1' intel-sycl-rt==2025.0.5
           python setup.py -v bdist_wheel
           pip install (Get-Item ${{ env.NEW_WORKSPACE }}\python\dist\*.whl)
 

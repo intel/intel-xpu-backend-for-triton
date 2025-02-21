@@ -59,8 +59,10 @@ public:
     addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
-    addDynamicallyLegalOp<ModuleOp>(
-        [](ModuleOp op) { return spirv::lookupTargetEnv(op) != nullptr; });
+    addDynamicallyLegalOp<ModuleOp>([](ModuleOp op) {
+      return !triton::gpu::intel::hasSpirvTargetArch(op) ||
+             spirv::lookupTargetEnv(op) != nullptr;
+    });
   }
 };
 
@@ -99,7 +101,7 @@ struct ConvertTritonGPUToLLVM
     TritonIntelGPUToLLVMTypeConverter typeConverter(context, option, targetInfo,
                                                     isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = triton::gpu::lookupNumWarps(&*mod.getOps().begin());
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
