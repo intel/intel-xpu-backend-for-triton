@@ -53,6 +53,7 @@ constexpr unsigned shapeAndStridesBitwidth = 64u;
 // otherwise create a new one.
 Value findOrCreateConstant(Location loc, int val, unsigned bitWidth,
                            OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   Block *block = builder.getInsertionBlock();
   const Block::iterator insertPoint = builder.getInsertionPoint();
 
@@ -70,6 +71,7 @@ Value findOrCreateConstant(Location loc, int val, unsigned bitWidth,
 
 Value findOrCreateCast(Location loc, Value val, Type tgtType,
                        OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   Block *block = builder.getInsertionBlock();
   const Block::iterator insertPoint = builder.getInsertionPoint();
 
@@ -88,6 +90,7 @@ Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
                                 ValueRange strides, ValueRange offsets,
                                 ArrayRef<int> order, ArrayRef<int> sizes,
                                 OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   Block *block = builder.getInsertionBlock();
   const Block::iterator insertPoint = builder.getInsertionPoint();
 
@@ -116,6 +119,7 @@ Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
 }
 
 Value getFinalValue(Value value) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
     // look init values outside the loop
@@ -178,6 +182,7 @@ struct PtrState {
   Value scalar;
 
   int getRank() const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(offsets.size() == sizes.size() && offsets.size() == strides.size() &&
            offsets.size() == strides.size());
     return offsets.size();
@@ -193,6 +198,7 @@ struct PtrState {
   // Note that this function should only be called when PtrState describes a
   // non-block pointer.
   bool dimHasModulo(unsigned dim) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(!isBlockPtr() && "Analysis should not check modulo if PtrState "
                             "describes block pointer");
     assert(dim < getRank() && "Dim cannot be higher than the tensor rank.");
@@ -205,6 +211,7 @@ struct PtrState {
 
   // @return true if addresses wrap around in any of the pointer dimension.
   bool hasModulo() const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     for (int i = 0; i < getRank(); i++) {
       if (dimHasModulo(i))
         return true;
@@ -217,6 +224,7 @@ struct PtrState {
   // Process addition of two PtrStates.
   LogicalResult addState(const PtrState &lhsState, const PtrState &rhsState,
                          Operation *op, OpBuilder &builder) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(isEmpty() && lhsState.getRank() == rhsState.getRank());
 
     if (lhsState.source && rhsState.source) {
@@ -299,6 +307,7 @@ struct PtrState {
 
   LogicalResult mulState(const PtrState &lhsState, const PtrState &rhsState,
                          Operation *op, OpBuilder &builder) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(isEmpty() && lhsState.getRank() == rhsState.getRank());
     assert(!lhsState.source && !rhsState.source &&
            "Multiplying base pointer does not make sense");
@@ -365,6 +374,7 @@ struct PtrState {
   }
 
   Value createTTMakeTensorPtrOp(OpBuilder &builder, Location loc) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     SmallVector<Value> newOffsets, newStrides, newShape;
 
     for (const auto &[offset, stride, dim] :
@@ -385,6 +395,7 @@ struct PtrState {
                                          tt::MakeTensorPtrOp makeTPtrOp,
                                          OpBuilder &builder,
                                          Location loc) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(triton::isTensorPointerType(ptr.getType()) &&
            "Expecting a block ptr");
     SmallVector<Value> newOffsets;
@@ -448,6 +459,7 @@ struct PtrState {
 private:
   Value computeOffset(Value offset, Value stride, OpBuilder &builder,
                       Location loc) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     if (ttgi::isConstant(stride, 0))
       return findOrCreateCast(loc, offset,
                               builder.getIntegerType(offsetBitwidth), builder);
@@ -496,6 +508,7 @@ public:
   using IndexMapSet = std::map<int, std::set<int>>;
 
   void runOnOperation() final {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     ModuleOp moduleOp = getOperation();
 
     if (IgnoreMasks)
@@ -514,6 +527,7 @@ public:
 
 private:
   LogicalResult rewriteOp(Operation *rootOp, bool isNested = false) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(rootOp && "Expected a valid operation");
 
     bool fail = false;
@@ -561,6 +575,7 @@ private:
   }
 
   LogicalResult rewriteForOp(scf::ForOp op) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << *op << "\n");
 
     for (auto &bodyOp : op.getRegion().getOps()) {
@@ -678,6 +693,7 @@ private:
   }
 
   bool lookForMultiplyingValueInDefiningPath(Value &val, Value &ref) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     if (Operation *defOp = getFinalValue(val).getDefiningOp()) {
       if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
         if ((mulOp.getLhs() == ref) || (mulOp.getRhs() == ref))
@@ -688,6 +704,7 @@ private:
   }
 
   bool areValuesEqual(Value val1, Value val2) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     if (val1 == val2)
       return true;
 
@@ -705,6 +722,7 @@ private:
   std::optional<unsigned>
   checkIfOffsetMultipliedByStride(Value operand,
                                   SmallVector<Value> &strides) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     Operation *defOp = operand.getDefiningOp();
 
     SmallVector<Value> finalStrides;
@@ -732,6 +750,7 @@ private:
 
   // Return true if a `tt::ExpandOp` has been found is the defining path.
   bool hasExpandOpInDefiningPath(Value value) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     Operation *defOp = value.getDefiningOp();
     if (!defOp) {
       // look init values outside the loop
@@ -759,6 +778,7 @@ private:
   }
 
   LogicalResult rewriteAddPtrOp(tt::AddPtrOp op) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     OpBuilder builder(op);
     Location loc = op.getLoc();
     Value ptr = op.getPtr();
@@ -874,6 +894,7 @@ private:
                                           PtrState &state, const Location loc,
                                           OpBuilder &builder,
                                           bool addedByPass = false) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(state.isEmpty() && "state is a return argument");
 
     if (auto iter = knownPtrs.find(makeTPtrOp.getResult());
@@ -910,6 +931,7 @@ private:
 
   LogicalResult visitOperandAddptr(tt::AddPtrOp addptrOp, PtrState &state,
                                    Location loc, OpBuilder &builder) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(state.isEmpty() && "state is a return argument");
 
     PtrState ptrState;
@@ -968,6 +990,7 @@ private:
 
   LogicalResult visitOperand(Value operand, PtrState &state, const Location loc,
                              OpBuilder &builder) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     if (knownPtrs.find(operand) != knownPtrs.end()) {
       state = knownPtrs.lookup(operand);
       return success();
@@ -1061,6 +1084,7 @@ private:
       std::enable_if_t<llvm::is_one_of<OpTy, tt::LoadOp, tt::StoreOp>::value,
                        bool> = true>
   LogicalResult rewriteLoadStoreOp(OpTy op) {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     // If the pointer is already a block pointer, there is nothing to do.
     if (tt::isTensorPointerType(op.getPtr().getType()))
       return success();
@@ -1127,11 +1151,13 @@ private:
   }
 
   void dropMasks(ModuleOp moduleOp) const {
+    llvm::errs() << "at line " << __LINE__ << "\n";
     assert(IgnoreMasks && "Expecting 'IgnoreMask' flag to be set");
 
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       TypeSwitch<Operation *>(op)
           .Case<tt::LoadOp>([&](auto loadOp) {
+            llvm::errs() << "at line " << __LINE__ << "\n";
             if (loadOp.getMask()) {
               loadOp->emitWarning("TritonRaiseBlockPointer: ignoring mask");
               OpBuilder builder(loadOp);
@@ -1145,6 +1171,7 @@ private:
             return WalkResult::advance();
           })
           .Case<tt::StoreOp>([&](auto storeOp) {
+            llvm::errs() << "at line " << __LINE__ << "\n";
             if (storeOp.getMask()) {
               storeOp->emitWarning("TritonRaiseBlockPointer: ignoring mask");
               OpBuilder builder(storeOp);
@@ -1162,7 +1189,8 @@ private:
           .Default([&](auto) { return WalkResult::advance(); });
     });
 
-    moduleOp.dump();
+    //moduleOp.dump();
+    llvm::errs() << "at line " << __LINE__ << "\n";
   }
 
   static void dump(const IRMapping &map) {
@@ -1190,6 +1218,7 @@ template <
         llvm::is_one_of<OpTy, arith::RemSIOp, arith::RemUIOp>::value, bool>>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerRemOperand(
     OpTy remOp, PtrState &state, Location loc, OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   PtrState rhsState;
@@ -1291,6 +1320,7 @@ LogicalResult
 TritonRaiseBlockPointer::visitAddPointerOperand(tt::MakeRangeOp rangeOp,
                                                 PtrState &state, Location loc,
                                                 OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   ArrayRef<int64_t> shape = cast<ShapedType>(rangeOp.getType()).getShape();
@@ -1315,6 +1345,7 @@ TritonRaiseBlockPointer::visitAddPointerOperand(tt::MakeRangeOp rangeOp,
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     tt::SplatOp splatOp, PtrState &state, Location loc, OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   Value src = splatOp.getSrc();
@@ -1352,6 +1383,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::AddIOp addOp, PtrState &state, Location loc, OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   PtrState lhsState;
@@ -1372,6 +1404,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::MulIOp mulOp, PtrState &state, Location loc, OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   PtrState lhsState;
@@ -1392,6 +1425,7 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
 template <>
 LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     arith::ConstantOp op, PtrState &state, Location loc, OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   auto attr = cast<DenseElementsAttr>(op.getValue());
@@ -1427,6 +1461,7 @@ LogicalResult
 TritonRaiseBlockPointer::visitAddPointerOperand(tt::ExpandDimsOp expandDimsOp,
                                                 PtrState &state, Location loc,
                                                 OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   if (failed(visitOperand(expandDimsOp.getSrc(), state, loc, builder)))
@@ -1463,6 +1498,7 @@ LogicalResult
 TritonRaiseBlockPointer::visitAddPointerOperand(tt::BroadcastOp broadcastOp,
                                                 PtrState &state, Location loc,
                                                 OpBuilder &builder) {
+  llvm::errs() << "at line " << __LINE__ << "\n";
   assert(state.isEmpty() && "state is a return argument");
 
   Value src = broadcastOp.getSrc();
