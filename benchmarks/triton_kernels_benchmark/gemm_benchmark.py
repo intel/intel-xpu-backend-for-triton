@@ -277,9 +277,9 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton'] + (['xetla'] if use_xetla else ['onednn']),
+        line_vals=['triton', 'onednn'] + (['xetla'] if use_xetla else []),
         # label name for the lines
-        line_names=['Triton'] + (['XeTLA'] if use_xetla else ['onednn']),
+        line_names=['Triton', 'OneDNN'] + (['XeTLA'] if use_xetla else []),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
