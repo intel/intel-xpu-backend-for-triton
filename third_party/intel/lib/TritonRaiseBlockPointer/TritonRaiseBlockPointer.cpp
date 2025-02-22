@@ -1161,9 +1161,13 @@ private:
                 storeOp.getBoundaryCheck(), storeOp.getCache(),
                 storeOp.getEvict());
 
+            Operation *maskOpToErase = nullptr;
+            if (storeOp.getMask().hasOneUse())
+              maskOpToErase = storeOp.getMask().getDefiningOp();
+
             storeOp->erase();
-            if (storeOp.getMask().getUsers().empty())
-              storeOp.getMask().getDefiningOp()->erase();
+            if (maskOpToErase)
+              maskOpToErase->erase();
           });
     }
   }
