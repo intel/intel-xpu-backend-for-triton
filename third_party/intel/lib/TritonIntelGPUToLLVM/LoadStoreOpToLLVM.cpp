@@ -886,8 +886,8 @@ struct LoadOpConversion
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
     const auto origNumOperandsPer2DloadN = numOperandsPer2DloadN;
     if (numOperandsPer2DloadN > 64 / totalBytesPerRowPerDPASOp)
-      llvm::errs() << "enlarge vblocks : " << 64 / totalBytesPerRowPerDPASOp << " vs "
-                   << numOperandsPer2DloadN << "\n";
+      llvm::errs() << "enlarge vblocks : " << 64 / totalBytesPerRowPerDPASOp
+                   << " vs " << numOperandsPer2DloadN << "\n";
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
     vBlocks = numOperandsPer2DloadN;
