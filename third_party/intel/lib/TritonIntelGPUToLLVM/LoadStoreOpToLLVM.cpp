@@ -882,6 +882,10 @@ struct LoadOpConversion
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
+    const auto origNumOperandsPer2DloadN = numOperandsPer2DloadN;
+    if (numOperandsPer2DloadN > 64 / totalBytesPerRowPerDPASOp)
+      llvm::errs() << "enlarge vblocks : " << 64 / totalBytesPerRowPerDPASOp << " vs "
+                   << numOperandsPer2DloadN << "\n";
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
     vBlocks = numOperandsPer2DloadN;
@@ -891,8 +895,16 @@ struct LoadOpConversion
     numOperandsInnerDimPerLoad =
         isOperandA ? numOperandsPer2DloadN : numOperandsPer2DLoadM;
 
-    if (isTransposeRequired)
+    // vblocks are not represented using the load layout
+    auto numIterationsOuterDimPerLoad =
+        isOperandA ? numOperandsPer2DLoadM : origNumOperandsPer2DloadN;
+    auto numIterationsInnerDimPerLoad =
+        isOperandA ? origNumOperandsPer2DloadN : numOperandsPer2DLoadM;
+
+    if (isTransposeRequired) {
       std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
+      std::swap(numIterationsOuterDimPerLoad, numIterationsInnerDimPerLoad);
+    }
 
     unsigned numLoadPerOutRepCluster =
         mlir::ceil<unsigned>(repCluster[dimOuter], numOperandsOuterDimPerLoad);
@@ -902,14 +914,18 @@ struct LoadOpConversion
                                 numOperandsInnerDimPerLoad;
 
     if (!isTransposeRequired) {
-      tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
+      tileLayout *= LinearLayout::identity1D(numIterationsOuterDimPerLoad,
                                              kIteration, dimOuterStr);
-      tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
+      tileLayout *= LinearLayout::identity1D(numIterationsInnerDimPerLoad,
                                              kIteration, dimInnerStr);
       llvm::errs() << "\nnumOperandsOuterDimPerLoad: "
                    << numOperandsOuterDimPerLoad << "\n";
       llvm::errs() << "numOperandsInnerDimPerLoad: "
                    << numOperandsInnerDimPerLoad << "\n";
+      llvm::errs() << "numIterationsOuterDimPerLoad: "
+                   << numIterationsOuterDimPerLoad << "\n";
+      llvm::errs() << "numIterationsInnerDimPerLoad: "
+                   << numIterationsInnerDimPerLoad << "\n";
       llvm::errs() << "repCluster[dimOuter]: " << repCluster[dimOuter] << "\n";
       llvm::errs() << "repCluster[dimInner]: " << repCluster[dimInner] << "\n";
       llvm::errs() << "numReps[unsigned(opIdx) ? 1 : 2]: "
@@ -996,11 +1012,11 @@ struct LoadOpConversion
 
 #if 1
     llvm::errs() << "numRepOuter: " << numRepOuter << " vs "
-                 << (numRepOuter * vBlocks * packedElementsPerSlot) /
-                        numOperandsOuterDimPerLoad
+                 << (numRepOuter * packedElementsPerSlot * vBlocks) /
+                        numIterationsOuterDimPerLoad
                  << "\n";
     llvm::errs() << "numRepInner: " << numRepInner << " vs "
-                 << numRepInner / numOperandsInnerDimPerLoad << "\n";
+                 << (numRepInner) / numIterationsInnerDimPerLoad << "\n";
     llvm::errs() << "vblocks: " << vBlocks << "\n";
     llvm::errs() << "numRepOuter * repCluster[dimOuter]: "
                  << numRepOuter * repCluster[dimOuter] << "\n";
@@ -1009,24 +1025,26 @@ struct LoadOpConversion
                                              kLoad, dimOuterStr);
     } else {
       tileLayout *= LinearLayout::identity1D(
-          (numRepOuter * vBlocks * packedElementsPerSlot) /
+          (numRepOuter * packedElementsPerSlot * vBlocks) /
+              numIterationsOuterDimPerLoad,
+          kLoad, dimOuterStr);
+    }
+
+    tileLayout *= LinearLayout::identity1D(
+        numRepInner / numIterationsInnerDimPerLoad, kLoad, dimInnerStr);
+#else
+    if (isTransposeRequired && oneMatrixPerLoadForBT) {
+      tileLayout *= LinearLayout::identity1D(numRepOuter * repCluster[dimOuter],
+                                             kLoad, dimOuterStr);
+    } else {
+      tileLayout *= LinearLayout::identity1D(
+          (numRepOuter * packedElementsPerSlot * (isOperandA ? vBlocks : 1)) /
               numOperandsOuterDimPerLoad,
           kLoad, dimOuterStr);
     }
     tileLayout *= LinearLayout::identity1D(
-        numRepInner / numOperandsInnerDimPerLoad, kLoad, dimInnerStr);
-#else
-    if (isOperandA) {
-      tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
-    } else {
-      if (isTransposeRequired && oneMatrixPerLoadForBT) {
-        tileLayout *= LinearLayout::identity1D(
-            numRepOuter * repCluster[dimOuter], kLoad, dimOuterStr);
-      } else {
-        tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
-      }
-      tileLayout *= LinearLayout::identity1D(numRepInner, kLoad, dimInnerStr);
-    }
+        (numRepInner * (isOperandA ? 1 : vBlocks)) / numOperandsInnerDimPerLoad,
+        kLoad, dimInnerStr);
 #endif
 
     LLVM_DEBUG({
@@ -1163,7 +1181,7 @@ struct LoadOpConversion
           const int loadIdx = (outer * numLoadPerOutRepCluster *
                                (numRepInner / numOperandsInnerDimPerLoad)) +
                               rep * (numRepInner / numOperandsInnerDimPerLoad) +
-                              k;
+                              k / numOperandsInnerDimPerLoad;
           LLVM_DEBUG(llvm::dbgs() << "loadIdx: " << loadIdx << "\n");
 #endif
 
