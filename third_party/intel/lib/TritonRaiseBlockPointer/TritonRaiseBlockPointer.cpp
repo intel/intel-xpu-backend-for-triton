@@ -496,11 +496,6 @@ public:
   VersioningCondition(Value S, Value BS) : S(S), BS(BS) {
     assert(isValid() && "Invalid values supplied");
   }
-  //  VersioningCondition() : S(), BS(){};
-  //  VersioningCondition(const VersioningCondition &other) {
-  //    S = other.S;
-  //    BS = other.BS;
-  //  }
 
   // Create the condition: (S % BS == 0 && S > BS)
   Value materialize(OpBuilder &builder, Location loc) const {
@@ -632,9 +627,9 @@ class LoopVersioner {
 public:
   // TODO: Extend the versioning region to encompass the downward exposed uses
   // of the return values.
-  void version(scf::ForOp &forOp, MaskedOpsCollector &collector) const {
+  bool version(scf::ForOp &forOp, MaskedOpsCollector &collector) const {
     if (!canVersion(forOp))
-      return;
+      return false;
 
     // Collect loop results that are downward exposed.
     auto getUsedResults = [](const scf::ForOp &forOp) {
@@ -702,6 +697,8 @@ public:
     }
 
     forOp.erase();
+
+    return true;
   }
 
 private:
@@ -736,8 +733,12 @@ public:
         MaskedOpsCollector collector;
         LoopVersioner loopVersioner;
         if (scf::ForOp forOp = dyn_cast<scf::ForOp>(op)) {
-          if (collector.collectMaskedOps(forOp))
-            loopVersioner.version(forOp, collector);
+          if (collector.collectMaskedOps(forOp)) {
+            [[maybe_unused]] bool loopVersioned =
+                loopVersioner.version(forOp, collector);
+            if (loopVersioned)
+              LLVM_DEBUG(llvm::dbgs() << "Loop versioned\n");
+          }
         }
         return WalkResult::advance();
       });
