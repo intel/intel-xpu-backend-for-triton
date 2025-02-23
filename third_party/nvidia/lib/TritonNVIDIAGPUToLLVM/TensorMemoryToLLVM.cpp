@@ -29,23 +29,17 @@ struct TMemAccessAtom {
   bool usesSecondHalfOffset;
 };
 
-constexpr TMemAccessAtom TMemAccess32x32b{.opBitWidth = 32,
-                                          .colsPerThread = 1,
-                                          .rowsPerThread = 1,
-                                          .opShape = "32x32b",
-                                          .usesSecondHalfOffset = false};
+constexpr TMemAccessAtom TMemAccess32x32b{
+    32 /*opBitWidth*/, 1 /*colsPerThread*/, 1 /*rowsPerThread*/,
+    "32x32b" /*opShape*/, false /*usesSecondHalfOffset*/};
 
-constexpr TMemAccessAtom TMemAccess16x32bx2{.opBitWidth = 32,
-                                            .colsPerThread = 1,
-                                            .rowsPerThread = 1,
-                                            .opShape = "16x32bx2",
-                                            .usesSecondHalfOffset = true};
+constexpr TMemAccessAtom TMemAccess16x32bx2{
+    32 /*opBitWidth*/, 1 /*colsPerThread*/, 1 /*rowsPerThread*/,
+    "16x32bx2" /*opShape*/, true /*usesSecondHalfOffset*/};
 
-constexpr TMemAccessAtom TMemAccess16x256b{.opBitWidth = 256,
-                                           .colsPerThread = 2,
-                                           .rowsPerThread = 2,
-                                           .opShape = "16x256b",
-                                           .usesSecondHalfOffset = false};
+constexpr TMemAccessAtom TMemAccess16x256b{
+    256 /*opBitWidth*/, 2 /*colsPerThread*/, 2 /*rowsPerThread*/,
+    "16x256b" /*opShape*/, false /*usesSecondHalfOffset*/};
 
 struct TMemMessageTraits {
   TMemAccessAtom atom;
