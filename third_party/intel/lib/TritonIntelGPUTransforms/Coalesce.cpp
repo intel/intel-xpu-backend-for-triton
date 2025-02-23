@@ -209,8 +209,8 @@ private:
         continue;
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
+          propagateLayoutToLoopResults(forOp, layout, rewriter);
         continue;
       }
       changeAndPropagateLayout(user, layout, rewriter);
@@ -227,8 +227,8 @@ private:
 
       LDBG("arg's user: " << *user << "\n");
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
+          propagateLayoutToLoopResults(forOp, layout, rewriter);
         continue;
       }
       changeAndPropagateLayout(user, layout, rewriter);
