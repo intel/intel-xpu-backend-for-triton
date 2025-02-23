@@ -18,29 +18,55 @@ for arg in "$@"; do
   esac
 done
 
-if dpkg-query --show libigc2 &> /dev/null; then
-    export LIBIGC1_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc2 | grep -oP '.+(?=~)')
-elif dpkg-query --show libigc1 &> /dev/null; then
-    export LIBIGC1_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc1 | grep -oP '.+(?=~)')
-else
-    export LIBIGC1_VERSION="Not Installed"
-fi
+function libigc_version {
+    if [[ $OSTYPE = msys ]]; then
+        powershell -Command "(Get-ChildItem c:/Windows/System32/DriverStore/FileRepository/*/igc64.dll).VersionInfo.ProductVersion"
+        return
+    fi
+    if dpkg-query --show libigc2 &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' libigc2 | grep -oP '.+(?=~)'
+    elif dpkg-query --show libigc1 &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' libigc1 | grep -oP '.+(?=~)'
+    else
+        echo "Not Installed"
+    fi
+}
 
-if dpkg-query --show libze1 &> /dev/null; then
-    export LEVEL_ZERO_VERSION=$(dpkg-query --show --showformat='${version}\n' libze1 | grep -oP '.+(?=~)')
-elif dpkg-query --show intel-level-zero-gpu &> /dev/null; then
-    export LEVEL_ZERO_VERSION=$(dpkg-query --show --showformat='${version}\n' intel-level-zero-gpu | grep -oP '.+(?=~)')
-else
-    export LEVEL_ZERO_VERSION="Not Installed"
-fi
+function level_zero_version {
+    if [[ $OSTYPE = msys ]]; then
+        powershell -Command "(Get-Item C:\Windows\system32\ze_loader.dll).VersionInfo.ProductVersion"
+        return
+    fi
+    if dpkg-query --show libze1 &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' libze1 | grep -oP '.+(?=~)'
+    elif dpkg-query --show intel-level-zero-gpu &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' intel-level-zero-gpu | grep -oP '.+(?=~)'
+    else
+        echo "Not Installed"
+    fi
+}
 
-if dpkg-query --show libigc2 &> /dev/null; then
-    export AGAMA_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc2 | sed 's/.*-\(.*\)~.*/\1/')
-elif dpkg-query --show libigc1 &> /dev/null; then
-    export AGAMA_VERSION=$(dpkg-query --show --showformat='${version}\n' libigc1 | sed 's/.*-\(.*\)~.*/\1/')
-else
-    export AGAMA_VERSION="Not Installed"
-fi
+function agama_version {
+    if [[ $OSTYPE = msys ]]; then
+        powershell -Command '(Get-WmiObject Win32_VideoController | where {$_.VideoProcessor -like "*Intel*" }).DriverVersion'
+        return
+    fi
+    if dpkg-query --show libigc2 &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' libigc2 | sed 's/.*-\(.*\)~.*/\1/'
+    elif dpkg-query --show libigc1 &> /dev/null; then
+        dpkg-query --show --showformat='${version}\n' libigc1 | sed 's/.*-\(.*\)~.*/\1/'
+    else
+        echo "Not Installed"
+    fi
+}
+
+# Use LIBIGC1_VERSION also for libigc2 for backward compatibility.
+export LIBIGC1_VERSION="$(libigc_version)"
+
+export LEVEL_ZERO_VERSION="$(level_zero_version)"
+
+# Use AGAMA_VERSION for GPU driver version on both Linux and Windows for backward compatibility.
+export AGAMA_VERSION="$(agama_version)"
 
 if command -v clinfo &> /dev/null; then
     export GPU_DEVICE=$(clinfo --json | jq -r '[.devices[].online[] | select(.CL_DEVICE_TYPE.raw == 4)][0].CL_DEVICE_NAME')
@@ -64,14 +90,14 @@ else
     export COMPILER_VERSION="Not installed"
 fi
 
-if [ "$QUIET" = false ]; then
+if [[ $QUIET = false ]]; then
     echo "LIBIGC1_VERSION=$LIBIGC1_VERSION"
     echo "LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION"
     echo "AGAMA_VERSION=$AGAMA_VERSION"
     echo "GPU_DEVICE=$GPU_DEVICE"
     echo "TORCH_VERSION=$TORCH_VERSION"
     echo "COMPILER_VERSION=$COMPILER_VERSION"
-    if [[ ! "${BENCHMARKING_METHOD:-}" = "" ]]; then
+    if [[ ${BENCHMARKING_METHOD:-} ]]; then
         echo "BENCHMARKING_METHOD=$BENCHMARKING_METHOD"
     fi
 fi
