@@ -385,6 +385,7 @@ class CompiledKernel:
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         })
+        print(f"{self.asm['ttir']=} \n\n {self.asm['ttgir']=} \n\n {self.asm['llir']=} \n\n ")
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
