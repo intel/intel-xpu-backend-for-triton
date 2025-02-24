@@ -45,6 +45,10 @@ except ModuleNotFoundError:
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
 @triton.jit
 def _layer_norm_fwd_fused(
     X,  # pointer to the input
@@ -263,6 +267,8 @@ class LayerNorm(torch.autograd.Function):
         if N <= 8192: GROUP_SIZE_M = 96
         if N <= 4096: GROUP_SIZE_M = 128
         if N <= 1024: GROUP_SIZE_M = 256
+        if is_xpu():
+            GROUP_SIZE_M = 256
         # allocate output
         locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device=w.device)
         _dw = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
