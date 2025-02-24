@@ -409,3 +409,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 16], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
+module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-DAG: [[BLOCKED_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 16], order = [1, 0]}>
+  // CHECK-DAG: [[BLOCKED_LAYOUT1:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
+  // CHECK-DAG: [[BLOCKED_LAYOUT2:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
+  // CHECK: @issue_3489
+  tt.func public @issue_3489(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: i32, %arg3: i32, %arg4: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i64 = arith.constant 0 : i64
+    %c63_i32 = arith.constant 63 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %0 = arith.extsi %arg3 : i32 to i64
+    // CHECK: [[PTR1:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<128x64xf16, [[BLOCKED_LAYOUT1]]>>
+    %1 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%0, %c1_i64], [%arg3, %c0_i32] {order = array<i32>} : <tensor<128x64xf16, #blocked1>>
+    %2 = arith.extsi %arg4 : i32 to i64
+    // CHECK: [[PTR2:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<64x256xf16, [[BLOCKED_LAYOUT]]>>
+    %3 = tt.make_tensor_ptr %arg1, [%c0_i64, %c0_i64], [%2, %c1_i64], [%c0_i32, %c256_i32] {order = array<i32>} : <tensor<64x256xf16, #blocked>>
+    %4 = arith.addi %arg2, %c63_i32 : i32
+    %5 = arith.divsi %4, %c64_i32 : i32
+    %6 = arith.remsi %arg2, %c64_i32 : i32
+    %7 = arith.cmpi eq, %6, %c0_i32 : i32
+    %8 = scf.if %7 -> (tensor<128x256xf32, #blocked>) {
+      %9 = arith.muli %arg4, %c64_i32 : i32
+      // CHECK: [[RES:%.*]]:3 = scf.for {{.*}} iter_args([[ARG6:%.*]] = %cst, [[ARG7:%.*]] = [[PTR1]], [[ARG8:%.*]] = [[PTR2]]) -> (tensor<128x256xf32, [[BLOCKED_LAYOUT]]>, !tt.ptr<tensor<128x64xf16, [[BLOCKED_LAYOUT1]]>>, !tt.ptr<tensor<64x256xf16, [[BLOCKED_LAYOUT]]>>)
+      %10:3 = scf.for %arg5 = %c0_i32 to %5 step %c1_i32 iter_args(%arg6 = %cst, %arg7 = %1, %arg8 = %3) -> (tensor<128x256xf32, #blocked>, !tt.ptr<tensor<128x64xf16, #blocked1>>, !tt.ptr<tensor<64x256xf16, #blocked>>)  : i32 {
+        // CHECK-DAG: [[LOAD1:%.*]] = tt.load [[ARG7]] : !tt.ptr<tensor<128x64xf16, [[BLOCKED_LAYOUT1]]>>
+        // CHECK-DAG: [[LOAD2:%.*]] = tt.load [[ARG8]] : !tt.ptr<tensor<64x256xf16, [[BLOCKED_LAYOUT]]>>
+        // CHECK: ttg.convert_layout [[LOAD1]] : tensor<128x64xf16, [[BLOCKED_LAYOUT1]]> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED_LAYOUT2]]}>>
+        // CHECK: ttg.convert_layout [[LOAD2]] : tensor<64x256xf16, [[BLOCKED_LAYOUT]]> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED_LAYOUT2]]}>>
+        // CHECK: ttg.convert_layout [[ARG6]] : tensor<128x256xf32, [[BLOCKED_LAYOUT]]> -> tensor<128x256xf32, [[BLOCKED_LAYOUT2]]>
+        %11 = tt.load %arg7 : !tt.ptr<tensor<128x64xf16, #blocked1>>
+        %12 = tt.load %arg8 : !tt.ptr<tensor<64x256xf16, #blocked>>
+        %13 = ttg.convert_layout %11 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
+        %14 = ttg.convert_layout %12 : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>
+        %15 = ttg.convert_layout %arg6 : tensor<128x256xf32, #blocked> -> tensor<128x256xf32, #blocked2>
+        %16 = tt.dot %13, %14, %15, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>> -> tensor<128x256xf32, #blocked2>
+        %17 = ttg.convert_layout %16 : tensor<128x256xf32, #blocked2> -> tensor<128x256xf32, #blocked>
+        // CHECK-DAG: [[ADVANCE1:%.*]] = tt.advance [[ARG7]], {{.*}} : <tensor<128x64xf16, [[BLOCKED_LAYOUT1]]>>
+        // CHECK-DAG: [[ADVANCE2:%.*]] = tt.advance [[ARG8]], {{.*}} : <tensor<64x256xf16, [[BLOCKED_LAYOUT]]>>
+        %18 = tt.advance %arg7, [%c0_i32, %c64_i32] : <tensor<128x64xf16, #blocked1>>
+        %19 = tt.advance %arg8, [%c0_i32, %9] : <tensor<64x256xf16, #blocked>>
+        scf.yield %17, %18, %19 : tensor<128x256xf32, #blocked>, !tt.ptr<tensor<128x64xf16, #blocked1>>, !tt.ptr<tensor<64x256xf16, #blocked>>
+      }
+      // CHECK: scf.yield [[RES]]#0 : tensor<128x256xf32, [[BLOCKED_LAYOUT]]>
+      scf.yield %10#0 : tensor<128x256xf32, #blocked>
+    } else {
+      // CHECK: scf.yield %cst : tensor<128x256xf32, [[BLOCKED_LAYOUT]]>
+      scf.yield %cst : tensor<128x256xf32, #blocked>
+    }
+    tt.return
+  }
+}
