@@ -135,3 +135,72 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     tt.return
   }
 }
+
+// -----
+
+// CHECK:   llvm.func spir_funccc @_Z41intel_sub_group_2d_block_read_16b_8r32x1cPU3AS1viiiDv2_iPj
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [4, 2], A = [32, 32], B = [32, 32], C = [32, 32]}>
+module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+  tt.func public @matmul_tensor_pointer_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 32 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 32 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %arg3: i32 {tt.divisibility = 32 : i32}, %arg4: i32 {tt.divisibility = 32 : i32}, %arg5: i32 {tt.divisibility = 32 : i32}, %arg6: i32 {tt.divisibility = 32 : i32}, %arg7: i32 {tt.divisibility = 32 : i32}, %arg8: i32 {tt.divisibility = 32 : i32}) attributes {noinline = false} {
+    %c31_i32 = arith.constant 31 : i32
+    %c255_i32 = arith.constant 255 : i32
+    %c127_i32 = arith.constant 127 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %cst = arith.constant dense<32> : tensor<128x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %cst_1 = arith.constant dense<0> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.addi %arg3, %c127_i32 : i32
+    %2 = arith.divsi %1, %c128_i32 : i32
+    %3 = arith.addi %arg4, %c255_i32 : i32
+    %4 = arith.divsi %3, %c256_i32 : i32
+    %5 = arith.muli %4, %c4_i32 : i32
+    %6 = arith.divsi %0, %5 : i32
+    %7 = arith.muli %6, %c4_i32 : i32
+    %8 = arith.subi %2, %7 : i32
+    %9 = arith.minsi %8, %c4_i32 : i32
+    %10 = arith.remsi %0, %9 : i32
+    %11 = arith.addi %7, %10 : i32
+    %14 = arith.muli %11, %c128_i32 : i32
+    %16 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %17 = tt.splat %14 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %18 = arith.addi %17, %16 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %22 = tt.splat %arg3 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %23 = arith.cmpi slt, %18, %22 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %24 = arith.select %23, %18, %cst_1 {tt.contiguity = dense<128> : tensor<1xi32>, tt.divisibility = dense<128> : tensor<1xi32>} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>, tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %28 = tt.expand_dims %24 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>> -> tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %29 = tt.splat %arg6 : i32 -> tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %30 = arith.muli %28, %29 : tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %31 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>>
+    %32 = tt.expand_dims %31 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>}>> -> tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %33 = tt.broadcast %30 : tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> -> tensor<128x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %34 = tt.broadcast %32 : tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> -> tensor<128x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %35 = arith.addi %33, %34 : tensor<128x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %36 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %37 = tt.addptr %36, %35 : tensor<128x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, tensor<128x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %48 = arith.addi %arg5, %c31_i32 : i32
+    %49 = arith.divsi %48, %c32_i32 : i32
+    cf.br ^bb1(%c0_i32, %37 : i32, tensor<128x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>)
+  ^bb1(%52: i32, %53: tensor<128x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>):  // 2 preds: ^bb0, ^bb2
+    %55 = arith.cmpi slt, %52, %49 : i32
+    cf.cond_br %55, ^bb2, ^bb3
+  ^bb2:  // pred: ^bb1
+    %56 = arith.muli %52, %c32_i32 : i32
+    %57 = arith.subi %arg5, %56 : i32
+    %58 = tt.splat %57 : i32 -> tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %59 = arith.cmpi slt, %32, %58 : tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %60 = tt.broadcast %59 : tensor<1x32xi1, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> -> tensor<128x32xi1, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    // CHECK-4: llvm.call spir_funccc @_Z41intel_sub_group_2d_block_read_16b_8r32x1cPU3AS1viiiDv2_iPj
+    %61 = tt.load %53, %60, %cst_2 {triton_intel_gpu.block_io = "row_major"} : tensor<128x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %66 = tt.addptr %53, %cst : tensor<128x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, tensor<128x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %68 = arith.addi %52, %c1_i32 : i32
+    cf.br ^bb1(%68, %66 : i32, tensor<128x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>)
+  ^bb3:  // pred: ^bb1
+    tt.return
+  }
+}
