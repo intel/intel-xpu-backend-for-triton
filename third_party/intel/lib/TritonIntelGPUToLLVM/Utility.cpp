@@ -48,7 +48,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
     }
   }
 
-  int width = TritonGEN::getSubgroupSize(i.getDefiningOp());
+  int width = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+      i.getDefiningOp()->getParentOfType<ModuleOp>());
   Value widthConstant = b.i32_val(width);
   Value result =
       rewriter.create<mlir::gpu::ShuffleOp>(loc, val, i, widthConstant, mode)
