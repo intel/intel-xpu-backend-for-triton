@@ -489,6 +489,236 @@ static llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
 }
 #endif
 
+// Utility class aggregating information required to create a versioning
+// condition.
+class VersioningCondition {
+public:
+  VersioningCondition(Value S, Value BS) : S(S), BS(BS) {
+    assert(isValid() && "Invalid values supplied");
+  }
+
+  // Create the condition: (S % BS == 0 && S > BS)
+  Value materialize(OpBuilder &builder, Location loc) const {
+    assert(S && BS && "Expecting valid values");
+    Value zero =
+        builder.createOrFold<arith::ConstantIntOp>(loc, 0, S.getType());
+    Value cmp1 = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq,
+        builder.create<arith::RemSIOp>(loc, S, BS), zero);
+    Value cmp2 =
+        builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, S, BS);
+    return builder.create<arith::AndIOp>(loc, cmp1, cmp2);
+  }
+
+private:
+  bool isValid() const {
+    Type SType = S.getType(), BSType = BS.getType();
+    if (!isa<IntegerType>(SType) || !isa<IntegerType>(BSType))
+      return false;
+
+    return cast<IntegerType>(SType).getWidth() ==
+           cast<IntegerType>(BSType).getWidth();
+  }
+
+  Value S;  // The length of a row/column.
+  Value BS; // The block size.
+};
+
+// Utility class responsible for collecting masked operation in a loop that are
+// amenable to having their mask dropped when the loop is versioned.
+class MaskedOpsCollector {
+  friend class LoopVersioner;
+
+public:
+  bool collectMaskedOps(scf::ForOp &forOp) {
+    // Nested loop aren't currently handled.
+    if (forOp->template getParentOfType<scf::ForOp>())
+      return false;
+
+    // Ensure the loop upper bound is in canonical form (N+END-1)/END.
+    if (!hasValidUpperBound(forOp))
+      return false;
+
+    assert(versioningCond && "Expecting a valid versioning condition");
+
+    // Collect masked loads in the loop if they have canonical mask.
+    for (auto op : forOp.getOps<tt::LoadOp>()) {
+      Value mask = op.getMask();
+      if (mask && isValidMask(getFinalValue(mask)))
+        maskedOps.insert(op);
+    }
+
+    // TODO: collect masked stores in the loop if they have canonical mask.
+
+    return maskedOps.size();
+  }
+
+private:
+  // Check whether the loop UB is in canonical form: (N+END-1)/END and create
+  // the versioning condition to use for the loop if so.
+  bool hasValidUpperBound(scf::ForOp &forOp) {
+    Value ub = getFinalValue(forOp.getUpperBound());
+    Operation *defOp = ub.getDefiningOp();
+    if (!defOp || !isa<arith::DivSIOp>(defOp))
+      return false;
+
+    auto divOp = cast<arith::DivSIOp>(defOp);
+    Operation *divLhsOp = divOp.getLhs().getDefiningOp();
+    Operation *divRhsOp = divOp.getRhs().getDefiningOp();
+    if (!divLhsOp || !divRhsOp || !isa<arith::AddIOp>(divLhsOp) ||
+        !isa<arith::ConstantOp>(divRhsOp))
+      return false;
+
+    auto divNumOp = cast<arith::AddIOp>(divLhsOp);
+    auto divDenOp = cast<arith::ConstantIntOp>(divRhsOp);
+    Operation *addLhsOp = divNumOp.getLhs().getDefiningOp();
+    Operation *addRhsOp = divNumOp.getRhs().getDefiningOp();
+    if (addLhsOp || !isa<arith::ConstantIntOp>(addRhsOp) ||
+        (divDenOp.value() != cast<arith::ConstantIntOp>(addRhsOp).value() + 1))
+      return false;
+
+    versioningCond = std::make_unique<VersioningCondition>(divNumOp.getLhs(),
+                                                           divOp.getRhs());
+    return true;
+  }
+
+  // Check whether a mask is in canonical form: (0..END) < N - i*END
+  bool isValidMask(Value mask) const {
+    assert(mask.getDefiningOp() && "Expected a valid mask operation");
+    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    arith::CmpIPredicate pred = cmpOp.getPredicate();
+    if (pred != arith::CmpIPredicate::slt)
+      return false;
+
+    Operation *lhs = getFinalValue(cmpOp.getLhs()).getDefiningOp();
+    Operation *rhs = getFinalValue(cmpOp.getRhs()).getDefiningOp();
+    if (!isa<tt::MakeRangeOp>(lhs) || !isa<arith::SubIOp>(rhs))
+      return false;
+
+    auto rangeOp = cast<tt::MakeRangeOp>(lhs);
+    unsigned end = rangeOp.getEnd();
+    assert(end > rangeOp.getStart() && "Invalid range");
+
+    auto subOp = cast<arith::SubIOp>(rhs);
+    Operation *subLhs = subOp.getLhs().getDefiningOp();
+    Operation *subRhs = subOp.getRhs().getDefiningOp();
+    if (subLhs || !isa<arith::MulIOp>(subRhs))
+      return false;
+
+    auto mulOp = cast<arith::MulIOp>(subRhs);
+    Operation *mulLhs = mulOp.getLhs().getDefiningOp();
+    Operation *mulRhs = mulOp.getRhs().getDefiningOp();
+    if (mulLhs && mulRhs)
+      return false;
+
+    if (!mulLhs && isa<arith::ConstantIntOp>(mulRhs))
+      return cast<arith::ConstantIntOp>(mulRhs).value() == end;
+    if (!mulRhs && isa<arith::ConstantIntOp>(mulLhs))
+      return cast<arith::ConstantIntOp>(mulLhs).value() == end;
+
+    return false;
+  }
+
+private:
+  using MaskedOperations = SmallPtrSet<Operation *, 8>;
+  // Masked operations in the loop that can be have their mask dropped when the
+  // loop is versioned using the condition builder associated with this class.
+  MaskedOperations maskedOps;
+  std::unique_ptr<VersioningCondition> versioningCond = nullptr;
+};
+
+class LoopVersioner {
+public:
+  // TODO: Extend the versioning region to encompass the downward exposed uses
+  // of the return values.
+  bool version(scf::ForOp &forOp, MaskedOpsCollector &collector) const {
+    if (!canVersion(forOp))
+      return false;
+
+    // Collect loop results that are downward exposed.
+    auto getUsedResults = [](const scf::ForOp &forOp) {
+      SmallVector<Type> resTypes;
+      for (Value res : forOp->getResults()) {
+        if (!res.getUsers().empty())
+          resTypes.push_back(res.getType());
+      }
+      return resTypes;
+    };
+
+    // Create the versioning condition.
+    OpBuilder builder(forOp);
+    Location loc = forOp.getLoc();
+    Value versioningCond = collector.versioningCond->materialize(builder, loc);
+    auto ifOp =
+        builder.create<scf::IfOp>(loc, getUsedResults(forOp), versioningCond,
+                                  /*withThenRegion=*/true,
+                                  /*withElseRegion=*/true);
+
+    // Clone the original loop into the 2 if branches.
+    OpBuilder thenB = ifOp.getThenBodyBuilder();
+    OpBuilder elseB = ifOp.getElseBodyBuilder();
+
+    IRMapping map;
+    Operation *thenForLoop = thenB.clone(*forOp.getOperation(), map);
+    Operation *elseForLoop = elseB.clone(*forOp.getOperation());
+
+    // Collect results in 'clonedLoop' corresponding to downward exposed results
+    // 'forOp'.
+    auto pruneUnusedResults = [&](const scf::ForOp &forOp,
+                                  Operation *clonedLoop) {
+      SmallVector<Value> prunedResults;
+      for (auto [idx, val] : llvm::enumerate(forOp->getResults())) {
+        if (!val.getUsers().empty())
+          prunedResults.push_back(clonedLoop->getResult(idx));
+      }
+      return prunedResults;
+    };
+
+    // Create the yield operations for the two if branches.
+    thenB.create<scf::YieldOp>(loc, pruneUnusedResults(forOp, thenForLoop));
+    elseB.create<scf::YieldOp>(loc, pruneUnusedResults(forOp, elseForLoop));
+
+    // Drop the mask from candidate masked operations in the "then" region's
+    // cloned loop.
+    for (Operation *maskedOp : collector.maskedOps) {
+      Operation *mappedOp = map.lookup(maskedOp);
+      if (auto loadOp = dyn_cast<tt::LoadOp>(mappedOp)) {
+        OpBuilder builder(mappedOp);
+        auto newLoad = builder.create<tt::LoadOp>(
+            loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
+            loadOp.getEvict(), loadOp.getIsVolatile());
+        mappedOp->replaceAllUsesWith(newLoad);
+        mappedOp->erase();
+      }
+      // TODO: stores
+    }
+
+    // Replace the uses of the original loop results.
+    unsigned idx = 0;
+    for (Value res : forOp.getResults()) {
+      if (!res.getUsers().empty())
+        res.replaceAllUsesWith(ifOp->getResult(idx++));
+    }
+
+    forOp.erase();
+
+    return true;
+  }
+
+private:
+  // Currently we can version the loop only is it doesn't have downward
+  // exposed uses of return values that are a tensor of pointers.
+  // Note: this is due to the fact the results yielded by the 2 versioning
+  // branches have different types for ptr (only in one versioned loop tensor of
+  // ptrs are changed to block ptrs) 'then' part of the versioning branch and
+  // leave them as is in the 'else' branch).
+  bool canVersion(scf::ForOp &forOp) const {
+    return llvm::any_of(forOp.getResults(), [](Value res) {
+      return !tt::isTensorPointerType(res.getType()) || res.getUsers().empty();
+    });
+  }
+};
+
 struct TritonRaiseBlockPointer
     : tt::intel::impl::TritonRaiseBlockPointerBase<TritonRaiseBlockPointer> {
 public:
@@ -498,12 +728,34 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    // Drop the mask or version loops containing masked operations.
     if (IgnoreMasks)
       dropMasks(moduleOp);
+    else {
+      // Collect masked operations amenable to versioning in each loop.
+      moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+        MaskedOpsCollector collector;
+        LoopVersioner loopVersioner;
+        if (scf::ForOp forOp = dyn_cast<scf::ForOp>(op)) {
+          if (collector.collectMaskedOps(forOp)) {
+            [[maybe_unused]] bool loopVersioned =
+                loopVersioner.version(forOp, collector);
+            if (loopVersioned)
+              LLVM_DEBUG(llvm::dbgs() << "Loop versioned\n");
+          }
+        }
+        return WalkResult::advance();
+      });
 
+      LLVM_DEBUG(llvm::dbgs() << "After versioning:\n" << moduleOp << "\n");
+      assert(succeeded(verify(moduleOp)) && "Module verification failed");
+    }
+
+    // Perform the transformation.
     if (failed(rewriteOp(moduleOp)))
       moduleOp->emitWarning("TritonRaiseToBlockPointer failed");
 
+    // Cleanup unused operations.
     for (Operation *op : cleanUp) {
       if (op->getUsers().empty())
         op->erase();
