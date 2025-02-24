@@ -196,7 +196,7 @@ public:
       }
       it += curr.size();
     }
-    resultVals = maybeDeduplicate(op, resultVals);
+    // resultVals = maybeDeduplicate(op, resultVals);
     Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
                                 rewriter, resultTy);
     rewriter.replaceOp(op, view);
