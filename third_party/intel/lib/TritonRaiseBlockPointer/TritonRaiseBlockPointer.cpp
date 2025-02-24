@@ -532,8 +532,7 @@ class MaskedOpsCollector {
 public:
   bool collectMaskedOps(scf::ForOp &forOp) {
     // Nested loop aren't currently handled.
-    if (isa<scf::ForOp>(forOp->getParentOp()) ||
-        forOp->getParentOp()->template getParentOfType<scf::ForOp>())
+    if (forOp->template getParentOfType<scf::ForOp>())
       return false;
 
     // Ensure the loop upper bound is in canonical form (N+END-1)/END.
@@ -609,10 +608,15 @@ private:
     auto mulOp = cast<arith::MulIOp>(subRhs);
     Operation *mulLhs = mulOp.getLhs().getDefiningOp();
     Operation *mulRhs = mulOp.getRhs().getDefiningOp();
-    if (mulLhs || !isa<arith::ConstantIntOp>(mulRhs))
+    if (mulLhs && mulRhs)
       return false;
 
-    return cast<arith::ConstantIntOp>(mulRhs).value() == end;
+    if (!mulLhs && isa<arith::ConstantIntOp>(mulRhs))
+      return cast<arith::ConstantIntOp>(mulRhs).value() == end;
+    if (!mulRhs && isa<arith::ConstantIntOp>(mulLhs))
+      return cast<arith::ConstantIntOp>(mulLhs).value() == end;
+
+    return false;
   }
 
 private:
