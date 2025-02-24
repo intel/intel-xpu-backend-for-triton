@@ -110,7 +110,7 @@ private:
 
     Operation *lhs = tt::intel::getFinalValue(cmpOp.getLhs()).getDefiningOp();
     Operation *rhs = tt::intel::getFinalValue(cmpOp.getRhs()).getDefiningOp();
-    if (!isa<tt::MakeRangeOp>(lhs) || !isa<arith::SubIOp>(rhs))
+    if (!lhs || !rhs || !isa<tt::MakeRangeOp>(lhs) || !isa<arith::SubIOp>(rhs))
       return false;
 
     auto rangeOp = cast<tt::MakeRangeOp>(lhs);
