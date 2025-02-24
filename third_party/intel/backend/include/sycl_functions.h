@@ -124,7 +124,11 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }
-  ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
+  auto error_no = zeKernelCreate(module, &kernel_description, &kernel);
+  if (error_no != ZE_RESULT_SUCCESS) {
+    std::cerr << "zeKernelCreate failed with error: " << error_no << std::endl;
+  }
+  ZE_CHECK(error_no);
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
 
