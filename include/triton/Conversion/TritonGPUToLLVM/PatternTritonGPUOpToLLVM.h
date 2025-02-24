@@ -26,16 +26,21 @@ constexpr int patternBenefitDefault = 1;
 constexpr int patternBenefitPrioritizeOverLLVMConversions = 10;
 constexpr int patternBenefitClampOptimizedPattern = 20;
 constexpr int patternBenefitConvertLayoutOptimizedPattern = 20;
+constexpr int patternBenefitNvidiaTensorCoreSubviewPattern = 20;
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
-void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                   const TargetInfoBase &targetInfo,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
+// The given callback is invoked at the end of a successful rewrite. The
+// callback receives 1) the current source op, 2) the number of issued LLVM
+// instructions and 3) their input types. Each MLIR backend can provide a
+// callback and, thus, handle backend-specific behaviors.
+void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    const TargetInfoBase &targetInfo,
+                                    RewritePatternSet &patterns,
+                                    PatternBenefit benefit);
 
 void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -74,15 +79,15 @@ void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
+void populateGatherOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    RewritePatternSet &patterns,
+                                    const TargetInfoBase &targetInfo,
+                                    PatternBenefit benefit);
 
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfoBase &targetInfo,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
-
-void populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
-    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
@@ -95,7 +100,7 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  PatternBenefit benefit);
 
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
-                                     RewritePatternSet &patterns, int numWarps,
+                                     RewritePatternSet &patterns,
                                      const TargetInfoBase &targetInfo,
                                      PatternBenefit benefit);
 

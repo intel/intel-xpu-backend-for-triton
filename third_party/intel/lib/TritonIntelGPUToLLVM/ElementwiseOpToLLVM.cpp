@@ -8,308 +8,321 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 using mlir::triton::gpu::ElementwiseOpConversionBase;
+using mlir::triton::gpu::MultipleOperandsRange;
 
 namespace {
 
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 static SmallVector<Value>
-Fp16_to_Fp8E5M2_func(Location loc, ConversionPatternRewriter &rewriter,
+Fp16_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec0 = undef(fp16x2VecTy);
-  Value fp16x2Vec1 = undef(fp16x2VecTy);
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[2], i32_val(0));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[3], i32_val(1));
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
+  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
+  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
 
-  Value a0 = bitcast(fp16x2Vec0, i32_ty);
-  Value a1 = bitcast(fp16x2Vec1, i32_ty);
-
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  a0 = bitcast(a0, fp8x4VecTy);
-  a1 = bitcast(a1, fp8x4VecTy);
-
-  return {extract_element(i8_ty, a0, i32_val(1)),
-          extract_element(i8_ty, a0, i32_val(3)),
-          extract_element(i8_ty, a1, i32_val(1)),
-          extract_element(i8_ty, a1, i32_val(3))};
-}
-
-static SmallVector<Value>
-Fp16_to_Fp8E5M2_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
-                          const SmallVector<Value> &v) {
-
-  Value val = zext(i32_ty, bitcast(v[0], i16_ty));
-  Value sign = and_(i32_ty, val, i32_val(0x8000));
-  Value nosign = and_(i32_ty, val, i32_val(0x7fff));
-
-  Value truncated = and_(i32_ty, nosign, i32_val(0x7f00));
-  Value tail = and_(i32_ty, nosign, i32_val(0xff));
+  Value truncated = b.and_(i32_ty, nosign, b.i32_val(0x7f00));
+  Value tail = b.and_(i32_ty, nosign, b.i32_val(0xff));
   Value odd_trunc =
-      icmp_ne(and_(i32_ty, truncated, i32_val(0x100)), i32_val(0));
-  Value round_up = or_(icmp_ugt(tail, i32_val(0x80)),
-                       and_(icmp_eq(tail, i32_val(0x80)), odd_trunc));
+      b.icmp_ne(b.and_(i32_ty, truncated, b.i32_val(0x100)), b.i32_val(0));
+  Value round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x80)),
+                         b.and_(b.icmp_eq(tail, b.i32_val(0x80)), odd_trunc));
   // Skip round-up if it leads to inf/nan.
-  round_up = and_(round_up, icmp_ult(truncated, i32_val(0x7b00)));
-  truncated = select(round_up, add(truncated, i32_val(0x100)), truncated);
+  round_up = b.and_(round_up, b.icmp_ult(truncated, b.i32_val(0x7b00)));
+  truncated = b.select(round_up, b.add(truncated, b.i32_val(0x100)), truncated);
 
-  Value res_val = or_(i32_ty, truncated, sign);
+  Value res_val = b.or_(i32_ty, truncated, sign);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value res = bitcast(res_val, fp8x4VecTy);
+  Value res = b.bitcast(res_val, fp8x4VecTy);
 
-  return {extract_element(i8_ty, res, i32_val(1))};
+  return {b.extract_element(i8_ty, res, b.i32_val(1))};
 }
 
 static SmallVector<Value>
-Fp8E5M2_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
-                     const SmallVector<Value> &v) {
+Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
+                    const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto fp16x2VecTy = vec_ty(f16_ty, 2);
+  Value fp16x2Vec0 = b.undef(fp16x2VecTy);
+  Value fp16x2Vec1 = b.undef(fp16x2VecTy);
+  fp16x2Vec0 = b.insert_element(fp16x2VecTy, fp16x2Vec0, v[0], b.i32_val(0));
+  fp16x2Vec0 = b.insert_element(fp16x2VecTy, fp16x2Vec0, v[1], b.i32_val(1));
+  fp16x2Vec1 = b.insert_element(fp16x2VecTy, fp16x2Vec1, v[2], b.i32_val(0));
+  fp16x2Vec1 = b.insert_element(fp16x2VecTy, fp16x2Vec1, v[3], b.i32_val(1));
+
+  Value a0 = b.bitcast(fp16x2Vec0, i32_ty);
+  Value a1 = b.bitcast(fp16x2Vec1, i32_ty);
+
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a0 = undef(fp8x4VecTy);
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
-  a0 = bitcast(a0, i32_ty);
-  Value a1 = undef(fp8x4VecTy);
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
-  a1 = bitcast(a1, i32_ty);
+  a0 = b.bitcast(a0, fp8x4VecTy);
+  a1 = b.bitcast(a1, fp8x4VecTy);
+
+  return {b.extract_element(i8_ty, a0, b.i32_val(1)),
+          b.extract_element(i8_ty, a0, b.i32_val(3)),
+          b.extract_element(i8_ty, a1, b.i32_val(1)),
+          b.extract_element(i8_ty, a1, b.i32_val(3))};
+}
+
+static SmallVector<Value> Fp8E5M2_to_Fp16(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
+  Value a1 = b.undef(fp8x4VecTy);
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
+  a1 = b.bitcast(a1, i32_ty);
 
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  auto fp16x2Vec0 = bitcast(a0, fp16x2VecTy);
-  auto fp16x2Vec1 = bitcast(a1, fp16x2VecTy);
+  auto fp16x2Vec0 = b.bitcast(a0, fp16x2VecTy);
+  auto fp16x2Vec1 = b.bitcast(a1, fp16x2VecTy);
 
-  return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
+  return {b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(0)),
+          b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(1)),
+          b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(0)),
+          b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(1))};
 }
 
-static SmallVector<Value>
-Fp8E5M2_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
-                     const SmallVector<Value> &v) {
+static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a0 = undef(fp8x4VecTy);
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
-  a0 = bitcast(a0, i32_ty);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
 
-  Value a1 = undef(fp8x4VecTy);
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
-  a1 = bitcast(a1, i32_ty);
+  Value a1 = b.undef(fp8x4VecTy);
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
+  a1 = b.bitcast(a1, i32_ty);
 
-  Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-  Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+  Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
+  Value b1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
   // In i32 original fp8 exponent is b0 >> 26
   // bf16's 5-bit exponent in the top 2 bytes of i32 is at b0 >> 23
   // 2^5-1 << 23 = 0xf800000
-  b0 = lshr(i32_ty, b0, i32_val(3));
-  b1 = lshr(i32_ty, b1, i32_val(3));
+  b0 = b.lshr(i32_ty, b0, b.i32_val(3));
+  b1 = b.lshr(i32_ty, b1, b.i32_val(3));
 
-  Value c0 = and_(i32_ty, b0, i32_val(0xffff0000));
-  Value c1 = shl(i32_ty, b0, i32_val(16));
-  Value c2 = and_(i32_ty, b1, i32_val(0xffff0000));
-  Value c3 = shl(i32_ty, b1, i32_val(16));
+  Value c0 = b.and_(i32_ty, b0, b.i32_val(0xffff0000));
+  Value c1 = b.shl(i32_ty, b0, b.i32_val(16));
+  Value c2 = b.and_(i32_ty, b1, b.i32_val(0xffff0000));
+  Value c3 = b.shl(i32_ty, b1, b.i32_val(16));
 
   auto i32x4VecTy = vec_ty(i32_ty, 4);
-  Value predefined = undef(i32x4VecTy);
-  predefined = insert_element(i32x4VecTy, predefined, i32_val(0x0), i32_val(0));
+  Value predefined = b.undef(i32x4VecTy);
   predefined =
-      insert_element(i32x4VecTy, predefined, i32_val(0x37800000), i32_val(1));
-  predefined =
-      insert_element(i32x4VecTy, predefined, i32_val(0x38000000), i32_val(2));
-  predefined =
-      insert_element(i32x4VecTy, predefined, i32_val(0x38400000), i32_val(3));
+      b.insert_element(i32x4VecTy, predefined, b.i32_val(0x0), b.i32_val(0));
+  predefined = b.insert_element(i32x4VecTy, predefined, b.i32_val(0x37800000),
+                                b.i32_val(1));
+  predefined = b.insert_element(i32x4VecTy, predefined, b.i32_val(0x38000000),
+                                b.i32_val(2));
+  predefined = b.insert_element(i32x4VecTy, predefined, b.i32_val(0x38400000),
+                                b.i32_val(3));
   // Check if the exponent is zero, i.e. subnormal number.
   // depending on the significand value normalization goes like:
   //  [00] -> 0x0
   //  [01] -> exp=127-16, sig=0x0
   //  [10] -> exp=127-15, sig=0x0
   //  [11] -> exp=127-15, sig=b1000...
-  Value cmp0 = icmp_eq(and_(c0, i32_val(0xf800000)), i32_val(0));
-  Value cmp1 = icmp_eq(and_(c1, i32_val(0xf800000)), i32_val(0));
-  Value cmp2 = icmp_eq(and_(c2, i32_val(0xf800000)), i32_val(0));
-  Value cmp3 = icmp_eq(and_(c3, i32_val(0xf800000)), i32_val(0));
+  Value cmp0 = b.icmp_eq(b.and_(c0, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp1 = b.icmp_eq(b.and_(c1, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp2 = b.icmp_eq(b.and_(c2, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp3 = b.icmp_eq(b.and_(c3, b.i32_val(0xf800000)), b.i32_val(0));
 
-  Value predef_idx0 = lshr(and_(c0, i32_val(3 << 21)), i32_val(21));
-  Value predef_idx1 = lshr(and_(c1, i32_val(3 << 21)), i32_val(21));
-  Value predef_idx2 = lshr(and_(c2, i32_val(3 << 21)), i32_val(21));
-  Value predef_idx3 = lshr(and_(c3, i32_val(3 << 21)), i32_val(21));
+  Value predef_idx0 = b.lshr(b.and_(c0, b.i32_val(3 << 21)), b.i32_val(21));
+  Value predef_idx1 = b.lshr(b.and_(c1, b.i32_val(3 << 21)), b.i32_val(21));
+  Value predef_idx2 = b.lshr(b.and_(c2, b.i32_val(3 << 21)), b.i32_val(21));
+  Value predef_idx3 = b.lshr(b.and_(c3, b.i32_val(3 << 21)), b.i32_val(21));
 
-  Value normalized0 = extract_element(i32_ty, predefined, predef_idx0);
-  Value normalized1 = extract_element(i32_ty, predefined, predef_idx1);
-  Value normalized2 = extract_element(i32_ty, predefined, predef_idx2);
-  Value normalized3 = extract_element(i32_ty, predefined, predef_idx3);
+  Value normalized0 = b.extract_element(i32_ty, predefined, predef_idx0);
+  Value normalized1 = b.extract_element(i32_ty, predefined, predef_idx1);
+  Value normalized2 = b.extract_element(i32_ty, predefined, predef_idx2);
+  Value normalized3 = b.extract_element(i32_ty, predefined, predef_idx3);
 
-  Value d0 = add(i32_ty, c0, i32_val(0x38000000));
-  Value d1 = add(i32_ty, c1, i32_val(0x38000000));
-  Value d2 = add(i32_ty, c2, i32_val(0x38000000));
-  Value d3 = add(i32_ty, c3, i32_val(0x38000000));
+  Value d0 = b.add(i32_ty, c0, b.i32_val(0x38000000));
+  Value d1 = b.add(i32_ty, c1, b.i32_val(0x38000000));
+  Value d2 = b.add(i32_ty, c2, b.i32_val(0x38000000));
+  Value d3 = b.add(i32_ty, c3, b.i32_val(0x38000000));
 
-  Value res0 = select(cmp0, normalized0, d0);
-  Value res1 = select(cmp1, normalized1, d1);
-  Value res2 = select(cmp2, normalized2, d2);
-  Value res3 = select(cmp3, normalized3, d3);
+  Value res0 = b.select(cmp0, normalized0, d0);
+  Value res1 = b.select(cmp1, normalized1, d1);
+  Value res2 = b.select(cmp2, normalized2, d2);
+  Value res3 = b.select(cmp3, normalized3, d3);
 
-  Value f0 = or_(i32_ty, res0, lshr(i32_ty, res1, i32_val(16)));
-  Value f1 = or_(i32_ty, res2, lshr(i32_ty, res3, i32_val(16)));
+  Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
+  Value f1 = b.or_(i32_ty, res2, b.lshr(i32_ty, res3, b.i32_val(16)));
 
-  Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
-  Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
+  Value sign0 = b.and_(i32_ty, a0, b.i32_val(0x80008000));
+  Value sign1 = b.and_(i32_ty, a1, b.i32_val(0x80008000));
 
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = or_(i32_ty, sign0, f0);
-  Value bf16x2Vec1 = or_(i32_ty, sign1, f1);
-  bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
-  bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
+  Value bf16x2Vec0 = b.or_(i32_ty, sign0, f0);
+  Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
+  bf16x2Vec0 = b.bitcast(bf16x2Vec0, bf16x2VecTy);
+  bf16x2Vec1 = b.bitcast(bf16x2Vec1, bf16x2VecTy);
 
-  return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
+  return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(1))};
 }
 
-static SmallVector<Value>
-Bf16_to_Fp8E5M2_func(Location loc, ConversionPatternRewriter &rewriter,
-                     const SmallVector<Value> &v) {
+static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = undef(bf16x2VecTy);
-  Value bf16x2Vec1 = undef(bf16x2VecTy);
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[1], i32_val(1));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[2], i32_val(0));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[3], i32_val(1));
-  bf16x2Vec0 = bitcast(bf16x2Vec0, i32_ty);
-  bf16x2Vec1 = bitcast(bf16x2Vec1, i32_ty);
+  Value bf16x2Vec0 = b.undef(bf16x2VecTy);
+  Value bf16x2Vec1 = b.undef(bf16x2VecTy);
+  bf16x2Vec0 = b.insert_element(bf16x2VecTy, bf16x2Vec0, v[0], b.i32_val(0));
+  bf16x2Vec0 = b.insert_element(bf16x2VecTy, bf16x2Vec0, v[1], b.i32_val(1));
+  bf16x2Vec1 = b.insert_element(bf16x2VecTy, bf16x2Vec1, v[2], b.i32_val(0));
+  bf16x2Vec1 = b.insert_element(bf16x2VecTy, bf16x2Vec1, v[3], b.i32_val(1));
+  bf16x2Vec0 = b.bitcast(bf16x2Vec0, i32_ty);
+  bf16x2Vec1 = b.bitcast(bf16x2Vec1, i32_ty);
 
-  Value sign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x80008000));
-  Value sign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x80008000));
+  Value sign0 = b.and_(i32_ty, bf16x2Vec0, b.i32_val(0x80008000));
+  Value sign1 = b.and_(i32_ty, bf16x2Vec1, b.i32_val(0x80008000));
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value sign = undef(fp8x4VecTy);
-  sign0 = bitcast(sign0, fp8x4VecTy);
-  sign1 = bitcast(sign1, fp8x4VecTy);
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign0, i32_val(1)), i32_val(0));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign0, i32_val(3)), i32_val(1));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign1, i32_val(1)), i32_val(2));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign1, i32_val(3)), i32_val(3));
-  sign = bitcast(sign, i32_ty);
+  Value sign = b.undef(fp8x4VecTy);
+  sign0 = b.bitcast(sign0, fp8x4VecTy);
+  sign1 = b.bitcast(sign1, fp8x4VecTy);
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign0, b.i32_val(1)),
+                          b.i32_val(0));
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign0, b.i32_val(3)),
+                          b.i32_val(1));
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign1, b.i32_val(1)),
+                          b.i32_val(2));
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign1, b.i32_val(3)),
+                          b.i32_val(3));
+  sign = b.bitcast(sign, i32_ty);
 
-  Value nosign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x7fff7fff));
-  Value nosign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x7fff7fff));
+  Value nosign0 = b.and_(i32_ty, bf16x2Vec0, b.i32_val(0x7fff7fff));
+  Value nosign1 = b.and_(i32_ty, bf16x2Vec1, b.i32_val(0x7fff7fff));
 
-  Value nosign_0_0 = and_(i32_ty, nosign0, i32_val(0xffff0000));
-  nosign_0_0 = umax(i32_ty, nosign_0_0, i32_val(0x38000000));
-  nosign_0_0 = umin(i32_ty, nosign_0_0, i32_val(0x57e00000));
-  Value nosign_0_1 = and_(i32_ty, nosign0, i32_val(0x0000ffff));
-  nosign_0_1 = umax(i32_ty, nosign_0_1, i32_val(0x3800));
-  nosign_0_1 = umin(i32_ty, nosign_0_1, i32_val(0x57e0));
-  nosign0 = or_(i32_ty, nosign_0_0, nosign_0_1);
+  Value nosign_0_0 = b.and_(i32_ty, nosign0, b.i32_val(0xffff0000));
+  nosign_0_0 = b.umax(i32_ty, nosign_0_0, b.i32_val(0x38000000));
+  nosign_0_0 = b.umin(i32_ty, nosign_0_0, b.i32_val(0x57e00000));
+  Value nosign_0_1 = b.and_(i32_ty, nosign0, b.i32_val(0x0000ffff));
+  nosign_0_1 = b.umax(i32_ty, nosign_0_1, b.i32_val(0x3800));
+  nosign_0_1 = b.umin(i32_ty, nosign_0_1, b.i32_val(0x57e0));
+  nosign0 = b.or_(i32_ty, nosign_0_0, nosign_0_1);
 
-  Value nosign_1_0 = and_(i32_ty, nosign1, i32_val(0xffff0000));
-  nosign_1_0 = umax(i32_ty, nosign_1_0, i32_val(0x38000000));
-  nosign_1_0 = umin(i32_ty, nosign_1_0, i32_val(0x57e00000));
-  Value nosign_1_1 = and_(i32_ty, nosign1, i32_val(0x0000ffff));
-  nosign_1_1 = umax(i32_ty, nosign_1_1, i32_val(0x3800));
-  nosign_1_1 = umin(i32_ty, nosign_1_1, i32_val(0x57e0));
-  nosign1 = or_(i32_ty, nosign_1_0, nosign_1_1);
+  Value nosign_1_0 = b.and_(i32_ty, nosign1, b.i32_val(0xffff0000));
+  nosign_1_0 = b.umax(i32_ty, nosign_1_0, b.i32_val(0x38000000));
+  nosign_1_0 = b.umin(i32_ty, nosign_1_0, b.i32_val(0x57e00000));
+  Value nosign_1_1 = b.and_(i32_ty, nosign1, b.i32_val(0x0000ffff));
+  nosign_1_1 = b.umax(i32_ty, nosign_1_1, b.i32_val(0x3800));
+  nosign_1_1 = b.umin(i32_ty, nosign_1_1, b.i32_val(0x57e0));
+  nosign1 = b.or_(i32_ty, nosign_1_0, nosign_1_1);
 
-  nosign0 = add(i32_ty, nosign0, i32_val(0x00100010));
-  nosign1 = add(i32_ty, nosign1, i32_val(0x00100010));
-  nosign0 = sub(i32_ty, nosign0, i32_val(0x38003800));
-  nosign1 = sub(i32_ty, nosign1, i32_val(0x38003800));
-  nosign0 = shl(i32_ty, nosign0, i32_val(3));
-  nosign1 = shl(i32_ty, nosign1, i32_val(3));
+  nosign0 = b.add(i32_ty, nosign0, b.i32_val(0x00100010));
+  nosign1 = b.add(i32_ty, nosign1, b.i32_val(0x00100010));
+  nosign0 = b.sub(i32_ty, nosign0, b.i32_val(0x38003800));
+  nosign1 = b.sub(i32_ty, nosign1, b.i32_val(0x38003800));
+  nosign0 = b.shl(i32_ty, nosign0, b.i32_val(3));
+  nosign1 = b.shl(i32_ty, nosign1, b.i32_val(3));
 
-  nosign0 = bitcast(nosign0, fp8x4VecTy);
-  nosign1 = bitcast(nosign1, fp8x4VecTy);
-  Value nosign = undef(fp8x4VecTy);
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign0, i32_val(1)), i32_val(0));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign0, i32_val(3)), i32_val(1));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign1, i32_val(1)), i32_val(2));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign1, i32_val(3)), i32_val(3));
-  nosign = bitcast(nosign, i32_ty);
+  nosign0 = b.bitcast(nosign0, fp8x4VecTy);
+  nosign1 = b.bitcast(nosign1, fp8x4VecTy);
+  Value nosign = b.undef(fp8x4VecTy);
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign0, b.i32_val(1)),
+                            b.i32_val(0));
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign0, b.i32_val(3)),
+                            b.i32_val(1));
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign1, b.i32_val(1)),
+                            b.i32_val(2));
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign1, b.i32_val(3)),
+                            b.i32_val(3));
+  nosign = b.bitcast(nosign, i32_ty);
 
-  Value fp8x4Vec = or_(i32_ty, nosign, sign);
-  fp8x4Vec = bitcast(fp8x4Vec, fp8x4VecTy);
-  return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(3))};
+  Value fp8x4Vec = b.or_(i32_ty, nosign, sign);
+  fp8x4Vec = b.bitcast(fp8x4Vec, fp8x4VecTy);
+  return {b.extract_element(i8_ty, fp8x4Vec, b.i32_val(0)),
+          b.extract_element(i8_ty, fp8x4Vec, b.i32_val(1)),
+          b.extract_element(i8_ty, fp8x4Vec, b.i32_val(2)),
+          b.extract_element(i8_ty, fp8x4Vec, b.i32_val(3))};
 }
 
 static SmallVector<Value>
-Bf16_to_Fp8E5M2_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
-                          const SmallVector<Value> &v) {
-  Value val = zext(i32_ty, bitcast(v[0], i16_ty));
-  Value sign = and_(i32_ty, val, i32_val(0x8000));
-  Value nosign = and_(i32_ty, val, i32_val(0x7fff));
+Bf16_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
+                     const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
+  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
+  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
 
-  Value exp = and_(i32_ty, lshr(nosign, i32_val(7)), i32_val(0xff));
+  Value exp = b.and_(i32_ty, b.lshr(nosign, b.i32_val(7)), b.i32_val(0xff));
   // Check if we need a translation to a subnormal value. This happens when
   // exp value is in range [110, 112].
   Value is_subnormal =
-      and_(icmp_uge(exp, i32_val(110)), icmp_ule(exp, i32_val(112)));
-  Value shift = sub(i32_ty, exp, i32_val(110));
-  Value subnormal = and_(i32_ty, nosign, i32_val(0x7f));
-  subnormal = or_(i32_ty, subnormal, i32_val(0x80));
+      b.and_(b.icmp_uge(exp, b.i32_val(110)), b.icmp_ule(exp, b.i32_val(112)));
+  Value shift = b.sub(i32_ty, exp, b.i32_val(110));
+  Value subnormal = b.and_(i32_ty, nosign, b.i32_val(0x7f));
+  subnormal = b.or_(i32_ty, subnormal, b.i32_val(0x80));
   // Make rounding with respect to bits we are going to shift and cut off.
-  Value round_step = lshr(i32_ty, i32_val(0x100), shift);
-  Value tail_mask = sub(i32_ty, round_step, i32_val(1));
-  Value tail = and_(i32_ty, subnormal, tail_mask);
-  Value threshold = lshr(i32_ty, i32_val(0x80), shift);
+  Value round_step = b.lshr(i32_ty, b.i32_val(0x100), shift);
+  Value tail_mask = b.sub(i32_ty, round_step, b.i32_val(1));
+  Value tail = b.and_(i32_ty, subnormal, tail_mask);
+  Value threshold = b.lshr(i32_ty, b.i32_val(0x80), shift);
   Value odd_truncated =
-      icmp_ne(and_(i32_ty, subnormal, round_step), i32_val(0));
-  Value round_up = or_(icmp_ugt(tail, threshold),
-                       and_(icmp_eq(tail, threshold), odd_truncated));
-  subnormal = select(round_up, add(i32_ty, subnormal, round_step), subnormal);
+      b.icmp_ne(b.and_(i32_ty, subnormal, round_step), b.i32_val(0));
+  Value round_up = b.or_(b.icmp_ugt(tail, threshold),
+                         b.and_(b.icmp_eq(tail, threshold), odd_truncated));
+  subnormal =
+      b.select(round_up, b.add(i32_ty, subnormal, round_step), subnormal);
   // Now shift to get the final result.
-  subnormal = shl(i32_ty, subnormal, shift);
+  subnormal = b.shl(i32_ty, subnormal, shift);
 
   // Normalized case. Start with rounding, then apply exp range to fit 5 bits,
   // adjust bias and shift left.
   // TODO: NaN values might be mishandled.
-  tail = and_(i32_ty, nosign, i32_val(0x1f));
-  odd_truncated = icmp_ne(and_(i32_ty, nosign, i32_val(0x20)), i32_val(0));
-  round_up = or_(icmp_ugt(tail, i32_val(0x10)),
-                 and_(icmp_eq(tail, i32_val(0x10)), odd_truncated));
+  tail = b.and_(i32_ty, nosign, b.i32_val(0x1f));
+  odd_truncated =
+      b.icmp_ne(b.and_(i32_ty, nosign, b.i32_val(0x20)), b.i32_val(0));
+  round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x10)),
+                   b.and_(b.icmp_eq(tail, b.i32_val(0x10)), odd_truncated));
   Value rounded =
-      and_(i32_ty, add(i32_ty, nosign, i32_val(0x20)), i32_val(0x7fe0));
-  nosign = select(round_up, rounded, nosign);
+      b.and_(i32_ty, b.add(i32_ty, nosign, b.i32_val(0x20)), b.i32_val(0x7fe0));
+  nosign = b.select(round_up, rounded, nosign);
 
-  nosign = umax(i32_ty, nosign, i32_val(0x3800));
-  nosign = umin(i32_ty, nosign, i32_val(0x57e0));
-  nosign = sub(i32_ty, nosign, i32_val(0x3800));
-  nosign = shl(i32_ty, nosign, i32_val(3));
+  nosign = b.umax(i32_ty, nosign, b.i32_val(0x3800));
+  nosign = b.umin(i32_ty, nosign, b.i32_val(0x57e0));
+  nosign = b.sub(i32_ty, nosign, b.i32_val(0x3800));
+  nosign = b.shl(i32_ty, nosign, b.i32_val(3));
 
   // Choose between subnormal and normal values.
-  nosign = select(is_subnormal, subnormal, nosign);
+  nosign = b.select(is_subnormal, subnormal, nosign);
 
-  Value res_val = or_(i32_ty, nosign, sign);
+  Value res_val = b.or_(i32_ty, nosign, sign);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value res = bitcast(res_val, fp8x4VecTy);
+  Value res = b.bitcast(res_val, fp8x4VecTy);
 
-  return {extract_element(i8_ty, res, i32_val(1))};
+  return {b.extract_element(i8_ty, res, b.i32_val(1))};
 }
 
 /* ----- FP8E4M3B15 ------ */
@@ -320,83 +333,87 @@ Bf16_to_Fp8E5M2_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
 //    - has multiple nans (when all exponent bits are 1)
 //    - has an exponent bias of 15 (vs. 7 for fp8e4m3)
 static SmallVector<Value>
-Fp8E4M3B15_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
-                        const SmallVector<Value> &v) {
+Fp8E4M3B15_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
+                   const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a0 = undef(fp8x4VecTy);
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
-  a0 = bitcast(a0, i32_ty);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
 
-  Value a1 = undef(fp8x4VecTy);
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
-  a1 = bitcast(a1, i32_ty);
+  Value a1 = b.undef(fp8x4VecTy);
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
+  a1 = b.bitcast(a1, i32_ty);
 
-  Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-  Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
+  Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
+  Value b1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
 
-  b0 = lshr(i32_ty, b0, i32_val(1));
-  b1 = lshr(i32_ty, b1, i32_val(1));
+  b0 = b.lshr(i32_ty, b0, b.i32_val(1));
+  b1 = b.lshr(i32_ty, b1, b.i32_val(1));
 
-  b0 = or_(i32_ty, b0, and_(i32_ty, a0, i32_val(0x80008000)));
-  b1 = or_(i32_ty, b1, and_(i32_ty, a1, i32_val(0x80008000)));
+  b0 = b.or_(i32_ty, b0, b.and_(i32_ty, a0, b.i32_val(0x80008000)));
+  b1 = b.or_(i32_ty, b1, b.and_(i32_ty, a1, b.i32_val(0x80008000)));
 
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  auto fp16x2Vec0 = bitcast(b0, fp16x2VecTy);
-  auto fp16x2Vec1 = bitcast(b1, fp16x2VecTy);
+  auto fp16x2Vec0 = b.bitcast(b0, fp16x2VecTy);
+  auto fp16x2Vec1 = b.bitcast(b1, fp16x2VecTy);
 
-  return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec0, i32_val(1)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec1, i32_val(1))};
+  return {b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(0)),
+          b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(1)),
+          b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(0)),
+          b.extract_element(f16_ty, fp16x2Vec1, b.i32_val(1))};
 }
 
 static SmallVector<Value>
-Fp16_to_Fp8E4M3B15_func(Location loc, ConversionPatternRewriter &rewriter,
-                        const SmallVector<Value> &v) {
+Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
+                   const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec0 = undef(fp16x2VecTy);
-  Value fp16x2Vec1 = undef(fp16x2VecTy);
+  Value fp16x2Vec0 = b.undef(fp16x2VecTy);
+  Value fp16x2Vec1 = b.undef(fp16x2VecTy);
 
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[2], i32_val(0));
-  fp16x2Vec1 = insert_element(fp16x2VecTy, fp16x2Vec1, v[3], i32_val(1));
+  fp16x2Vec0 = b.insert_element(fp16x2VecTy, fp16x2Vec0, v[0], b.i32_val(0));
+  fp16x2Vec0 = b.insert_element(fp16x2VecTy, fp16x2Vec0, v[1], b.i32_val(1));
+  fp16x2Vec1 = b.insert_element(fp16x2VecTy, fp16x2Vec1, v[2], b.i32_val(0));
+  fp16x2Vec1 = b.insert_element(fp16x2VecTy, fp16x2Vec1, v[3], b.i32_val(1));
 
-  Value fp16x2VecMin = i32_val(0xBF80BF80);
-  Value fp16x2VecMax = i32_val(0x3F803F80);
-  fp16x2VecMin = bitcast(fp16x2VecMin, fp16x2VecTy);
-  fp16x2VecMax = bitcast(fp16x2VecMax, fp16x2VecTy);
-  fp16x2Vec0 = fmax(fp16x2VecTy, fp16x2Vec0, fp16x2VecMin);
-  fp16x2Vec1 = fmax(fp16x2VecTy, fp16x2Vec1, fp16x2VecMin);
-  fp16x2Vec0 = fmin(fp16x2VecTy, fp16x2Vec0, fp16x2VecMax);
-  fp16x2Vec1 = fmin(fp16x2VecTy, fp16x2Vec1, fp16x2VecMax);
+  Value fp16x2VecMin = b.i32_val(0xBF80BF80);
+  Value fp16x2VecMax = b.i32_val(0x3F803F80);
+  fp16x2VecMin = b.bitcast(fp16x2VecMin, fp16x2VecTy);
+  fp16x2VecMax = b.bitcast(fp16x2VecMax, fp16x2VecTy);
+  fp16x2Vec0 = b.fmax(fp16x2VecTy, fp16x2Vec0, fp16x2VecMin);
+  fp16x2Vec1 = b.fmax(fp16x2VecTy, fp16x2Vec1, fp16x2VecMin);
+  fp16x2Vec0 = b.fmin(fp16x2VecTy, fp16x2Vec0, fp16x2VecMax);
+  fp16x2Vec1 = b.fmin(fp16x2VecTy, fp16x2Vec1, fp16x2VecMax);
 
-  fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
-  fp16x2Vec1 = bitcast(fp16x2Vec1, i32_ty);
+  fp16x2Vec0 = b.bitcast(fp16x2Vec0, i32_ty);
+  fp16x2Vec1 = b.bitcast(fp16x2Vec1, i32_ty);
 
-  Value a0 = shl(i32_ty, fp16x2Vec0, i32_val(1));
-  Value a1 = shl(i32_ty, fp16x2Vec1, i32_val(1));
-  a0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-  a1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
-  a0 = add(i32_ty, a0, i32_val(0x00800080));
-  a1 = add(i32_ty, a1, i32_val(0x00800080));
-  Value b0 = or_(i32_ty, and_(i32_ty, fp16x2Vec0, i32_val(0x80008000)), a0);
-  Value b1 = or_(i32_ty, and_(i32_ty, fp16x2Vec1, i32_val(0x80008000)), a1);
+  Value a0 = b.shl(i32_ty, fp16x2Vec0, b.i32_val(1));
+  Value a1 = b.shl(i32_ty, fp16x2Vec1, b.i32_val(1));
+  a0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
+  a1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
+  a0 = b.add(i32_ty, a0, b.i32_val(0x00800080));
+  a1 = b.add(i32_ty, a1, b.i32_val(0x00800080));
+  Value b0 =
+      b.or_(i32_ty, b.and_(i32_ty, fp16x2Vec0, b.i32_val(0x80008000)), a0);
+  Value b1 =
+      b.or_(i32_ty, b.and_(i32_ty, fp16x2Vec1, b.i32_val(0x80008000)), a1);
 
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  b0 = bitcast(b0, fp8x4VecTy);
-  b1 = bitcast(b1, fp8x4VecTy);
+  b0 = b.bitcast(b0, fp8x4VecTy);
+  b1 = b.bitcast(b1, fp8x4VecTy);
 
-  return {extract_element(i8_ty, b0, i32_val(1)),
-          extract_element(i8_ty, b0, i32_val(3)),
-          extract_element(i8_ty, b1, i32_val(1)),
-          extract_element(i8_ty, b1, i32_val(3))};
+  return {b.extract_element(i8_ty, b0, b.i32_val(1)),
+          b.extract_element(i8_ty, b0, b.i32_val(3)),
+          b.extract_element(i8_ty, b1, b.i32_val(1)),
+          b.extract_element(i8_ty, b1, b.i32_val(3))};
 }
 
 /* ----- FP8E4M3 ------ */
@@ -404,23 +421,24 @@ Fp16_to_Fp8E4M3B15_func(Location loc, ConversionPatternRewriter &rewriter,
 // has more than a single NaN values.
 
 // Fp8E4M3 -> Fp16 (packed)
-static SmallVector<Value>
-Fp8E4M3Nv_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
-                       const SmallVector<Value> &v) {
+static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a0 = undef(fp8x4VecTy);
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
-  a0 = bitcast(a0, i32_ty);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
 
-  Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
+  Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
 
-  b0 = lshr(i32_ty, b0, i32_val(1));
+  b0 = b.lshr(i32_ty, b0, b.i32_val(1));
 
-  Value c0 = and_(i32_ty, b0, i32_val(0xffff0000));
-  Value c1 = shl(i32_ty, b0, i32_val(16));
+  Value c0 = b.and_(i32_ty, b0, b.i32_val(0xffff0000));
+  Value c1 = b.shl(i32_ty, b0, b.i32_val(16));
 
   // Check if the exponent is zero, i.e. subnormal number.
   // fp8e4 has a bias of 7
@@ -433,156 +451,163 @@ Fp8E4M3Nv_to_Fp16_func(Location loc, ConversionPatternRewriter &rewriter,
   //  [101] -> exp=15-7, sig=b010...
   //  [110] -> exp=15-7, sig=b100...
   //  [111] -> exp=15-7, sig=b110...
-  Value cmp0 = icmp_eq(and_(c0, i32_val(0x7c000000)), i32_val(0));
-  Value cmp1 = icmp_eq(and_(c1, i32_val(0x7c000000)), i32_val(0));
+  Value cmp0 = b.icmp_eq(b.and_(c0, b.i32_val(0x7c000000)), b.i32_val(0));
+  Value cmp1 = b.icmp_eq(b.and_(c1, b.i32_val(0x7c000000)), b.i32_val(0));
 
   auto i32x8VecTy = vec_ty(i32_ty, 8);
-  Value predefined = undef(i32x8VecTy);
-  predefined = insert_element(i32x8VecTy, predefined, i32_val(0x0), i32_val(0));
+  Value predefined = b.undef(i32x8VecTy);
   predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x18000000), i32_val(1));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x1C000000), i32_val(2));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x1E000000), i32_val(3));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x20000000), i32_val(4));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x21000000), i32_val(5));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x22000000), i32_val(6));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x23000000), i32_val(7));
+      b.insert_element(i32x8VecTy, predefined, b.i32_val(0x0), b.i32_val(0));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x18000000),
+                                b.i32_val(1));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x1C000000),
+                                b.i32_val(2));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x1E000000),
+                                b.i32_val(3));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x20000000),
+                                b.i32_val(4));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x21000000),
+                                b.i32_val(5));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x22000000),
+                                b.i32_val(6));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x23000000),
+                                b.i32_val(7));
 
-  Value predef_idx0 = lshr(and_(c0, i32_val(7 << 23)), i32_val(23));
-  Value predef_idx1 = lshr(and_(c1, i32_val(7 << 23)), i32_val(23));
+  Value predef_idx0 = b.lshr(b.and_(c0, b.i32_val(7 << 23)), b.i32_val(23));
+  Value predef_idx1 = b.lshr(b.and_(c1, b.i32_val(7 << 23)), b.i32_val(23));
 
-  Value normalized0 = extract_element(i32_ty, predefined, predef_idx0);
-  Value normalized1 = extract_element(i32_ty, predefined, predef_idx1);
+  Value normalized0 = b.extract_element(i32_ty, predefined, predef_idx0);
+  Value normalized1 = b.extract_element(i32_ty, predefined, predef_idx1);
 
-  Value d0 = add(i32_ty, c0, i32_val(0x20000000));
-  Value d1 = add(i32_ty, c1, i32_val(0x20000000));
+  Value d0 = b.add(i32_ty, c0, b.i32_val(0x20000000));
+  Value d1 = b.add(i32_ty, c1, b.i32_val(0x20000000));
 
-  Value res0 = select(cmp0, normalized0, d0);
-  Value res1 = select(cmp1, normalized1, d1);
+  Value res0 = b.select(cmp0, normalized0, d0);
+  Value res1 = b.select(cmp1, normalized1, d1);
 
-  Value f0 = or_(i32_ty, res0, lshr(i32_ty, res1, i32_val(16)));
-  Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
+  Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
+  Value sign0 = b.and_(i32_ty, a0, b.i32_val(0x80008000));
 
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec0 = or_(i32_ty, sign0, f0);
-  fp16x2Vec0 = bitcast(fp16x2Vec0, fp16x2VecTy);
+  Value fp16x2Vec0 = b.or_(i32_ty, sign0, f0);
+  fp16x2Vec0 = b.bitcast(fp16x2Vec0, fp16x2VecTy);
 
-  return {extract_element(f16_ty, fp16x2Vec0, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec0, i32_val(1))};
+  return {b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(0)),
+          b.extract_element(f16_ty, fp16x2Vec0, b.i32_val(1))};
 }
 
 // Fp16 -> Fp8E4M3 (packed)
-static SmallVector<Value>
-Fp16_to_Fp8E4M3Nv_func(Location loc, ConversionPatternRewriter &rewriter,
-                       const SmallVector<Value> &v) {
+static SmallVector<Value> Fp16_to_Fp8E4M3Nv(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec0 = undef(fp16x2VecTy);
+  Value fp16x2Vec0 = b.undef(fp16x2VecTy);
 
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[0], i32_val(0));
-  fp16x2Vec0 = insert_element(fp16x2VecTy, fp16x2Vec0, v[1], i32_val(1));
+  fp16x2Vec0 = b.insert_element(fp16x2VecTy, fp16x2Vec0, v[0], b.i32_val(0));
+  fp16x2Vec0 = b.insert_element(fp16x2VecTy, fp16x2Vec0, v[1], b.i32_val(1));
 
-  fp16x2Vec0 = bitcast(fp16x2Vec0, i32_ty);
-  fp16x2Vec0 = sub(i32_ty, fp16x2Vec0, i32_val(0x20002000));
+  fp16x2Vec0 = b.bitcast(fp16x2Vec0, i32_ty);
+  fp16x2Vec0 = b.sub(i32_ty, fp16x2Vec0, b.i32_val(0x20002000));
 
-  Value a0 = shl(i32_ty, fp16x2Vec0, i32_val(1));
-  a0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-  a0 = add(i32_ty, a0, i32_val(0x00800080));
-  Value b0 = or_(i32_ty, and_(i32_ty, fp16x2Vec0, i32_val(0x80008000)), a0);
+  Value a0 = b.shl(i32_ty, fp16x2Vec0, b.i32_val(1));
+  a0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
+  a0 = b.add(i32_ty, a0, b.i32_val(0x00800080));
+  Value b0 =
+      b.or_(i32_ty, b.and_(i32_ty, fp16x2Vec0, b.i32_val(0x80008000)), a0);
 
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  b0 = bitcast(b0, fp8x4VecTy);
+  b0 = b.bitcast(b0, fp8x4VecTy);
 
-  return {extract_element(i8_ty, b0, i32_val(1)),
-          extract_element(i8_ty, b0, i32_val(3))};
+  return {b.extract_element(i8_ty, b0, b.i32_val(1)),
+          b.extract_element(i8_ty, b0, b.i32_val(3))};
 }
 
 static SmallVector<Value>
-Fp16_to_Fp8E4M3Nv_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
-                            const SmallVector<Value> &v) {
-  Value val = zext(i32_ty, bitcast(v[0], i16_ty));
-  Value sign = and_(i32_ty, val, i32_val(0x8000));
-  Value nosign = and_(i32_ty, val, i32_val(0x7fff));
+Fp16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
+  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
+  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
 
-  Value exp = and_(i32_ty, lshr(nosign, i32_val(10)), i32_val(0x1f));
+  Value exp = b.and_(i32_ty, b.lshr(nosign, b.i32_val(10)), b.i32_val(0x1f));
   // Check if we need a translation to a subnormal value. This happens when
   // exp value is in range [5, 8].
   Value is_subnormal =
-      and_(icmp_uge(exp, i32_val(5)), icmp_ule(exp, i32_val(8)));
-  Value shift = sub(i32_ty, i32_val(8), exp);
-  Value subnormal = and_(i32_ty, nosign, i32_val(0x3ff));
-  subnormal = or_(i32_ty, subnormal, i32_val(0x400));
+      b.and_(b.icmp_uge(exp, b.i32_val(5)), b.icmp_ule(exp, b.i32_val(8)));
+  Value shift = b.sub(i32_ty, b.i32_val(8), exp);
+  Value subnormal = b.and_(i32_ty, nosign, b.i32_val(0x3ff));
+  subnormal = b.or_(i32_ty, subnormal, b.i32_val(0x400));
   // Make rounding with respect to bits we are going to shift and cut off.
-  Value round_step = shl(i32_ty, i32_val(0x100), shift);
-  Value tail_mask = sub(i32_ty, round_step, i32_val(1));
-  Value tail = and_(i32_ty, subnormal, tail_mask);
-  Value threshold = shl(i32_ty, i32_val(0x80), shift);
+  Value round_step = b.shl(i32_ty, b.i32_val(0x100), shift);
+  Value tail_mask = b.sub(i32_ty, round_step, b.i32_val(1));
+  Value tail = b.and_(i32_ty, subnormal, tail_mask);
+  Value threshold = b.shl(i32_ty, b.i32_val(0x80), shift);
   Value odd_truncated =
-      icmp_ne(and_(i32_ty, subnormal, round_step), i32_val(0));
-  Value round_up = or_(icmp_ugt(tail, threshold),
-                       and_(icmp_eq(tail, threshold), odd_truncated));
-  subnormal = select(round_up, add(i32_ty, subnormal, round_step), subnormal);
+      b.icmp_ne(b.and_(i32_ty, subnormal, round_step), b.i32_val(0));
+  Value round_up = b.or_(b.icmp_ugt(tail, threshold),
+                         b.and_(b.icmp_eq(tail, threshold), odd_truncated));
+  subnormal =
+      b.select(round_up, b.add(i32_ty, subnormal, round_step), subnormal);
   // Now shift to get the final result.
-  subnormal = lshr(i32_ty, subnormal, shift);
+  subnormal = b.lshr(i32_ty, subnormal, shift);
 
   // Normalized case. Start with rounding, then apply exp range to fit 4 bits,
   // adjust bias and shift left.
   // TODO: NaN values might be mishandled.
-  tail = and_(i32_ty, nosign, i32_val(0x7f));
-  odd_truncated = icmp_ne(and_(i32_ty, nosign, i32_val(0x80)), i32_val(0));
-  round_up = or_(icmp_ugt(tail, i32_val(0x40)),
-                 and_(icmp_eq(tail, i32_val(0x40)), odd_truncated));
+  tail = b.and_(i32_ty, nosign, b.i32_val(0x7f));
+  odd_truncated =
+      b.icmp_ne(b.and_(i32_ty, nosign, b.i32_val(0x80)), b.i32_val(0));
+  round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x40)),
+                   b.and_(b.icmp_eq(tail, b.i32_val(0x40)), odd_truncated));
   Value rounded =
-      and_(i32_ty, add(i32_ty, nosign, i32_val(0x80)), i32_val(0x7f80));
-  nosign = select(round_up, rounded, nosign);
+      b.and_(i32_ty, b.add(i32_ty, nosign, b.i32_val(0x80)), b.i32_val(0x7f80));
+  nosign = b.select(round_up, rounded, nosign);
 
-  nosign = umax(i32_ty, nosign, i32_val(0x2000));
-  nosign = umin(i32_ty, nosign, i32_val(0x5c00));
-  nosign = sub(i32_ty, nosign, i32_val(0x2000));
-  nosign = shl(i32_ty, nosign, i32_val(1));
+  nosign = b.umax(i32_ty, nosign, b.i32_val(0x2000));
+  nosign = b.umin(i32_ty, nosign, b.i32_val(0x5c00));
+  nosign = b.sub(i32_ty, nosign, b.i32_val(0x2000));
+  nosign = b.shl(i32_ty, nosign, b.i32_val(1));
 
   // Choose between subnormal and normal values.
-  nosign = select(is_subnormal, subnormal, nosign);
+  nosign = b.select(is_subnormal, subnormal, nosign);
 
-  Value res_val = or_(i32_ty, nosign, sign);
+  Value res_val = b.or_(i32_ty, nosign, sign);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value res = bitcast(res_val, fp8x4VecTy);
+  Value res = b.bitcast(res_val, fp8x4VecTy);
 
-  return {extract_element(i8_ty, res, i32_val(1))};
+  return {b.extract_element(i8_ty, res, b.i32_val(1))};
 }
 
-static SmallVector<Value>
-Fp8E4M3Nv_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
-                       const SmallVector<Value> &v) {
+static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a0 = undef(fp8x4VecTy);
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
-  a0 = bitcast(a0, i32_ty);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
 
-  Value a1 = undef(fp8x4VecTy);
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
-  a1 = bitcast(a1, i32_ty);
+  Value a1 = b.undef(fp8x4VecTy);
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
+  a1 = b.bitcast(a1, i32_ty);
 
-  Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-  Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
-  b0 = lshr(i32_ty, b0, i32_val(4));
-  b1 = lshr(i32_ty, b1, i32_val(4));
+  Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
+  Value b1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
+  b0 = b.lshr(i32_ty, b0, b.i32_val(4));
+  b1 = b.lshr(i32_ty, b1, b.i32_val(4));
 
-  Value c0 = and_(i32_ty, b0, i32_val(0xffff0000));
-  Value c1 = shl(i32_ty, b0, i32_val(16));
-  Value c2 = and_(i32_ty, b1, i32_val(0xffff0000));
-  Value c3 = shl(i32_ty, b1, i32_val(16));
+  Value c0 = b.and_(i32_ty, b0, b.i32_val(0xffff0000));
+  Value c1 = b.shl(i32_ty, b0, b.i32_val(16));
+  Value c2 = b.and_(i32_ty, b1, b.i32_val(0xffff0000));
+  Value c3 = b.shl(i32_ty, b1, b.i32_val(16));
 
   // Check if the exponent is zero, i.e. subnormal number.
   // fp8e4 has a bias of 7
@@ -595,213 +620,223 @@ Fp8E4M3Nv_to_Bf16_func(Location loc, ConversionPatternRewriter &rewriter,
   //  [101] -> exp=127-7, sig=b0100...
   //  [110] -> exp=127-7, sig=b1000...
   //  [111] -> exp=127-7, sig=b1100...
-  Value cmp0 = icmp_eq(and_(c0, i32_val(0xf800000)), i32_val(0));
-  Value cmp1 = icmp_eq(and_(c1, i32_val(0xf800000)), i32_val(0));
-  Value cmp2 = icmp_eq(and_(c2, i32_val(0xf800000)), i32_val(0));
-  Value cmp3 = icmp_eq(and_(c3, i32_val(0xf800000)), i32_val(0));
+  Value cmp0 = b.icmp_eq(b.and_(c0, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp1 = b.icmp_eq(b.and_(c1, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp2 = b.icmp_eq(b.and_(c2, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp3 = b.icmp_eq(b.and_(c3, b.i32_val(0xf800000)), b.i32_val(0));
 
   auto i32x8VecTy = vec_ty(i32_ty, 8);
-  Value predefined = undef(i32x8VecTy);
-  predefined = insert_element(i32x8VecTy, predefined, i32_val(0x0), i32_val(0));
+  Value predefined = b.undef(i32x8VecTy);
   predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x3B000000), i32_val(1));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x3B800000), i32_val(2));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x3BC00000), i32_val(3));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x3C000000), i32_val(4));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x3C200000), i32_val(5));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x3C400000), i32_val(6));
-  predefined =
-      insert_element(i32x8VecTy, predefined, i32_val(0x3C600000), i32_val(7));
+      b.insert_element(i32x8VecTy, predefined, b.i32_val(0x0), b.i32_val(0));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3B000000),
+                                b.i32_val(1));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3B800000),
+                                b.i32_val(2));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3BC00000),
+                                b.i32_val(3));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C000000),
+                                b.i32_val(4));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C200000),
+                                b.i32_val(5));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C400000),
+                                b.i32_val(6));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C600000),
+                                b.i32_val(7));
 
-  Value predef_idx0 = lshr(and_(c0, i32_val(7 << 20)), i32_val(20));
-  Value predef_idx1 = lshr(and_(c1, i32_val(7 << 20)), i32_val(20));
-  Value predef_idx2 = lshr(and_(c2, i32_val(7 << 20)), i32_val(20));
-  Value predef_idx3 = lshr(and_(c3, i32_val(7 << 20)), i32_val(20));
+  Value predef_idx0 = b.lshr(b.and_(c0, b.i32_val(7 << 20)), b.i32_val(20));
+  Value predef_idx1 = b.lshr(b.and_(c1, b.i32_val(7 << 20)), b.i32_val(20));
+  Value predef_idx2 = b.lshr(b.and_(c2, b.i32_val(7 << 20)), b.i32_val(20));
+  Value predef_idx3 = b.lshr(b.and_(c3, b.i32_val(7 << 20)), b.i32_val(20));
 
-  Value normalized0 = extract_element(i32_ty, predefined, predef_idx0);
-  Value normalized1 = extract_element(i32_ty, predefined, predef_idx1);
-  Value normalized2 = extract_element(i32_ty, predefined, predef_idx2);
-  Value normalized3 = extract_element(i32_ty, predefined, predef_idx3);
+  Value normalized0 = b.extract_element(i32_ty, predefined, predef_idx0);
+  Value normalized1 = b.extract_element(i32_ty, predefined, predef_idx1);
+  Value normalized2 = b.extract_element(i32_ty, predefined, predef_idx2);
+  Value normalized3 = b.extract_element(i32_ty, predefined, predef_idx3);
 
-  Value d0 = add(i32_ty, c0, i32_val(0x3c000000));
-  Value d1 = add(i32_ty, c1, i32_val(0x3c000000));
-  Value d2 = add(i32_ty, c2, i32_val(0x3c000000));
-  Value d3 = add(i32_ty, c3, i32_val(0x3c000000));
+  Value d0 = b.add(i32_ty, c0, b.i32_val(0x3c000000));
+  Value d1 = b.add(i32_ty, c1, b.i32_val(0x3c000000));
+  Value d2 = b.add(i32_ty, c2, b.i32_val(0x3c000000));
+  Value d3 = b.add(i32_ty, c3, b.i32_val(0x3c000000));
 
-  Value res0 = select(cmp0, normalized0, d0);
-  Value res1 = select(cmp1, normalized1, d1);
-  Value res2 = select(cmp2, normalized2, d2);
-  Value res3 = select(cmp3, normalized3, d3);
+  Value res0 = b.select(cmp0, normalized0, d0);
+  Value res1 = b.select(cmp1, normalized1, d1);
+  Value res2 = b.select(cmp2, normalized2, d2);
+  Value res3 = b.select(cmp3, normalized3, d3);
 
-  Value f0 = or_(i32_ty, res0, lshr(i32_ty, res1, i32_val(16)));
-  Value f1 = or_(i32_ty, res2, lshr(i32_ty, res3, i32_val(16)));
+  Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
+  Value f1 = b.or_(i32_ty, res2, b.lshr(i32_ty, res3, b.i32_val(16)));
 
-  Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
-  Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
+  Value sign0 = b.and_(i32_ty, a0, b.i32_val(0x80008000));
+  Value sign1 = b.and_(i32_ty, a1, b.i32_val(0x80008000));
 
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = or_(i32_ty, sign0, f0);
-  Value bf16x2Vec1 = or_(i32_ty, sign1, f1);
-  bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
-  bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
+  Value bf16x2Vec0 = b.or_(i32_ty, sign0, f0);
+  Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
+  bf16x2Vec0 = b.bitcast(bf16x2Vec0, bf16x2VecTy);
+  bf16x2Vec1 = b.bitcast(bf16x2Vec1, bf16x2VecTy);
 
-  return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
+  return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(1))};
 }
 
-static SmallVector<Value>
-Bf16_to_Fp8E4M3Nv_func(Location loc, ConversionPatternRewriter &rewriter,
-                       const SmallVector<Value> &v) {
+static SmallVector<Value> Bf16_to_Fp8E4M3Nv(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = undef(bf16x2VecTy);
-  Value bf16x2Vec1 = undef(bf16x2VecTy);
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[1], i32_val(1));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[2], i32_val(0));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[3], i32_val(1));
-  bf16x2Vec0 = bitcast(bf16x2Vec0, i32_ty);
-  bf16x2Vec1 = bitcast(bf16x2Vec1, i32_ty);
+  Value bf16x2Vec0 = b.undef(bf16x2VecTy);
+  Value bf16x2Vec1 = b.undef(bf16x2VecTy);
+  bf16x2Vec0 = b.insert_element(bf16x2VecTy, bf16x2Vec0, v[0], b.i32_val(0));
+  bf16x2Vec0 = b.insert_element(bf16x2VecTy, bf16x2Vec0, v[1], b.i32_val(1));
+  bf16x2Vec1 = b.insert_element(bf16x2VecTy, bf16x2Vec1, v[2], b.i32_val(0));
+  bf16x2Vec1 = b.insert_element(bf16x2VecTy, bf16x2Vec1, v[3], b.i32_val(1));
+  bf16x2Vec0 = b.bitcast(bf16x2Vec0, i32_ty);
+  bf16x2Vec1 = b.bitcast(bf16x2Vec1, i32_ty);
 
-  Value sign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x80008000));
-  Value sign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x80008000));
+  Value sign0 = b.and_(i32_ty, bf16x2Vec0, b.i32_val(0x80008000));
+  Value sign1 = b.and_(i32_ty, bf16x2Vec1, b.i32_val(0x80008000));
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value sign = undef(fp8x4VecTy);
-  sign0 = bitcast(sign0, fp8x4VecTy);
-  sign1 = bitcast(sign1, fp8x4VecTy);
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign0, i32_val(1)), i32_val(0));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign0, i32_val(3)), i32_val(1));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign1, i32_val(1)), i32_val(2));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign1, i32_val(3)), i32_val(3));
-  sign = bitcast(sign, i32_ty);
+  Value sign = b.undef(fp8x4VecTy);
+  sign0 = b.bitcast(sign0, fp8x4VecTy);
+  sign1 = b.bitcast(sign1, fp8x4VecTy);
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign0, b.i32_val(1)),
+                          b.i32_val(0));
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign0, b.i32_val(3)),
+                          b.i32_val(1));
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign1, b.i32_val(1)),
+                          b.i32_val(2));
+  sign = b.insert_element(fp8x4VecTy, sign,
+                          b.extract_element(i8_ty, sign1, b.i32_val(3)),
+                          b.i32_val(3));
+  sign = b.bitcast(sign, i32_ty);
 
-  Value nosign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x7fff7fff));
-  Value nosign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x7fff7fff));
+  Value nosign0 = b.and_(i32_ty, bf16x2Vec0, b.i32_val(0x7fff7fff));
+  Value nosign1 = b.and_(i32_ty, bf16x2Vec1, b.i32_val(0x7fff7fff));
 
-  Value nosign_0_0 = and_(i32_ty, nosign0, i32_val(0xffff0000));
-  nosign_0_0 = umax(i32_ty, nosign_0_0, i32_val(0x3c000000));
-  nosign_0_0 = umin(i32_ty, nosign_0_0, i32_val(0x43f00000));
-  Value nosign_0_1 = and_(i32_ty, nosign0, i32_val(0x0000ffff));
-  nosign_0_1 = umax(i32_ty, nosign_0_1, i32_val(0x3c00));
-  nosign_0_1 = umin(i32_ty, nosign_0_1, i32_val(0x43f0));
-  nosign0 = or_(i32_ty, nosign_0_0, nosign_0_1);
+  Value nosign_0_0 = b.and_(i32_ty, nosign0, b.i32_val(0xffff0000));
+  nosign_0_0 = b.umax(i32_ty, nosign_0_0, b.i32_val(0x3c000000));
+  nosign_0_0 = b.umin(i32_ty, nosign_0_0, b.i32_val(0x43f00000));
+  Value nosign_0_1 = b.and_(i32_ty, nosign0, b.i32_val(0x0000ffff));
+  nosign_0_1 = b.umax(i32_ty, nosign_0_1, b.i32_val(0x3c00));
+  nosign_0_1 = b.umin(i32_ty, nosign_0_1, b.i32_val(0x43f0));
+  nosign0 = b.or_(i32_ty, nosign_0_0, nosign_0_1);
 
-  Value nosign_1_0 = and_(i32_ty, nosign1, i32_val(0xffff0000));
-  nosign_1_0 = umax(i32_ty, nosign_1_0, i32_val(0x3c000000));
-  nosign_1_0 = umin(i32_ty, nosign_1_0, i32_val(0x43f00000));
-  Value nosign_1_1 = and_(i32_ty, nosign1, i32_val(0x0000ffff));
-  nosign_1_1 = umax(i32_ty, nosign_1_1, i32_val(0x3c00));
-  nosign_1_1 = umin(i32_ty, nosign_1_1, i32_val(0x43f0));
-  nosign1 = or_(i32_ty, nosign_1_0, nosign_1_1);
+  Value nosign_1_0 = b.and_(i32_ty, nosign1, b.i32_val(0xffff0000));
+  nosign_1_0 = b.umax(i32_ty, nosign_1_0, b.i32_val(0x3c000000));
+  nosign_1_0 = b.umin(i32_ty, nosign_1_0, b.i32_val(0x43f00000));
+  Value nosign_1_1 = b.and_(i32_ty, nosign1, b.i32_val(0x0000ffff));
+  nosign_1_1 = b.umax(i32_ty, nosign_1_1, b.i32_val(0x3c00));
+  nosign_1_1 = b.umin(i32_ty, nosign_1_1, b.i32_val(0x43f0));
+  nosign1 = b.or_(i32_ty, nosign_1_0, nosign_1_1);
 
-  nosign0 = add(i32_ty, nosign0, i32_val(0x80008));
-  nosign1 = add(i32_ty, nosign1, i32_val(0x80008));
-  nosign0 = sub(i32_ty, nosign0, i32_val(0x3c003c00));
-  nosign1 = sub(i32_ty, nosign1, i32_val(0x3c003c00));
-  nosign0 = lshr(i32_ty, nosign0, i32_val(4));
-  nosign1 = lshr(i32_ty, nosign1, i32_val(4));
+  nosign0 = b.add(i32_ty, nosign0, b.i32_val(0x80008));
+  nosign1 = b.add(i32_ty, nosign1, b.i32_val(0x80008));
+  nosign0 = b.sub(i32_ty, nosign0, b.i32_val(0x3c003c00));
+  nosign1 = b.sub(i32_ty, nosign1, b.i32_val(0x3c003c00));
+  nosign0 = b.lshr(i32_ty, nosign0, b.i32_val(4));
+  nosign1 = b.lshr(i32_ty, nosign1, b.i32_val(4));
 
-  nosign0 = bitcast(nosign0, fp8x4VecTy);
-  nosign1 = bitcast(nosign1, fp8x4VecTy);
-  Value nosign = undef(fp8x4VecTy);
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign0, i32_val(0)), i32_val(0));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign0, i32_val(2)), i32_val(1));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign1, i32_val(0)), i32_val(2));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign1, i32_val(2)), i32_val(3));
-  nosign = bitcast(nosign, i32_ty);
+  nosign0 = b.bitcast(nosign0, fp8x4VecTy);
+  nosign1 = b.bitcast(nosign1, fp8x4VecTy);
+  Value nosign = b.undef(fp8x4VecTy);
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign0, b.i32_val(0)),
+                            b.i32_val(0));
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign0, b.i32_val(2)),
+                            b.i32_val(1));
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign1, b.i32_val(0)),
+                            b.i32_val(2));
+  nosign = b.insert_element(fp8x4VecTy, nosign,
+                            b.extract_element(i8_ty, nosign1, b.i32_val(2)),
+                            b.i32_val(3));
+  nosign = b.bitcast(nosign, i32_ty);
 
-  Value fp8x4Vec = or_(i32_ty, nosign, sign);
-  fp8x4Vec = bitcast(fp8x4Vec, fp8x4VecTy);
-  return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(3))};
+  Value fp8x4Vec = b.or_(i32_ty, nosign, sign);
+  fp8x4Vec = b.bitcast(fp8x4Vec, fp8x4VecTy);
+  return {b.extract_element(i8_ty, fp8x4Vec, b.i32_val(0)),
+          b.extract_element(i8_ty, fp8x4Vec, b.i32_val(1)),
+          b.extract_element(i8_ty, fp8x4Vec, b.i32_val(2)),
+          b.extract_element(i8_ty, fp8x4Vec, b.i32_val(3))};
 }
 
 static SmallVector<Value>
-Bf16_to_Fp8E4M3Nv_RTNE_func(Location loc, ConversionPatternRewriter &rewriter,
-                            const SmallVector<Value> &v) {
-  Value val = zext(i32_ty, bitcast(v[0], i16_ty));
-  Value sign = and_(i32_ty, val, i32_val(0x8000));
-  Value nosign = and_(i32_ty, val, i32_val(0x7fff));
+Bf16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
+  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
+  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
 
-  Value exp = and_(i32_ty, lshr(nosign, i32_val(7)), i32_val(0xff));
+  Value exp = b.and_(i32_ty, b.lshr(nosign, b.i32_val(7)), b.i32_val(0xff));
   // Check if we need a translation to a subnormal value. This happens when
   // exp value is in range [117, 120].
   Value is_subnormal =
-      and_(icmp_uge(exp, i32_val(117)), icmp_ule(exp, i32_val(120)));
-  Value shift = sub(i32_ty, exp, i32_val(117));
-  Value subnormal = and_(i32_ty, nosign, i32_val(0x7f));
-  subnormal = or_(i32_ty, subnormal, i32_val(0x80));
+      b.and_(b.icmp_uge(exp, b.i32_val(117)), b.icmp_ule(exp, b.i32_val(120)));
+  Value shift = b.sub(i32_ty, exp, b.i32_val(117));
+  Value subnormal = b.and_(i32_ty, nosign, b.i32_val(0x7f));
+  subnormal = b.or_(i32_ty, subnormal, b.i32_val(0x80));
   // Make rounding with respect to bits we are going to shift and cut off.
-  Value round_step = lshr(i32_ty, i32_val(0x100), shift);
-  Value tail_mask = sub(i32_ty, round_step, i32_val(1));
-  Value tail = and_(i32_ty, subnormal, tail_mask);
-  Value threshold = lshr(i32_ty, i32_val(0x80), shift);
+  Value round_step = b.lshr(i32_ty, b.i32_val(0x100), shift);
+  Value tail_mask = b.sub(i32_ty, round_step, b.i32_val(1));
+  Value tail = b.and_(i32_ty, subnormal, tail_mask);
+  Value threshold = b.lshr(i32_ty, b.i32_val(0x80), shift);
   Value odd_truncated =
-      icmp_ne(and_(i32_ty, subnormal, round_step), i32_val(0));
-  Value round_up = or_(icmp_ugt(tail, threshold),
-                       and_(icmp_eq(tail, threshold), odd_truncated));
-  subnormal = select(round_up, add(i32_ty, subnormal, round_step), subnormal);
+      b.icmp_ne(b.and_(i32_ty, subnormal, round_step), b.i32_val(0));
+  Value round_up = b.or_(b.icmp_ugt(tail, threshold),
+                         b.and_(b.icmp_eq(tail, threshold), odd_truncated));
+  subnormal =
+      b.select(round_up, b.add(i32_ty, subnormal, round_step), subnormal);
   // Now shift to get the final result.
-  subnormal = shl(i32_ty, subnormal, shift);
+  subnormal = b.shl(i32_ty, subnormal, shift);
 
   // Normalized case. Start with rounding, then apply exp range to fit 4 bits,
   // adjust bias and shift left.
   // TODO: NaN values might be mishandled.
-  tail = and_(i32_ty, nosign, i32_val(0xf));
-  odd_truncated = icmp_ne(and_(i32_ty, nosign, i32_val(0x10)), i32_val(0));
-  round_up = or_(icmp_ugt(tail, i32_val(0x8)),
-                 and_(icmp_eq(tail, i32_val(0x8)), odd_truncated));
+  tail = b.and_(i32_ty, nosign, b.i32_val(0xf));
+  odd_truncated =
+      b.icmp_ne(b.and_(i32_ty, nosign, b.i32_val(0x10)), b.i32_val(0));
+  round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x8)),
+                   b.and_(b.icmp_eq(tail, b.i32_val(0x8)), odd_truncated));
   Value rounded =
-      and_(i32_ty, add(i32_ty, nosign, i32_val(0x10)), i32_val(0x7ff0));
-  nosign = select(round_up, rounded, nosign);
+      b.and_(i32_ty, b.add(i32_ty, nosign, b.i32_val(0x10)), b.i32_val(0x7ff0));
+  nosign = b.select(round_up, rounded, nosign);
 
-  nosign = umax(i32_ty, nosign, i32_val(0x3c00));
-  nosign = umin(i32_ty, nosign, i32_val(0x4380));
-  nosign = sub(i32_ty, nosign, i32_val(0x3c00));
-  nosign = shl(i32_ty, nosign, i32_val(4));
+  nosign = b.umax(i32_ty, nosign, b.i32_val(0x3c00));
+  nosign = b.umin(i32_ty, nosign, b.i32_val(0x4380));
+  nosign = b.sub(i32_ty, nosign, b.i32_val(0x3c00));
+  nosign = b.shl(i32_ty, nosign, b.i32_val(4));
 
   // Choose between subnormal and normal values.
-  nosign = select(is_subnormal, subnormal, nosign);
+  nosign = b.select(is_subnormal, subnormal, nosign);
 
-  Value res_val = or_(i32_ty, nosign, sign);
+  Value res_val = b.or_(i32_ty, nosign, sign);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value res = bitcast(res_val, fp8x4VecTy);
+  Value res = b.bitcast(res_val, fp8x4VecTy);
 
-  return {extract_element(i8_ty, res, i32_val(1))};
+  return {b.extract_element(i8_ty, res, b.i32_val(1))};
 }
 
-static SmallVector<Value> Bf16_to_Fp16_func(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            const SmallVector<Value> &v) {
+static SmallVector<Value> Bf16_to_Fp16(Location loc,
+                                       ConversionPatternRewriter &rewriter,
+                                       const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
 
-  Value bf16x2Vec = undef(bf16x2VecTy);
-  bf16x2Vec = insert_element(bf16x2VecTy, bf16x2Vec, v[0], i32_val(0));
-  bf16x2Vec = insert_element(bf16x2VecTy, bf16x2Vec, v[1], i32_val(1));
-  bf16x2Vec = bitcast(bf16x2Vec, i32_ty);
+  Value bf16x2Vec = b.undef(bf16x2VecTy);
+  bf16x2Vec = b.insert_element(bf16x2VecTy, bf16x2Vec, v[0], b.i32_val(0));
+  bf16x2Vec = b.insert_element(bf16x2VecTy, bf16x2Vec, v[1], b.i32_val(1));
+  bf16x2Vec = b.bitcast(bf16x2Vec, i32_ty);
 
-  Value sign = and_(i32_ty, bf16x2Vec, i32_val(0x80008000));
-  Value nosign = and_(i32_ty, bf16x2Vec, i32_val(0x7fff7fff));
+  Value sign = b.and_(i32_ty, bf16x2Vec, b.i32_val(0x80008000));
+  Value nosign = b.and_(i32_ty, bf16x2Vec, b.i32_val(0x7fff7fff));
 
   // BF16 exp range is 0..255 with bias 127
   // FP16 exp range is 0..31 with bias 15
@@ -809,22 +844,22 @@ static SmallVector<Value> Bf16_to_Fp16_func(Location loc,
   // Min BF16 value we can convert is 112 << 7 = 0x3800
   // Max BF16 value we can convert is 143 << 7 + <max fraction> =
   // 0x4780 + 0x7F = 0x47FF
-  Value nosign_0 = and_(i32_ty, nosign, i32_val(0xffff0000));
-  nosign_0 = umax(i32_ty, nosign_0, i32_val(0x38000000));
-  nosign_0 = umin(i32_ty, nosign_0, i32_val(0x47ff0000));
-  Value nosign_1 = and_(i32_ty, nosign, i32_val(0xffff));
-  nosign_1 = umax(i32_ty, nosign_1, i32_val(0x3800));
-  nosign_1 = umin(i32_ty, nosign_1, i32_val(0x47ff));
-  nosign = or_(i32_ty, nosign_0, nosign_1);
+  Value nosign_0 = b.and_(i32_ty, nosign, b.i32_val(0xffff0000));
+  nosign_0 = b.umax(i32_ty, nosign_0, b.i32_val(0x38000000));
+  nosign_0 = b.umin(i32_ty, nosign_0, b.i32_val(0x47ff0000));
+  Value nosign_1 = b.and_(i32_ty, nosign, b.i32_val(0xffff));
+  nosign_1 = b.umax(i32_ty, nosign_1, b.i32_val(0x3800));
+  nosign_1 = b.umin(i32_ty, nosign_1, b.i32_val(0x47ff));
+  nosign = b.or_(i32_ty, nosign_0, nosign_1);
 
-  nosign = sub(i32_ty, nosign, i32_val(0x38003800));
-  nosign = shl(i32_ty, nosign, i32_val(3));
+  nosign = b.sub(i32_ty, nosign, b.i32_val(0x38003800));
+  nosign = b.shl(i32_ty, nosign, b.i32_val(3));
 
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec = or_(i32_ty, nosign, sign);
-  fp16x2Vec = bitcast(fp16x2Vec, fp16x2VecTy);
-  return {extract_element(f16_ty, fp16x2Vec, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec, i32_val(1))};
+  Value fp16x2Vec = b.or_(i32_ty, nosign, sign);
+  fp16x2Vec = b.bitcast(fp16x2Vec, fp16x2VecTy);
+  return {b.extract_element(f16_ty, fp16x2Vec, b.i32_val(0)),
+          b.extract_element(f16_ty, fp16x2Vec, b.i32_val(1))};
 }
 
 inline Type getFunctionType(Type resultType, ValueRange operands) {
@@ -860,72 +895,9 @@ inline Type getElementType(Value value) {
   return type;
 }
 
-inline SmallVector<Value> unpackI32(const SmallVector<Value> &inValues,
-                                    Type srcTy,
-                                    ConversionPatternRewriter &rewriter,
-                                    Location loc,
-                                    TypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  SmallVector<Value> outValues;
-  for (auto v : inValues) {
-    // cast i32 to appropriate eltType vector and extract elements
-    auto eltType = typeConverter->convertType(tensorTy.getElementType());
-    auto vecType = vec_ty(eltType, 32 / eltType.getIntOrFloatBitWidth());
-    auto vec = bitcast(v, vecType);
-    for (int i = 0; i < 32 / eltType.getIntOrFloatBitWidth(); i++) {
-      outValues.push_back(extract_element(vec, i32_val(i)));
-    }
-  }
-  return outValues;
-}
-
-inline SmallVector<Value> packI32(const SmallVector<Value> &inValues,
-                                  Type srcTy,
-                                  ConversionPatternRewriter &rewriter,
-                                  Location loc, TypeConverter *typeConverter) {
-  auto tensorTy = dyn_cast<RankedTensorType>(srcTy);
-  if (!tensorTy)
-    return inValues;
-  auto encoding = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!(encoding && isa<NvidiaMmaEncodingAttr>(encoding.getParent())))
-    return inValues;
-  SmallVector<Value> outValues;
-  auto eltType = typeConverter->convertType(tensorTy.getElementType());
-  int vecWidth = 32 / eltType.getIntOrFloatBitWidth();
-  auto vecType = vec_ty(eltType, vecWidth);
-  for (int i = 0; i < inValues.size(); i += vecWidth) {
-    Value vec = undef(vecType);
-    for (int j = 0; j < vecWidth; j++) {
-      vec = insert_element(vec, inValues[i + j], i32_val(j));
-    }
-    outValues.push_back(bitcast(vec, i32_ty));
-  }
-  return outValues;
-}
-
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
     ConverterT;
-
-class MultipleOperandsRange
-    : public iterator_range<SmallVector<SmallVector<Value>>::iterator> {
-  using ContainerT = SmallVector<SmallVector<Value>>;
-
-public:
-  using iterator_range<ContainerT::iterator>::iterator_range;
-  ContainerT::reference operator[](ContainerT::size_type idx) {
-    return begin()[idx];
-  }
-  ContainerT::const_reference operator[](ContainerT::size_type idx) const {
-    return begin()[idx];
-  }
-  ContainerT::size_type size() const { return end() - begin(); }
-};
 
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
@@ -944,37 +916,10 @@ struct FpToFpOpConversion
     return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
-  static LLVM::RoundingMode
-  convertTritonRoundingModeToLLVM(const RoundingMode rounding) {
-    LLVM::RoundingMode roundingMode;
-    switch (rounding) {
-    case RoundingMode::RTNE:
-      return LLVM::RoundingMode::NearestTiesToEven;
-    case RoundingMode::RTZ:
-      return LLVM::RoundingMode::TowardZero;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
-    }
-  }
-
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v, const RoundingMode rounding) {
-    MLIRContext *ctx = rewriter.getContext();
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-        loc, f16_ty, v,
-        LLVM::RoundingModeAttr::get(ctx,
-                                    convertTritonRoundingModeToLLVM(rounding)),
-        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
-  }
-
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
+    auto F8E4M3B15TyID = TypeID::get<Float8E4M3FNUZType>();
     auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
     auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
     auto F16TyID = TypeID::get<Float16Type>();
@@ -997,39 +942,34 @@ struct FpToFpOpConversion
                     std::pair<ConverterT, size_t>>
         srcMap = {
             // F8 -> F16
-            {{F8E4M3B15TyID, F16TyID, undefRounding},
-             {Fp8E4M3B15_to_Fp16_func, 4}},
-            {{F8E4M3TyID, F16TyID, undefRounding}, {Fp8E4M3Nv_to_Fp16_func, 2}},
-            {{F8E5M2TyID, F16TyID, undefRounding}, {Fp8E5M2_to_Fp16_func, 4}},
+            {{F8E4M3B15TyID, F16TyID, undefRounding}, {Fp8E4M3B15_to_Fp16, 4}},
+            {{F8E4M3TyID, F16TyID, undefRounding}, {Fp8E4M3Nv_to_Fp16, 2}},
+            {{F8E5M2TyID, F16TyID, undefRounding}, {Fp8E5M2_to_Fp16, 4}},
             // F16 -> F8
             {{F16TyID, F8E4M3B15TyID, RoundingMode::RTZ},
-             {Fp16_to_Fp8E4M3B15_func, 4}},
+             {Fp16_to_Fp8E4M3B15, 4}},
             {{F16TyID, F8E4M3B15TyID, RoundingMode::RTNE},
              // TODO: provide proper implementation for RTNE rounding.
-             {Fp16_to_Fp8E4M3B15_func, 4}},
-            {{F16TyID, F8E4M3TyID, RoundingMode::RTZ},
-             {Fp16_to_Fp8E4M3Nv_func, 2}},
+             {Fp16_to_Fp8E4M3B15, 4}},
+            {{F16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Fp16_to_Fp8E4M3Nv, 2}},
             {{F16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Fp16_to_Fp8E4M3Nv_RTNE_func, 1}},
+             {Fp16_to_Fp8E4M3Nv_RTNE, 1}},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ},
-             {Fp16_to_Fp8E5M2_func, 4}},
+             {Fp16_to_Fp8E5M2_RTZ, 4}},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Fp16_to_Fp8E5M2_RTNE_func, 1}},
+             {Fp16_to_Fp8E5M2_RTNE, 1}},
             // F8 -> BF16
-            {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16_func, 4}},
-            {{F8E4M3TyID, BF16TyID, undefRounding},
-             {Fp8E4M3Nv_to_Bf16_func, 4}},
+            {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16, 4}},
+            {{F8E4M3TyID, BF16TyID, undefRounding}, {Fp8E4M3Nv_to_Bf16, 4}},
             // BF16 -> F8
-            {{BF16TyID, F8E5M2TyID, RoundingMode::RTZ},
-             {Bf16_to_Fp8E5M2_func, 4}},
+            {{BF16TyID, F8E5M2TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E5M2, 4}},
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Bf16_to_Fp8E5M2_RTNE_func, 1}},
-            {{BF16TyID, F8E4M3TyID, RoundingMode::RTZ},
-             {Bf16_to_Fp8E4M3Nv_func, 4}},
+             {Bf16_to_Fp8E5M2_RTNE, 1}},
+            {{BF16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E4M3Nv, 4}},
             {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Bf16_to_Fp8E4M3Nv_RTNE_func, 1}},
+             {Bf16_to_Fp8E4M3Nv_RTNE, 1}},
             // BF16 -> F16
-            {{BF16TyID, F16TyID, undefRounding}, {Bf16_to_Fp16_func, 2}},
+            {{BF16TyID, F16TyID, undefRounding}, {Bf16_to_Fp16, 2}},
         };
 
     std::tuple<TypeID, TypeID, RoundingMode> key = {
@@ -1051,13 +991,14 @@ struct FpToFpOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcElementType = getElementType(op.getSrc());
     auto dstElementType = getElementType(op.getResult());
     auto roundingMode = op.getRounding();
 
-    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FN()) {
+    if (isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
       assert(roundingMode.has_value() &&
-             "Rounding mode must be specified for convertsions to fp8");
+             "Rounding mode must be specified for conversions to fp8");
 
       // For now only RTNE is supported for conversions from fp16 to fp8
       if (!srcElementType.isF32() &&
@@ -1073,8 +1014,8 @@ struct FpToFpOpConversion
              "rounding mode must be specified for fp32->fp16 conversion");
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
-        outVals.push_back(
-            convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+        outVals.push_back(LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
+                                                         roundingMode.value()));
       }
       return outVals;
     }
@@ -1097,13 +1038,15 @@ struct FpToFpOpConversion
     auto [cvtFunc, numElements] =
         getConversionFunc(srcType, dstType, roundingMode);
     SmallVector<Value> inVals;
+    inVals.reserve(std::min(numElements, operands.size()));
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
       inVals.push_back(operands[i][0]);
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
-    inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
+        v = LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
+                                           roundingMode.value());
+    inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
@@ -1114,17 +1057,6 @@ struct FpToFpOpConversion
     return outVals;
   }
 };
-
-template <typename OP>
-Value EmitDualBF16ElementwiseOp(Location loc,
-                                ConversionPatternRewriter &rewriter,
-                                MultipleOperandsRange operands) {
-  auto v0 = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
-  auto v1 = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
-  auto result = rewriter.create<OP>(loc, f32_ty, v0, v1);
-  auto undefRounding = static_cast<RoundingMode>(-1);
-  return intel::convertFp32ToBf16(loc, rewriter, result, undefRounding);
-}
 
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
@@ -1154,89 +1086,28 @@ struct ExternElementwiseOpConversion
   }
 };
 
-struct FDivOpConversion
-    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion>;
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
   using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+  using OpAdaptor = typename Base::OpAdaptor;
 
-  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    assert((!getElementType(op.getLhs()).isBF16() &&
+            !getElementType(op.getRhs()).isBF16()) &&
+           "unsupported conversion");
+    return {
+        rewriter.create<DestOp>(loc, elemTy, operands[0][0], operands[0][1])};
   }
 };
 
-struct FMulOpConversion
-    : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::MulFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
-
-    return {rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
-  }
-};
-
-struct FAddOpConversion
-    : ElementwiseOpConversionBase<arith::AddFOp, FAddOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::AddFOp, FAddOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::AddFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands)};
-
-    return {rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
-  }
-};
-
-struct FSubOpConversion
-    : ElementwiseOpConversionBase<arith::SubFOp, FSubOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::SubFOp, FSubOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::SubFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    bool lhsAndRhsAreBF16 = lhsElemTy.isBF16() && rhsElemTy.isBF16();
-
-    if (lhsAndRhsAreBF16)
-      return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands)};
-
-    return {rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
-  }
-};
-
-// Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -1250,11 +1121,9 @@ struct SIToFPOpConversion
     Type inElemTy = getElementType(op.getIn());
     Type outElemTy = getElementType(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
-      SmallVector<Value> outVals;
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
       return {
           intel::convertFp32ToBf16(loc, rewriter, value, RoundingMode::RTNE)};
-      llvm_unreachable("");
     } else if (outElemTy.isBF16()) {
       auto value = rewriter.create<LLVM::SIToFPOp>(loc, f32_ty, operands[0][0]);
       return {
@@ -1323,9 +1192,8 @@ struct TruncFOpConversion
       return {// Trunc uses the default rounding mode: RTNE
               intel::convertFp32ToBf16(loc, rewriter, operands[0][0],
                                        RoundingMode::RTNE)};
-    } else {
-      return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
     }
+    return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
   }
 };
 
@@ -1344,11 +1212,19 @@ struct ExpOpConversionApprox
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     const double log2e = 1.4426950408889634;
-    Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
+    Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
 
-    return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
-                                          adaptor.getAttributes().getValue())};
+    // Here we use llvm.exp2.f32 instead of math::Exp2Op. The latter
+    // flushes denorms by default, but we want to preserve denorms by default
+    // for expOp.
+    StringRef funcName = "llvm.exp2.f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {LLVM::createLLVMCallOp(rewriter, loc, funcOp, prod).getResult()};
   }
 };
 
@@ -1364,10 +1240,11 @@ struct AbsFOpConversion
                                    Location loc) const {
     // FIXME: Remove bitcast to and from i16 once SPIRV-LLVM-Translator supports
     // LLVM::FAbsOp with bf16.
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value v = operands[0][0];
-    Type orig_type = elemTy;
-    if (llvm::isa<BFloat16Type>(orig_type)) {
-      v = bitcast(v, i16_ty);
+    Type origTy = elemTy;
+    if (llvm::isa<BFloat16Type>(origTy)) {
+      v = b.bitcast(v, i16_ty);
       elemTy = i16_ty;
     }
     if (llvm::isa<IntegerType>(elemTy)) {
@@ -1378,9 +1255,9 @@ struct AbsFOpConversion
       auto mask = (1u << (num_bits - 1u)) - 1u;
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
       auto maskConst = rewriter.create<LLVM::ConstantOp>(loc, maskAttr);
-      Value res = and_(v, maskConst);
-      if (llvm::isa<BFloat16Type>(orig_type))
-        res = bitcast(res, orig_type);
+      Value res = b.and_(v, maskConst);
+      if (llvm::isa<BFloat16Type>(origTy))
+        res = b.bitcast(res, origTy);
       return {res};
     }
 
@@ -1418,6 +1295,35 @@ struct MulhiUIOpConversion
 
 protected:
   const TargetInfoBase &targetInfo;
+};
+
+struct PreciseSqrtOpConversion
+    : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(PreciseSqrtOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value input = operands[0][0];
+    Type origTy = input.getType();
+    if (!origTy.isF64())
+      input = b.fpext(f64_ty, input);
+    Type funcType = LLVM::LLVMFunctionType::get(f64_ty, {f64_ty});
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, "__imf_sqrt_rn", funcType);
+    LLVM::CallOp callOp =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, {input});
+    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    Value result = callOp.getResult();
+    if (!origTy.isF64())
+      result = rewriter.create<LLVM::FPTruncOp>(loc, origTy, result);
+    return {result};
+  }
 };
 
 template <typename TritonOp>
@@ -1460,10 +1366,9 @@ void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit) {
-  using namespace mlir::triton::gpu;
 
-  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "__imf_sqrtf", benefit);
+  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis,
+                                        benefit);
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "__imf_fdiv_rn", benefit);
 
@@ -1475,15 +1380,18 @@ void populateElementwiseOpToLLVMPatterns(
                                               benefit);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::AddFOp, LLVM::FAddOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<ElementwiseOpConversion<arith::SubFOp, LLVM::FSubOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 

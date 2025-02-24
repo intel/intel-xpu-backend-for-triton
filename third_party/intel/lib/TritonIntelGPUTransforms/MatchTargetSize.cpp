@@ -220,11 +220,11 @@ static void rewriteLoadWithSLM(ModuleOp &m, DenseSet<Value> &dotWithSLMOperands,
   OpBuilder b(load);
   auto type = cast<RankedTensorType>(load.getType());
   unsigned bytes = type.getNumElements() * type.getElementTypeBitWidth() / 8;
-  unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(m);
+  unsigned numWarps = ttg::lookupNumWarps(load);
   unsigned slmSize = numWarps * bytes;
 
   // TODO: use LocalAllocOp for SLM allocation
-  static constexpr char sharedAttr[] = "triton_gpu.shared";
+  static constexpr char sharedAttr[] = "ttg.shared";
   m->setAttr(sharedAttr,
              mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32), slmSize));
   auto func = load->getParentOfType<FunctionOpInterface>();
@@ -282,7 +282,7 @@ public:
     // FIXME: force threads-per-warp=16 in simt(this should be done via an
     // analysis designed to determine whether the kernel contains tt.dot
     // operations that use block pointers).
-    m->setAttr("triton_gpu.threads-per-warp",
+    m->setAttr("ttg.threads-per-warp",
                IntegerAttr::get(IntegerType::get(ctx, 32), 16));
 
     Workload workload = Workload::None;
@@ -653,7 +653,7 @@ void MatchTargetSizePass::canonicalize() {
   patterns.add<ScfPattern>(ctx);
   patterns.add<ArithRemPattern>(ctx); // FIXME: upstream to arith dialect.
 
-  if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
+  if (failed(applyPatternsGreedily(m, std::move(patterns))))
     signalPassFailure();
 }
 
@@ -722,9 +722,9 @@ MatchTargetSizePass::getSubOpSize(RankedTensorType type,
     if (isa<ttgi::WarpEncodingAttr>(layout)) {
       // 32 = 2 * 16(subgroupSize) which is for large load/store
       // max 2d block prefetch width is 16 for 32-bit datatype
-      subSize[1] = std::min(sizeInBits == 32 ? 16L : 32L, shape[1]);
+      subSize[1] = std::min<int64_t>(sizeInBits == 32 ? 16 : 32, shape[1]);
       // max 2d block load height is 32
-      subSize[0] = std::min(32L, shape[0]);
+      subSize[0] = std::min<int64_t>(32, shape[0]);
     } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
       const TargetArchNativeSizes::BlockMemShape &memShape =
           nativeSizes.getBlockMemShape(sizeInBits);
@@ -815,7 +815,7 @@ static Value hackAlloc(OpBuilder &b, Location loc, Type ptrTy, int64_t size) {
       &*b.getInsertionPoint()
             ->getParentWithTrait<FunctionOpInterface::Trait>());
   auto m = func->getParentOfType<ModuleOp>();
-  constexpr StringLiteral SharedAttrName = "triton_gpu.shared";
+  constexpr StringLiteral SharedAttrName = "ttg.shared";
   if (!m->getAttr(SharedAttrName)) {
     m->setAttr(SharedAttrName, b.getIndexAttr(size));
     func.insertArgument(func.getNumArguments(), ptrTy, b.getDictionaryAttr({}),
@@ -849,16 +849,13 @@ static SmallVector<Value> glueForReduction(OpBuilder &builder, Location loc,
 
 static Value allocateSLMForTransposedReduction(tt::ReduceOp op, unsigned step,
                                                OpBuilder &b) {
-  auto m = op->getParentOfType<ModuleOp>();
-
   Value src = op.getSrcs().front();
   auto srcTy = cast<RankedTensorType>(src.getType());
   Location loc = op.getLoc();
 
   // Fixed size for num_warps matrices of sg_size^2 shape.
   int64_t size = static_cast<int64_t>(step) * step *
-                 srcTy.getElementTypeBitWidth() / 8 *
-                 ttg::TritonGPUDialect::getNumWarps(m);
+                 srcTy.getElementTypeBitWidth() / 8 * ttg::lookupNumWarps(op);
   Type allocTy = cast<RankedTensorType>(src.getType()).getElementType();
   Type ptrTy = tt::PointerType::get(allocTy, tt::TritonGEN::kWorkgroup);
   return hackAlloc(b, loc, ptrTy, size);

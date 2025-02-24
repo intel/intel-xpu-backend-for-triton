@@ -13,12 +13,54 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttng = mlir::triton::nvidia_gpu;
 
-void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
+bool tt::CoarseSchedule::insertMinimum(Operation *op, int stage,
+                                       Cluster cluster) {
+  auto res = opToStageAndCluster.insert({op, {stage, cluster}});
+  if (res.second) {
+    return true;
+  }
+
+  auto &[existingStage, existingCluster] = res.first->second;
+
+  // Always insert if the stage is earlier.
+  if (stage < existingStage) {
+    existingStage = stage;
+    existingCluster = cluster;
+    return true;
+  }
+
+  // If the stage is later, no change.
+  if (stage > existingStage) {
+    return false;
+  }
+
+  // If existingCluster is reachable from cluster,
+  // then cluster is earlier in the list
+  auto it = cluster;
+  for (auto it = cluster; it != clusters.end(); ++it) {
+    if (it == existingCluster) {
+      existingCluster = cluster;
+      return true;
+    }
+  }
+
+  // Didn't change the cluster.
+  return false;
+}
+
+bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
                                         tt::CoarseSchedule::Cluster cluster,
-                                        bool includeArg) {
-  for (Value operand : op->getOperands()) {
+                                        bool includeArg, bool insertIfEarlier) {
+  auto tryInsert = [&](Operation *op, int stage,
+                       tt::CoarseSchedule::Cluster cluster) {
+    if (!insertIfEarlier)
+      return insertIfAbsent(op, stage, cluster);
+    return insertMinimum(op, stage, cluster);
+  };
+
+  bool inserted = false;
+  for (Value operand : getNestedOperands(op)) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
     while (auto arg = dyn_cast<BlockArgument>(v)) {
@@ -35,11 +77,13 @@ void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
     }
     Operation *defOp = v.getDefiningOp();
     if (defOp && defOp->getBlock() == op->getBlock()) {
-      if (insertIfAbsent(defOp, stage, cluster)) {
+      if (tryInsert(defOp, stage, cluster)) {
+        inserted = true;
         insertDepsOfOp(defOp, stage, cluster, includeArg);
       }
     }
   }
+  return inserted;
 }
 
 SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
@@ -87,6 +131,46 @@ void tt::CoarseSchedule::dump() {
         llvm::dbgs() << "        cluster: " << *stageAndCluster.second
                      << ":\n\t" << *op << "\n";
       }
+    }
+  }
+}
+
+// Set <stage, cluster> based on CoarseSchedule.
+void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
+  for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
+    tt::setStageCluster(op, stage, *cluster);
+  }
+}
+
+// Create a CoarseSchedule based on forOp's <stage, cluster>.
+void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
+  auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(forOp);
+
+  DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
+  for (int i = minClusterId; i < maxClusterId + 1; i++) {
+    clustersMap.insert({i, clusters.newAtBack()});
+  }
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
+      continue;
+    auto [stage, clusterId] = tt::getStageCluster(&op);
+    insert(&op, stage, clustersMap[clusterId]);
+  }
+}
+
+// TODO: Should this be moved somewhere else?
+// Add dependencies of anchor ops to the coarse schedule. Schedule them to
+// the same stage and ordering cluster as the anchor op.
+void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
+  int numStages = schedule.numStages;
+  SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
+      opsInOrder = schedule.getOpsInOrder(forOp);
+  // Schedule dependencies stage by stage.
+  for (int stage = 0; stage < numStages; stage++) {
+    for (auto [op, stage_, cluster] : opsInOrder) {
+      if (stage_ != stage)
+        continue;
+      schedule.insertDepsOfOp(op, stage, cluster, false);
     }
   }
 }

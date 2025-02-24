@@ -42,6 +42,12 @@ try:
 except ModuleNotFoundError:
     HAS_APEX = False
 
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "xpu"
+
 
 @triton.jit
 def _layer_norm_fwd_fused(
@@ -261,6 +267,8 @@ class LayerNorm(torch.autograd.Function):
         if N <= 8192: GROUP_SIZE_M = 96
         if N <= 4096: GROUP_SIZE_M = 128
         if N <= 1024: GROUP_SIZE_M = 256
+        if is_xpu():
+            GROUP_SIZE_M = 256
         # allocate output
         locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device=w.device)
         _dw = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
@@ -290,7 +298,7 @@ class LayerNorm(torch.autograd.Function):
 layer_norm = LayerNorm.apply
 
 
-def test_layer_norm(M, N, dtype, eps=1e-5, device='xpu'):
+def test_layer_norm(M, N, dtype, eps=1e-5, device=DEVICE):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
@@ -329,7 +337,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device='xpu'):
         plot_name='layer-norm-backward',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'},
     ))
-def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device='xpu'):
+def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device=DEVICE):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )

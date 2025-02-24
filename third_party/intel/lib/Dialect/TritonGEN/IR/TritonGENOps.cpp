@@ -48,35 +48,6 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
   return success();
 }
 
-static LogicalResult verifySIMDBlockTy(Operation *op, VectorType vecTy) {
-  unsigned numElems = vecTy.getNumElements();
-  IntegerType elemTy = cast<IntegerType>(vecTy.getElementType());
-
-  // FIXME: Allow 16xi16 when SPIRV-LLVM translator supports it.
-  if (numElems != 1 && numElems != 2 && numElems != 4 && numElems != 8 &&
-      (elemTy.getWidth() != 8 || numElems != 16))
-    return op->emitOpError("unsupported vector type");
-
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// gen.sub_group_reduce
-//===----------------------------------------------------------------------===//
-
-LogicalResult TritonGEN::SubGroupReduceOp::verify() {
-  spirv::TargetEnvAttr attr = spirv::lookupTargetEnv(*this);
-  if (!attr)
-    return this->emitOpError("expecting valid target env attribute");
-
-  if (getSize() < 1 || getSize() > TritonGEN::getSubgroupSize(*this) ||
-      !llvm::isPowerOf2_32(getSize()))
-    return this->emitOpError(
-        "expecting size to be a power of 2 between 1 and subgroup size");
-
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // gen.matrix.dpas
 //===----------------------------------------------------------------------===//
@@ -437,20 +408,4 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   }
 
   return success();
-}
-
-//===----------------------------------------------------------------------===//
-// gen.simdblockread
-//===----------------------------------------------------------------------===//
-
-LogicalResult TritonGEN::SIMDBlockReadOp::verify() {
-  return verifySIMDBlockTy(*this, getRes().getType());
-}
-
-//===----------------------------------------------------------------------===//
-// gen.simdblockwrite
-//===----------------------------------------------------------------------===//
-
-LogicalResult TritonGEN::SIMDBlockWriteOp::verify() {
-  return verifySIMDBlockTy(*this, getVal().getType());
 }

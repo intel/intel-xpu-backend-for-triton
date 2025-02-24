@@ -1,11 +1,13 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "SPIRVSubgroupOps.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -38,20 +40,68 @@ VectorType getVectorType(RankedTensorType tensorType, Type elemType) {
   return vec_ty(elemType, num);
 };
 
+MakeTensorPtrOp getMakePtrOp(Value v) {
+  using BranchOps = llvm::SetVector<std::pair<Operation *, int>>;
+  llvm::DenseMap<Block *, BranchOps> blockToBrOps;
+  auto moduleOp =
+      v.getParentBlock()->getParentOp()->getParentOfType<ModuleOp>();
+
+  moduleOp.walk([&](Operation *op) {
+    if (auto br = dyn_cast<LLVM::BrOp>(op)) {
+      Block *block = br.getDest();
+      blockToBrOps[block].insert({op, -1});
+    }
+    if (auto condBr = dyn_cast<LLVM::CondBrOp>(op)) {
+      Block *blockT = condBr.getTrueDest();
+      Block *blockF = condBr.getFalseDest();
+      blockToBrOps[blockT].insert({condBr, 1});
+      blockToBrOps[blockF].insert({condBr, 0});
+    }
+  });
+
+  if (Operation *def = v.getDefiningOp()) {
+    if (auto cast = dyn_cast<mlir::UnrealizedConversionCastOp>(def))
+      def = cast.getInputs()[0].getDefiningOp();
+    if (auto make = dyn_cast<MakeTensorPtrOp>(def))
+      return make;
+    if (auto advanceOp = dyn_cast<AdvanceOp>(def))
+      return getMakePtrOp(advanceOp.getPtr());
+    llvm_unreachable("Unable to getMakePtr()");
+  }
+
+  // If there is no defining op, v must be a BlockArgument.
+  BlockArgument arg = cast<BlockArgument>(v);
+  unsigned argNum = arg.getArgNumber();
+  Operation *argOwner = arg.getOwner()->getParentOp();
+
+  if (auto funcOp = dyn_cast<FunctionOpInterface>(argOwner)) {
+    Block *block = arg.getOwner();
+    auto [op, tOrF] = blockToBrOps[block][0];
+    if (auto br = dyn_cast<LLVM::BrOp>(op))
+      return getMakePtrOp(br.getDestOperands()[argNum]);
+    if (auto condBr = dyn_cast<LLVM::CondBrOp>(op))
+      return getMakePtrOp(tOrF ? condBr.getTrueDestOperands()[argNum]
+                               : condBr.getFalseDestOperands()[argNum]);
+    return getMakePtrOp(argOwner->getOperand(argNum));
+  }
+  llvm_unreachable("Unable to getMakePtr()");
+}
+
 static void decomposeBlockStore(ConversionPatternRewriter &rewriter,
                                 Location loc, Value base, Value val,
                                 VectorType vecTy, unsigned subGroupSize) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   constexpr unsigned maxBlockStoreWidth = 8;
   VectorType decomposedVecTy =
       VectorType::get(maxBlockStoreWidth, vecTy.getElementType());
-  Value offset = i32_val(subGroupSize);
+  Value offset = b.i32_val(subGroupSize);
   for (int i = 0; i < vecTy.getNumElements() / maxBlockStoreWidth; ++i) {
-    rewriter.create<TritonGEN::SIMDBlockWriteOp>(
+    rewriter.create<TritonGEN::SubGroupBlockWriteOp>(
         loc, base,
         rewriter
             .create<triton::gpu::intel::ExtractOp>(loc, decomposedVecTy, val, i)
             .getRes());
-    base = gep(base.getType(), decomposedVecTy, base, offset);
+    base = b.gep(base.getType(), decomposedVecTy, base, offset);
   }
 }
 
@@ -65,12 +115,13 @@ public:
   matchAndRewrite(MakeTensorPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     VectorType v2i32 = vec_ty(i32_ty, 2);
     Value offsetX = op.getOffsets()[1];
     Value offsetY = op.getOffsets()[0];
-    Value payLoad = undef(v2i32);
-    payLoad = insert_element(payLoad, offsetX, i32_val(0));
-    payLoad = insert_element(payLoad, offsetY, i32_val(1));
+    Value payLoad = b.undef(v2i32);
+    payLoad = b.insert_element(payLoad, offsetX, b.i32_val(0));
+    payLoad = b.insert_element(payLoad, offsetY, b.i32_val(1));
     rewriter.replaceOp(op, payLoad);
     return success();
   }
@@ -87,6 +138,7 @@ public:
   matchAndRewrite(AdvanceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     ValueRange offsets = adaptor.getOffsets();
     Value ptr = adaptor.getPtr();
 
@@ -97,10 +149,10 @@ public:
             attr && attr.getInt() == 0)
           continue;
 
-      Value idx = i32_val(!i);
-      Value oldOffset = extract_element(ptr, idx);
-      Value newOffset = add(i32_ty, oldOffset, offset);
-      ptr = insert_element(ptr, newOffset, idx);
+      Value idx = b.i32_val(!i);
+      Value oldOffset = b.extract_element(ptr, idx);
+      Value newOffset = b.add(i32_ty, oldOffset, offset);
+      ptr = b.insert_element(ptr, newOffset, idx);
     }
 
     rewriter.replaceOp(op, ptr);
@@ -154,6 +206,18 @@ public:
   matchAndRewrite(OpType op, typename OpType::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto ptrType = cast<PointerType>(op.getPtr().getType());
+    // scalar load/store
+    if (!isa<RankedTensorType>(ptrType.getPointeeType())) {
+      if constexpr (std::is_same_v<OpType, LoadOp>) {
+        auto newLoad = rewriter.create<LLVM::LoadOp>(op.getLoc(), op.getType(),
+                                                     adaptor.getPtr());
+        rewriter.replaceOp(op, newLoad);
+        return success();
+      }
+      assert(0 && "add more support");
+      return failure();
+    }
+    // blocked load/store
     auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
     assert(tensorType.getRank() == 2 &&
            "only support 2d load/store/prefetch for now");
@@ -185,7 +249,7 @@ public:
     if (auto cast = ptr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       ptr = cast.getInputs()[0];
 
-    MakeTensorPtrOp ptrOp = getMakeTensorPtrOp(ptr);
+    MakeTensorPtrOp ptrOp = getMakePtrOp(ptr);
     Value base = ptrOp.getBase();
     if (auto cast = base.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       base = cast.getInputs()[0];
@@ -198,14 +262,15 @@ public:
       return rewriteLocalSpace(op, base, insertPoint, adaptor, rewriter);
 
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     bool transpose = ptrOp.getOrder()[0] == 0;
     Value bytes =
-        i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
+        b.i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
 
     auto calculateSurface = [&](Value shape, bool multiplyBytes) {
-      Value truncatedShape = trunc(i32_ty, shape);
+      Value truncatedShape = b.trunc(i32_ty, shape);
       if (multiplyBytes)
-        truncatedShape = mul(truncatedShape, bytes);
+        truncatedShape = b.mul(truncatedShape, bytes);
       return truncatedShape;
     };
 
@@ -215,8 +280,8 @@ public:
     rewriter.restoreInsertionPoint(insertPoint);
 
     Value tensorPtr = adaptor.getPtr();
-    Value offsetX = extract_element(tensorPtr, i32_val(0));
-    Value offsetY = extract_element(tensorPtr, i32_val(1));
+    Value offsetX = b.extract_element(tensorPtr, b.i32_val(0));
+    Value offsetY = b.extract_element(tensorPtr, b.i32_val(1));
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       assert(idxAttr && "Dot index attribute missing");
@@ -238,7 +303,7 @@ public:
         dataSize = 32;
         blockWidth /= 2;
         Value tmp = offsetX;
-        offsetX = lshr(offsetY, i32_val(1));
+        offsetX = b.lshr(offsetY, b.i32_val(1));
         offsetY = tmp;
       }
       auto load = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
@@ -246,7 +311,7 @@ public:
           dataSize, blockWidth, blockHeight, vBlks, transpose, vnni);
       VERIFY_OPERATION(load)
 
-      rewriter.replaceOp(op, bitcast(load, resType));
+      rewriter.replaceOp(op, b.bitcast(load, resType));
     } else if constexpr (std::is_same_v<OpType, ttgi::PrefetchOp>) {
       if (transpose)
         std::swap(offsetX, offsetY);
@@ -263,7 +328,7 @@ public:
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc, base, surfaceW, surfaceH, surfaceP, offsetX, offsetY, dataSize,
           blockWidth, blockHeight, vBlks,
-          bitcast(adaptor.getValue(), vectorType));
+          b.bitcast(adaptor.getValue(), vectorType));
       VERIFY_OPERATION(newOp)
 
       rewriter.eraseOp(op);
@@ -286,6 +351,7 @@ private:
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value llPtr = adaptor.getPtr();
     if (auto cast = llPtr.getDefiningOp<mlir::UnrealizedConversionCastOp>())
       llPtr = cast.getInputs()[0];
@@ -294,13 +360,13 @@ private:
     VectorType v64i16Ty = VectorType::get(64, i16_ty);
     LLVM::LLVMPointerType ptrToSharedMemTy =
         ptr_ty(ctx, ptrType.getAddressSpace());
-    Value offsetX = extract_element(llPtr, i32_val(0));
-    Value offsetY = extract_element(llPtr, i32_val(1));
+    Value offsetX = b.extract_element(llPtr, b.i32_val(0));
+    Value offsetY = b.extract_element(llPtr, b.i32_val(1));
 
-    Value blkId = add(mul(udiv(offsetY, i32_val(8)), i32_val(4)),
-                      udiv(offsetX, i32_val(16)));
-    Value index = mul(blkId, i32_val(128));
-    base = gep(ptrToSharedMemTy, i16_ty, base, index);
+    Value blkId = b.add(b.mul(b.udiv(offsetY, b.i32_val(8)), b.i32_val(4)),
+                        b.udiv(offsetX, b.i32_val(16)));
+    Value index = b.mul(blkId, b.i32_val(128));
+    base = b.gep(ptrToSharedMemTy, i16_ty, base, index);
 
     if constexpr (std::is_same_v<OpType, LoadOp>) {
       rewriter.restoreInsertionPoint(insertPoint);
@@ -310,19 +376,19 @@ private:
           VectorType::get(maxBlockLoadi16Width, i16_ty);
       auto mod = op->template getParentOfType<mlir::ModuleOp>();
       Value offset =
-          i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+          b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
       SmallVector<Value> values;
       for (int i = 0; i < 64 / maxBlockLoadi16Width; ++i) {
-        auto simdRead = rewriter.create<TritonGEN::SIMDBlockReadOp>(
+        auto simdRead = rewriter.create<TritonGEN::SubGroupBlockReadOp>(
             loc, decomposedVecTy, base);
         values.push_back(simdRead.getRes());
-        base = gep(ptrToSharedMemTy, decomposedVecTy, base, offset);
+        base = b.gep(ptrToSharedMemTy, decomposedVecTy, base, offset);
       }
       auto simdRead =
           rewriter.create<triton::gpu::intel::GlueOp>(loc, v64i16Ty, values);
 
       VectorType v64Ty = VectorType::get(64, elemType);
-      rewriter.replaceOp(op, bitcast(simdRead.getRes(), v64Ty));
+      rewriter.replaceOp(op, b.bitcast(simdRead.getRes(), v64Ty));
 
       return success();
     }
@@ -336,7 +402,7 @@ private:
         SmallVector<Value> unpackedVal = unpackLLElements(loc, val, rewriter);
         val = packLLVector(loc, unpackedVal, rewriter);
       }
-      val = bitcast(val, v64i16Ty);
+      val = b.bitcast(val, v64i16Ty);
 
       auto mod = op->template getParentOfType<mlir::ModuleOp>();
       decomposeBlockStore(
@@ -396,13 +462,14 @@ public:
         TritonGEN::PrecisionTypeAttr::get(rewriter.getContext(), precBTy);
 
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type typeA = getVectorType(
         cast<RankedTensorType>(op.getA().getType()),
         precATy == TritonGEN::PrecisionType::TF32 ? i32_ty : i16_ty);
-    Value castA = bitcast(adaptor.getA(), typeA);
+    Value castA = b.bitcast(adaptor.getA(), typeA);
     VectorType typeB =
         getVectorType(cast<RankedTensorType>(op.getB().getType()), i32_ty);
-    Value castB = bitcast(adaptor.getB(), typeB);
+    Value castB = b.bitcast(adaptor.getB(), typeB);
     auto rc = IntegerAttr::get(i32_ty, 8);
     // sd dpasW fixed in genx.dpas lowering.
     rewriter.replaceOpWithNewOp<TritonGEN::MatrixDPASOp>(
@@ -484,9 +551,10 @@ private:
     return std::accumulate(std::begin(enumeratedOperands),
                            std::end(enumeratedOperands), poison,
                            [&rewriter, loc](Value acc, const auto &pair) {
+                             auto b = TritonLLVMOpBuilder(loc, rewriter);
                              auto [index, operand] = pair;
-                             Value idx = i32_val(index);
-                             return insert_element(acc, operand, idx);
+                             Value idx = b.i32_val(index);
+                             return b.insert_element(acc, operand, idx);
                            });
   }
 };
@@ -503,6 +571,7 @@ public:
   matchAndRewrite(ttgi::ExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value base = adaptor.getBase();
     unsigned idx = adaptor.getIndex();
     Type dstType = getTypeConverter()->convertType(op.getType());
@@ -516,7 +585,7 @@ public:
           loc, vecTy, base, base, rewriter.getDenseI32ArrayAttr(indices));
     } else {
       Value idxVal = rewriter.create<LLVM::ConstantOp>(loc, i32_ty, idx);
-      result = extract_element(base, idxVal);
+      result = b.extract_element(base, idxVal);
     }
     rewriter.replaceOp(op, result);
     return success();
@@ -531,14 +600,15 @@ public:
   matchAndRewrite(SplatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     RankedTensorType resultType = op.getType();
     TritonIntelGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
     Type srcTy = adaptor.getSrc().getType();
     VectorType vecTy = VectorType::get(1, srcTy);
     auto poison = rewriter.create<LLVM::PoisonOp>(loc, vecTy);
     auto splat =
-        insert_element(vecTy, poison, adaptor.getSrc(),
-                       rewriter.create<LLVM::ConstantOp>(loc, i32_ty, 0));
+        b.insert_element(vecTy, poison, adaptor.getSrc(),
+                         rewriter.create<LLVM::ConstantOp>(loc, i32_ty, 0));
     Type convertedTy = typeConverter->convertType(resultType);
     if (!isa<VectorType>(convertedTy)) {
       // On the advance path, the type converter reduces 1-element vectors to
@@ -561,7 +631,7 @@ public:
   using ConvertTritonGPUOpToLLVMPattern<
       ReduceOp>::ConvertTritonGPUOpToLLVMPattern;
   LogicalResult
-  matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
+  matchAndRewrite(ReduceOp op, ReduceOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto mod = op->getParentOfType<mlir::ModuleOp>();
     int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -582,18 +652,14 @@ public:
     Operation *combine = &*combineOp.front().getOperations().begin();
 
     // FIXME: support all possible reduction modes
-    using AllReduceOperation = mlir::gpu::AllReduceOperation;
-    AllReduceOperation redKind;
-    if (isa<arith::AddFOp>(combine))
-      redKind = AllReduceOperation::ADD;
-    else if (isa<arith::MaxNumFOp>(combine))
-      redKind = AllReduceOperation::MAXNUMF;
-    else
-      llvm_unreachable("Unhandled reduction kind");
+    TypeSwitch<Operation *>(combine).Case<arith::AddFOp, arith::MaxNumFOp>(
+        [&](auto reduce) {
+          rewriter.replaceOpWithNewOp<intel::SPIRVGroupOpTy<decltype(reduce)>>(
+              op, typeConverter->convertType(op.getType(0)),
+              spirv::Scope::Subgroup, spirv::GroupOperation::Reduce,
+              adaptor.getSrcs()[0], Value());
+        });
 
-    Value result = rewriter.create<mlir::gpu::SubgroupReduceOp>(
-        loc, adaptor.getSrcs()[0], redKind, true);
-    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -615,6 +681,7 @@ public:
            "Reduce size should be split into subgroups");
 
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     ValueRange srcs = adaptor.getSrcs();
     if (srcs.size() != 1)
       return failure();
@@ -624,7 +691,7 @@ public:
       return failure();
     SmallVector<Value> elements;
     for (int i = 0, size = srcTy.getNumElements(); i < size; ++i)
-      elements.push_back(extract_element(src, i32_val(i)));
+      elements.push_back(b.extract_element(src, b.i32_val(i)));
     // Help tree reduce.
     if (!llvm::isPowerOf2_64(elements.size()))
       return failure();
@@ -688,10 +755,11 @@ private:
       (index % 2 == 0 ? lhs : rhs).push_back(value);
     SmallVector<Value> res;
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     llvm::transform(llvm::zip_equal(lhs, rhs), std::back_inserter(res),
                     [&](auto pair) -> Value {
                       auto [lhs, rhs] = pair;
-                      auto callOp = call(reduceFunc, ValueRange{lhs, rhs});
+                      auto callOp = b.call(reduceFunc, ValueRange{lhs, rhs});
                       callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
                       return callOp->getResult(0);
                     });
@@ -707,6 +775,7 @@ class ConvertLayoutOpConversion : public ConvertTritonGPUOpToLLVMPattern<
   matchAndRewrite(mlir::triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value src = adaptor.getSrc();
     Type type = getTypeConverter()->convertType(op.getType());
     if (!type)
@@ -717,9 +786,9 @@ class ConvertLayoutOpConversion : public ConvertTritonGPUOpToLLVMPattern<
 
     Value res = rewriter.create<LLVM::PoisonOp>(loc, type);
     for (int i = 0; i < size; ++i) {
-      Value idx = i32_val(i);
+      Value idx = b.i32_val(i);
       Value element = LLVM::intel::shuffleIdx(loc, rewriter, src, idx);
-      res = insert_element(res, element, idx);
+      res = b.insert_element(res, element, idx);
     }
     rewriter.replaceOp(op, res);
     return success();
@@ -801,6 +870,7 @@ public:
            "size");
 
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value localBuffer = adaptor.getLocalBuffer();
     Type offsetType = getTypeConverter()->getIndexType();
     Value subGroupId = getValueOrCreateCastToIndexLike(
@@ -815,27 +885,29 @@ public:
         rewriter.create<LLVM::ConstantOp>(loc, offsetType, threadsPerWarp);
     Value sgStride = rewriter.create<LLVM::ConstantOp>(
         loc, offsetType, threadsPerWarp * threadsPerWarp);
-    Value subGroupOffset = mul(sgStride, subGroupId);
+    Value subGroupOffset = b.mul(sgStride, subGroupId);
     Type ptrType = localBuffer.getType();
     Type elementType =
         cast<RankedTensorType>(op.getSrc().getType()).getElementType();
-    Value subGroupBasePtr = gep(ptrType, elementType, localBuffer,
-                                ValueRange{subGroupOffset}, /*inbounds=*/true);
+    Value subGroupBasePtr =
+        b.gep(ptrType, elementType, localBuffer, ValueRange{subGroupOffset},
+              /*inbounds=*/true);
 
     // Store matrix in local memory.
     VectorType intVecTy =
         vec_ty(int_ty(vecTy.getElementType().getIntOrFloatBitWidth()),
                vecTy.getNumElements());
     Value val =
-        vecTy.getElementType().isInteger() ? src : bitcast(src, intVecTy);
+        vecTy.getElementType().isInteger() ? src : b.bitcast(src, intVecTy);
     decomposeBlockStore(rewriter, loc, subGroupBasePtr, val, intVecTy,
                         threadsPerWarp);
 
     // Load from matrix, trasposed.
-    Value workItemOffset = mul(wiStride, subGroupLocalId);
-    Value workItemBasePtr = gep(ptrType, elementType, subGroupBasePtr,
-                                ValueRange{workItemOffset}, /*inbounds=*/true);
-    rewriter.replaceOp(op, load(src.getType(), workItemBasePtr));
+    Value workItemOffset = b.mul(wiStride, subGroupLocalId);
+    Value workItemBasePtr =
+        b.gep(ptrType, elementType, subGroupBasePtr, ValueRange{workItemOffset},
+              /*inbounds=*/true);
+    rewriter.replaceOp(op, b.load(src.getType(), workItemBasePtr));
     return success();
   }
 };
@@ -848,13 +920,14 @@ public:
   matchAndRewrite(AddPtrOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type resultType = op.getType();
     LLVMTypeConverter *typeConverter = getTypeConverter();
     Type resultPtrTy = typeConverter->convertType(resultType);
     Type resultElmTy = typeConverter->convertType(
         cast<PointerType>(resultType).getPointeeType());
     Value result =
-        gep(resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());
+        b.gep(resultPtrTy, resultElmTy, adaptor.getPtr(), adaptor.getOffset());
     rewriter.replaceOp(op, result);
     return success();
   }

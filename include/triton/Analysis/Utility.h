@@ -6,6 +6,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
 
 namespace mlir {
 
@@ -46,21 +47,13 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
-  bool isReductionOnLayoutFastAxis();
-
   unsigned getThreadOffsetOnReductionAxis();
 
   bool isWarpSynchronous();
 
-  unsigned getInterWarpSize();
-
-  unsigned getIntraWarpSize();
-
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
-
-  unsigned getThreadsReductionAxis();
 
   // The shape of the shared memory space needed for the reduction.
   SmallVector<unsigned> getScratchRepShape();
@@ -69,11 +62,7 @@ public:
 
   unsigned getScratchSizeInBytes();
 
-  bool isSupportedLayout();
-
   bool isReduceWithinCTA();
-
-  unsigned getAxis() { return axis; }
 
 private:
   triton::ReduceOp op;
@@ -152,6 +141,40 @@ private:
   SmallVector<Type> srcElementTypes;
 };
 
+// Helper class for lowering `tt.gather` operations. This class shares lowering
+// logic between shared memory allocation and LLVM codegen.
+class GatherLoweringHelper {
+public:
+  GatherLoweringHelper(triton::GatherOp gatherOp);
+
+  // Get the shared memory scratch size required by this op.
+  unsigned getScratchSizeInBytes();
+  // Determine if the gather can be performed completely within a warp.
+  bool isWarpLocal();
+
+private:
+  triton::GatherOp gatherOp;
+};
+
+// This struct represents a decomposed layout conversion within a warp into
+// three transformations: P1 and P2 represent lane-dependent register shuffles
+// and W represents a warp shuffle. P2^-1 is returned because it represents the
+// (reg, lane) -> (reg) mapping from the perspective of the destination element.
+//
+// Nearly all layout conversions that only require data movement within a warp
+// can be implemented this way.
+struct DecomposedWarpConversion {
+  triton::LinearLayout P1, W, P2inv;
+  triton::LinearLayout reducedP1, reducedP2inv;
+};
+
+// Given the source and destination tensor types where a layout conversion only
+// involves data movement within warps, attempt to find a decomposition for a
+// warp layout conversion.
+std::optional<DecomposedWarpConversion>
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy);
+
 // Decomposes a reshape into simpler pieces.
 //
 // As an example, suppose we have a reshape from [4,4,4] to [2,2,8,2].
@@ -181,13 +204,19 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape, ArrayRef<int64_t> dstShape);
 // If shape is empty, it means no shared memory is needed.
 unsigned getNumScratchElements(ArrayRef<unsigned> shape);
 
-bool supportMFMA(triton::DotOp op);
-
 bool supportWMMA(triton::DotOp op);
 
 bool supportMMA(triton::DotOp op, int version);
 
 bool supportMMA(Value value, int version);
+
+// Conversion from `srcTy` to `dstTy` involving the minimum amount of data
+// transfer provided that both types can be converted to LL (if it can't it'll
+// return nullopt). The output will be such that layout.getInDimNames() ==
+// layout.getOutDimNames() and the conversion will not include kBlock (resp.
+// kWarp or kLane) if it can be avoided
+triton::LinearLayout minimalCvtLayout(RankedTensorType srcTy,
+                                      RankedTensorType dstTy);
 
 // Conversion from `srcTy` to `dstTy` only involves reordering of registers.
 // There is no need for data exchange across threads, warps, or blocks.
@@ -203,15 +232,16 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);
 
-bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstT);
-
-bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
-
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
+bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy);
+
+// Check if MFMA layout can be converted to the dot operand
+// layout using warp shuffle.
+bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
+                                       RankedTensorType dstTy);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future

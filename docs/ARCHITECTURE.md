@@ -314,7 +314,7 @@ Example 1, a row-major coalesced layout may partition a 16x16 tensor over 2 warp
 ```
 for
 ```
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -341,7 +341,7 @@ Example 2, a row-major coalesced layout may partition a 32x32 tensor over 2 warp
 ```
 for
 ```
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -373,7 +373,7 @@ CTA [1,0]                                              CTA [1,1]
 ```
 for
 ```
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -403,25 +403,25 @@ A single dot operator is likely to be mapped to multiple MMA instructions. For N
 ### Layout conversion
 To produce the desired memory behavior described in the previous section, triton GPU introduces layouts conversion (by means of ConvertLayoutOp). An input tensor represented in a blocked layout is sliced and inserted into a shared layout, e.g.:
 ```
-    %61 = triton_gpu.insert_slice_async %39, %58, %c0_i32, %60, %cst_1 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x32x!tt.ptr<f16>, #blocked> -> tensor<4x64x32xf16, #shared>
-    triton_gpu.async_commit_group
+    %61 = ttg.insert_slice_async %39, %58, %c0_i32, %60, %cst_1 {axis = 0 : i32, cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<64x32x!tt.ptr<f16>, #blocked> -> tensor<4x64x32xf16, #shared>
+    ttg.async_commit_group
 ```
 
 The main loop of the GEMM would then extract a slice (a reimplementation of tensor.extract_slice [25]) from the shared memory, converting arguments to the dot layout and producing mma layout with the dot operator, e.g.:
 <pre><code>
-    %107:14 = <b>scf.for</b> %arg9 = %c0_i32 to %51 step %c1_i32 iter_args(%arg10 = %cst, %arg11 = %39, %arg12 = %49, %arg13 = %94, %arg14 = %100, %arg15 = %101, %arg16 = %102, %arg17 = %85, %arg18 = %86, %arg19 = %c2_i32, %arg20 = %c3_i32, %arg21 = %c1_i32, %arg22 = %104, %arg23 = %106) -> (tensor<64x128xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x128x!tt.ptr<f16>, #blocked1>, tensor<4x64x32xf16, #shared>, tensor<4x32x128xf16, #shared1>, tensor<64x32xf16, #shared>, tensor<32x128xf16, #shared1>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x128x!tt.ptr<f16>, #blocked1>, i32, i32, i32, tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, tensor<16x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>)  : i32 {
-      %126 = <b>triton_gpu.extract_slice</b> %arg15[0, 16] [64, 16] [1, 1] : tensor<64x32xf16, #shared> to tensor<64x16xf16, #shared>
-      %127 = <b>triton_gpu.convert_layout</b> %126 : (tensor<64x16xf16, <b>#shared</b>>) -> tensor<64x16xf16, <b>#triton_gpu.dot_op</b><{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %128 = <b>triton_gpu.extract_slice</b> %arg16[16, 0] [16, 128] [1, 1] : tensor<32x128xf16, <b>#shared1</b>> to tensor<16x128xf16, <b>#shared1</b>>
-      %129 = <b>triton_gpu.convert_layout</b> %128 : (tensor<16x128xf16, #shared1>) -> tensor<16x128xf16, <b>#triton_gpu.dot_op</b><{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %130 = tt.dot %arg22, %arg23, %arg10 {allowTF32 = true} : tensor<64x16xf16, <b>#triton_gpu.dot_op</b><{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x128xf16, <b>#triton_gpu.dot_op</b><{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x128xf32, <b>#mma</b>>
-      %131 = <b>tt.dot</b> %127, %129, %130 {allowTF32 = true} : tensor<64x16xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x128xf16, <b>#triton_gpu.dot_op</b><{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x128xf32, <b>#mma</b>>
+    %107:14 = <b>scf.for</b> %arg9 = %c0_i32 to %51 step %c1_i32 iter_args(%arg10 = %cst, %arg11 = %39, %arg12 = %49, %arg13 = %94, %arg14 = %100, %arg15 = %101, %arg16 = %102, %arg17 = %85, %arg18 = %86, %arg19 = %c2_i32, %arg20 = %c3_i32, %arg21 = %c1_i32, %arg22 = %104, %arg23 = %106) -> (tensor<64x128xf32, #mma>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x128x!tt.ptr<f16>, #blocked1>, tensor<4x64x32xf16, #shared>, tensor<4x32x128xf16, #shared1>, tensor<64x32xf16, #shared>, tensor<32x128xf16, #shared1>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x128x!tt.ptr<f16>, #blocked1>, i32, i32, i32, tensor<64x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, tensor<16x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>)  : i32 {
+      %126 = <b>ttg.extract_slice</b> %arg15[0, 16] [64, 16] [1, 1] : tensor<64x32xf16, #shared> to tensor<64x16xf16, #shared>
+      %127 = <b>ttg.convert_layout</b> %126 : (tensor<64x16xf16, <b>#shared</b>>) -> tensor<64x16xf16, <b>#ttg.dot_op</b><{opIdx = 0, parent = #mma, kWidth = 2}>>
+      %128 = <b>ttg.extract_slice</b> %arg16[16, 0] [16, 128] [1, 1] : tensor<32x128xf16, <b>#shared1</b>> to tensor<16x128xf16, <b>#shared1</b>>
+      %129 = <b>ttg.convert_layout</b> %128 : (tensor<16x128xf16, #shared1>) -> tensor<16x128xf16, <b>#ttg.dot_op</b><{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %130 = tt.dot %arg22, %arg23, %arg10 {allowTF32 = true} : tensor<64x16xf16, <b>#ttg.dot_op</b><{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x128xf16, <b>#ttg.dot_op</b><{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x128xf32, <b>#mma</b>>
+      %131 = <b>tt.dot</b> %127, %129, %130 {allowTF32 = true} : tensor<64x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x128xf16, <b>#ttg.dot_op</b><{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x128xf32, <b>#mma</b>>
       ...
 </code></pre>
 
 The result of the processing is then converted back to blocked layout to be stored to the main GPU memory, e.g.:
 ```
-    %125 = triton_gpu.convert_layout %108 : (tensor<64x128xf16, #mma>) -> tensor<64x128xf16, #blocked1>
+    %125 = ttg.convert_layout %108 : (tensor<64x128xf16, #mma>) -> tensor<64x128xf16, #blocked1>
     tt.store %117, %125, %124 {cache = 1 : i32, evict = 1 : i32} : tensor<64x128xf16, #blocked1>
 ```
 
@@ -454,12 +454,12 @@ Is translated to:
 ```
 %a: tensor<128x32xf16, #enc>
 %a_tmp = tensor.extract_slice %a[0, 0] [128, 16]
-%a_prefetch = triton_gpu.convert_layout %a_tmp
+%a_prefetch = ttg.convert_layout %a_tmp
 scf.for %iv = ... iter_args(%a_buf = %a, ..., %a_prefetch_arg = %a_prefetch)
 {
   %x = tt.dot %a_arg, %b, %c
   %a_tmp_rem = tensor.extract_slice %a_buf[0, 16] [128, 16]
-  %a_prefetch_next = triton_gpu.convert_layout %a_tmp_rem
+  %a_prefetch_next = ttg.convert_layout %a_tmp_rem
   ...
   scf.yield %next_a, ..., %a_prefetch_next
 }

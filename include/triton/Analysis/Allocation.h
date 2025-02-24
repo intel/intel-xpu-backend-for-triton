@@ -18,6 +18,12 @@ namespace mlir {
 namespace triton {
 class AllocationAnalysis;
 
+/// Callback to allow backends to specify target-specific scratch sizes for
+/// some operations.
+using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
+
+unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
+
 // To convert a tensor from one layout to another, we need to allocate a
 // temporary buffer (i.e., scratch buffer) in shared memory. The conversion may
 // require multiple iterations, with each iteration involving multiple
@@ -51,6 +57,12 @@ struct ScratchConfig {
     os << ", inVec: " << inVec << ", outVec: " << outVec << "\n";
   }
 };
+
+// For a layout conversion between `srcTy` and `dstTy`, return the vector length
+// that can be used for the stores to and loads from shared memory,
+// respectively.
+std::pair</*inVec*/ unsigned, /*outVec*/ unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy);
 
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy);
@@ -102,7 +114,8 @@ public:
   explicit Allocation(Operation *operation) : operation(operation) {}
 
   /// Runs allocation analysis on the given top-level operation.
-  void run(FuncAllocMapT &funcAllocMap);
+  void run(FuncAllocMapT &funcAllocMap,
+           triton::AllocationAnalysisScratchSizeFn scratchSizeGetter);
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -173,8 +186,8 @@ public:
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
-    /// Explicit: triton_gpu.local_alloc
-    /// Scratch: triton_gpu.convert_layout
+    /// Explicit: ttg.local_alloc
+    /// Scratch: ttg.convert_layout
     /// Virtual: triton.call
     enum class BufferKind { Explicit, Scratch, Virtual };
 
@@ -202,7 +215,7 @@ private:
   };
 
   /// Op -> Scratch Buffer
-  using OpScratchMapT = DenseMap<Operation *, BufferT *>;
+  using OpScratchMapT = llvm::MapVector<Operation *, BufferT *>;
   /// Value -> Explicit Buffer
   using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
   /// Value -> Alias Buffer
@@ -250,7 +263,9 @@ class ModuleAllocation : public CallGraph<Allocation> {
 public:
   using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
 
-  explicit ModuleAllocation(ModuleOp moduleOp)
+  ModuleAllocation(ModuleOp moduleOp,
+                   triton::AllocationAnalysisScratchSizeFn scratchSizeGetter =
+                       triton::defaultAllocationAnalysisScratchSizeFn)
       : CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
@@ -259,7 +274,7 @@ public:
         [&](FunctionOpInterface funcOp) {
           auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
           if (inserted)
-            iter->second.run(funcMap);
+            iter->second.run(funcMap, scratchSizeGetter);
         });
   }
 

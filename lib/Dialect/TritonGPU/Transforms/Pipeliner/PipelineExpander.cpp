@@ -19,6 +19,8 @@
 // -Fix bug when a value yield is used outside the loop and the value def is not
 // in the last stage. If we are not peeling the epilgue we need to remap the
 // output correctly.
+// -Allow for distance of 2 or more between producer and consumer for the cases
+// where the producer is in the same stage as the consumer.
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -28,10 +30,14 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
+
+// FIXME: PipelineExpander should not depend on Triton-specific headers!
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 
 #define DEBUG_TYPE "triton-loop-pipelining"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -109,6 +115,17 @@ public:
   LogicalResult emitEpilogue(RewriterBase &rewriter,
                              llvm::SmallVector<Value> &returnValues);
 };
+
+/// Find operands of all the nested operations within `op`.
+static SetVector<Value> getNestedOperands(Operation *op) {
+  SetVector<Value> operands;
+  op->walk([&](Operation *nestedOp) {
+    for (Value operand : nestedOp->getOperands()) {
+      operands.insert(operand);
+    }
+  });
+  return operands;
+}
 
 bool LoopPipelinerInternal::initializeLoopInfo(
     ForOp op, const triton::PipeliningOption &options) {
@@ -197,29 +214,22 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   // those defined outside of the loop. This means that any dependency within a
   // loop should either be on the immediately preceding iteration, the current
   // iteration, or on variables whose values are set before entering the loop.
-  if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
-                   [this](Value operand) {
-                     Operation *def = operand.getDefiningOp();
-                     return !def ||
-                            (!stages.contains(def) && forOp->isAncestor(def));
-                   })) {
-    LDBG("--only support loop carried dependency with a distance of 1 or "
-         "defined outside of the loop -> BAIL");
-    return false;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    for (auto operand : getNestedOperands(&op)) {
+      auto [def, distance] = getDefiningOpAndDistance(operand);
+      if (!def)
+        continue;
+      if (distance > 1 && (stages[def] != stages[&op])) {
+        // Allow the case of loop carried dependency between the ops in the same
+        // stage.
+        LDBG("--only support loop carried dependency with a distance of 1 or "
+             "defined outside of the loop -> BAIL");
+        return false;
+      }
+    }
   }
   annotateFn = options.annotateFn;
   return true;
-}
-
-/// Find operands of all the nested operations within `op`.
-static SetVector<Value> getNestedOperands(Operation *op) {
-  SetVector<Value> operands;
-  op->walk([&](Operation *nestedOp) {
-    for (Value operand : nestedOp->getOperands()) {
-      operands.insert(operand);
-    }
-  });
-  return operands;
 }
 
 /// Compute unrolled cycles of each op (consumer) and verify that each op is
@@ -248,7 +258,12 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        consumer->emitError("operation scheduled before its operands");
+        InFlightDiagnostic diag =
+            consumer->emitWarning("operation scheduled before its operands. "
+                                  "Pipelining will be disabled.");
+        diag.attachNote(producer->getLoc())
+            .append("operand defined here: ")
+            .appendOp(*producer, OpPrintingFlags().printGenericOpForm());
         return false;
       }
     }
@@ -281,23 +296,22 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
        llvm::zip(forOp.getRegionIterArgs(), forOp.getInitsMutable())) {
     setValueMapping(arg, operand.get(), 0);
   }
+
+  // If the incoming value to an iter arg from the loop yield is defined outside
+  // the loop, then that means the iter arg takes that value for all stages
+  // after the first stage.
   auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  for (auto [arg, operand] :
+       llvm::zip(forOp.getRegionIterArgs(), yield->getOpOperands())) {
+    if (forOp.getBodyRegion().isAncestor(operand.get().getParentRegion()))
+      continue;
+    for (int64_t i = 1; i < maxStage; ++i)
+      setValueMapping(arg, operand.get(), i);
+  }
+
   Location loc = forOp.getLoc();
   SmallVector<Value> predicates(maxStage);
   for (int64_t i = 0; i < maxStage; i++) {
-    if (dynamicLoop) {
-      Type t = ub.getType();
-      // pred = ub > lb + (i * step)
-      Value iv = rewriter.create<arith::AddIOp>(
-          loc, lb,
-          rewriter.create<arith::MulIOp>(
-              loc, step,
-              rewriter.create<arith::ConstantOp>(
-                  loc, rewriter.getIntegerAttr(t, i))));
-      predicates[i] = rewriter.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::slt, iv, ub);
-    }
-
     // special handling for induction variable as the increment is implicit.
     // iv = lb + i * step
     Type t = lb.getType();
@@ -308,6 +322,13 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
             rewriter.create<arith::ConstantOp>(loc,
                                                rewriter.getIntegerAttr(t, i))));
     setValueMapping(forOp.getInductionVar(), iv, i);
+
+    if (dynamicLoop) {
+      // pred = ub > lb + (i * step)
+      predicates[i] = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::slt, iv, ub);
+    }
+
     for (Operation *op : opOrder) {
       if (stages[op] > i)
         continue;
@@ -387,7 +408,7 @@ LoopPipelinerInternal::analyzeCrossStageValues() {
 std::pair<Operation *, int64_t>
 LoopPipelinerInternal::getDefiningOpAndDistance(Value value) {
   int64_t distance = 0;
-  if (auto arg = dyn_cast<BlockArgument>(value)) {
+  while (auto arg = dyn_cast<BlockArgument>(value)) {
     if (arg.getOwner() != forOp.getBody())
       return {nullptr, 0};
     // Ignore induction variable.
@@ -418,8 +439,6 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   for (const auto &retVal :
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
-    assert(def && "Only support loop carried dependencies of distance of 1 or "
-                  "outside the loop");
     auto defStage = stages.find(def);
     if (defStage != stages.end()) {
       Value valueVersion =
@@ -634,8 +653,6 @@ LogicalResult LoopPipelinerInternal::createKernel(
   for (const auto &retVal :
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
-    assert(def && "Only support loop carried dependencies of distance of 1 or "
-                  "defined outside the loop");
     auto defStage = stages.find(def);
     if (defStage == stages.end()) {
       for (unsigned int stage = 1; stage <= maxStage; stage++)
@@ -655,22 +672,24 @@ LogicalResult
 LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
                                     llvm::SmallVector<Value> &returnValues) {
   Location loc = forOp.getLoc();
+  Type t = lb.getType();
   // Emit different versions of the induction variable. They will be
   // removed by dead code if not used.
 
-  // range_diff = ub - lb
-  // total_iterations = (range_diff + step + (step < 0 ? 1 : -1)) / step
-  Type t = lb.getType();
-  Value zero =
-      rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, 0));
-  Value one =
-      rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, 1));
-  Value minusOne =
-      rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -1));
+  auto createConst = [&](int v) {
+    return rewriter.create<arith::ConstantOp>(loc,
+                                              rewriter.getIntegerAttr(t, v));
+  };
+
+  // total_iterations = cdiv(range_diff, step);
+  // - range_diff = ub - lb
+  // - total_iterations = (range_diff + step + (step < 0 ? 1 : -1)) / step
+  Value zero = createConst(0);
+  Value one = createConst(1);
   Value stepLessZero = rewriter.create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::slt, step, zero);
   Value stepDecr =
-      rewriter.create<arith::SelectOp>(loc, stepLessZero, one, minusOne);
+      rewriter.create<arith::SelectOp>(loc, stepLessZero, one, createConst(-1));
 
   Value rangeDiff = rewriter.create<arith::SubIOp>(loc, ub, lb);
   Value rangeIncrStep = rewriter.create<arith::AddIOp>(loc, rangeDiff, step);
@@ -678,27 +697,31 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
       rewriter.create<arith::AddIOp>(loc, rangeIncrStep, stepDecr);
   Value totalIterations = rewriter.create<arith::DivSIOp>(loc, rangeDecr, step);
 
+  // If total_iters < max_stage, start the epilogue at zero to match the
+  // ramp-up in the prologue.
+  // start_iter = max(0, total_iters - max_stage)
+  Value iterI = rewriter.create<arith::SubIOp>(loc, totalIterations,
+                                               createConst(maxStage));
+  iterI = rewriter.create<arith::MaxSIOp>(loc, zero, iterI);
+
   // Capture predicates for dynamic loops.
   SmallVector<Value> predicates(maxStage + 1);
 
-  for (int64_t i = 0; i < maxStage; i++) {
-    // iterI = total_iters - 1 - i
-    // May go negative...
-    Value minusI =
-        rewriter.create<arith::ConstantOp>(loc, rewriter.getIntegerAttr(t, -i));
-    Value iterI = rewriter.create<arith::AddIOp>(
-        loc, rewriter.create<arith::AddIOp>(loc, totalIterations, minusOne),
-        minusI);
+  for (int64_t i = 1; i <= maxStage; i++) {
     // newLastIter = lb + step * iterI
     Value newlastIter = rewriter.create<arith::AddIOp>(
         loc, lb, rewriter.create<arith::MulIOp>(loc, step, iterI));
 
-    setValueMapping(forOp.getInductionVar(), newlastIter, maxStage - i);
+    setValueMapping(forOp.getInductionVar(), newlastIter, i);
+
+    // increment to next iterI
+    iterI = rewriter.create<arith::AddIOp>(loc, iterI, one);
 
     if (dynamicLoop) {
-      // pred = iterI >= 0
-      predicates[i + 1] = rewriter.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::sge, iterI, zero);
+      // Disable stages when `i` is greater than total_iters.
+      // pred = total_iters >= i
+      predicates[i] = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::sge, totalIterations, createConst(i));
     }
   }
 

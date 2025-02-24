@@ -32,6 +32,10 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -70,6 +74,8 @@ jobs:
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
+      # For this workflow, use max1550 runners to reduce cache consumption on max1100 runners.
+      device: ${{ matrix.driver == 'rolling' && 'max1550' || 'max1100' }}
       driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
@@ -79,3 +85,4 @@ jobs:
       skip_list: ${{ inputs.skip_list }}
       run_name: ${{ inputs.run_name }}
       enable_unskip: ${{ inputs.enable_unskip }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python || false }}

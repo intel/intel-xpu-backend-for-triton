@@ -1,13 +1,11 @@
 import argparse
 import itertools
 import os
-from typing import Any, Dict, List
 
-USE_IPEX_OPTION = os.getenv("USE_IPEX", "1") == "1"
-if USE_IPEX_OPTION:
-    BENCHMARKING_METHOD = "PYTORCH_LEGACY_PROFILER_USING_IPEX"
-else:
-    BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
+from triton.testing import assert_close as triton_assert_close, Benchmark
+
+BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
+VERIFY = os.getenv("VERIFY", "1") == "1"
 
 
 def synchronize():
@@ -36,79 +34,8 @@ def _summarize_statistics(times, quantiles, return_mode):
     return getattr(torch, return_mode)(times).item()
 
 
-def do_bench_ipex(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
-                  sync_submitting=True, kernel_name=None):  # pylint: disable=unused-argument
-    """
-    Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
-    the 20-th and 80-th performance percentile.
-
-    :param fn: Function to benchmark
-    :type fn: Callable
-    :param n_warmup: Number of repetitions for warmup
-    :type n_warmup: int
-    :param n_repeat: Number of repetitions to collect measurements
-    :type n_repeat: int
-    :param grad_to_none: Reset the gradient of the provided tensor to None
-    :type grad_to_none: torch.tensor, optional
-    :param quantiles: Performance percentile to return in addition to the median.
-    :type quantiles: list[float]
-    """
-    # TODO: remove this function and switch to `do_bench_no_ipex` after
-    # `XPUEvent.elapsed_time` stops introducing regressions into the results.
-
-    assert return_mode in ["min", "max", "mean", "median"]
-    import torch
-    from torch.autograd.profiler import record_function
-
-    fn()
-    synchronize()
-
-    # We maintain a buffer of 256 MB that we clear
-    # before each kernel call to make sure that the L2
-    # doesn't contain any input data before the run
-    cache_size = 256 * 1024 * 1024
-    cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
-
-    # Warm-up
-    for _ in range(n_warmup):
-        fn()
-    # Benchmark
-    with torch.autograd.profiler_legacy.profile(True, use_xpu=True) as prof:
-        for _ in range(n_repeat):
-            # we don't want `fn` to accumulate gradient values
-            # if it contains a backward pass. So we clear the
-            # provided gradients
-            if grad_to_none is not None:
-                for x in grad_to_none:
-                    x.grad = None
-            # we clear the L2 cache before each run
-            cache.zero_()
-            if sync_submitting:
-                synchronize()
-            # record time of `fn`
-            with record_function("__profile_kernel_of_func"):
-                fn()
-        # Record clocks
-        synchronize()
-
-    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.function_events)
-    functions = list(profiling_func_filter)
-
-    def extract_kernels(funcs):
-        kernels = []
-        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
-        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
-        return kernels
-
-    kernels = [extract_kernels(func.cpu_children) for func in functions]
-    assert len(kernels) == n_repeat, "the profiling number not match"
-    # Make the time to the milliseconds.
-    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
-    return _summarize_statistics(times, quantiles, return_mode)
-
-
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu", kernel_name=None):  # pylint: disable=unused-argument
+                          device="xpu"):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -126,6 +53,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     """
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
+    import triton
     from triton.testing import do_bench as triton_do_bench
 
     # We maintain a buffer of 256 MB that we clear
@@ -143,6 +71,9 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
         fn()
     end_event.record()
     synchronize()
+    # FIXME: to avoid negative timings before DLE 2025.1;
+    # this workaround doesn't work for BMG.
+    triton.runtime.driver.active.utils.wait()
     estimate_ms = start_event.elapsed_time(end_event) / 5
 
     # The cache is also maintained in `triton_do_bench` function,
@@ -153,14 +84,13 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     warmup_time = n_warmup * estimate_ms
     rep_time = n_repeat * estimate_ms
 
-    times = triton_do_bench(fn, warmup=warmup_time, rep=rep_time, grad_to_none=grad_to_none, return_mode="all",
-                            device_type=device)
+    times = triton_do_bench(fn, warmup=warmup_time, rep=rep_time, grad_to_none=grad_to_none, return_mode="all")
     times = torch.tensor(times, dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True, kernel_name=None):
+                                       return_mode="mean", device="xpu", sync_submitting=True):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
     the 20-th and 80-th performance percentile.
@@ -179,7 +109,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
 
     assert return_mode in ["min", "max", "mean", "median"]
     import torch
-    from torch.profiler import profile, ProfilerActivity
+    from torch.profiler import profile, ProfilerActivity, record_function
 
     fn()
     synchronize()
@@ -207,28 +137,37 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
             if sync_submitting:
                 synchronize()
             # record time of `fn`
-            fn()
+            with record_function("__profile_kernel_of_func"):
+                fn()
         # Record clocks
         synchronize()
 
-    function_events = prof.events()
+    profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), prof.events())
+    functions = list(profiling_func_filter)
 
-    functions = []
-    if isinstance(kernel_name, str):
-        kernel_name = [kernel_name]
-    for ker_name in kernel_name:
-        functions.extend(list(filter(lambda x: x.name.startswith(ker_name), function_events)))  # pylint: disable=cell-var-from-loop
-    # profiling_func_filter = filter(lambda x: x.name.startswith("__profile_kernel_of_func"), function_events)
+    def extract_kernels(funcs):
+        kernels = []
+        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
+        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
+        return kernels
 
-    assert len(functions) == n_repeat, f"the profiling number not match, {len(functions)}"
+    kernels = [extract_kernels(func.cpu_children) for func in functions]
+    # For example, for backward FA, kernels can be empty for one of the threads.
+    # Keep in mind that `backward` function is launched in another thread and
+    # requires the use of `record_function` function additionally in its thread
+    # for correct registration of kernels.
+    # For details: https://github.com/pytorch/pytorch/issues/144778
+    kernels = [kernel for kernel in kernels if kernel != []]
+    # FIXME: relaxation for new agama release
+    assert len(kernels) >= n_repeat - 1, (
+        f"the profiling number not match; {n_repeat=}, {kernels=}, \n" +
+        f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
     # Make the time to the milliseconds.
-    times = torch.tensor([f.self_device_time_total * 1e-3 for f in functions], dtype=torch.float)
+    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-if BENCHMARKING_METHOD == "PYTORCH_LEGACY_PROFILER_USING_IPEX":
-    do_bench = do_bench_ipex
-elif BENCHMARKING_METHOD == "ELAPSED_TIME":
+if BENCHMARKING_METHOD == "ELAPSED_TIME":
     do_bench = do_bench_elapsed_time
 elif BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
     do_bench = do_bench_upstream_pytorch_profiler
@@ -236,41 +175,9 @@ else:
     raise NotImplementedError(f"BENCHMARKING_METHOD: {BENCHMARKING_METHOD} isn't implemented")
 
 
-def assert_close(x, y, atol=None, rtol=None, err_msg=""):
-    import numpy as np
-    import torch
-
-    # canonicalize arguments to be tensors
-    if not isinstance(x, torch.Tensor):
-        x = torch.tensor(x)
-    if not isinstance(y, torch.Tensor):
-        y = torch.tensor(y)
-    # absolute tolerance
-    if atol is None:
-        atol = 1e-2
-    atol = atol(x.dtype) if callable(atol) else atol
-    # relative tolerance hook
-    if rtol is None:
-        rtol = 0.
-    rtol = rtol(x.dtype) if callable(rtol) else rtol
-    # we use numpy instead of pytorch
-    # as it seems more memory efficient
-    # pytorch tends to oom on large tensors
-    if isinstance(x, torch.Tensor):
-        if x.dtype == torch.bfloat16:
-            x = x.float()
-        x = x.cpu().detach().numpy()
-    if isinstance(y, torch.Tensor):
-        if y.dtype == torch.bfloat16:
-            y = y.float()
-        y = y.cpu().detach().numpy()
-    # we handle size==1 case separately as we can
-    # provide better error message there
-    if x.size > 1 or y.size > 1:
-        np.testing.assert_allclose(x, y, atol=atol, rtol=rtol, equal_nan=True)
-        return
-    if not np.allclose(x, y, atol=atol, rtol=rtol):
-        raise AssertionError(f"{err_msg} {x} is not close to {y} (atol={atol}, rtol={rtol})")
+def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
+    if VERIFY:
+        triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
 
 
 def perf_report(benchmarks):
@@ -282,73 +189,6 @@ def perf_report(benchmarks):
     """
     wrapper = lambda fn: Mark(fn, benchmarks)
     return wrapper
-
-
-# # pylint: disable=too-many-instance-attributes
-class Benchmark:
-    """
-    This class is used by the :code:`perf_report` function to generate line plots with a concise API.
-    """
-
-    def __init__(
-        self,
-        x_names: List[str],
-        x_vals: List[Any],
-        line_arg: str,
-        line_vals: List[Any],
-        line_names: List[str],
-        plot_name: str,
-        args: Dict[str, Any],
-        xlabel: str = "",
-        ylabel: str = "",
-        x_log: bool = False,
-        y_log: bool = False,
-        color=None,  # pylint: disable=unused-argument
-        styles=None,
-    ):
-        """
-        Constructor.
-        x_vals can be a list of scalars or a list of tuples/lists. If x_vals is a list
-        of scalars and there are multiple x_names, all arguments will have the same value.
-        If x_vals is a list of tuples/lists, each element should have the same length as
-        x_names.
-
-        :param x_names: Name of the arguments that should appear on the x axis of the plot.
-        :type x_names: List[str]
-        :param x_vals: List of values to use for the arguments in :code:`x_names`.
-        :type x_vals: List[Any]
-        :param line_arg: Argument name for which different values correspond to different lines in the plot.
-        :type line_arg: str
-        :param line_vals: List of values to use for the arguments in :code:`line_arg`.
-        :type line_vals: List[Any]
-        :param line_names: Label names for the different lines.
-        :type line_names: List[str]
-        :param plot_name: Name of the plot.
-        :type plot_name: str
-        :param args: Dictionary of keyword arguments to remain fixed throughout the benchmark.
-        :type args: Dict[str, Any]
-        :param xlabel: Label for the x axis of the plot.
-        :type xlabel: str, optional
-        :param ylabel: Label for the y axis of the plot.
-        :type ylabel: str, optional
-        :param x_log: Whether the x axis should be log scale.
-        :type x_log: bool, optional
-        :param y_log: Whether the y axis should be log scale.
-        :type y_log: bool, optional
-        """
-        self.x_names = x_names
-        self.x_vals = x_vals
-        self.x_log = x_log
-        self.line_arg = line_arg
-        self.line_vals = line_vals
-        self.line_names = line_names
-        self.y_log = y_log
-        self.styles = styles
-        # plot info
-        self.xlabel = xlabel
-        self.ylabel = ylabel
-        self.plot_name = plot_name
-        self.args = args
 
 
 class Mark:

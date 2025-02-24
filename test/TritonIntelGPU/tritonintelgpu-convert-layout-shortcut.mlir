@@ -1,52 +1,14 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_1_2
-  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [512 : i32, 1 : i32, 1 : i32]} {
+  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_1_2(%arg: tensor<1024x32xf16, #dpas>) {
     // COM: The repetitions order of dot layout and dpas layout are same when the GEMM tiling is clustered as repCluster [1, 2].
-    // CHECK:           %[[VAL_81:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_0:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_81]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_98:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_1:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_98]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_115:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_2:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_115]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_132:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_3:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_132]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_149:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_4:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_149]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_166:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_5:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_166]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_183:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_6:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_183]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_200:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_7:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_200]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_216:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_217:.*]] = llvm.extractelement %[[REP_0]]{{\[}}%[[VAL_216]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_232:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_233:.*]] = llvm.extractelement %[[REP_1]]{{\[}}%[[VAL_232]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_248:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_249:.*]] = llvm.extractelement %[[REP_2]]{{\[}}%[[VAL_248]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_264:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_265:.*]] = llvm.extractelement %[[REP_3]]{{\[}}%[[VAL_264]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_280:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_281:.*]] = llvm.extractelement %[[REP_4]]{{\[}}%[[VAL_280]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_296:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_297:.*]] = llvm.extractelement %[[REP_5]]{{\[}}%[[VAL_296]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_312:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_313:.*]] = llvm.extractelement %[[REP_6]]{{\[}}%[[VAL_312]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_328:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_329:.*]] = llvm.extractelement %[[REP_7]]{{\[}}%[[VAL_328]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_338:.*]] = llvm.insertvalue %[[VAL_217]], {{.*}}[7]
-    // CHECK:           %[[VAL_346:.*]] = llvm.insertvalue %[[VAL_233]], {{.*}}[15]
-    // CHECK:           %[[VAL_354:.*]] = llvm.insertvalue %[[VAL_249]], {{.*}}[23]
-    // CHECK:           %[[VAL_362:.*]] = llvm.insertvalue %[[VAL_265]], {{.*}}[31]
-    // CHECK:           %[[VAL_370:.*]] = llvm.insertvalue %[[VAL_281]], {{.*}}[39]
-    // CHECK:           %[[VAL_378:.*]] = llvm.insertvalue %[[VAL_297]], {{.*}}[47]
-    // CHECK:           %[[VAL_386:.*]] = llvm.insertvalue %[[VAL_313]], {{.*}}[55]
-    // CHECK:           %[[VAL_394:.*]] = llvm.insertvalue %[[VAL_329]], {{.*}}[63]
-    %108 = triton_gpu.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    // CHECK-NO: llvm.insertvalue
+    // CHECK-NO: llvm.extractvalue
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }
@@ -54,55 +16,144 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
 // -----
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [2, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_2_2
-  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [512 : i32, 1 : i32, 1 : i32]} {
+  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_2_2(%arg: tensor<1024x32xf16, #dpas>) {
     // COM: The repetitions order of dpas layout when the GEMM tiling is clustered as repCluster [2, 2]:
     // COM:   - 0, 1, 2, 3, 4, 5, 6, 7.
     // COM: The repetitions order of dot layout when the GEMM tiling is clustered as repCluster [2, 2]:
     // COM:   - 0, 2, 1, 3, 4, 6, 5, 7.
-    // CHECK:           %[[VAL_81:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_0:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_81]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_98:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_1:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_98]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_115:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_2:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_115]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_132:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_3:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_132]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_149:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_4:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_149]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_166:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_5:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_166]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_183:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_6:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_183]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_200:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_7:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_200]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_216:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_217:.*]] = llvm.extractelement %[[REP_0]]{{\[}}%[[VAL_216]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_232:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_233:.*]] = llvm.extractelement %[[REP_2]]{{\[}}%[[VAL_232]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_248:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_249:.*]] = llvm.extractelement %[[REP_1]]{{\[}}%[[VAL_248]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_264:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_265:.*]] = llvm.extractelement %[[REP_3]]{{\[}}%[[VAL_264]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_280:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_281:.*]] = llvm.extractelement %[[REP_4]]{{\[}}%[[VAL_280]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_296:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_297:.*]] = llvm.extractelement %[[REP_6]]{{\[}}%[[VAL_296]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_312:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_313:.*]] = llvm.extractelement %[[REP_5]]{{\[}}%[[VAL_312]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_328:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_329:.*]] = llvm.extractelement %[[REP_7]]{{\[}}%[[VAL_328]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_338:.*]] = llvm.insertvalue %[[VAL_217]], {{.*}}[7]
-    // CHECK:           %[[VAL_346:.*]] = llvm.insertvalue %[[VAL_233]], {{.*}}[15]
-    // CHECK:           %[[VAL_354:.*]] = llvm.insertvalue %[[VAL_249]], {{.*}}[23]
-    // CHECK:           %[[VAL_362:.*]] = llvm.insertvalue %[[VAL_265]], {{.*}}[31]
-    // CHECK:           %[[VAL_370:.*]] = llvm.insertvalue %[[VAL_281]], {{.*}}[39]
-    // CHECK:           %[[VAL_378:.*]] = llvm.insertvalue %[[VAL_297]], {{.*}}[47]
-    // CHECK:           %[[VAL_386:.*]] = llvm.insertvalue %[[VAL_313]], {{.*}}[55]
-    // CHECK:           %[[VAL_394:.*]] = llvm.insertvalue %[[VAL_329]], {{.*}}[63]
-    %108 = triton_gpu.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    // CHECK:           %[[VAL_1:.*]] = llvm.extractvalue %[[VAL_0]][0]
+    // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][1]
+    // CHECK:           %[[VAL_3:.*]] = llvm.extractvalue %[[VAL_0]][2]
+    // CHECK:           %[[VAL_4:.*]] = llvm.extractvalue %[[VAL_0]][3]
+    // CHECK:           %[[VAL_5:.*]] = llvm.extractvalue %[[VAL_0]][4]
+    // CHECK:           %[[VAL_6:.*]] = llvm.extractvalue %[[VAL_0]][5]
+    // CHECK:           %[[VAL_7:.*]] = llvm.extractvalue %[[VAL_0]][6]
+    // CHECK:           %[[VAL_8:.*]] = llvm.extractvalue %[[VAL_0]][7]
+    // CHECK:           %[[VAL_9:.*]] = llvm.extractvalue %[[VAL_0]][8]
+    // CHECK:           %[[VAL_10:.*]] = llvm.extractvalue %[[VAL_0]][9]
+    // CHECK:           %[[VAL_11:.*]] = llvm.extractvalue %[[VAL_0]][10]
+    // CHECK:           %[[VAL_12:.*]] = llvm.extractvalue %[[VAL_0]][11]
+    // CHECK:           %[[VAL_13:.*]] = llvm.extractvalue %[[VAL_0]][12]
+    // CHECK:           %[[VAL_14:.*]] = llvm.extractvalue %[[VAL_0]][13]
+    // CHECK:           %[[VAL_15:.*]] = llvm.extractvalue %[[VAL_0]][14]
+    // CHECK:           %[[VAL_16:.*]] = llvm.extractvalue %[[VAL_0]][15]
+    // CHECK:           %[[VAL_17:.*]] = llvm.extractvalue %[[VAL_0]][16]
+    // CHECK:           %[[VAL_18:.*]] = llvm.extractvalue %[[VAL_0]][17]
+    // CHECK:           %[[VAL_19:.*]] = llvm.extractvalue %[[VAL_0]][18]
+    // CHECK:           %[[VAL_20:.*]] = llvm.extractvalue %[[VAL_0]][19]
+    // CHECK:           %[[VAL_21:.*]] = llvm.extractvalue %[[VAL_0]][20]
+    // CHECK:           %[[VAL_22:.*]] = llvm.extractvalue %[[VAL_0]][21]
+    // CHECK:           %[[VAL_23:.*]] = llvm.extractvalue %[[VAL_0]][22]
+    // CHECK:           %[[VAL_24:.*]] = llvm.extractvalue %[[VAL_0]][23]
+    // CHECK:           %[[VAL_25:.*]] = llvm.extractvalue %[[VAL_0]][24]
+    // CHECK:           %[[VAL_26:.*]] = llvm.extractvalue %[[VAL_0]][25]
+    // CHECK:           %[[VAL_27:.*]] = llvm.extractvalue %[[VAL_0]][26]
+    // CHECK:           %[[VAL_28:.*]] = llvm.extractvalue %[[VAL_0]][27]
+    // CHECK:           %[[VAL_29:.*]] = llvm.extractvalue %[[VAL_0]][28]
+    // CHECK:           %[[VAL_30:.*]] = llvm.extractvalue %[[VAL_0]][29]
+    // CHECK:           %[[VAL_31:.*]] = llvm.extractvalue %[[VAL_0]][30]
+    // CHECK:           %[[VAL_32:.*]] = llvm.extractvalue %[[VAL_0]][31]
+    // CHECK:           %[[VAL_33:.*]] = llvm.extractvalue %[[VAL_0]][32]
+    // CHECK:           %[[VAL_34:.*]] = llvm.extractvalue %[[VAL_0]][33]
+    // CHECK:           %[[VAL_35:.*]] = llvm.extractvalue %[[VAL_0]][34]
+    // CHECK:           %[[VAL_36:.*]] = llvm.extractvalue %[[VAL_0]][35]
+    // CHECK:           %[[VAL_37:.*]] = llvm.extractvalue %[[VAL_0]][36]
+    // CHECK:           %[[VAL_38:.*]] = llvm.extractvalue %[[VAL_0]][37]
+    // CHECK:           %[[VAL_39:.*]] = llvm.extractvalue %[[VAL_0]][38]
+    // CHECK:           %[[VAL_40:.*]] = llvm.extractvalue %[[VAL_0]][39]
+    // CHECK:           %[[VAL_41:.*]] = llvm.extractvalue %[[VAL_0]][40]
+    // CHECK:           %[[VAL_42:.*]] = llvm.extractvalue %[[VAL_0]][41]
+    // CHECK:           %[[VAL_43:.*]] = llvm.extractvalue %[[VAL_0]][42]
+    // CHECK:           %[[VAL_44:.*]] = llvm.extractvalue %[[VAL_0]][43]
+    // CHECK:           %[[VAL_45:.*]] = llvm.extractvalue %[[VAL_0]][44]
+    // CHECK:           %[[VAL_46:.*]] = llvm.extractvalue %[[VAL_0]][45]
+    // CHECK:           %[[VAL_47:.*]] = llvm.extractvalue %[[VAL_0]][46]
+    // CHECK:           %[[VAL_48:.*]] = llvm.extractvalue %[[VAL_0]][47]
+    // CHECK:           %[[VAL_49:.*]] = llvm.extractvalue %[[VAL_0]][48]
+    // CHECK:           %[[VAL_50:.*]] = llvm.extractvalue %[[VAL_0]][49]
+    // CHECK:           %[[VAL_51:.*]] = llvm.extractvalue %[[VAL_0]][50]
+    // CHECK:           %[[VAL_52:.*]] = llvm.extractvalue %[[VAL_0]][51]
+    // CHECK:           %[[VAL_53:.*]] = llvm.extractvalue %[[VAL_0]][52]
+    // CHECK:           %[[VAL_54:.*]] = llvm.extractvalue %[[VAL_0]][53]
+    // CHECK:           %[[VAL_55:.*]] = llvm.extractvalue %[[VAL_0]][54]
+    // CHECK:           %[[VAL_56:.*]] = llvm.extractvalue %[[VAL_0]][55]
+    // CHECK:           %[[VAL_57:.*]] = llvm.extractvalue %[[VAL_0]][56]
+    // CHECK:           %[[VAL_58:.*]] = llvm.extractvalue %[[VAL_0]][57]
+    // CHECK:           %[[VAL_59:.*]] = llvm.extractvalue %[[VAL_0]][58]
+    // CHECK:           %[[VAL_60:.*]] = llvm.extractvalue %[[VAL_0]][59]
+    // CHECK:           %[[VAL_61:.*]] = llvm.extractvalue %[[VAL_0]][60]
+    // CHECK:           %[[VAL_62:.*]] = llvm.extractvalue %[[VAL_0]][61]
+    // CHECK:           %[[VAL_63:.*]] = llvm.extractvalue %[[VAL_0]][62]
+    // CHECK:           %[[VAL_64:.*]] = llvm.extractvalue %[[VAL_0]][63]
+    // CHECK:           %[[VAL_65:.*]] = llvm.mlir.undef
+    // CHECK:           %[[VAL_66:.*]] = llvm.insertvalue %[[VAL_1]], %[[VAL_65]][0]
+    // CHECK:           %[[VAL_67:.*]] = llvm.insertvalue %[[VAL_2]], %[[VAL_66]][1]
+    // CHECK:           %[[VAL_68:.*]] = llvm.insertvalue %[[VAL_3]], %[[VAL_67]][2]
+    // CHECK:           %[[VAL_69:.*]] = llvm.insertvalue %[[VAL_4]], %[[VAL_68]][3]
+    // CHECK:           %[[VAL_70:.*]] = llvm.insertvalue %[[VAL_5]], %[[VAL_69]][4]
+    // CHECK:           %[[VAL_71:.*]] = llvm.insertvalue %[[VAL_6]], %[[VAL_70]][5]
+    // CHECK:           %[[VAL_72:.*]] = llvm.insertvalue %[[VAL_7]], %[[VAL_71]][6]
+    // CHECK:           %[[VAL_73:.*]] = llvm.insertvalue %[[VAL_8]], %[[VAL_72]][7]
+    // CHECK:           %[[VAL_74:.*]] = llvm.insertvalue %[[VAL_17]], %[[VAL_73]][8]
+    // CHECK:           %[[VAL_75:.*]] = llvm.insertvalue %[[VAL_18]], %[[VAL_74]][9]
+    // CHECK:           %[[VAL_76:.*]] = llvm.insertvalue %[[VAL_19]], %[[VAL_75]][10]
+    // CHECK:           %[[VAL_77:.*]] = llvm.insertvalue %[[VAL_20]], %[[VAL_76]][11]
+    // CHECK:           %[[VAL_78:.*]] = llvm.insertvalue %[[VAL_21]], %[[VAL_77]][12]
+    // CHECK:           %[[VAL_79:.*]] = llvm.insertvalue %[[VAL_22]], %[[VAL_78]][13]
+    // CHECK:           %[[VAL_80:.*]] = llvm.insertvalue %[[VAL_23]], %[[VAL_79]][14]
+    // CHECK:           %[[VAL_81:.*]] = llvm.insertvalue %[[VAL_24]], %[[VAL_80]][15]
+    // CHECK:           %[[VAL_82:.*]] = llvm.insertvalue %[[VAL_9]], %[[VAL_81]][16]
+    // CHECK:           %[[VAL_83:.*]] = llvm.insertvalue %[[VAL_10]], %[[VAL_82]][17]
+    // CHECK:           %[[VAL_84:.*]] = llvm.insertvalue %[[VAL_11]], %[[VAL_83]][18]
+    // CHECK:           %[[VAL_85:.*]] = llvm.insertvalue %[[VAL_12]], %[[VAL_84]][19]
+    // CHECK:           %[[VAL_86:.*]] = llvm.insertvalue %[[VAL_13]], %[[VAL_85]][20]
+    // CHECK:           %[[VAL_87:.*]] = llvm.insertvalue %[[VAL_14]], %[[VAL_86]][21]
+    // CHECK:           %[[VAL_88:.*]] = llvm.insertvalue %[[VAL_15]], %[[VAL_87]][22]
+    // CHECK:           %[[VAL_89:.*]] = llvm.insertvalue %[[VAL_16]], %[[VAL_88]][23]
+    // CHECK:           %[[VAL_90:.*]] = llvm.insertvalue %[[VAL_25]], %[[VAL_89]][24]
+    // CHECK:           %[[VAL_91:.*]] = llvm.insertvalue %[[VAL_26]], %[[VAL_90]][25]
+    // CHECK:           %[[VAL_92:.*]] = llvm.insertvalue %[[VAL_27]], %[[VAL_91]][26]
+    // CHECK:           %[[VAL_93:.*]] = llvm.insertvalue %[[VAL_28]], %[[VAL_92]][27]
+    // CHECK:           %[[VAL_94:.*]] = llvm.insertvalue %[[VAL_29]], %[[VAL_93]][28]
+    // CHECK:           %[[VAL_95:.*]] = llvm.insertvalue %[[VAL_30]], %[[VAL_94]][29]
+    // CHECK:           %[[VAL_96:.*]] = llvm.insertvalue %[[VAL_31]], %[[VAL_95]][30]
+    // CHECK:           %[[VAL_97:.*]] = llvm.insertvalue %[[VAL_32]], %[[VAL_96]][31]
+    // CHECK:           %[[VAL_98:.*]] = llvm.insertvalue %[[VAL_33]], %[[VAL_97]][32]
+    // CHECK:           %[[VAL_99:.*]] = llvm.insertvalue %[[VAL_34]], %[[VAL_98]][33]
+    // CHECK:           %[[VAL_100:.*]] = llvm.insertvalue %[[VAL_35]], %[[VAL_99]][34]
+    // CHECK:           %[[VAL_101:.*]] = llvm.insertvalue %[[VAL_36]], %[[VAL_100]][35]
+    // CHECK:           %[[VAL_102:.*]] = llvm.insertvalue %[[VAL_37]], %[[VAL_101]][36]
+    // CHECK:           %[[VAL_103:.*]] = llvm.insertvalue %[[VAL_38]], %[[VAL_102]][37]
+    // CHECK:           %[[VAL_104:.*]] = llvm.insertvalue %[[VAL_39]], %[[VAL_103]][38]
+    // CHECK:           %[[VAL_105:.*]] = llvm.insertvalue %[[VAL_40]], %[[VAL_104]][39]
+    // CHECK:           %[[VAL_106:.*]] = llvm.insertvalue %[[VAL_49]], %[[VAL_105]][40]
+    // CHECK:           %[[VAL_107:.*]] = llvm.insertvalue %[[VAL_50]], %[[VAL_106]][41]
+    // CHECK:           %[[VAL_108:.*]] = llvm.insertvalue %[[VAL_51]], %[[VAL_107]][42]
+    // CHECK:           %[[VAL_109:.*]] = llvm.insertvalue %[[VAL_52]], %[[VAL_108]][43]
+    // CHECK:           %[[VAL_110:.*]] = llvm.insertvalue %[[VAL_53]], %[[VAL_109]][44]
+    // CHECK:           %[[VAL_111:.*]] = llvm.insertvalue %[[VAL_54]], %[[VAL_110]][45]
+    // CHECK:           %[[VAL_112:.*]] = llvm.insertvalue %[[VAL_55]], %[[VAL_111]][46]
+    // CHECK:           %[[VAL_113:.*]] = llvm.insertvalue %[[VAL_56]], %[[VAL_112]][47]
+    // CHECK:           %[[VAL_114:.*]] = llvm.insertvalue %[[VAL_41]], %[[VAL_113]][48]
+    // CHECK:           %[[VAL_115:.*]] = llvm.insertvalue %[[VAL_42]], %[[VAL_114]][49]
+    // CHECK:           %[[VAL_116:.*]] = llvm.insertvalue %[[VAL_43]], %[[VAL_115]][50]
+    // CHECK:           %[[VAL_117:.*]] = llvm.insertvalue %[[VAL_44]], %[[VAL_116]][51]
+    // CHECK:           %[[VAL_118:.*]] = llvm.insertvalue %[[VAL_45]], %[[VAL_117]][52]
+    // CHECK:           %[[VAL_119:.*]] = llvm.insertvalue %[[VAL_46]], %[[VAL_118]][53]
+    // CHECK:           %[[VAL_120:.*]] = llvm.insertvalue %[[VAL_47]], %[[VAL_119]][54]
+    // CHECK:           %[[VAL_121:.*]] = llvm.insertvalue %[[VAL_48]], %[[VAL_120]][55]
+    // CHECK:           %[[VAL_122:.*]] = llvm.insertvalue %[[VAL_57]], %[[VAL_121]][56]
+    // CHECK:           %[[VAL_123:.*]] = llvm.insertvalue %[[VAL_58]], %[[VAL_122]][57]
+    // CHECK:           %[[VAL_124:.*]] = llvm.insertvalue %[[VAL_59]], %[[VAL_123]][58]
+    // CHECK:           %[[VAL_125:.*]] = llvm.insertvalue %[[VAL_60]], %[[VAL_124]][59]
+    // CHECK:           %[[VAL_126:.*]] = llvm.insertvalue %[[VAL_61]], %[[VAL_125]][60]
+    // CHECK:           %[[VAL_127:.*]] = llvm.insertvalue %[[VAL_62]], %[[VAL_126]][61]
+    // CHECK:           %[[VAL_128:.*]] = llvm.insertvalue %[[VAL_63]], %[[VAL_127]][62]
+    // CHECK:           %[[VAL_129:.*]] = llvm.insertvalue %[[VAL_64]], %[[VAL_128]][63]
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }
@@ -110,55 +161,144 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 
 // -----
 
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [32, 1], repCluster = [4, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
   // CHECK-LABEL: convert_dpas_to_dot_rep_cluster_4_2
-  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {triton_gen.intel_reqd_sub_group_size = [16 : i32], triton_gen.max_work_group_size = [512 : i32, 1 : i32, 1 : i32]} {
+  // CHECK-SAME:  %[[VAL_0:.*]]: !llvm.struct<({{.*}})>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas_to_dot_rep_cluster_4_2(%arg: tensor<1024x32xf16, #dpas>) {
     // COM: The repetitions order of dpas layout when the GEMM tiling is clustered as repCluster [4, 2]:
     // COM:   - 0, 1, 2, 3, 4, 5, 6, 7.
     // COM: The repetitions order of dot layout when the GEMM tiling is clustered as repCluster [4, 2]:
     // COM:   - 0, 2, 4, 6, 1, 3, 5, 7.
-    // CHECK:           %[[VAL_81:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_0:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_81]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_98:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_1:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_98]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_115:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_2:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_115]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_132:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_3:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_132]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_149:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_4:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_149]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_166:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_5:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_166]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_183:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_6:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_183]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_200:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[REP_7:.*]] = llvm.insertelement {{.*}}, {{.*}}{{\[}}%[[VAL_200]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_216:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_217:.*]] = llvm.extractelement %[[REP_0]]{{\[}}%[[VAL_216]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_232:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_233:.*]] = llvm.extractelement %[[REP_2]]{{\[}}%[[VAL_232]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_248:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_249:.*]] = llvm.extractelement %[[REP_4]]{{\[}}%[[VAL_248]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_264:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_265:.*]] = llvm.extractelement %[[REP_6]]{{\[}}%[[VAL_264]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_280:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_281:.*]] = llvm.extractelement %[[REP_1]]{{\[}}%[[VAL_280]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_296:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_297:.*]] = llvm.extractelement %[[REP_3]]{{\[}}%[[VAL_296]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_312:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_313:.*]] = llvm.extractelement %[[REP_5]]{{\[}}%[[VAL_312]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_328:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK:           %[[VAL_329:.*]] = llvm.extractelement %[[REP_7]]{{\[}}%[[VAL_328]] : i32] : vector<8xf16>
-    // CHECK:           %[[VAL_338:.*]] = llvm.insertvalue %[[VAL_217]], {{.*}}[7]
-    // CHECK:           %[[VAL_346:.*]] = llvm.insertvalue %[[VAL_233]], {{.*}}[15]
-    // CHECK:           %[[VAL_354:.*]] = llvm.insertvalue %[[VAL_249]], {{.*}}[23]
-    // CHECK:           %[[VAL_362:.*]] = llvm.insertvalue %[[VAL_265]], {{.*}}[31]
-    // CHECK:           %[[VAL_370:.*]] = llvm.insertvalue %[[VAL_281]], {{.*}}[39]
-    // CHECK:           %[[VAL_378:.*]] = llvm.insertvalue %[[VAL_297]], {{.*}}[47]
-    // CHECK:           %[[VAL_386:.*]] = llvm.insertvalue %[[VAL_313]], {{.*}}[55]
-    // CHECK:           %[[VAL_394:.*]] = llvm.insertvalue %[[VAL_329]], {{.*}}[63]
-    %108 = triton_gpu.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>>
+    // CHECK:           %[[VAL_1:.*]] = llvm.extractvalue %[[VAL_0]][0]
+    // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][1]
+    // CHECK:           %[[VAL_3:.*]] = llvm.extractvalue %[[VAL_0]][2]
+    // CHECK:           %[[VAL_4:.*]] = llvm.extractvalue %[[VAL_0]][3]
+    // CHECK:           %[[VAL_5:.*]] = llvm.extractvalue %[[VAL_0]][4]
+    // CHECK:           %[[VAL_6:.*]] = llvm.extractvalue %[[VAL_0]][5]
+    // CHECK:           %[[VAL_7:.*]] = llvm.extractvalue %[[VAL_0]][6]
+    // CHECK:           %[[VAL_8:.*]] = llvm.extractvalue %[[VAL_0]][7]
+    // CHECK:           %[[VAL_9:.*]] = llvm.extractvalue %[[VAL_0]][8]
+    // CHECK:           %[[VAL_10:.*]] = llvm.extractvalue %[[VAL_0]][9]
+    // CHECK:           %[[VAL_11:.*]] = llvm.extractvalue %[[VAL_0]][10]
+    // CHECK:           %[[VAL_12:.*]] = llvm.extractvalue %[[VAL_0]][11]
+    // CHECK:           %[[VAL_13:.*]] = llvm.extractvalue %[[VAL_0]][12]
+    // CHECK:           %[[VAL_14:.*]] = llvm.extractvalue %[[VAL_0]][13]
+    // CHECK:           %[[VAL_15:.*]] = llvm.extractvalue %[[VAL_0]][14]
+    // CHECK:           %[[VAL_16:.*]] = llvm.extractvalue %[[VAL_0]][15]
+    // CHECK:           %[[VAL_17:.*]] = llvm.extractvalue %[[VAL_0]][16]
+    // CHECK:           %[[VAL_18:.*]] = llvm.extractvalue %[[VAL_0]][17]
+    // CHECK:           %[[VAL_19:.*]] = llvm.extractvalue %[[VAL_0]][18]
+    // CHECK:           %[[VAL_20:.*]] = llvm.extractvalue %[[VAL_0]][19]
+    // CHECK:           %[[VAL_21:.*]] = llvm.extractvalue %[[VAL_0]][20]
+    // CHECK:           %[[VAL_22:.*]] = llvm.extractvalue %[[VAL_0]][21]
+    // CHECK:           %[[VAL_23:.*]] = llvm.extractvalue %[[VAL_0]][22]
+    // CHECK:           %[[VAL_24:.*]] = llvm.extractvalue %[[VAL_0]][23]
+    // CHECK:           %[[VAL_25:.*]] = llvm.extractvalue %[[VAL_0]][24]
+    // CHECK:           %[[VAL_26:.*]] = llvm.extractvalue %[[VAL_0]][25]
+    // CHECK:           %[[VAL_27:.*]] = llvm.extractvalue %[[VAL_0]][26]
+    // CHECK:           %[[VAL_28:.*]] = llvm.extractvalue %[[VAL_0]][27]
+    // CHECK:           %[[VAL_29:.*]] = llvm.extractvalue %[[VAL_0]][28]
+    // CHECK:           %[[VAL_30:.*]] = llvm.extractvalue %[[VAL_0]][29]
+    // CHECK:           %[[VAL_31:.*]] = llvm.extractvalue %[[VAL_0]][30]
+    // CHECK:           %[[VAL_32:.*]] = llvm.extractvalue %[[VAL_0]][31]
+    // CHECK:           %[[VAL_33:.*]] = llvm.extractvalue %[[VAL_0]][32]
+    // CHECK:           %[[VAL_34:.*]] = llvm.extractvalue %[[VAL_0]][33]
+    // CHECK:           %[[VAL_35:.*]] = llvm.extractvalue %[[VAL_0]][34]
+    // CHECK:           %[[VAL_36:.*]] = llvm.extractvalue %[[VAL_0]][35]
+    // CHECK:           %[[VAL_37:.*]] = llvm.extractvalue %[[VAL_0]][36]
+    // CHECK:           %[[VAL_38:.*]] = llvm.extractvalue %[[VAL_0]][37]
+    // CHECK:           %[[VAL_39:.*]] = llvm.extractvalue %[[VAL_0]][38]
+    // CHECK:           %[[VAL_40:.*]] = llvm.extractvalue %[[VAL_0]][39]
+    // CHECK:           %[[VAL_41:.*]] = llvm.extractvalue %[[VAL_0]][40]
+    // CHECK:           %[[VAL_42:.*]] = llvm.extractvalue %[[VAL_0]][41]
+    // CHECK:           %[[VAL_43:.*]] = llvm.extractvalue %[[VAL_0]][42]
+    // CHECK:           %[[VAL_44:.*]] = llvm.extractvalue %[[VAL_0]][43]
+    // CHECK:           %[[VAL_45:.*]] = llvm.extractvalue %[[VAL_0]][44]
+    // CHECK:           %[[VAL_46:.*]] = llvm.extractvalue %[[VAL_0]][45]
+    // CHECK:           %[[VAL_47:.*]] = llvm.extractvalue %[[VAL_0]][46]
+    // CHECK:           %[[VAL_48:.*]] = llvm.extractvalue %[[VAL_0]][47]
+    // CHECK:           %[[VAL_49:.*]] = llvm.extractvalue %[[VAL_0]][48]
+    // CHECK:           %[[VAL_50:.*]] = llvm.extractvalue %[[VAL_0]][49]
+    // CHECK:           %[[VAL_51:.*]] = llvm.extractvalue %[[VAL_0]][50]
+    // CHECK:           %[[VAL_52:.*]] = llvm.extractvalue %[[VAL_0]][51]
+    // CHECK:           %[[VAL_53:.*]] = llvm.extractvalue %[[VAL_0]][52]
+    // CHECK:           %[[VAL_54:.*]] = llvm.extractvalue %[[VAL_0]][53]
+    // CHECK:           %[[VAL_55:.*]] = llvm.extractvalue %[[VAL_0]][54]
+    // CHECK:           %[[VAL_56:.*]] = llvm.extractvalue %[[VAL_0]][55]
+    // CHECK:           %[[VAL_57:.*]] = llvm.extractvalue %[[VAL_0]][56]
+    // CHECK:           %[[VAL_58:.*]] = llvm.extractvalue %[[VAL_0]][57]
+    // CHECK:           %[[VAL_59:.*]] = llvm.extractvalue %[[VAL_0]][58]
+    // CHECK:           %[[VAL_60:.*]] = llvm.extractvalue %[[VAL_0]][59]
+    // CHECK:           %[[VAL_61:.*]] = llvm.extractvalue %[[VAL_0]][60]
+    // CHECK:           %[[VAL_62:.*]] = llvm.extractvalue %[[VAL_0]][61]
+    // CHECK:           %[[VAL_63:.*]] = llvm.extractvalue %[[VAL_0]][62]
+    // CHECK:           %[[VAL_64:.*]] = llvm.extractvalue %[[VAL_0]][63]
+    // CHECK:           %[[VAL_65:.*]] = llvm.mlir.undef
+    // CHECK:           %[[VAL_66:.*]] = llvm.insertvalue %[[VAL_1]], %[[VAL_65]][0]
+    // CHECK:           %[[VAL_67:.*]] = llvm.insertvalue %[[VAL_2]], %[[VAL_66]][1]
+    // CHECK:           %[[VAL_68:.*]] = llvm.insertvalue %[[VAL_3]], %[[VAL_67]][2]
+    // CHECK:           %[[VAL_69:.*]] = llvm.insertvalue %[[VAL_4]], %[[VAL_68]][3]
+    // CHECK:           %[[VAL_70:.*]] = llvm.insertvalue %[[VAL_5]], %[[VAL_69]][4]
+    // CHECK:           %[[VAL_71:.*]] = llvm.insertvalue %[[VAL_6]], %[[VAL_70]][5]
+    // CHECK:           %[[VAL_72:.*]] = llvm.insertvalue %[[VAL_7]], %[[VAL_71]][6]
+    // CHECK:           %[[VAL_73:.*]] = llvm.insertvalue %[[VAL_8]], %[[VAL_72]][7]
+    // CHECK:           %[[VAL_74:.*]] = llvm.insertvalue %[[VAL_17]], %[[VAL_73]][8]
+    // CHECK:           %[[VAL_75:.*]] = llvm.insertvalue %[[VAL_18]], %[[VAL_74]][9]
+    // CHECK:           %[[VAL_76:.*]] = llvm.insertvalue %[[VAL_19]], %[[VAL_75]][10]
+    // CHECK:           %[[VAL_77:.*]] = llvm.insertvalue %[[VAL_20]], %[[VAL_76]][11]
+    // CHECK:           %[[VAL_78:.*]] = llvm.insertvalue %[[VAL_21]], %[[VAL_77]][12]
+    // CHECK:           %[[VAL_79:.*]] = llvm.insertvalue %[[VAL_22]], %[[VAL_78]][13]
+    // CHECK:           %[[VAL_80:.*]] = llvm.insertvalue %[[VAL_23]], %[[VAL_79]][14]
+    // CHECK:           %[[VAL_81:.*]] = llvm.insertvalue %[[VAL_24]], %[[VAL_80]][15]
+    // CHECK:           %[[VAL_82:.*]] = llvm.insertvalue %[[VAL_33]], %[[VAL_81]][16]
+    // CHECK:           %[[VAL_83:.*]] = llvm.insertvalue %[[VAL_34]], %[[VAL_82]][17]
+    // CHECK:           %[[VAL_84:.*]] = llvm.insertvalue %[[VAL_35]], %[[VAL_83]][18]
+    // CHECK:           %[[VAL_85:.*]] = llvm.insertvalue %[[VAL_36]], %[[VAL_84]][19]
+    // CHECK:           %[[VAL_86:.*]] = llvm.insertvalue %[[VAL_37]], %[[VAL_85]][20]
+    // CHECK:           %[[VAL_87:.*]] = llvm.insertvalue %[[VAL_38]], %[[VAL_86]][21]
+    // CHECK:           %[[VAL_88:.*]] = llvm.insertvalue %[[VAL_39]], %[[VAL_87]][22]
+    // CHECK:           %[[VAL_89:.*]] = llvm.insertvalue %[[VAL_40]], %[[VAL_88]][23]
+    // CHECK:           %[[VAL_90:.*]] = llvm.insertvalue %[[VAL_49]], %[[VAL_89]][24]
+    // CHECK:           %[[VAL_91:.*]] = llvm.insertvalue %[[VAL_50]], %[[VAL_90]][25]
+    // CHECK:           %[[VAL_92:.*]] = llvm.insertvalue %[[VAL_51]], %[[VAL_91]][26]
+    // CHECK:           %[[VAL_93:.*]] = llvm.insertvalue %[[VAL_52]], %[[VAL_92]][27]
+    // CHECK:           %[[VAL_94:.*]] = llvm.insertvalue %[[VAL_53]], %[[VAL_93]][28]
+    // CHECK:           %[[VAL_95:.*]] = llvm.insertvalue %[[VAL_54]], %[[VAL_94]][29]
+    // CHECK:           %[[VAL_96:.*]] = llvm.insertvalue %[[VAL_55]], %[[VAL_95]][30]
+    // CHECK:           %[[VAL_97:.*]] = llvm.insertvalue %[[VAL_56]], %[[VAL_96]][31]
+    // CHECK:           %[[VAL_98:.*]] = llvm.insertvalue %[[VAL_9]], %[[VAL_97]][32]
+    // CHECK:           %[[VAL_99:.*]] = llvm.insertvalue %[[VAL_10]], %[[VAL_98]][33]
+    // CHECK:           %[[VAL_100:.*]] = llvm.insertvalue %[[VAL_11]], %[[VAL_99]][34]
+    // CHECK:           %[[VAL_101:.*]] = llvm.insertvalue %[[VAL_12]], %[[VAL_100]][35]
+    // CHECK:           %[[VAL_102:.*]] = llvm.insertvalue %[[VAL_13]], %[[VAL_101]][36]
+    // CHECK:           %[[VAL_103:.*]] = llvm.insertvalue %[[VAL_14]], %[[VAL_102]][37]
+    // CHECK:           %[[VAL_104:.*]] = llvm.insertvalue %[[VAL_15]], %[[VAL_103]][38]
+    // CHECK:           %[[VAL_105:.*]] = llvm.insertvalue %[[VAL_16]], %[[VAL_104]][39]
+    // CHECK:           %[[VAL_106:.*]] = llvm.insertvalue %[[VAL_25]], %[[VAL_105]][40]
+    // CHECK:           %[[VAL_107:.*]] = llvm.insertvalue %[[VAL_26]], %[[VAL_106]][41]
+    // CHECK:           %[[VAL_108:.*]] = llvm.insertvalue %[[VAL_27]], %[[VAL_107]][42]
+    // CHECK:           %[[VAL_109:.*]] = llvm.insertvalue %[[VAL_28]], %[[VAL_108]][43]
+    // CHECK:           %[[VAL_110:.*]] = llvm.insertvalue %[[VAL_29]], %[[VAL_109]][44]
+    // CHECK:           %[[VAL_111:.*]] = llvm.insertvalue %[[VAL_30]], %[[VAL_110]][45]
+    // CHECK:           %[[VAL_112:.*]] = llvm.insertvalue %[[VAL_31]], %[[VAL_111]][46]
+    // CHECK:           %[[VAL_113:.*]] = llvm.insertvalue %[[VAL_32]], %[[VAL_112]][47]
+    // CHECK:           %[[VAL_114:.*]] = llvm.insertvalue %[[VAL_41]], %[[VAL_113]][48]
+    // CHECK:           %[[VAL_115:.*]] = llvm.insertvalue %[[VAL_42]], %[[VAL_114]][49]
+    // CHECK:           %[[VAL_116:.*]] = llvm.insertvalue %[[VAL_43]], %[[VAL_115]][50]
+    // CHECK:           %[[VAL_117:.*]] = llvm.insertvalue %[[VAL_44]], %[[VAL_116]][51]
+    // CHECK:           %[[VAL_118:.*]] = llvm.insertvalue %[[VAL_45]], %[[VAL_117]][52]
+    // CHECK:           %[[VAL_119:.*]] = llvm.insertvalue %[[VAL_46]], %[[VAL_118]][53]
+    // CHECK:           %[[VAL_120:.*]] = llvm.insertvalue %[[VAL_47]], %[[VAL_119]][54]
+    // CHECK:           %[[VAL_121:.*]] = llvm.insertvalue %[[VAL_48]], %[[VAL_120]][55]
+    // CHECK:           %[[VAL_122:.*]] = llvm.insertvalue %[[VAL_57]], %[[VAL_121]][56]
+    // CHECK:           %[[VAL_123:.*]] = llvm.insertvalue %[[VAL_58]], %[[VAL_122]][57]
+    // CHECK:           %[[VAL_124:.*]] = llvm.insertvalue %[[VAL_59]], %[[VAL_123]][58]
+    // CHECK:           %[[VAL_125:.*]] = llvm.insertvalue %[[VAL_60]], %[[VAL_124]][59]
+    // CHECK:           %[[VAL_126:.*]] = llvm.insertvalue %[[VAL_61]], %[[VAL_125]][60]
+    // CHECK:           %[[VAL_127:.*]] = llvm.insertvalue %[[VAL_62]], %[[VAL_126]][61]
+    // CHECK:           %[[VAL_128:.*]] = llvm.insertvalue %[[VAL_63]], %[[VAL_127]][62]
+    // CHECK:           %[[VAL_129:.*]] = llvm.insertvalue %[[VAL_64]], %[[VAL_128]][63]
+    %108 = ttg.convert_layout %arg : tensor<1024x32xf16, #dpas> -> tensor<1024x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }
 }

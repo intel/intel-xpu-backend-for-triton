@@ -58,7 +58,8 @@ Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA) {
         src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(layout))
     return triton::gpu::AMDWmmaEncodingAttr::get(
-        ctx, /*version=*/1, warpsPerCTA, src.getCTALayout());
+        ctx, src.getVersion(), src.getIsTransposed(), warpsPerCTA,
+        src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout))
     return triton::gpu::BlockedEncodingAttr::get(
         ctx, src.getSizePerThread(), src.getThreadsPerWarp(), warpsPerCTA,
@@ -68,9 +69,13 @@ Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA) {
         ctx, src.getOpIdx(), createTmpLayout(src.getParent(), warpsPerCTA),
         src.getKWidth());
   }
-  if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout))
+  if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)) {
+    // TODO: think of a way to construct slice layouts based on warpsPerCTA
+    // argument
+    auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(src.getParent());
     return triton::gpu::SliceEncodingAttr::get(
-        ctx, src.getDim(), createTmpLayout(src.getParent(), warpsPerCTA));
+        ctx, src.getDim(), createTmpLayout(src.getParent(), parentWarpsPerCTA));
+  }
   assert("Encountered unsupported layout");
   return Attribute();
 }

@@ -14,9 +14,6 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 
-if benchmark_suit.USE_IPEX_OPTION:
-    import intel_extension_for_pytorch  # type: ignore # noqa: F401
-
 kAlpha = tl.constexpr(math.sqrt(2.0 / math.pi))
 
 
@@ -74,7 +71,7 @@ def matmul_kernel_with_block_pointers(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     a_block_ptr = tl.make_block_ptr(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
@@ -135,15 +132,15 @@ def matmul_kernel_with_block_pointers_batched(
         stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
-    bid = tl.program_id(axis=0)
-    pid = tl.program_id(axis=1)
+    bid = tl.program_id(axis=1)
+    pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     offset_a = bid.to(tl.int64) * stride_az
@@ -185,8 +182,8 @@ def matmul(a, b, c):
         B, K, N = b.shape
         # 1D launch kernel where each block gets its own program.
         grid = lambda META: (
-            B,
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+            B,
         )
         matmul_kernel_with_block_pointers_batched[grid](
             a, b, c,  #
@@ -212,35 +209,56 @@ def matmul(a, b, c):
     return c
 
 
+X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i]
+          for i in [1, 2, 4, 8]] + [[1, 1, 5120, 13824],  #
+                                    [1, 4, 4096, 12288],  #
+                                    [1, 512, 8192, 8192],  #
+                                    [1, 512, 8192, 32768],  #
+                                    [1, 512, 32768, 8192],  #
+                                    [1, 1024, 16384, 8192],  #
+                                    [1, 1024, 28672, 8192],  #
+                                    [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
+                                    [1, 4096, 16384, 8192],  #
+                                    [1, 8192, 16384, 1024],  #
+                                    [1, 8192, 16384, 4096],  #
+                                    [1, 16384, 1024, 8192],  #
+                                    [1, 16384, 4096, 8192],  #
+                                    [1, 16384, 8192, 1024],  #
+                                    [1, 16384, 8192, 4096],  #
+                                    [4, 32768, 128, 4096],  #
+                                    [4, 32768, 4096, 128],  #
+                                    [32, 4096, 4096, 128],  #
+                                    [4096, 8, 128, 16384],  #
+                                    [4096, 8, 16384, 128]]
+
+DEVICE_NAME = torch.xpu.get_device_name()
+DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+
+
+def is_enough_memory(x_val):
+    # x_val: (B, M, K, N)
+    B, M, K, N = x_val
+    # a: (B, M, K) bfloat16
+    # b: (B, K, N) bfloat16
+    # c: (B, M, N) float32
+    # pytorch reference: (B, M, N) float32
+    required_memory = B * M * K * 2 + B * K * N * 2 + 2 * B * M * N * 4
+    enough_memory = required_memory < DEVICE_TOTAL_MEMORY
+    if not enough_memory:
+        print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
+    return enough_memory
+
+
+X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
+
+
 # Benchmark Performance
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['B', 'M', 'K', 'N'],
         # different possible values for `x_name`
-        x_vals=[[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] +  #
-        [  #
-            [1, 1, 5120, 13824],  #
-            [1, 4, 4096, 12288],  #
-            [1, 512, 8192, 8192],  #
-            [1, 512, 8192, 32768],  #
-            [1, 512, 32768, 8192],  #
-            [1, 1024, 16384, 8192],  #
-            [1, 1024, 28672, 8192],  #
-            [1, 3072, 4096, 3072],  # FIXME: Remove this case when gemm_streamk_benchmark works
-            [1, 4096, 16384, 8192],  #
-            [1, 8192, 16384, 1024],  #
-            [1, 8192, 16384, 4096],  #
-            [1, 16384, 1024, 8192],  #
-            [1, 16384, 4096, 8192],  #
-            [1, 16384, 8192, 1024],  #
-            [1, 16384, 8192, 4096],  #
-            [4, 32768, 128, 4096],  #
-            [4, 32768, 4096, 128],  #
-            [32, 4096, 4096, 128],  #
-            [4096, 8, 128, 16384],  #
-            [4096, 8, 16384, 128]
-        ],
+        x_vals=X_VALS,
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -268,17 +286,15 @@ def benchmark(B, M, N, K, provider):
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
             c = torch.empty((B, M, N), device='xpu', dtype=torch.float32)
-            kernel_name = 'matmul_kernel_with_block_pointers_batched'
         else:
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
-            kernel_name = 'matmul_kernel_with_block_pointers'
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.nn.functional.gelu(torch.matmul(a, b).to(torch.float32))
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn(), torch_fn(), atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles, kernel_name=kernel_name)
+                                                                 quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

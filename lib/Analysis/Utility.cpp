@@ -11,12 +11,14 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
+#include "triton/Analysis/Allocation.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
@@ -43,14 +45,8 @@ SmallVector<unsigned> getParentOrder(Attribute layout) {
 
 } // namespace
 
-// TODO(jlebar): Move this class into namespace triton.
-bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
-  return getParentAxis(getSrcLayout(), axis) ==
-         getParentOrder(getSrcLayout())[0];
-}
-
 SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto srcLayout = getSrcLayout();
+  auto srcLayout = srcEncoding;
   auto order = getOrder(srcLayout);
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
@@ -63,28 +59,18 @@ SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
 // Thread offset is the thread index offset of two adjacent threads on the
 // reduction axis within the warp.
 unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
-  auto srcLayout = getSrcLayout();
-
-  // If the reduction axis is the fast axis of the parent layout
-  if (isReductionOnLayoutFastAxis()) {
-    return 1;
+  auto *ctx = srcEncoding.getContext();
+  auto linearLayout = toLinearLayout(srcShape, srcEncoding);
+  auto kLane = mlir::StringAttr::get(ctx, "lane");
+  const auto &bases = linearLayout.getBases();
+  const auto &lanes = bases.find(kLane)->second;
+  auto offset = 1;
+  for (const auto &lane : lanes) {
+    if (lane[axis] != 0)
+      break;
+    offset *= 2;
   }
-
-  unsigned threadOffset = 1;
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto threadsPerWarp = getThreadsPerWarp(parentLayout);
-    threadOffset = threadsPerWarp[sliceLayout.getDim()];
-  } else {
-    auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-    auto order = getThreadOrder(srcLayout);
-    for (unsigned i = 0; i < order.size(); i++) {
-      if (order[i] == axis)
-        break;
-      threadOffset *= threadsPerWarp[order[i]];
-    }
-  }
-  return threadOffset;
+  return offset;
 }
 
 // Cases where distributed shared memory is not required in ConvertLayout:
@@ -132,44 +118,16 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
   return true;
 }
 
-unsigned ReduceOpHelper::getInterWarpSize() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  unsigned sizeIntraWarps = getIntraWarpSize();
-  return std::min(srcReduceDimSize / sizeIntraWarps,
-                  getWarpsPerCTA(getSrcLayout())[axis]);
-}
-
-unsigned ReduceOpHelper::getIntraWarpSize() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  return std::min(srcReduceDimSize, getThreadsPerWarp(getSrcLayout())[axis]);
-}
-
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  unsigned sizeIntraWarps = getIntraWarpSizeWithUniqueData();
-  return std::min(
-      srcReduceDimSize / sizeIntraWarps,
-      getWarpsPerCTAWithUniqueData(getSrcLayout(), getSrcShape())[axis]);
+  return getWarpsPerCTAWithUniqueData(srcEncoding, srcShape)[axis];
 }
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  unsigned elementPerThreads =
-      getUniqueContigPerThread(getSrcLayout(), getSrcShape())[axis];
-  return std::min(
-      srcReduceDimSize / elementPerThreads,
-      getThreadsPerWarpWithUniqueData(getSrcLayout(), getSrcShape())[axis]);
-}
-
-unsigned ReduceOpHelper::getThreadsReductionAxis() {
-  auto srcLayout = getSrcLayout();
-  auto srcShape = getSrcShape();
-  return getThreadsPerWarpWithUniqueData(srcLayout, srcShape)[axis] *
-         getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
+  return getThreadsPerWarpWithUniqueData(srcEncoding, srcShape)[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
-  auto srcLayout = getSrcLayout();
+  auto srcLayout = srcEncoding;
   // FIXME: In the default path tensors will always have a layout. Tensors do
   // not have a layout only in the advanced path. We need to find a workaround
   // in order to remove this change.
@@ -181,11 +139,11 @@ bool ReduceOpHelper::isWarpSynchronous() {
 
 SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
   SmallVector<unsigned> smemShape;
-  // that case doesn't need inter-warp communication
+  // This case doesn't need inter-warp communication
   if (isWarpSynchronous())
     return {0, 0};
 
-  smemShape = convertType<unsigned>(getSrcShape());
+  smemShape = convertType<unsigned>(srcShape);
   smemShape[axis] = getInterWarpSizeWithUniqueData();
 
   return smemShape;
@@ -203,31 +161,10 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
-  auto axis = getAxis();
-  auto srcLayout = getSrcLayout();
-  auto CTASplitNum = getCTASplitNum(srcLayout);
-  assert(axis < CTASplitNum.size());
-  return CTASplitNum[axis] == 1;
-}
-
-bool ReduceOpHelper::isSupportedLayout() {
+  // TODO: Support reduce across CTAS
   // Layout optimization passes such as PlanCTAPass and
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
-  if (!isReduceWithinCTA()) {
-    return false;
-  }
-
-  auto srcLayout = getSrcLayout();
-  if (isa<BlockedEncodingAttr>(srcLayout)) {
-    return true;
-  }
-  if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcLayout)) {
-    return mmaLayout.supportReduction();
-  }
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    return true;
-  }
-  return false;
+  return getCTASplitNum(srcEncoding)[axis] == 1;
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
@@ -302,14 +239,13 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
 bool ScanLoweringHelper::isSupported() {
   // TODO: Support the following cases:
   // 1. Scan on non-blocking encodings
-  if (!isa<BlockedEncodingAttr>(getEncoding()))
+  if (!isa<BlockedEncodingAttr>(srcEncoding))
     return false;
   return true;
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInElems() {
-  auto mod = scanOp->getParentOfType<ModuleOp>();
-  unsigned numWarps = TritonGPUDialect::getNumWarps(mod);
+  unsigned numWarps = product(getEncoding().getWarpsPerCTA());
   unsigned numNonAxisElementsPerWarp =
       getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
   unsigned numElements = numWarps * numNonAxisElementsPerWarp *
@@ -318,6 +254,10 @@ unsigned ScanLoweringHelper::getScratchSizeInElems() {
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
+  // Lowering will fail later if the layout is not supported.
+  if (!isSupported())
+    return 0;
+
   unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
   if (axisNumWarps == 1)
     return 0;
@@ -326,6 +266,227 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
     elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
   }
   return elementSizeInBytes * getScratchSizeInElems();
+}
+
+std::optional<DecomposedWarpConversion>
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy) {
+  auto conversion = minimalCvtLayout(srcTy, dstTy);
+
+  MLIRContext *ctx = srcTy.getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+
+  // We have already checked that data movement is only required within a warp,
+  // thus we can discard the block and warp dimensions.
+  LinearLayout C = conversion.sublayout({kLane, kRegister}, {kLane, kRegister});
+
+  // `C` is map from `(dst_lane, dst_reg) -> (src_lane, src_reg)`. From the
+  // perspetive of the destination lane, it tells us which register from which
+  // lane to get the value. Since the source and destination layouts are
+  // subpermutation matrices, the overall transformation amounts to permuting
+  // data around (plus broadcasting, if necessary).
+  //
+  // Warp shuffles allow indexing into another lane, but does not allowing
+  // selecting the register. Suppose we decompose `C` into `C = P1 ∘ W ∘ P2`,
+  // where `W` is a warp shuffle and `P1` and `P2` are (lane-dependent) register
+  // permutations within a lane. Start from `C` and work backwards.
+  //
+  // Given any `C`, is it possible that for a given destination register, two
+  // destination lanes map to different source registers in the same source
+  // lane. This is impossible to represent using a shuffle. This happens when,
+  // with respect to the identity layout, a register base is swapped with a lane
+  // base (when the destination lane changes, the source register changes but
+  // the lane does not).
+  //
+  // Example:
+  //
+  //   src = {register = [[1,0], [2,0]], lane = [[0,1], [0,2]]}
+  //   dst = {register = [[0,1], [2,0]], lane = [[1,0], [0,2]]}
+  //   cvt = dst, since src is the identity layout
+  //
+  // The map from destination -> source looks like:
+  //
+  //             dst_lane
+  // dst_reg       0      1      2      3
+  //  0          T0:0   T0:1   T2:0   T2:1
+  //  1          T1:0   T1:1   T3:0   T3:1
+  //  2          T0:2   T0:3   T2:2   T2:3
+  //  3          T1:2   T1:3   T3:2   T3:3
+  //
+  // Note for each destination register, two lanes want two different registers
+  // in the same source lane (T0:0 -> T0:0, T1:0 -> T0:1). This is impossible to
+  // represent with a warp shuffle, because the source lane (e.g. T0) can only
+  // supply one of its registers as the shuffle value.
+  //
+  // The goal of `P2` is to permute registers within a thread so that this does
+  // not happen. Specifically, pick `P2` such that bases in
+  // `(P2^-1 ∘ C).sublayout(kLane, {kLane, kRegister})` has non-zero lane
+  // components when the register components are non-zero.
+  //
+  // P2 can only change the register mapping within a thread. Constrain P2 as:
+  //
+  //   P2 = [ I 0 ]
+  //        [ P I ]
+  //
+  // Then `P2^-1 ∘ C` is:
+  //
+  //   [ I  0 ] [ C(r,r) C(r,l) ] = [ C(r,r)             C(r,l)           ]
+  //   [ P' I ] [ C(l,r) C(l,l) ]   [ P'*C(r,r)+C(l,r)   P'*C(r,l)+C(l,l) ]
+  //
+  // Where addition in GF(2) is xor.
+  //
+  // We can see that P' selects rows (i.e. bases) from the upper half (register)
+  // and combines them with the lower half (lane). Because the goal is for P' to
+  // select register bases `i` where C(r,l)[i] != 0, we know P'*C(r,r) = 0,
+  // since the corresponding C(r,r)[i] element in the same row will be zero.
+  //
+  // Note that solutions for P' do not always exist (no register permutation
+  // will decompose C to make the warp shuffle possible), and this happens when
+  // there aren't enough non-zero bases in C(r,l).
+  //
+  // Find the indices of the missing lane bases: rows in the lower half where
+  // the register component is non-zero but the lane component is zero.
+  SmallVector<int> missingLaneRows;
+  for (int i : llvm::seq(C.getInDimSizeLog2(kLane))) {
+    ArrayRef<int32_t> /*C(l,(r,l))[i]*/ lowerHalfRow = C.getBasis(kLane, i);
+    assert(lowerHalfRow.size() == 2);
+    if (/*C(l,r)[i]*/ lowerHalfRow[0] != 0) {
+      assert(/*C(l,l)[i]*/ lowerHalfRow[1] == 0);
+      missingLaneRows.push_back(i);
+    } else if (lowerHalfRow[1] == 0) {
+      // If there is broadcasting along the lane, then C'(l,l) below won't be
+      // invertible. Intuitively, the dst tensor contains a subset of the src
+      // tensor's data, so recovering the src tensor through permutation alone
+      // is impossible. We would need an affine component (bfly shuffle).
+      return {};
+    }
+  }
+
+  // Find rows in the upper-half  of C (i.e. the (reg) -> (reg, lane) submatrix)
+  // that can be selected by P' to make the lane components in the lower half
+  // (i.e. the (lane) -> (lane) submatrix) non-zero.
+  std::vector<std::vector<int32_t>> PPrimeLaneBases(C.getInDimSizeLog2(kLane),
+                                                    {0});
+  for (int i : llvm::seq(C.getInDimSizeLog2(kRegister))) {
+    ArrayRef<int32_t> /*C(r,(r,l))[i]*/ upperHalfRow = C.getBasis(kRegister, i);
+    assert(upperHalfRow.size() == 2);
+    if (/*C(r,l)[i]*/ upperHalfRow[1] == 0)
+      continue;
+
+    assert(upperHalfRow[0] == 0);
+    int32_t laneBase = upperHalfRow[1];
+    assert(/*C(r,r)[i]*/ upperHalfRow[0] == 0);
+    if (!missingLaneRows.empty()) {
+      // Select row i into row j from the missing rows. The order in which the
+      // missing rows are selected doesn't really matter.
+      PPrimeLaneBases[missingLaneRows.pop_back_val()][0] |= (1 << i);
+    }
+  }
+  if (!missingLaneRows.empty()) {
+    // The decomposition failed. No solution for P' is possible.
+    return {};
+  }
+
+  // P' outputs the destination register.
+  LinearLayout PPrime({{kLane, std::move(PPrimeLaneBases)}},
+                      {{kRegister, C.getInDimSize(kRegister)}},
+                      /*requiresSurjective=*/false);
+
+  // Form P2^-1 from P'.
+  unsigned dstRegSize = C.getInDimSize(kRegister);
+  unsigned numLanes = C.getInDimSize(kLane);
+  LinearLayout P2invTop =
+      LinearLayout::identity1D(dstRegSize, kRegister, kRegister)
+          .concatOuts(
+              LinearLayout::zeros1D(dstRegSize, kRegister, kLane, numLanes));
+  LinearLayout P2invBot =
+      PPrime.concatOuts(LinearLayout::identity1D(numLanes, kLane, kLane));
+  LinearLayout P2inv = P2invTop.concatIns(P2invBot);
+
+  // Check that P2^-1 was formed correctly.
+  assert(P2inv.sublayoutIsZero(kRegister, kLane));
+  assert(squareSublayoutIsPermutation(P2inv, kLane));
+
+  LinearLayout Cp = P2inv.compose(C);
+
+  // Now we have C' = P2^-1 ∘ C = W ∘ P1. W is considerably easier to compute.
+  // A warp shuffle is a function from `(register, lane) -> (lane)`, i.e.
+  //
+  //   W = [ I R' ]
+  //       [ 0 L  ]
+  //
+  // `W^-1 ∘ C'` will be
+  //
+  //   [ I R ] [ C'(r,r) C'(r,l) ] = [ ... C'(r,l) + R*C'(l,l) ]
+  //   [ 0 L ] [ C'(l,r) C'(l,l) ] = [ ... L*C'(l,l)           ]
+  //
+  // Since P1 cannot change lanes, we know that
+  //
+  //   W^-1 ∘ C' = [ ... 0 ]
+  //               [ ... I ]
+  //
+  // Thus L = C'(l,l)^-1, and R = -C'(r,l) * C'(l,l)^-1. (0 - LL) = LL in GF(2).
+  // We know that C'(l,l) has a suitable pseudo-inverse.
+  LinearLayout L = Cp.sublayout(kLane, kLane).pseudoinvert();
+  LinearLayout R = Cp.sublayout(kRegister, kLane).compose(L);
+
+  // Now form W^-1.
+  LinearLayout WinvLeft =
+      LinearLayout::identity1D(dstRegSize, kRegister, kRegister)
+          .concatIns(
+              LinearLayout::zeros1D(numLanes, kLane, kRegister, dstRegSize));
+  LinearLayout Winv = WinvLeft.concatOuts(R.concatIns(L));
+
+  // Check that Winv was formed correctly. P1 is just what's left over.
+  LinearLayout P1 = Winv.compose(Cp);
+  assert(P1.sublayoutIsZero(kRegister, kLane));
+  assert(squareSublayoutIsIdentity(P1, kLane));
+
+  // Grab just the interesting parts of the decomposed layouts.
+  P1 = P1.sublayout({kLane, kRegister}, kRegister);
+  P2inv = P2inv.sublayout({kLane, kRegister}, kRegister);
+  Cp = Cp.sublayout({kLane, kRegister}, kLane);
+
+  // To minimize the number of selects emitted on the source side, determine the
+  // minimum set of registers that could be selected from each thread.
+  // InstCombine *might* be able to crush this, but if the sizePerThread is
+  // large, it's truly a huge number of selects that get emitted.
+  // If reducedP1 is trivial, then we will emit
+  // shflSrc = select(i == i, src[i], undef) and this will get trivially folded,
+  // so don't worry about this case.
+  LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
+  LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
+
+  // The number of emitted selects can still be quite large if the layout is not
+  // cooperative. This happens when the source register is more correlated
+  // with the desination lane than the destination register (i.e. the number of
+  // non-zero bases). The number of selects impacts performance and grows
+  // exponentially with the number of non-zero bases. Experiments show that more
+  // than 1 select causes performance to be slower than shared memory.
+  if (reducedP1.getInDimSize(kLane) > 2 || reducedP2.getInDimSize(kLane) > 2)
+    return {};
+
+  // HACK: Workaround AMD codegen path generating transient invalid layouts.
+  auto isInvalidDotEnc = [](RankedTensorType type) {
+    auto dotEnc = dyn_cast<DotOperandEncodingAttr>(type.getEncoding());
+    return dotEnc && dotEnc.getKWidth() == 0;
+  };
+  if (isInvalidDotEnc(srcTy) || isInvalidDotEnc(dstTy))
+    return {};
+
+  // When the element type is smaller than 32 bits, values are upcasted to i32
+  // for shuffles. When the shared memory conversion can use vector stores of
+  // sufficiently large length, the shared memory conversion is faster.
+  // TODO: Implementing shuffling packed 16 and 8 bit values.
+  auto [inVec, outVec] = getScratchCvtInOutVecLengths(srcTy, dstTy);
+  if (!isa<PointerType>(srcTy.getElementType()) &&
+      srcTy.getElementTypeBitWidth() < 32 && inVec > 4 && outVec > 4)
+    return {};
+
+  // Return just the interesting parts of the decomposed layouts.
+  return {{std::move(P1), std::move(Cp), std::move(P2inv), std::move(reducedP1),
+           std::move(reducedP2)}};
 }
 
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
@@ -408,81 +569,91 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
+    : gatherOp(gatherOp) {}
+
+unsigned GatherLoweringHelper::getScratchSizeInBytes() {
+  // If the gather is warp-local, no scratch space is needed.
+  if (isWarpLocal())
+    return 0;
+
+  // Otherwise, performing the gather will require scratch space to communicate
+  // the source tensor across threads. For now, assume the whole source tensor
+  // is written back to shared memory.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  return product(srcType.getShape()) *
+         ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
+}
+
+bool GatherLoweringHelper::isWarpLocal() {
+  // The gather is warp-local if for each column along the gather axis in the
+  // source and index tensors, all the elements are owned by the same warp.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  RankedTensorType idxType = gatherOp.getIndices().getType();
+  LinearLayout srcLayout =
+      toLinearLayout(srcType.getShape(), srcType.getEncoding());
+  LinearLayout idxLayout =
+      toLinearLayout(idxType.getShape(), idxType.getEncoding());
+
+  Builder b(gatherOp.getContext());
+  StringAttr kBlock = b.getStringAttr("block");
+  StringAttr kWarp = b.getStringAttr("warp");
+  StringAttr kLane = b.getStringAttr("lane");
+  StringAttr kGatherDim =
+      b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
+
+  // The tensor layouts must be distributed layouts, where the basis matrix is a
+  // subpermutation matrix (permutation matrix plus zeros for broadcasting).
+  // FIXME(jeff): Check this invariant somehow.
+  //
+  // We want to know if all elements of a column along the gather axis are
+  // mapped to the same set of warps, which means the gather can be performed
+  // entirely within the warp. We need to query
+  //
+  //   srcLayout.invert().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
+  //
+  // But due to broadcasting, the matrix might not be invertible. But since the
+  // matrix is a permutation matrix (checked below), we can instead query
+  //
+  //   srcLayout.sublayoutIsZero({kBlock, kWarp}, {kGatherDim})
+  //
+  // Which implies that changing the warp will not change the gather dimension.
+  // And since there is no swizzling, this applies to all warps.
+  if (!srcLayout.sublayoutIsZero({kBlock, kWarp}, kGatherDim) ||
+      !idxLayout.sublayoutIsZero({kBlock, kWarp}, kGatherDim))
+    return false;
+
+  SmallVector<StringAttr> otherDims;
+  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
+    if (dim != gatherOp.getAxis()) {
+      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
+    }
+  }
+
+  // If the gather axis `dimN` is invariant to the warp, but the `(block, warp)`
+  // mapping to all other dimensions must be the same for both layouts. If so,
+  // then the warp that owns a particular index element also owns all the source
+  // elements it could index into.
+  if (srcLayout.sublayout({kBlock, kWarp}, otherDims) !=
+      idxLayout.sublayout({kBlock, kWarp}, otherDims))
+    return false;
+
+  // The two constraints above ensure that data-movement to perform the gather
+  // operation are contained within a warp. The subsequent constraints simplify
+  // codegen.
+
+  // Require that for any given gather column, the threads mapped to the column
+  // in the index and source tensors are the same. This means we don't need to
+  // xor shuffle across threads before emitting index shuffles; we push warp
+  // shuffling to layout conversions.
+  return srcLayout.sublayout(kLane, otherDims) ==
+         idxLayout.sublayout(kLane, otherDims);
+}
+
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   if (shape.empty())
     return 0;
   return product<unsigned>(shape);
-}
-
-static bool supportMFMAGranularity(int m, int n, int k) {
-  // these limitations are dtype dependent, in future we may relax them
-  const static std::pair<int, int> mfmaTypes[2] = {{32, 8}, {16, 16}};
-  for (const auto &mfmaType : mfmaTypes) {
-    auto [granularityMN, granularityK] = mfmaType;
-    if (m % granularityMN != 0 || n % granularityMN != 0)
-      continue;
-    if (k % granularityK != 0)
-      continue;
-    return true;
-  }
-  return false;
-}
-
-bool supportMFMATypes(Type a, Type b) {
-  if (a.getIntOrFloatBitWidth() != b.getIntOrFloatBitWidth())
-    return false;
-
-  auto F8E5M2 = TypeID::get<Float8E5M2Type>();
-  auto F8E4M3FN = TypeID::get<Float8E4M3FNType>();
-  auto F8E4M3FNUZ = TypeID::get<Float8E4M3FNUZType>();
-  auto F8E5M2FNUZ = TypeID::get<Float8E5M2FNUZType>();
-  auto F16 = TypeID::get<Float16Type>();
-  auto BF16 = TypeID::get<BFloat16Type>();
-  auto F32 = TypeID::get<Float32Type>();
-  auto Int = TypeID::get<IntegerType>();
-  DenseSet<std::pair<TypeID, TypeID>> supportedTypes = {
-      {F32, F32},
-      {F16, F16},
-      {BF16, BF16},
-      {F8E5M2, F8E5M2},
-      {F8E4M3FN, F8E4M3FN},
-      {F8E4M3FNUZ, F8E4M3FNUZ},
-      {F8E4M3FNUZ, F8E5M2FNUZ},
-      {F8E5M2FNUZ, F8E4M3FNUZ},
-      {F8E5M2FNUZ, F8E5M2FNUZ},
-      {Int, Int}};
-
-  if (!supportedTypes.contains({a.getTypeID(), b.getTypeID()}))
-    return false;
-
-  if (a.isIntOrIndex() && a.getIntOrFloatBitWidth() != 8)
-    return false;
-  return true;
-}
-
-bool supportMFMA(triton::DotOp op) {
-  auto aTy = cast<RankedTensorType>(op.getA().getType());
-  auto bTy = cast<RankedTensorType>(op.getB().getType());
-
-  auto aElemTy = aTy.getElementType();
-  auto bElemTy = bTy.getElementType();
-
-  if (!supportMFMATypes(aElemTy, bElemTy))
-    return false;
-
-  auto aShape = aTy.getShape();
-  auto bShape = bTy.getShape();
-
-  auto rank = aShape.size();
-  assert(bShape.size() == rank);
-  auto M = aShape[rank - 2];
-  auto N = bShape[rank - 1];
-  auto K = aShape[rank - 1];
-  assert(K == bShape[rank - 2]);
-  if (!supportMFMAGranularity(M, N, K))
-    return false;
-
-  return true;
 }
 
 bool supportMMA(triton::DotOp op, int version) {
@@ -491,6 +662,27 @@ bool supportMMA(triton::DotOp op, int version) {
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
+  if (version == 5) {
+    if (triton::tools::getBoolEnv("DISABLE_MMA_V5"))
+      return false;
+    auto retType = op.getType();
+    auto retShapePerCTA = getShapePerCTA(retType);
+    auto rank = retShapePerCTA.size();
+    int numWarps = lookupNumWarps(op);
+    if (aElemTy.isInteger() || bElemTy.isInteger() ||
+        retType.getElementType().isInteger())
+      return false;
+    if (op.getType().getRank() != 2)
+      return false;
+    if (numWarps != 4 && numWarps != 8) {
+      // Currently only support numWarps 4 or 8 for TMEM load and store.
+      return false;
+    }
+    if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
+          retShapePerCTA[rank - 1] % 8 == 0))
+      return false;
+    return true;
+  }
   if (version == 3) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;
@@ -502,21 +694,20 @@ bool supportMMA(triton::DotOp op, int version) {
       return false;
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(op);
     // TODO(Keren): for now, fallback to MMAv2 if handling batch matmul.
     if (rank == 3)
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
           retShapePerCTA[rank - 1] % 8 == 0 &&
-          (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN() ||
+          (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
       return false;
     }
     // We cannot use MMA_V3 if we need to accumulate in F32 within the MMA op.
     if (op.getMaxNumImpreciseAcc() < 32 &&
-        (aElemTy.isFloat8E5M2() || aElemTy.isFloat8E4M3FN()) &&
+        (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) &&
         cast<RankedTensorType>(op.getType()).getElementType().isF32()) {
       return false;
     }
@@ -533,17 +724,18 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy = cast<TensorOrMemDesc>(value.getType()).getElementType();
+  auto elemTy =
+      cast<triton::gpu::TensorOrMemDesc>(value.getType()).getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
-  bool isFP8 = elemTy.isFloat8E5M2() || elemTy.isFloat8E4M3FN() ||
-               elemTy.isFloat8E5M2FNUZ() || elemTy.isFloat8E4M3FNUZ();
+  bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
+                         Float8E4M3FNUZType>(elemTy);
   return isFP8 || elemTy.isF16() || elemTy.isBF16() ||
          (elemTy.isF32() && version >= 2) ||
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
+bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
   auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
   if (blockedLayout == nullptr || dotOperandLayout == nullptr)
@@ -612,22 +804,6 @@ bool isBlockedToDotShortcut(RankedTensorType &srcTy, RankedTensorType &dstTy) {
   return matrixDimsCompatible && bDimCompatible;
 }
 
-bool isMfmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (mfmaLayout == nullptr || dotOperandLayout == nullptr)
-    return false;
-  // TODO: Remove the restriction on the warpsPerCTA once chain dot testing is
-  // improved. In addition, we can enable this shortcut for regular MFMA
-  // layout when opIdx == 1.
-  return mfmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
-         dotOperandLayout.getKWidth() == getContigPerThread(mfmaLayout)[1] &&
-         dotOperandLayout.getParent() == mfmaLayout &&
-         (mfmaLayout.getMDim() == 32 || mfmaLayout.getMDim() == 16) &&
-         (srcTy.getElementType().isF16() || srcTy.getElementType().isBF16());
-}
-
 // For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
@@ -642,75 +818,90 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   auto ans = mmaLayout.getVersionMajor() == 3 &&
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
-             !cvtNeedsSharedMemory(parentTy, srcTy) &&
-             (elementTypeSize == 16 || elementTypeSize == 8);
+             !cvtNeedsSharedMemory(parentTy, srcTy) && elementTypeSize == 8 &&
+             dotOperandLayout.getKWidth() == 32 / elementTypeSize;
   return ans;
 }
 
-bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
+                                       RankedTensorType dstTy) {
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!mfmaLayout || !dotOperandLayout)
+    return false;
+
+  // Currently supporting 32x32 and 16x16 FP8 MFMA -> dot operand case
+  return dotOperandLayout.getParent() == mfmaLayout &&
+         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
+         dotOperandLayout.getKWidth() == 8 &&
+         getContigPerThread(mfmaLayout)[1] == 4 &&
+         ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
+          (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
+         triton::type::isFloat8(srcTy.getElementType()) &&
+         triton::type::isFloat8(dstTy.getElementType()) &&
+         mfmaLayout.getWarpsPerCTA()[1] == 1;
+}
+
+// We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
+// under kBlock, kWarp or kLane (in that order). The idea here is that if we
+// have a transformation that's the identity on kBlock, we don't need to use
+// distributed shared memory. If it's also the identity on kWarp, we can
+// transfer via warp-shuffles, and if it's the identity on kLane just have to
+// reorder the registers
+LinearLayout minimalCvtLayout(RankedTensorType srcTy, RankedTensorType dstTy) {
   MLIRContext *ctx = srcTy.getContext();
-  std::optional<LinearLayout> srcLayout =
+  LinearLayout srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  std::optional<LinearLayout> dstLayout =
+  LinearLayout dstLayout =
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  if (srcLayout.has_value() && dstLayout.has_value()) {
-    // comp describes the layout function for converting from src to dst.
-    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
-    StringAttr kLane = StringAttr::get(ctx, "lane");
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-    // TODO(jlebar): These checks are overly-restrictive.  For example, we can
-    // transfer by shuffling registers (case 1) if and only if all of the bases
-    // for `register` have 0s for lane, warp, and block.  But the check below is
-    // stronger than this, checking also that the choice of lane/warp/block does
-    // not affect the permutation of registers.  If we allow different
-    // lane/warp/blocks to have different permutations, we can generalize this.
-    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kLane),
-                                                  kLane, kLane) *
-                         LinearLayout::identity1D(comp.getInDimSize(kWarp),
-                                                  kWarp, kWarp) *
-                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
-                                                  kBlock, kBlock))
-            .has_value()) {
-      return true;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+
+  auto comp = dstLayout.invertAndCompose(srcLayout);
+  // We try to quotient by the largest subspace first
+  auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
+  for (auto dim : dims) {
+    auto quotient = comp.quotient(StringAttr::get(ctx, dim));
+    if (!quotient.has_value()) {
+      break;
     }
+    comp = *quotient;
   }
-  return false;
+  return comp;
+}
+
+bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto layout = minimalCvtLayout(srcTy, dstTy);
+  MLIRContext *ctx = srcTy.getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto outDims = to_vector(layout.getOutDimNames());
+  return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
+  auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
-  std::optional<LinearLayout> srcLayout =
-      toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  std::optional<LinearLayout> dstLayout =
-      toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  if (srcLayout.has_value() && dstLayout.has_value()) {
-    // comp describes the layout function for converting from src to dst.
-    LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-    if (comp.divideRight(LinearLayout::identity1D(comp.getInDimSize(kWarp),
-                                                  kWarp, kWarp) *
-                         LinearLayout::identity1D(comp.getInDimSize(kBlock),
-                                                  kBlock, kBlock))
-            .has_value()) {
-      return true;
-    }
-  }
-  return false;
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  return to_vector(layout.getOutDimNames()) ==
+         SmallVector<StringAttr, 2>{kRegister, kLane};
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  // TODO(jlebar): Remove these special cases (`isMmaToDotShortcut`,
-  // `isBlockedToDotShortcut` and `isMfmaToDotShortcut`) once they're fully
-  // subsumed by the linear-layout checks.
-  // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
-  // supported yet in Triton's backend.
+  // TODO(jlebar): Remove these special cases (`isBlockedToDotShortcut` and
+  // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
+  // checks.
   return !cvtReordersRegisters(srcTy, dstTy) &&
+         !(cvtNeedsWarpShuffle(srcTy, dstTy) &&
+           getWarpLayoutConvertDecomposition(srcTy, dstTy)) &&
          !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
-         !isMmaToDotShortcut(srcTy, dstTy) &&
-         !isMfmaToDotShortcut(srcTy, dstTy);
+         !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
+         // to be removed when generalized warp shuffle conversions
+         // are ready:
+         !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);
 }
 
 bool atomicNeedsSharedMemory(Value value) {
@@ -718,20 +909,6 @@ bool atomicNeedsSharedMemory(Value value) {
   if (isa<RankedTensorType>(type) || value.use_empty())
     return false;
   return true;
-}
-
-bool isMmaToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  if (matchMmaV3AndDotOperandLayout(srcTy, dstTy))
-    return true;
-  // dot_op<opIdx=0, parent=#mma> = #mma
-  // when #mma = MmaEncoding<version=2, warpsPerCTA=[..., 1]>
-  auto mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  return mmaLayout && dotOperandLayout && mmaLayout.getVersionMajor() == 2 &&
-         mmaLayout.getWarpsPerCTA()[1] == 1 &&
-         dotOperandLayout.getOpIdx() == 0 &&
-         dotOperandLayout.getParent() == mmaLayout &&
-         !srcTy.getElementType().isF32();
 }
 
 namespace {
@@ -904,15 +1081,16 @@ public:
 
   LogicalResult initialize(Operation *top) override {
     WalkResult result = top->walk([&](Operation *op) {
-      if (failed(visit(op)))
+      ProgramPoint programPoint(op);
+      if (failed(visit(&programPoint)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
     return success(!result.wasInterrupted());
   }
 
-  LogicalResult visit(ProgramPoint point) override {
-    Operation *op = point.get<Operation *>();
+  LogicalResult visit(ProgramPoint *point) override {
+    Operation *op = point->getOperation();
     Attribute value;
     if (matchPattern(op, m_Constant(&value))) {
       auto *constant = getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(

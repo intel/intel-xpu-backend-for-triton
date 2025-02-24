@@ -1,0 +1,93 @@
+name: Test with pip
+
+on:
+  workflow_dispatch:
+
+  # run workflow on changes to the driver, which handles the libraries logic
+  pull_request:
+    branches:
+      - main
+    paths:
+      - third_party/intel/backend/driver.py
+  push:
+    branches:
+      - main
+    paths:
+      - third_party/intel/backend/driver.py
+
+  # run workflow after building nightly wheels
+  workflow_run:
+    workflows:
+      - Triton wheels
+    types:
+      - completed
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: '3.9'
+  # FIXME: temporary initialize oneapi/ccl because our pytorch build requires it
+  TRITON_TEST_CMD: "source /opt/intel/oneapi/ccl/latest/env/vars.sh && scripts/test-triton.sh --skip-pytorch-install"
+
+jobs:
+  tests:
+    name: Tests
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on:
+      - rolling
+      - runner-0.0.22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install wheels
+        uses: ./.github/actions/install-wheels
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          python_version: ${{ env.PYTHON_VERSION }}
+          # transformers package is required for the inductor (e2e) test
+          wheels_pattern: '{torch,transformers}-*.whl'
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+
+      - name: Attempt to get PyTorch XPU dependencies
+        run: |
+          set +e
+          curl -sSLO https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
+          sed -i '/^validate_nccl_dep_consistency.*/d' generate_binary_build_matrix.py
+          python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print(' '.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))"
+
+      # FIXME: dependencies for PyTorch XPU are currently maintained manually below.
+      # https://github.com/pytorch/pytorch/blob/d6513f3246e7956a49b6c9f3922eec8330b489e9/.github/scripts/generate_binary_build_matrix.py#L108
+      - name: Install Triton runtime dependencies
+        run: |
+          pip install \
+            intel-cmplr-lib-rt==2025.0.2 \
+            intel-cmplr-lib-ur==2025.0.2 \
+            intel-cmplr-lic-rt==2025.0.2 \
+            intel-sycl-rt==2025.0.2 \
+            tcmlib==1.2.0 \
+            umf==0.9.1 \
+            intel-pti==0.10.0
+
+      - name: Run core tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run interpreter tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --interpreter --skip-pip-install
+
+      - name: Run Tutorials
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --tutorial --skip-pip-install
+
+      - name: Run inductor test
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install

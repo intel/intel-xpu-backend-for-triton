@@ -2,6 +2,8 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 
+#include "llvm/ADT/TypeSwitch.h"
+
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
@@ -11,7 +13,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::linearize;
 
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -21,7 +22,6 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace mlir::triton::gpu {
@@ -64,6 +64,7 @@ private:
                     RankedTensorType type,
                     ArrayRef<unsigned> multiDimCTAInRepId,
                     ArrayRef<unsigned> shapePerCTATile) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto shape = type.getShape();
     unsigned rank = shape.size();
     if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
@@ -74,9 +75,9 @@ private:
           elemId, getSizePerThread(layout), getOrder(layout));
       for (unsigned d = 0; d < rank; ++d) {
         multiDimOffset[d] =
-            add(multiDimOffsetFirstElem[d],
-                i32_val(multiDimCTAInRepId[d] * shapePerCTATile[d] +
-                        multiDimElemId[d]));
+            b.add(multiDimOffsetFirstElem[d],
+                  b.i32_val(multiDimCTAInRepId[d] * shapePerCTATile[d] +
+                            multiDimElemId[d]));
       }
       return multiDimOffset;
     }
@@ -110,17 +111,25 @@ private:
       return multiDimOffset;
     }
     if (auto dpasLayout = dyn_cast<DpasEncodingAttr>(layout)) {
-      assert(rank == 2);
+      assert((rank == 2 || rank == 3) &&
+             "unexpected rank number for Dpas layout");
       auto multiDimBase = ::intel::emitBaseIndexForLayout(
           loc, rewriter, targetInfo, layout, type, false);
       SmallVector<SmallVector<unsigned>> offsets;
       ::emitOffsetForDpasLayoutPerCTA(
-          dpasLayout, offsets, multiDimCTAInRepId[0] * shapePerCTATile[0],
-          multiDimCTAInRepId[1] * shapePerCTATile[1]);
+          dpasLayout, offsets,
+          multiDimCTAInRepId[rank - 2] * shapePerCTATile[rank - 2],
+          multiDimCTAInRepId[rank - 1] * shapePerCTATile[rank - 1]);
 
-      SmallVector<Value> multiDimOffset = {
-          add(multiDimBase[0], i32_val(offsets[elemId][0])),
-          add(multiDimBase[1], i32_val(offsets[elemId][1]))};
+      SmallVector<Value> multiDimOffset(rank);
+      if (rank == 3)
+        multiDimOffset[0] =
+            b.add(multiDimBase[0],
+                  b.i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
+      multiDimOffset[rank - 2] =
+          b.add(multiDimBase[rank - 2], b.i32_val(offsets[elemId][rank - 2]));
+      multiDimOffset[rank - 1] =
+          b.add(multiDimBase[rank - 1], b.i32_val(offsets[elemId][rank - 1]));
 
       return multiDimOffset;
     }
@@ -136,6 +145,7 @@ private:
                       ArrayRef<unsigned> origRepShape,
                       ArrayRef<unsigned> outOrd, SmallVector<Value> &vals,
                       Value smemBase) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto accumNumCTAsEachRep = product<unsigned>(numCTAsEachRep);
     auto layout = type.getEncoding();
     auto rank = type.getRank();
@@ -184,30 +194,30 @@ private:
         Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
                                  paddedRepShape, outOrd);
         auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
+        Value ptr = b.gep(elemPtrTy, llvmElemTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
-        ptr = bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
+        ptr = b.bitcast(ptr, ptr_ty(rewriter.getContext(), 3));
         if (stNotRd) {
-          Value valVec = undef(vecTy);
+          Value valVec = b.undef(vecTy);
           for (unsigned v = 0; v < vec; ++v) {
             auto currVal = vals[elemId + linearCTAId * accumSizePerThread + v];
             if (isInt1)
-              currVal = zext(llvmElemTy, currVal);
+              currVal = b.zext(llvmElemTy, currVal);
             else if (isPtr)
-              currVal = ptrtoint(llvmElemTy, currVal);
-            valVec = insert_element(vecTy, valVec, currVal, i32_val(v));
+              currVal = b.ptrtoint(llvmElemTy, currVal);
+            valVec = b.insert_element(vecTy, valVec, currVal, b.i32_val(v));
           }
-          store(valVec, ptr);
+          b.store(valVec, ptr);
         } else {
-          Value valVec = load(vecTy, ptr);
+          Value valVec = b.load(vecTy, ptr);
           for (unsigned v = 0; v < vec; ++v) {
-            Value currVal = extract_element(llvmElemTy, valVec, i32_val(v));
+            Value currVal = b.extract_element(llvmElemTy, valVec, b.i32_val(v));
             if (isInt1)
-              currVal = icmp_ne(currVal,
-                                rewriter.create<LLVM::ConstantOp>(
-                                    loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+              currVal = b.icmp_ne(
+                  currVal, rewriter.create<LLVM::ConstantOp>(
+                               loc, i8_ty, rewriter.getI8IntegerAttr(0)));
             else if (isPtr)
-              currVal = inttoptr(llvmElemTyOrig, currVal);
+              currVal = b.inttoptr(llvmElemTyOrig, currVal);
             vals[elemId + linearCTAId * accumSizePerThread + v] = currVal;
           }
         }
@@ -222,16 +232,17 @@ private:
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
     RankedTensorType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    Value smemBase = LLVM::intel::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                      op.getOperation());
+    Value smemBase =
+        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemBase = bitcast(smemBase, elemPtrTy);
+    smemBase = b.bitcast(smemBase, elemPtrTy);
     auto shape = dstTy.getShape();
     unsigned rank = dstTy.getRank();
     SmallVector<unsigned> numReplicates(rank);
@@ -239,8 +250,8 @@ private:
     SmallVector<unsigned> outNumCTAsEachRep(rank);
     SmallVector<unsigned> inNumCTAs(rank);
     SmallVector<unsigned> outNumCTAs(rank);
-    auto srcShapePerCTATile = getShapePerCTATile(srcLayout, srcTy.getShape());
-    auto dstShapePerCTATile = getShapePerCTATile(dstLayout, shape);
+    auto srcShapePerCTATile = getShapePerCTATile(srcLayout);
+    auto dstShapePerCTATile = getShapePerCTATile(dstLayout);
     auto shapePerCTA = getShapePerCTA(srcLayout, shape);
 
     for (unsigned d = 0; d < rank; ++d) {
@@ -278,7 +289,7 @@ private:
       auto multiDimRepId =
           getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
       if (repId != 0) {
-        barrier();
+        b.barrier();
       }
       if (isa<BlockedEncodingAttr>(srcLayout) ||
           isa<SliceEncodingAttr>(srcLayout) ||
@@ -292,7 +303,7 @@ private:
         return failure();
       }
 
-      barrier();
+      b.barrier();
       if (isa<BlockedEncodingAttr>(dstLayout) ||
           isa<SliceEncodingAttr>(dstLayout) ||
           isa<DpasEncodingAttr>(dstLayout)) {
@@ -313,7 +324,7 @@ private:
     return success();
   }
 
-  using ValueTable = std::map<std::pair<unsigned, unsigned>, Value>;
+  using ValueTable = std::map<std::array<unsigned, 3>, Value>;
 
   ValueTable getValuesFromDpasLayoutStruct(Location loc,
                                            ConversionPatternRewriter &rewriter,
@@ -325,27 +336,34 @@ private:
     size_t totalElems = elems.size();
     auto numElemsPerOperand =
         product<unsigned>(dpasLayout.getDPASInstShapeC()) /
-        dpasLayout.getSubGroupSize();
+        product<unsigned>(dpasLayout.getThreadsPerWarp());
     Type elemTy =
         this->getTypeConverter()->convertType(srcType.getElementType());
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(srcType.getShape(), 2 /*operand C*/);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    size_t outerDim = rank - 2;
+    size_t innerDim = rank - 1;
 
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     int offset = 0;
     ValueTable result;
-    for (int i = 0; i < repetitions[0]; ++i) {
-      for (int j = 0; j < repetitions[1]; ++j) {
-        for (int repOuter = 0; repOuter < repCluster[0]; ++repOuter) {
-          for (int repInner = 0; repInner < repCluster[1]; ++repInner) {
-            Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
-            for (int k = 0; k < numElemsPerOperand; ++k) {
-              matVal =
-                  insert_element(dotOpTy, matVal, elems[offset++], i32_val(k));
+    for (unsigned b = 0; b < repetitions[0]; ++b) {
+      for (int i = 0; i < repetitions[1]; ++i) {
+        for (int j = 0; j < repetitions[2]; ++j) {
+          for (int repOuter = 0; repOuter < repCluster[outerDim]; ++repOuter) {
+            for (int repInner = 0; repInner < repCluster[innerDim];
+                 ++repInner) {
+              Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
+              for (int k = 0; k < numElemsPerOperand; ++k) {
+                matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
+                                           tb.i32_val(k));
+              }
+              result[{b, i * repCluster[outerDim] + repOuter,
+                      j * repCluster[innerDim] + repInner}] = matVal;
             }
-            result[{i * repCluster[0] + repOuter,
-                    j * repCluster[1] + repInner}] = matVal;
           }
         }
       }
@@ -357,50 +375,62 @@ private:
   Value composeValuesToDotOperandLayoutStruct(
       Location loc, ConversionPatternRewriter &rewriter, const ValueTable &vals,
       RankedTensorType dstType) const {
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstType.getEncoding());
     auto dpasLayout = dyn_cast<DpasEncodingAttr>(dotLayout.getParent());
-    unsigned opIdx = dotLayout.getOpIdx();
+
+    auto opIdx = static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(dstType.getShape(), opIdx);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    size_t rank = repCluster.size();
+    unsigned repBatch = repetitions[0];
     unsigned repOuter = 0u;
     unsigned repInner = 0u;
     unsigned repClusterOuter = 0u;
-    if (opIdx == 0) {
+
+    switch (opIdx) {
+    case DpasEncodingAttr::OpIdx::OperandA: {
       // operand A
-      repOuter = repetitions[0];
-      repInner = repetitions[1];
-      repClusterOuter = repCluster[0];
-    } else {
-      // operand B
       repOuter = repetitions[1];
-      repInner = repetitions[0];
-      repClusterOuter = repCluster[1];
+      repInner = repetitions[2];
+      repClusterOuter = repCluster[rank - 2];
+    } break;
+    case DpasEncodingAttr::OpIdx::OperandB: {
+      // operand B
+      repOuter = repetitions[2];
+      repInner = repetitions[1];
+      repClusterOuter = repCluster[rank - 1];
+    } break;
+    case DpasEncodingAttr::OpIdx::OperandC: {
+      llvm_unreachable("unexpected OpIdx::OperandC");
+    } break;
     }
 
     // TODO: Operands B requires extra steps to combine [8, 16] to [16, 16].
     SmallVector<Value> elems;
-    for (int m = 0; m < repOuter; ++m) {
-      for (int k = 0; k < repInner; ++k) {
-        for (int repOuterIdx = 0; repOuterIdx < repClusterOuter;
-             ++repOuterIdx) {
-          unsigned offsetM = m * repClusterOuter + repOuterIdx;
-          unsigned offsetN = k;
-          Value matVal = vals.at({offsetM, offsetN});
-          VectorType vecType = cast<mlir::VectorType>(matVal.getType());
-          Type valTy = vecType.getElementType();
-          for (int i = 0; i < vecType.getNumElements(); ++i) {
-            Value val = extract_element(valTy, matVal, i32_val(i));
-            elems.push_back(val);
+    for (unsigned b = 0; b < repBatch; ++b) {
+      for (int m = 0; m < repOuter; ++m) {
+        for (int k = 0; k < repInner; ++k) {
+          for (int repOuterIdx = 0; repOuterIdx < repClusterOuter;
+               ++repOuterIdx) {
+            unsigned offsetM = m * repClusterOuter + repOuterIdx;
+            unsigned offsetN = k;
+            Value matVal = vals.at({b, offsetM, offsetN});
+            auto vecType = cast<VectorType>(matVal.getType());
+            Type valTy = vecType.getElementType();
+            for (int i = 0; i < vecType.getNumElements(); ++i) {
+              Value val = tb.extract_element(valTy, matVal, tb.i32_val(i));
+              elems.push_back(val);
+            }
           }
         }
       }
     }
 
-    Type elemTy =
-        this->getTypeConverter()->convertType(dstType.getElementType());
+    Type elemTy = getTypeConverter()->convertType(dstType.getElementType());
     Type structTy = LLVM::LLVMStructType::getLiteral(
-        this->getContext(), SmallVector<Type>(elems.size(), elemTy));
+        getContext(), SmallVector<Type>(elems.size(), elemTy));
     return packLLElements(loc, this->getTypeConverter(), elems, rewriter,
                           structTy);
   }
@@ -432,11 +462,15 @@ private:
 
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+  const TargetInfoBase &targetInfo;
+
   // Set benefit to 2 so that this pattern applies before other convert-layout
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
-  explicit ConvertLayoutOpUsingLinearLayoutsConversion(
-      LLVMTypeConverter &typeConverter, PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern(typeConverter, benefit) {}
+  ConvertLayoutOpUsingLinearLayoutsConversion(LLVMTypeConverter &typeConverter,
+                                              const TargetInfoBase &targetInfo,
+                                              PatternBenefit benefit = 2)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
 
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
@@ -446,85 +480,81 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
-    std::optional<LinearLayout> srcLayout =
-        toLinearLayout(shape, srcTy.getEncoding());
-    std::optional<LinearLayout> dstLayout =
-        toLinearLayout(shape, dstTy.getEncoding());
-    if (!srcLayout.has_value() || !dstLayout.has_value()) {
+
+    LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
+    LinearLayout srcLayout =
+        toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    LinearLayout dstLayout =
+        toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+
+    StringAttr kBlock = str_attr("block");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kRegister = str_attr("register");
+
+    assert(to_vector(conversion.getInDimNames()) ==
+           to_vector(conversion.getOutDimNames()));
+    auto dims = conversion.getInDimNames();
+    if (llvm::is_contained(dims, kBlock)) {
+      // Case 1: Transfer between values in different CTAs.
+      //          This requires moving values through distributed shared memory.
+      return rewriter.notifyMatchFailure(
+          op, "NYI: Transfer between different CTAs");
+    } else if (llvm::is_contained(dims, kWarp)) {
+      // Case 2: Transfer between values in the same CTA, in which case we move
+      //         values through shared memory.
+      // TODO: Implement
       return failure();
+    } else if (llvm::is_contained(dims, kLane)) {
+      // Case 3. Transfer between values in the same warp, in which case we try
+      //         to move values using warp shuffles, though if the pattern is
+      //         complicated enough we may fall back to using shared memory
+      // If the operation is a supported sub-group shuffle, perform via shuffle
+      // operations.
+      if (intel::cvtIsSubGroupShuffle(srcTy, dstTy)) {
+        performSubGroupShuffle(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
+      // If the operation is a supported sub-group transposition, perform via
+      // SLM.
+      if (intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
+        performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
+      if (auto decomposedCvt =
+              getWarpLayoutConvertDecomposition(srcTy, dstTy)) {
+        transferWithinWarp(op, *decomposedCvt, adaptor, rewriter);
+        return success();
+      }
+      // TODO(jlebar): Implement me.
+      return failure();
+    } else if (llvm::is_contained(dims, kRegister)) {
+      // Case 4. Transfer between values in the same thread, in which case we
+      //         simply reorder the elements of adaptor.getSrc().
+      return transferWithinThread(op, conversion, adaptor, rewriter);
+    } else {
+      // Cast 5. The two layouts are equivalent. We should probably remove
+      // these in RemoveLayoutConversion.
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
     }
-
-    // There are four cases to handle.
-    //
-    //  1. Transfer between values in the same thread, in which case we simply
-    //     reorder the elements of adaptor.getSrc().
-    //  2. Transfer between values in the same warp, in which case we try to
-    //     move values using warp shuffles, though if the pattern is complicated
-    //     enough we may fall back to using shared memory (case 3).
-    //  3. Transfer between values in the same CTA, in which case we move values
-    //     through shared memory.
-    //  4. Transfer between values in different CTAs, in which case we move
-    //     values through distributed shared memory.
-    //
-    // We can tell which case we're in by examining `conversion`.
-    // For example, if the block -> block mapping is an identity layout: {1, 2,
-    // 4, ...}, then there's no movement between data in different CTAs, and we
-    // know we're not in case 4.
-    if (cvtReordersRegisters(srcTy, dstTy)) { // Case 1.
-      return transferWithinThread(op, *srcLayout, *dstLayout, adaptor,
-                                  rewriter);
-    }
-
-    if (cvtNeedsWarpShuffle(srcTy, dstTy)) { // Case 2.
-      return transferWithinLane(op, *srcLayout, *dstLayout, adaptor, rewriter);
-    }
-
-    // TODO: match transferWithinBlockOrGroup from
-    // TritonGPUToLLVM/ConvertLayoutOpToLLVM.cpp
-    return transferWithinBlockGroup(op, *srcLayout, *dstLayout, adaptor,
-                                    rewriter);
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                       const LinearLayout &dstLayout, OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
+                       OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
-    StringAttr kLane = str_attr("lane");
-    StringAttr kWarp = str_attr("warp");
-    StringAttr kBlock = str_attr("block");
-
-    // There are three possible cases:
-    //
-    // 1. `srcLayout` has the same number of registers as `dstLayout`.
-    // 2. `srcLayout` has fewer registers than `dstLayout`.
-    // 3. `srcLayout` has more registers than `dstLayout`.
-    //
-    // In the second case `srcLayout . dstLayout^-1` is not surjective
-    // because not all destination registers are covered.
-    // Since the goal is to cover all of the destination
-    // registers, we can instead use `dstLayout . srcLayout^-1`.
-    LinearLayout conversion = dstLayout.invertAndCompose(srcLayout);
-    auto dstToSrc = conversion.divideRight(
-        LinearLayout::identity1D(conversion.getInDimSize(kLane), kLane, kLane) *
-        LinearLayout::identity1D(conversion.getInDimSize(kWarp), kWarp, kWarp) *
-        LinearLayout::identity1D(conversion.getInDimSize(kBlock), kBlock,
-                                 kBlock));
-
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-    assert(ArrayRef(to_vector(dstToSrc->getInDimNames())) ==
-           ArrayRef{kRegister});
-    assert(ArrayRef(to_vector(dstToSrc->getOutDimNames())) ==
-           ArrayRef{kRegister});
 
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals;
-    outVals.resize(dstToSrc->getInDimSize(kRegister));
-    for (int i = 0; i < dstToSrc->getInDimSize(kRegister); i++) {
-      auto srcIdx = dstToSrc->apply({{kRegister, i}});
-      outVals[i] = inVals[srcIdx.begin()->second];
+
+    SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
+    for (int i = 0; i < outVals.size(); i++) {
+      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
+      outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
@@ -532,21 +562,422 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     return success();
   }
 
-  LogicalResult transferWithinLane(ConvertLayoutOp op,
-                                   const LinearLayout &srcLayout,
-                                   const LinearLayout &dstLayout,
-                                   OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
+  // Use warp shuffles to implement a layout conversion where data only needs to
+  // be moved within warps.
+  void transferWithinWarp(ConvertLayoutOp op,
+                          DecomposedWarpConversion decomposed,
+                          OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const {
+    MLIRContext *ctx = op.getContext();
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
+    auto [P1, Cp, P2inv, reducedP1, reducedP2] = std::move(decomposed);
+
+    // Grab the source elements and prepare the outputs of just the shuffles.
+    SmallVector<Value> srcValues =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    SmallVector<Value> shflOuts(Cp.getInDimSize(kRegister));
+
+    Value threadId = getThreadId(rewriter, loc);
+    Value threadsPerWarp = b.i32_val(Cp.getInDimSize(kLane));
+    Value laneId = b.urem(threadId, threadsPerWarp);
+
+    // Emit one shuffle per destination register.
+    for (int i : llvm::seq(shflOuts.size())) {
+      // 'Cp' maps a (dst_lane, dst_reg) -> (src_lane, src_reg), and we know
+      // that for a register, it does not map to different registers in the same
+      // lane. At the same time, for each register, P1 returns the source value
+      // index to provide as the shuffle value.
+      auto out = applyLinearLayout(
+          loc, rewriter, P1, {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+      assert(out.size() == 1);
+      Value srcRegIdx = out.front().second;
+      // The size of the input lane dimension is the number of selects to emit.
+      // TODO(jeff): For dtypes smaller than i32, we can use byte permutes and
+      // shuffle multiple values at a time.
+      Value shflSrc = b.undef(srcValues.front().getType());
+      for (int j : llvm::seq(reducedP1.getInDimSize(kLane))) {
+        int32_t check =
+            reducedP1.apply({{kLane, j}, {kRegister, i}}).front().second;
+        shflSrc = b.select(b.icmp_eq(srcRegIdx, b.i32_val(check)),
+                           srcValues[check], shflSrc);
+      }
+
+      out = applyLinearLayout(loc, rewriter, Cp,
+                              {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+      assert(out.size() == 1);
+      Value shflIdx = out.front().second;
+      shflOuts[i] = targetInfo.shuffleIdx(rewriter, loc, shflSrc, shflIdx);
+    }
+
+    // Finally, we just need to apply P2 to the shflOuts to permute the
+    // registers into their final form. Use the same trick to reduce the number
+    // of emitted selects.
+    SmallVector<Value> results(shflOuts.size());
+    for (int i : llvm::seq(results.size())) {
+      Value result = b.undef(srcValues.front().getType());
+
+      auto out = applyLinearLayout(
+          loc, rewriter, P2inv, {{kLane, laneId}, {kRegister, b.i32_val(i)}});
+      Value resultIdx = out.front().second;
+      for (int j : llvm::seq(reducedP2.getInDimSize(kLane))) {
+        int32_t check =
+            reducedP2.apply({{kLane, j}, {kRegister, i}}).front().second;
+        result = b.select(b.icmp_eq(resultIdx, b.i32_val(check)),
+                          shflOuts[check], result);
+      }
+      results[i] = result;
+    }
+
+    Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
   }
 
-  LogicalResult
-  transferWithinBlockGroup(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                           const LinearLayout &dstLayout, OpAdaptor adaptor,
-                           ConversionPatternRewriter &rewriter) const {
-    // TODO(jlebar): Implement me.
-    return failure();
+  int getNumContiguousRowsForShuffle(const LinearLayout &srcLayout,
+                                     const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = getContext();
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp =
+        *dstLayout.invertAndCompose(srcLayout).quotient({kWarp, kBlock});
+    // Basic case: the number of contiguous rows is 1.
+    if (comp.getBasis(kRegister, 0)[1] == 1)
+      return 1;
+    // In other case, we only allow all threads handled by a single element to
+    // be contiguous, so we can simply:
+    return comp.getOutDimSize(kRegister);
+  }
+
+  void performSubGroupShuffle(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                              const LinearLayout &dstLayout, OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    assert(intel::cvtIsSubGroupShuffle(op.getSrc().getType(), op.getType()) &&
+           "Expecting sub-group shuffle");
+
+    MLIRContext *ctx = op->getContext();
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp = dstLayout.invertAndCompose(srcLayout);
+    LinearLayout conversion = *comp.quotient(kBlock)->quotient(kWarp);
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // FIXME: This workaround addresses the incorrect sgsize and SLM offset in
+    // ReduceOp and ConvertLayoutOp, which prevents a segmentation fault.
+    // However, this is a temporary solution. Once the OutDimSize computation
+    // issue in LinearLayout is resolved, this workaround should be removed.
+    int32_t subGroupSize = std::min((int32_t)op.getType().getNumElements(),
+                                    conversion.getOutDimSize(kLane));
+    if (!op->hasAttr("allocation.offset")) {
+      op->setAttr("allocation.offset",
+                  rewriter.getIntegerAttr(rewriter.getI32Type(), 0));
+    }
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
+    // upstream level. We are not enabling support for all types here as that
+    // should be done upstream.
+    Type origElemTy = inVals.front().getType();
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](BFloat16Type) {
+          auto intTy = i16_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.bitcast(val, intTy);
+          });
+        })
+        .Case([&](IntegerType intTy) {
+          constexpr unsigned minWidth = 8;
+          if (intTy.getWidth() >= minWidth)
+            return;
+          auto dstTy = i8_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.zext(dstTy, val);
+          });
+        })
+        .Case([&](LLVM::LLVMPointerType) {
+          Type dstType = i64_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.ptrtoint(dstType, val);
+          });
+        });
+
+    SmallVector<Value> outVals = performSubGroupShuffle(
+        loc, inVals, subGroupSize, rewriter,
+        getNumContiguousRowsForShuffle(srcLayout, dstLayout));
+
+    // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
+    // upstream level. We are not enabling support for all types here as that
+    // should be done upstream.
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](BFloat16Type) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.bitcast(val, origElemTy); });
+        })
+        .Case([&](IntegerType intTy) {
+          // Check whether conversion took place.
+          if (intTy == outVals.front().getType())
+            return;
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.trunc(origElemTy, val); });
+        })
+        .Case([&](LLVM::LLVMPointerType ptrTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.inttoptr(ptrTy, val); });
+        });
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+  }
+
+  SmallVector<Value> performSubGroupShuffle(Location loc,
+                                            ArrayRef<Value> inVals,
+                                            int32_t subGroupSize,
+                                            ConversionPatternRewriter &rewriter,
+                                            int numContiguousRows) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> res;
+    Value width = b.i32_val(subGroupSize);
+    // A work-item may handle more than one element. There are two cases we
+    // support:
+    if (numContiguousRows == 1) {
+      // 1. Elements held by a work-item are strided rows in the abstract slice
+      // matrix: Output element `i` will take the `i / 16`th value from the `i %
+      // 16`th thread.
+      for (Value val : inVals) {
+        for (int32_t i = 0; i < subGroupSize; ++i) {
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, b.i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+        }
+      }
+    } else {
+      // 2. Elements held by a work-item are contiguous rows in the abstract
+      // slice matrix: Output element `i` will take the `i % 16`th value from
+      // the `i / 16`th thread.
+      for (int32_t i = 0; i < subGroupSize; ++i) {
+        for (Value val : inVals) {
+          res.push_back(
+              rewriter
+                  .create<mlir::gpu::ShuffleOp>(loc, val, b.i32_val(i), width,
+                                                mlir::gpu::ShuffleMode::IDX)
+                  .getShuffleResult());
+        }
+      }
+    }
+    return res;
+  }
+
+  int getNumContiguousRowsForTranspose(const LinearLayout &srcLayout,
+                                       const LinearLayout &dstLayout) const {
+    MLIRContext *ctx = getContext();
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+    LinearLayout comp =
+        *dstLayout.invertAndCompose(srcLayout).quotient({kWarp, kBlock});
+    // Basic case: the number of contiguous rows is 0.
+    if (comp.getBasis(kLane, 0)[0] == 1)
+      return 1;
+    // In other case, we only allow all threads handled by a single element to
+    // be contiguous, so we can simply:
+    int32_t sizePerThread = comp.getOutDimSize(kRegister);
+    int32_t threadsPerWarp = comp.getOutDimSize(kLane);
+    assert(sizePerThread % threadsPerWarp == 0 && "Invalid transpose");
+    return sizePerThread / threadsPerWarp;
+  }
+
+  void performSubGroupTranspose(ConvertLayoutOp op,
+                                const LinearLayout &srcLayout,
+                                const LinearLayout &dstLayout,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    assert(intel::cvtIsSubGroupTranspose(op.getSrc().getType(), op.getType()) &&
+           "Expecting sub-group transpose");
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    Type origElemTy = inVals.front().getType();
+
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](FloatType floatTy) {
+          // TODO: Support FP4.
+          Type dstType = int_ty(floatTy.getWidth());
+          assert(intel::isValidElementTypeForSubGroupTranspose(dstType) &&
+                 "Expecting valid type");
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.bitcast(val, dstType);
+          });
+        })
+        .Case([&](IntegerType intTy) {
+          if (intel::isValidElementTypeForSubGroupTranspose(intTy))
+            return;
+          Type dstType = i8_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.zext(dstType, val);
+          });
+        })
+        .Case([&](LLVM::LLVMPointerType) {
+          Type dstType = i64_ty;
+          assert(intel::isValidElementTypeForSubGroupTranspose(dstType) &&
+                 "i64 type should be supported");
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.ptrtoint(dstType, val);
+          });
+        })
+        .Default([](auto) { llvm_unreachable("Unsupported type"); });
+
+    SmallVector<Value> outVals = performSubGroupTranspose(
+        loc, inVals, rewriter,
+        getNumContiguousRowsForTranspose(srcLayout, dstLayout));
+
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](FloatType floatTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.bitcast(val, origElemTy); });
+        })
+        .Case([&](IntegerType intTy) {
+          // Check whether conversion took place.
+          if (intTy == outVals.front().getType())
+            return;
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.trunc(origElemTy, val); });
+        })
+        .Case([&](LLVM::LLVMPointerType ptrTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.inttoptr(ptrTy, val); });
+        })
+        .Default([](auto) { llvm_unreachable("Unsupported type"); });
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+  }
+
+  SmallVector<Value>
+  unwrapFromVectors(Location loc, ArrayRef<Value> vecs,
+                    ConversionPatternRewriter &rewriter) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> res;
+    for (Value vec : vecs) {
+      for (unsigned i = 0, n = cast<VectorType>(vec.getType()).getShape()[0];
+           i < n; ++i)
+        res.push_back(b.extract_element(vec, b.i32_val(i)));
+    }
+    return res;
+  }
+
+  static unsigned getVecLoadWidth(unsigned threadsPerWarp) {
+    assert(llvm::isPowerOf2_32(threadsPerWarp) &&
+           "Expecting power of 2 sub-group size");
+    constexpr unsigned maxVecWidth = 16;
+    return std::min(maxVecWidth, threadsPerWarp);
+  }
+
+  SmallVector<Value>
+  performSubGroupTranspose(Location loc, ArrayRef<Value> inVals,
+                           ConversionPatternRewriter &rewriter,
+                           int numContiguousRows) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type elementType = inVals.front().getType();
+    auto mod = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
+
+    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                               &*rewriter.getInsertionPoint());
+    Type ptrType = smemBase.getType();
+
+    int numRows = inVals.size();
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    // Add an element that won't be accessed at the end of the row to avoid bank
+    // conflicts.
+    int rowLength = threadsPerWarp + 1;
+    Type offsetType = getTypeConverter()->getIndexType();
+    unsigned offsetBitWidth = offsetType.getIntOrFloatBitWidth();
+    Value subGroupId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(
+            loc, /*upper_bound=*/IntegerAttr{}));
+    Value subGroupLocalId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::LaneIdOp>(loc,
+                                             /*upper_bound=*/IntegerAttr{}));
+    Value subGroupOffset =
+        b.mul(subGroupId, b.int_val(offsetBitWidth, rowLength * numRows));
+    Value subGroupBasePtr =
+        b.gep(ptrType, elementType, smemBase, ValueRange{subGroupOffset},
+              /*inbounds=*/true);
+    Value base = subGroupBasePtr;
+    // Store in matrix, transposed
+    for (Value val : inVals) {
+      rewriter.create<TritonGEN::SubGroupBlockWriteOp>(loc, base, val);
+      base = b.gep(base.getType(), elementType, base,
+                   ArrayRef<LLVM::GEPArg>{rowLength},
+                   /*inbounds=*/true);
+    }
+
+    // Load from matrix, non-trasposed.
+
+    // Each work-item will load a row (but the last garbage element) and go to
+    // the next row it needs to handle.
+
+    int32_t workItemStride =
+        numContiguousRows == 1 ? rowLength * threadsPerWarp : rowLength;
+    Value workItemOffset =
+        b.mul(subGroupLocalId,
+              b.int_val(offsetBitWidth, numContiguousRows * rowLength));
+    Value workItemBasePtr =
+        b.gep(ptrType, elementType, subGroupBasePtr, ValueRange{workItemOffset},
+              /*inbounds=*/true);
+    int32_t rowsPerThread = numRows / threadsPerWarp;
+    assert((numContiguousRows == 1 || numContiguousRows == rowsPerThread) &&
+           "In case of more than one contiguous rows per thread, these must be "
+           "consecutive");
+    // We may not be able to load rows in a single operation if the sub-group
+    // size exceeds a given threshold (16):
+    unsigned vecLoadWidth = getVecLoadWidth(threadsPerWarp);
+    SmallVector<Value> transposedVecs;
+    VectorType vecType = vec_ty(elementType, vecLoadWidth);
+    assert(threadsPerWarp % vecLoadWidth == 0 &&
+           "Column must be loadable with N loads");
+    for (unsigned i = 0; i < rowsPerThread; ++i) {
+      for (unsigned j = 0; j < threadsPerWarp; j += vecLoadWidth) {
+        transposedVecs.push_back(b.load(vecType, workItemBasePtr));
+        workItemBasePtr = b.gep(workItemBasePtr.getType(), vecType,
+                                workItemBasePtr, ArrayRef<LLVM::GEPArg>{1},
+                                /*inbounds=*/true);
+      }
+      workItemBasePtr =
+          b.gep(workItemBasePtr.getType(), elementType, workItemBasePtr,
+                // "Go back" to the first column and increment by the stride.
+                ArrayRef<LLVM::GEPArg>{workItemStride - threadsPerWarp},
+                /*inbounds=*/true);
+    }
+    return unwrapFromVectors(loc, transposedVecs, rewriter);
   }
 };
 
@@ -556,11 +987,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  // We prefer using the linear layout conversion, so it gets a higher benefit.
-  // Eventually the LL conversion will subsume all of the others and be the only
-  // one left.
+  // We prefer using the Intel specific linear layout conversion, so it gets a
+  // higher benefit. Eventually the LL conversion will subsume all of the others
+  // and be the only one left.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, benefit.getBenefit() + 1);
+      typeConverter, targetInfo, benefit.getBenefit() + 2);
   patterns.add<gpu::ConvertLayoutOpConversion>(typeConverter, targetInfo,
-                                               benefit);
+                                               benefit.getBenefit() + 1);
+  mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
+                                                      patterns, benefit);
 }

@@ -28,6 +28,9 @@ from .core import (
     TRITON_MAX_TENSOR_NUMEL,
     _experimental_descriptor_load,
     _experimental_descriptor_store,
+    _experimental_make_tensor_descriptor,
+    _experimental_reinterpret_tensor_descriptor,
+    _experimental_tensor_descriptor,
     add,
     advance,
     arange,
@@ -66,7 +69,7 @@ from .core import (
     float8e5,
     float8e5b16,
     full,
-    function_type,
+    gather,
     histogram,
     inline_asm_elementwise,
     int1,
@@ -91,6 +94,7 @@ from .core import (
     range,
     reduce,
     reshape,
+    slice,
     split,
     static_assert,
     static_print,
@@ -98,6 +102,8 @@ from .core import (
     store,
     tensor,
     trans,
+    tuple,
+    tuple_type,
     uint16,
     uint32,
     uint64,
@@ -126,6 +132,9 @@ __all__ = [
     "TRITON_MAX_TENSOR_NUMEL",
     "_experimental_descriptor_load",
     "_experimental_descriptor_store",
+    "_experimental_make_tensor_descriptor",
+    "_experimental_reinterpret_tensor_descriptor",
+    "_experimental_tensor_descriptor",
     "abs",
     "add",
     "advance",
@@ -146,7 +155,6 @@ __all__ = [
     "block_type",
     "broadcast",
     "broadcast_to",
-    "builtin",
     "cat",
     "cast",
     "cdiv",
@@ -182,7 +190,7 @@ __all__ = [
     "floor",
     "fma",
     "full",
-    "function_type",
+    "gather",
     "histogram",
     "inline_asm_elementwise",
     "interleave",
@@ -191,7 +199,6 @@ __all__ = [
     "int32",
     "int64",
     "int8",
-    "ir",
     "join",
     "load",
     "log",
@@ -225,6 +232,7 @@ __all__ = [
     "reduce",
     "reshape",
     "rsqrt",
+    "slice",
     "sigmoid",
     "sin",
     "softmax",
@@ -240,7 +248,7 @@ __all__ = [
     "swizzle2d",
     "tensor",
     "trans",
-    "triton",
+    "tuple",
     "uint16",
     "uint32",
     "uint64",
@@ -257,6 +265,12 @@ __all__ = [
 
 
 def str_to_ty(name):
+    from builtins import tuple
+
+    if isinstance(name, tuple):
+        fields = type(name).__dict__.get("_fields", None)
+        return tuple_type([str_to_ty(x) for x in name], fields)
+
     if name[0] == "*":
         name = name[1:]
         const = False
@@ -268,6 +282,9 @@ def str_to_ty(name):
 
     if name == "nvTmaDesc":
         return nv_tma_desc_type()
+
+    if name == "constexpr":
+        return constexpr
 
     tys = {
         "fp8e4nv": float8e4nv,

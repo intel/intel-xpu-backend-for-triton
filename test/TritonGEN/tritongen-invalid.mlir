@@ -16,54 +16,6 @@ llvm.func @triton_gen.illegal_cache_controls_attr(%arg0: !llvm.ptr) {
 
 // -----
 
-llvm.func @triton_gen.sub_group_reduce() {
-  // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting valid target env attribute}}
-  %0 = llvm.mlir.constant(0 : i32) : i32
-  %1 = triton_gen.sub_group_reduce add %0 {size = 16} : i32
-  llvm.return
-}
-
-// -----
-
-module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
-} {
-  llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
-    %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce add %0 {size = 0} : i32
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
-} {
-  llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
-    %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce add %0 {size = 32} : i32
-    llvm.return
-  }
-}
-
-// -----
-
-module attributes {
-  spirv.target_env = #spirv.target_env<#spirv.vce<v1.4, [Kernel, Addresses, GroupNonUniformShuffle, Int64], []>, #spirv.resource_limits<subgroup_size = 16>>
-} {
-  llvm.func @triton_gen.sub_group_reduce() {
-    // expected-error @+2 {{'triton_gen.sub_group_reduce' op expecting size to be a power of 2 between 1 and subgroup size}}
-    %0 = llvm.mlir.constant(0 : i32) : i32
-    %1 = triton_gen.sub_group_reduce add %0 {size = 6} : i32
-    llvm.return
-  }
-}
-
-// -----
-
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // expected-error @+1 {{'triton_gen.dpas' op expecting repeat count to be 1, 2, 4, or 8}}
   %0 = triton_gen.dpas %c, %a, %b {pa=i8, pb=i8, rc=16} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
@@ -426,21 +378,5 @@ llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_hei
 llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // expected-error @+1 {{'triton_gen.2Dblockprefetch' op tile_width for 32 bit elements should be equal to 8 or 16}}
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=32, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
-  llvm.return
-}
-
-// -----
-
-llvm.func @triton_gen.simdblockread(%ptr: !llvm.ptr<3>) {
-  // expected-error @+1 {{'triton_gen.simdblockread' op unsupported vector type}}
-  %ret = triton_gen.simdblockread %ptr : (!llvm.ptr<3>) -> vector<64xi16>
-  llvm.return
-}
-
-// -----
-
-llvm.func @triton_gen.simdblockwrite(%ptr: !llvm.ptr<3>, %val: vector<64xi16>) {
-  // expected-error @+1 {{'triton_gen.simdblockwrite' op unsupported vector type}}
-  triton_gen.simdblockwrite %ptr, %val : (!llvm.ptr<3>, vector<64xi16>)
   llvm.return
 }
