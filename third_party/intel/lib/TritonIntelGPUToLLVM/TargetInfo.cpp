@@ -497,7 +497,8 @@ LLVM::GlobalOp TargetInfo::getGlobalString(Location loc, RewriterBase &rewriter,
   if (pos != globals.end())
     return pos->second;
 
-  ModuleOp moduleOp = rewriter.getInsertionPoint()->getParentOfType<ModuleOp>();
+  ModuleOp moduleOp =
+      rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>();
 
   llvm::SmallString<64> contentStr(value);
   size_t contentSize = contentStr.size_in_bytes();
