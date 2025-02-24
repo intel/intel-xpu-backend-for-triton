@@ -7,6 +7,7 @@ import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
+import subprocess
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -212,6 +213,12 @@ class SpirvUtils:
             result = self.shared_library.load_binary(args)
         except RuntimeError:
             print(f"self.shared_library.load_binary failed for the following {args=}")
+            folder = os.environ["IGC_DumpToCustomDir"]
+            with open(f"{folder}/test_bmg.spv", mode="wb") as _file:
+                _file.write(args[1])
+            ocloc_cmd = ['ocloc', 'compile', '-spirv_input', '-file', 'test_bmg.spv', '-device', 'bmg']
+            output = subprocess.check_output(ocloc_cmd, text=True, cwd=folder)
+            print(f"ocloc {output=}")
             raise
         return result
 

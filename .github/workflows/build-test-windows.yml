@@ -122,7 +122,17 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
+
+          $env:IGC_DumpToCustomDir = ${{ env.NEW_WORKSPACE }}\igc_custom_dir
           ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Upload pass rate report
+        # upload reports only for the default branch
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: igc_custom_dir_for_bmg
+          path: ${{ env.NEW_WORKSPACE }}\igc_custom_dir
 
       - name: Run interpreter tests
         run: |
