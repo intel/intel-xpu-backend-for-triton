@@ -45,9 +45,10 @@ inline std::string parseZeResultCode(const ze_result_t code) {
   return ss.str();
 }
 
-#define ZE_CHECK(code)                                                         \
+#define ZE_CHECK(code, error_msg)                                              \
   {                                                                            \
     if (code != ZE_RESULT_SUCCESS) {                                           \
+      std::cerr << error_msg << std::endl;                                     \
       return std::make_tuple(nullptr, code);                                   \
     }                                                                          \
   }
@@ -100,14 +101,14 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
   if (error_no != ZE_RESULT_SUCCESS) {
     size_t szLog = 0;
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
+    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr), "zeModuleBuildLogGetString first call failed");
     char *strLog = (char *)malloc(szLog);
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
+    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog), "zeModuleBuildLogGetString second call failed");
     std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
     free(strLog);
-    ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
+    ZE_CHECK(zeModuleBuildLogDestroy(buildlog), "zeModuleBuildLogDestroy failed");
   }
-  ZE_CHECK(error_no);
+  ZE_CHECK(error_no, "zeModuleCreate failed");
   return std::make_tuple(module, error_no);
 }
 
@@ -124,11 +125,7 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }
-  auto error_no = zeKernelCreate(module, &kernel_description, &kernel);
-  if (error_no != ZE_RESULT_SUCCESS) {
-    std::cerr << "zeKernelCreate failed with error: " << error_no << std::endl;
-  }
-  ZE_CHECK(error_no);
+  ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel), "zeKernelCreate failed");
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
 
