@@ -214,10 +214,13 @@ class SpirvUtils:
         except RuntimeError:
             print(f"self.shared_library.load_binary failed for the following {args=}")
             folder = os.environ["IGC_DumpToCustomDir"]
+            print(f"{os.environ.get('IGC_ShaderDumpEnable')=}")
             with open(f"{folder}{os.sep}test_bmg.spv", mode="wb") as _file:
                 _file.write(args[1])
             ocloc_cmd = ['ocloc', 'compile', '-spirv_input', '-file', 'test_bmg.spv', '-device', 'bmg']
-            output = subprocess.check_output(ocloc_cmd, text=True, cwd=folder)
+            env = os.environ.copy()
+            env["IGC_ShaderDumpEnable"] = "1"
+            output = subprocess.check_output(ocloc_cmd, text=True, cwd=folder, env=env)
             print(f"ocloc {output=}")
             raise
         return result
