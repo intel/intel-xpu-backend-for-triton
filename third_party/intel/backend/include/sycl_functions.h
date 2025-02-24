@@ -101,6 +101,7 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
   if (error_no != ZE_RESULT_SUCCESS) {
     size_t szLog = 0;
+    std::cerr << "zeModuleCreate failed" << std::endl;
     ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr), "zeModuleBuildLogGetString first call failed");
     char *strLog = (char *)malloc(szLog);
     ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog), "zeModuleBuildLogGetString second call failed");
