@@ -100,7 +100,9 @@ private:
 
   // Check whether a mask is in canonical form: (0..END) < N - i*END
   bool isValidMask(Value mask) const {
-    assert(mask.getDefiningOp() && "Expected a valid mask operation");
+    if (!mask.getDefiningOp() || !isa<arith::CmpIOp>(mask.getDefiningOp()))
+      return false;
+
     auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     if (pred != arith::CmpIPredicate::slt)
@@ -122,25 +124,32 @@ private:
       return false;
 
     auto mulOp = cast<arith::MulIOp>(subRhs);
-    Operation *mulLhs = mulOp.getLhs().getDefiningOp();
-    Operation *mulRhs = mulOp.getRhs().getDefiningOp();
-    if (mulLhs && mulRhs)
+    Operation *defMulLhs = mulOp.getLhs().getDefiningOp();
+    Operation *defMulRhs = mulOp.getRhs().getDefiningOp();
+    if (defMulLhs && defMulRhs)
       return false;
 
-    if (!mulLhs && isa<arith::ConstantIntOp>(mulRhs))
-      return cast<arith::ConstantIntOp>(mulRhs).value() == end;
-    if (!mulRhs && isa<arith::ConstantIntOp>(mulLhs))
-      return cast<arith::ConstantIntOp>(mulLhs).value() == end;
+    std::optional<Value> loopIV = forOp.getSingleInductionVar();
+    assert(loopIV.has_value() && "Failed to find loop induction variable");
+
+    if (!defMulLhs && mulOp.getLhs() == *loopIV &&
+        isa<arith::ConstantIntOp>(defMulRhs))
+      return cast<arith::ConstantIntOp>(defMulRhs).value() == end;
+
+    if (!defMulRhs && mulOp.getRhs() == *loopIV &&
+        isa<arith::ConstantIntOp>(defMulLhs))
+      return cast<arith::ConstantIntOp>(defMulLhs).value() == end;
 
     return false;
   }
 
 private:
-  // Masked operations in the loop that can be have their mask dropped when the
-  // loop is versioned using the versioning condition associated with this
-  // class.
   scf::ForOp &forOp;
+
+  // Masked operations that can be have their mask dropped when the loop is
+  // versioned using the versioning condition associated with this class.
   MaskedOperations maskedOps;
+
   std::unique_ptr<VersioningCondition> versioningCond = nullptr;
 };
 
@@ -285,8 +294,8 @@ public:
         if (forOp->template getParentOfType<scf::ForOp>())
           return WalkResult::advance();
 
-        // Ensure loop UB is in 'canonical' form.
-        if (!LoopVersioner::hasValidUpperBound(forOp))
+        if (!forOp.getSingleInductionVar() ||
+            !LoopVersioner::hasValidUpperBound(forOp))
           return WalkResult::advance();
 
         MaskedOpsCollector collector(forOp);
