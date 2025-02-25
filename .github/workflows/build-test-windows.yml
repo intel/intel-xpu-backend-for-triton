@@ -30,7 +30,9 @@ env:
 jobs:
   build:
     name: Build and test
-    runs-on: ${{ inputs.runner_label }}
+    runs-on:
+      - windows
+      - ${{ inputs.runner_label }}
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
     timeout-minutes: 480
     steps:
