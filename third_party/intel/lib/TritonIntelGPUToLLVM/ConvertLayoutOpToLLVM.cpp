@@ -47,21 +47,25 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            srcLayout) &&
-        isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
-            dstLayout)) {
-      return lowerDistributedToDistributed(op, adaptor, rewriter);
-    }
+    if (useLegacyMMAConversion)
+      if (isSupported(srcLayout, dstLayout)) {
+        return lowerDistributedToDistributed(op, adaptor, rewriter, targetInfo);
+      }
     if (isa<DpasEncodingAttr>(srcLayout) &&
         isa<DotOperandEncodingAttr>(dstLayout)) {
       return lowerDpasToDotOperand(op, adaptor, rewriter);
     }
-
     return failure();
   }
 
 private:
+  bool isSupported(Attribute srcLayout, Attribute dstLayout) const {
+    return isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+               srcLayout) &&
+           isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr>(
+               dstLayout);
+  }
+
   SmallVector<Value>
   getMultiDimOffset(Attribute layout, Location loc,
                     ConversionPatternRewriter &rewriter, unsigned elemId,
@@ -228,13 +232,12 @@ private:
       }
     }
   }
-
   // blocked/dpas -> blocked/dpas.
   // Data padding in shared memory to avoid bank conflict.
-  LogicalResult
-  lowerDistributedToDistributed(triton::gpu::ConvertLayoutOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const {
+  LogicalResult lowerDistributedToDistributed(
+      triton::gpu::ConvertLayoutOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter,
+      const triton::intel::TargetInfo &targetInfo) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
