@@ -20,7 +20,9 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: avc336
+    runs-on:
+      - windows
+      - avc336
     steps:
       - name: Enable long paths
         run: |
