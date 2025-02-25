@@ -11,6 +11,7 @@ on:
         description: Space separated lists of test suites, all if empty
         type: string
         default: >-
+          inductor/test_torchinductor.py
           inductor/test_codegen_triton.py
           inductor/test_triton_extension_backend.py
           inductor/test_triton_heuristics.py
