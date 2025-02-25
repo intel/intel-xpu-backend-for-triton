@@ -1,35 +1,11 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TargetInfo.h"
-#include "Utility.h"
 
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "intel/include/Analysis/Utility.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
-#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::linearize;
-
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::getContigPerThread;
-using ::mlir::triton::gpu::getOrder;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::getSizePerThread;
-using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace mlir::triton::gpu {
 namespace {
-
-// XXX(Keren): A temporary knob to control the use of legacy MMA conversion
-// because LinearLayout seems to have some performance issues.
-constexpr bool useLegacyMMAConversion = false;
 
 struct ConvertLayoutOpUsingLinearLayoutsConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
@@ -431,8 +407,7 @@ void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // We prefer using the Intel specific linear layout conversion, so it gets a
-  // higher benefit. Eventually the LL conversion will subsume all of the others
-  // and be the only one left.
+  // higher benefit.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
       typeConverter, targetInfo, benefit.getBenefit() + 2);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
