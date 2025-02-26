@@ -878,6 +878,10 @@ struct LoadOpConversion
 
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
+    if (numOperandsPer2DLoadM > (32 / tileHeight)) {
+      llvm::errs() << "replacing " << numOperandsPer2DLoadM << " with "
+                   << 32 / tileHeight << "\n";
+    }
     numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
     tileHeight = tileHeight * numOperandsPer2DLoadM;
 
@@ -904,9 +908,9 @@ struct LoadOpConversion
         isOperandA ? origNumOperandsPer2DloadN : numOperandsPer2DLoadM;
 
     if (!isTransposeRequired) {
-      tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
+      tileLayout *= LinearLayout::identity1D(numIterationsOuterDimPerLoad,
                                              kIteration, dimOuterStr);
-      tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
+      tileLayout *= LinearLayout::identity1D(numIterationsInnerDimPerLoad,
                                              kIteration, dimInnerStr);
       llvm::errs() << "\nnumOperandsOuterDimPerLoad: "
                    << numOperandsOuterDimPerLoad << "\n";
@@ -1409,8 +1413,17 @@ struct LoadOpConversion
             assert(tensorCoord.size() == 2);
             LLVM_DEBUG(llvm::dbgs() << "tensorCoord: " << tensorCoord[0].second
                                     << ", " << tensorCoord[1].second << "\n");
+            llvm::errs() << "elemsPerDPASInst: " << elemsPerDPASInst[0] << ", "
+                         << elemsPerDPASInst[1] << "\n";
+
             auto tensorRowCoord = (tensorCoord[0].second) / elemsPerDPASInst[0];
-            auto tensorColCoord = tensorCoord[1].second / tileWidth;
+            auto tensorColCoord = tensorCoord[1].second /
+                                  (elemsPerDPASInst[1] / packedElementsPerSlot);
+            if (oneMatrixPerLoadForBT) {
+              // HACK
+              llvm::errs() << "overwriting tensor col coord\n";
+              tensorColCoord = tensorCoord[1].second / tileWidth;
+            }
 
             if (isOperandA) {
               LLVM_DEBUG(llvm::dbgs()
