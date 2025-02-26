@@ -32,3 +32,16 @@ index e178b4ac6e8..259c906a8b7 100644
              else:
                  # args with value 1 are added into equal_to_1 and constants
                  # in triton_meta (in the Python codegen) which makes them
+diff --git a/test/inductor/test_max_autotune.py b/test/inductor/test_max_autotune.py
+index 6ca0ebd8e07..ce98c7ee90a 100644
+--- a/test/inductor/test_max_autotune.py
++++ b/test/inductor/test_max_autotune.py
+@@ -806,7 +806,7 @@ class TestMaxAutotune(TestCase):
+         _, code = run_and_get_code(f_c, inps[0], inps[1])
+         self.assertEqual(f_c(*inps), f(*inps), atol=0.03, rtol=0.25)
+         FileCheck().check(_get_func_call()).check_count(
+-            _get_kernel_launch(), 2, exactly=True
++            _get_kernel_launch(), 3, exactly=True
+         ).run(code[0])
+ 
+         def f(x, y):
