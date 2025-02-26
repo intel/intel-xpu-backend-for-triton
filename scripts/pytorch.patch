@@ -1,0 +1,34 @@
+diff --git a/torch/_inductor/codegen/cpp_wrapper_gpu.py b/torch/_inductor/codegen/cpp_wrapper_gpu.py
+index e178b4ac6e8..259c906a8b7 100644
+--- a/torch/_inductor/codegen/cpp_wrapper_gpu.py
++++ b/torch/_inductor/codegen/cpp_wrapper_gpu.py
+@@ -566,16 +566,19 @@ class CppWrapperGpu(CppWrapperCpu):
+                 arg_signatures = [
+                     val for val in signature.values() if val != "constexpr"
+                 ]
+-                call_args = [
+-                    call_arg
+-                    for call_arg, arg_name in zip(call_args, signature)
+-                    if signature[arg_name] != "constexpr"
+-                ]
+-                arg_types = [
+-                    arg_type
+-                    for arg_type, arg_name in zip(arg_types, signature)
+-                    if signature[arg_name] != "constexpr"
+-                ]
++                # may already be filtered
++                if len(arg_signatures) != len(call_args):
++                    call_args = [
++                        call_arg
++                        for call_arg, arg_name in zip(call_args, signature)
++                        if signature[arg_name] != "constexpr"
++                    ]
++                    arg_types = [
++                        arg_type
++                        for arg_type, arg_name in zip(arg_types, signature)
++                        if signature[arg_name] != "constexpr"
++                    ]
++                assert len(call_args) == len(arg_types), f"{call_args=} {arg_types=}"
+             else:
+                 # args with value 1 are added into equal_to_1 and constants
+                 # in triton_meta (in the Python codegen) which makes them
