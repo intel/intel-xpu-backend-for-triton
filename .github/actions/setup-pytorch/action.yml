@@ -115,9 +115,9 @@ runs:
         # See https://github.com/intel/intel-xpu-backend-for-triton/pull/3548#issuecomment-2685718019
         source ./scripts/capture-hw-details.sh
         if [[ $AGAMA_VERSION =~ 803 ]]; then
-          export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
-        else
           export TORCH_XPU_ARCH_LIST="pvc"
+        else
+          export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
         fi
 
         cd pytorch
