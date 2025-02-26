@@ -16,7 +16,6 @@ add_triton_library(TritonIntelGPUToLLVM
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     TritonGPUToLLVM.cpp
-    ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
