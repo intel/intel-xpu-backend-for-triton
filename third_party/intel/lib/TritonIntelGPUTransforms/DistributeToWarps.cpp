@@ -80,9 +80,7 @@ Attribute getWarpLayout(Attribute layout) {
         ctx, dotLayout.getOpIdx(), parentLayout, dotLayout.getKWidth());
   } else if (auto sLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     Attribute parentLayout = getWarpLayout(sLayout.getParent());
-    return ttg::SliceEncodingAttr::get(
-        ctx, sLayout.getDim(),
-        cast<ttg::DistributedEncodingTrait>(parentLayout));
+    return ttg::SliceEncodingAttr::get(ctx, sLayout.getDim(), parentLayout);
   }
   return layout;
 }
