@@ -230,8 +230,8 @@ public:
                                                benefit, oneMatrixPerLoadForBT);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
-      intel::populateScanOpToLLVMPatterns(typeConverter, patterns, targetInfo,
-                                          benefit);
+      mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
+                                                 targetInfo, benefit);
       mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
                                                    targetInfo, benefit);
       intel::populateViewOpToLLVMPatterns(typeConverter, patterns, benefit);
