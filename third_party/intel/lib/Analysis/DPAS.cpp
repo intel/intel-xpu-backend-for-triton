@@ -139,8 +139,8 @@ DPASAnalysis::getDPASType(OpTy op) {
   }
 
   if constexpr (std::is_same_v<OpTy, DotScaledOp>) {
-    aTy = cast<RankedTensorType>(op.getLhs().getType());
-    bTy = cast<RankedTensorType>(op.getRhs().getType());
+    aTy = cast<RankedTensorType>(op.getA().getType());
+    bTy = cast<RankedTensorType>(op.getB().getType());
     aElemTy = aTy.getElementType();
     bElemTy = bTy.getElementType();
 
