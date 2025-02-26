@@ -321,11 +321,7 @@ struct PrefetchOpConversion
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
     Value ptr = op.getPtr();
-    if (isTensorPointerType(ptr.getType()))
-      return rewriteTensorPointerPrefetch(op, adaptor, rewriter);
-
-    llvm_unreachable("Unexpected prefetch operation on 'regular' ptr");
-    return failure();
+    return rewriteTensorPointerPrefetch(op, adaptor, rewriter);
   }
 
   LogicalResult
@@ -336,10 +332,9 @@ struct PrefetchOpConversion
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr) {
-      // TODO: Fallback to gather semantic prefetching. Simply erase the
-      // prefetching op which is not supported for now.
-      rewriter.eraseOp(op);
-      return success();
+      llvm_unreachable("Unexpected prefetch operation on unstructured memory "
+                       "which may pollute the cache");
+      return failure();
     }
 
     // Only support rank 2 block pointer, either row major or column major.
@@ -354,8 +349,85 @@ struct PrefetchOpConversion
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value ptr = op.getPtr();
-    auto ptrType = cast<PointerType>(ptr.getType());
-    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    unsigned numWarps;
+    DpasEncodingAttr::OpIdx opIdx;
+    RankedTensorType tensorType;
+    std::map<SmallVector<unsigned>, Value> baseAddrs;
+    if (isTensorPointerType(ptr.getType())) {
+      numWarps = triton::gpu::lookupNumWarps(op);
+      auto ptrType = cast<PointerType>(ptr.getType());
+      tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    } else {
+      if (!memoryRowMajor) {
+        // TODO: To support more layouts on memory.
+        return failure();
+      }
+
+      auto tensorOfPointers = cast<RankedTensorType>(ptr.getType());
+
+      if (!hasDotDpasEncoding(tensorOfPointers))
+        return failure();
+
+      auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
+        auto dotLayout = getDotEncoding(tensorOfPointers).value();
+        return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+      };
+      opIdx = getOpIdx();
+
+      SmallVector<int64_t, 2> shardTensorShape;
+      auto encoding = getDotEncoding(tensorOfPointers).value();
+      auto dpasLayout = cast<DpasEncodingAttr>(encoding.getParent());
+      auto dpasWarpsPerCTA = dpasLayout.getWarpsPerCTA();
+      auto shape = tensorOfPointers.getShape();
+      numWarps = 1;
+      if (opIdx == DpasEncodingAttr::OpIdx::OperandA) {
+        shardTensorShape = {mlir::ceil<int64_t>(shape[0], dpasWarpsPerCTA[0]),
+                            shape[1]};
+        //        numWarps = dpasWarpsPerCTA[1];
+
+      } else {
+        shardTensorShape = {shape[0],
+                            mlir::ceil<int64_t>(shape[1], dpasWarpsPerCTA[1])};
+        //        numWarps = dpasWarpsPerCTA[0];
+      }
+
+      llvm::outs() << "johnlu debug: operands "
+                   << (opIdx == DpasEncodingAttr::OpIdx::OperandA ? "A" : "B")
+                   << "\n";
+      llvm::outs() << "johnlu debug: dpasWarpsPerCTA[0] = "
+                   << dpasWarpsPerCTA[0]
+                   << ", dpasWarpsPerCTA[1] = " << dpasWarpsPerCTA[1] << "\n";
+      llvm::outs() << "johnlu debug: numWarps " << numWarps << "\n";
+      llvm::outs() << "johnlu debug: tensor shape[0] = " << shape[0]
+                   << ", shape[1] = " << shape[1] << "\n";
+      llvm::outs() << "johnlu debug: shardTensorShape[0] = "
+                   << shardTensorShape[0]
+                   << ", shardTensorShape[1] = " << shardTensorShape[1] << "\n";
+      llvm::outs().flush();
+
+      auto ptrType = cast<PointerType>(tensorOfPointers.getElementType());
+      Type elementType = ptrType.getPointeeType();
+      tensorType = RankedTensorType::get(shardTensorShape, elementType,
+                                         tensorOfPointers.getEncoding());
+
+      // TODO: add masks
+      // std::map<SmallVector<unsigned>, Value> masks;
+      Value llPtr = adaptor.getPtr();
+
+      SmallVector<Value> ptrElems;
+      // Get the LLVM values for pointers
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+
+      // re-arrange the baseAddrs and masks to for large 2D block IO.
+      // Layout is unrelated to the scalar type.
+      SmallVector<SmallVector<unsigned>> offsets =
+          mlir::emitOffsetForLayout(encoding, tensorOfPointers);
+      for (size_t i = 0; i < ptrElems.size(); ++i) {
+        SmallVector<unsigned> offset = offsets[i];
+        baseAddrs[offset] = ptrElems[i];
+      }
+    }
+
     Type eltTy = tensorType.getElementType();
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
@@ -366,23 +438,35 @@ struct PrefetchOpConversion
       std::swap(tensorShape[0], tensorShape[1]);
     }
 
-    unsigned numWarps = triton::gpu::lookupNumWarps(op);
-
     SmallVector<unsigned, 2> shapePerWarp =
         get2DPrefetchShapePerWarp(tensorType);
-
+    ;
     SmallVector<unsigned, 2> warpsPerCTA =
         getWarpsPerCTA(tensorShape, shapePerWarp, numWarps);
+    ;
+
+    llvm::outs() << "johnlu debug: shapePerWarp[0] = " << shapePerWarp[0]
+                 << ", shapePerWarp[1] = " << shapePerWarp[1] << "\n";
+    llvm::outs() << "johnlu debug: prefetch warpsPerCTA[0] = " << warpsPerCTA[0]
+                 << ", warpsPerCTA[1] = " << warpsPerCTA[1] << "\n";
+    llvm::outs().flush();
 
     // To adjust the row shape per warp to fit the tensor shape and avoid
     // duplication in prefetching.
     unsigned factor =
         mlir::ceil(shapePerWarp[0] * warpsPerCTA[0], (unsigned)tensorShape[0]);
     shapePerWarp[0] = mlir::ceil(shapePerWarp[0], factor);
+    llvm::outs() << "johnlu debug: factor = " << factor << "\n";
+    llvm::outs() << "johnlu debug: adjust shapePerWarp[0] = " << shapePerWarp[0]
+                 << ", shapePerWarp[1] = " << shapePerWarp[1] << "\n";
+    llvm::outs().flush();
 
     SmallVector<int64_t> numReps = {
         mlir::ceil<int64_t>(tensorShape[0], shapePerWarp[0] * warpsPerCTA[0]),
         mlir::ceil<int64_t>(tensorShape[1], shapePerWarp[1] * warpsPerCTA[1])};
+    llvm::outs() << "johnlu debug: numReps[0] = " << numReps[0]
+                 << ", numReps[1] = " << numReps[1] << "\n";
+    llvm::outs().flush();
 
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     unsigned tileWidthInElem = shapePerWarp[1];
@@ -406,6 +490,11 @@ struct PrefetchOpConversion
       }
       break;
     }
+    llvm::outs() << "johnlu debug: elemSizeInBits: " << elemSizeInBits
+                 << ", tileWidthInElem: " << tileWidthInElem
+                 << ", tileHeightInElem: " << tileHeightInElem
+                 << ", vBlocks: " << vBlocks << "\n";
+    llvm::outs().flush();
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -413,33 +502,69 @@ struct PrefetchOpConversion
     SmallVector<Value> multiDimWarpId =
         mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, {1, 0});
 
-    auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
-          offsetBaseY] =
-        getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
+    Value base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
+        offsetBaseY;
+    if (isTensorPointerType(ptr.getType())) {
+      auto [base_, baseWidth_, baseHeight_, rowStride_, colStride_,
+            offsetBaseX_, offsetBaseY_] =
+          getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
-    if (!memoryRowMajor) {
-      // Swap the width/height and strides to the row major.
-      std::swap(baseWidth, baseHeight);
-      std::swap(colStride, rowStride);
+      if (!memoryRowMajor) {
+        // Swap the width/height and strides to the row major.
+        std::swap(baseWidth_, baseHeight_);
+        std::swap(colStride_, rowStride_);
+      }
+
+      base = base_;
+      baseWidth = baseWidth_, baseHeight = baseHeight_;
+      rowStride = rowStride_;
+      colStride = colStride_;
+      offsetBaseX = offsetBaseX_;
+      offsetBaseY = offsetBaseY_;
+
+    } else {
+
+      llvm::outs() << "johnlu debug: pointers" << "\n";
+      for (auto &ptr : baseAddrs) {
+        llvm::outs() << "johnlu debug: offset: " << ptr.first[0] << ", "
+                     << ptr.first[1] << "\n";
+      }
+      llvm::outs().flush();
+
+      rowStride = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
+                        b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
+      rowStride = targetInfo.shuffleIdx(rewriter, loc, rowStride, 0);
+      baseWidth = b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
+      baseHeight = b.i32_val(tileHeightInElem);
+      offsetBaseX = b.i32_val(0);
+      offsetBaseY = b.i32_val(0);
     }
-
-    baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-    baseWidth = b.trunc(i32_ty, baseWidth);
-
-    baseHeight = b.trunc(i32_ty, baseHeight);
 
     Value rowStrideInBytes =
         b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
     rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    Value warpSize = b.i32_val(threadsPerWarp);
+    Value laneId = b.urem(getThreadId(rewriter, loc), warpSize);
+    Value programId = targetInfo.programId(
+        rewriter, loc,
+        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+        0);
 
     for (int row = 0; row < numReps[0]; ++row) {
       for (int col = 0; col < numReps[1]; ++col) {
+        unsigned offsetN = col * warpsPerCTA[1] * shapePerWarp[1];
+        unsigned offsetM = row * warpsPerCTA[0] * shapePerWarp[0];
+        llvm::outs() << "johnlu debug: offsetM: " << offsetM
+                     << ", offsetN: " << offsetN << "\n";
+        llvm::outs().flush();
+
         Value offsetX, offsetY;
         offsetX = b.add(
             // the offset of this warp.
             b.mul(multiDimWarpId[1], b.i32_val(shapePerWarp[1])),
             // add the replica offset with a warp stride.
-            b.i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
+            b.i32_val(offsetN));
         // Round the offset into to the tensor shape
         offsetX = b.urem(offsetX, b.i32_val(tensorShape[1]));
         offsetX = b.add(offsetX, offsetBaseX);
@@ -447,14 +572,35 @@ struct PrefetchOpConversion
             // the offset of this warp.
             b.mul(multiDimWarpId[0], b.i32_val(shapePerWarp[0])),
             // add the replica offset with a warp stride.
-            b.i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
+            b.i32_val(offsetM));
         // Round the offset into to the tensor shape
         offsetY = b.urem(offsetY, b.i32_val(tensorShape[0]));
         offsetY = b.add(offsetY, offsetBaseY);
 
+        auto addr = targetInfo.shuffleIdx(rewriter, loc,
+                                          baseAddrs[{offsetM, offsetN}], 0);
+
+        if (opIdx == DpasEncodingAttr::OpIdx::OperandA) {
+          targetInfo.printf(rewriter,
+                            "A pid=%d warp %d lane %d johnlu 2d load addr=%p, "
+                            "pitch (bytes)=%d, base_width (bytes)=%d, "
+                            "base_height=%d, offsetM = %d, offsetN = %d",
+                            ValueRange{programId, warpId, laneId, addr,
+                                       rowStrideInBytes, baseWidth, baseHeight,
+                                       offsetY, offsetX});
+        } else {
+          targetInfo.printf(rewriter,
+                            "B pid=%d warp %d lane %d johnlu 2d load addr=%p, "
+                            "pitch (bytes)=%d, base_width (bytes)=%d, "
+                            "base_height=%d, offsetM = %d, offsetN = %d",
+                            ValueRange{programId, warpId, laneId, addr,
+                                       rowStrideInBytes, baseWidth, baseHeight,
+                                       offsetY, offsetX});
+        }
+
         auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
             loc,
-            /*ptr*/ base,
+            /*ptr*/ addr,
             /*base_width*/ baseWidth,
             /*base_height*/ baseHeight,
             /*base_pitch*/ rowStrideInBytes,
@@ -472,7 +618,27 @@ struct PrefetchOpConversion
         }
       }
     }
-
+#if 0
+        Value offsetX, offsetY;
+        offsetX = b.add(
+            // the offset of this warp.
+            b.mul(multiDimWarpId[1], b.i32_val(shapePerWarp[1])),
+            // add the replica offset with a warp stride.
+            b.i32_val(col * warpsPerCTA[1] * shapePerWarp[1]));
+        // Round the offset into to the tensor shape
+        offsetX = b.urem(offsetX, b.i32_val(tensorShape[1]));
+        offsetX = b.add(offsetX, offsetBaseX);
+        offsetY = b.add(
+            // the offset of this warp.
+            b.mul(multiDimWarpId[0], b.i32_val(shapePerWarp[0])),
+            // add the replica offset with a warp stride.
+            b.i32_val(row * warpsPerCTA[0] * shapePerWarp[0]));
+        // Round the offset into to the tensor shape
+        offsetY = b.urem(offsetY, b.i32_val(tensorShape[0]));
+        offsetY = b.add(offsetY, offsetBaseY);
+      }
+    }
+#endif
     rewriter.eraseOp(op);
     return success();
   }
