@@ -133,8 +133,9 @@ struct RewritedInfo {
       for (int64_t k = rank - 2; k >= 0; --k) {
         if (axisToRemove == i)
           --axisToRemove;
-        layouts[k] =
-            ttg::SliceEncodingAttr::get(ctx, axisToRemove, layouts[k + 1]);
+        layouts[k] = ttg::SliceEncodingAttr::get(
+            ctx, axisToRemove,
+            cast<ttg::DistributedEncodingTrait>(layouts[k + 1]));
         --axisToRemove;
       }
     }

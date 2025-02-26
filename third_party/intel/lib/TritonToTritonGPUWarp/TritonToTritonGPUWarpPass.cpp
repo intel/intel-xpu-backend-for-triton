@@ -346,8 +346,9 @@ public:
           auto src = reduce.getSrcs()[0];
           assert(valueAttrMap.count(src) != 0 &&
                  "reduce source attr should be already figured out");
-          auto sliceAttr =
-              ttg::SliceEncodingAttr::get(ctx, axis, valueAttrMap[src]);
+          auto sliceAttr = ttg::SliceEncodingAttr::get(
+              ctx, axis,
+              cast<ttg::DistributedEncodingTrait>(valueAttrMap[src]));
           auto result = reduce.getResults()[0];
           DenseSet<Value> chainedVals;
           chainedVals.insert(result);
@@ -427,7 +428,8 @@ public:
           // use.
           if (auto expand = dyn_cast<tt::ExpandDimsOp>(op)) {
             Attribute sliceLayout = triton::gpu::SliceEncodingAttr::get(
-                blockLayout.getContext(), expand.getAxis(), blockLayout);
+                blockLayout.getContext(), expand.getAxis(),
+                cast<triton::gpu::DistributedEncodingTrait>(blockLayout));
             DenseSet<Value> chainedVals;
             expandDefChain(expand.getSrc(), chainedVals);
             for (auto cv : chainedVals)

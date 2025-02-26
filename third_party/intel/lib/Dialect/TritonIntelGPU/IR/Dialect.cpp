@@ -589,7 +589,8 @@ struct TritonIntelGPUInferLayoutInterface
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
                         Attribute &resultEncoding) const override {
     resultEncoding = mlir::triton::gpu::SliceEncodingAttr::get(
-        getDialect()->getContext(), axis, operandEncoding);
+        getDialect()->getContext(), axis,
+        cast<mlir::triton::gpu::DistributedEncodingTrait>(operandEncoding));
     return success();
   }
 
