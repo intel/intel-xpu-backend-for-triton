@@ -8,7 +8,7 @@ on:
         type: string
         default: ""
       suite:
-        description: Space separated lists of test suites, all if empty
+        description: Space separated lists of test suites or "all"
         type: string
         default: >-
           inductor/test_codegen_triton.py
