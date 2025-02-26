@@ -127,7 +127,7 @@ private:
     RankedTensorType operandType = op.getInputTypes()[0];
     // Assumes offsets don't actually depend on type
     SmallVector<SmallVector<unsigned>> offsets =
-        ::intel::emitOffsetForLayout(helper.getSrcLayout(), operandType);
+        emitOffsetForLayout(helper.getSrcLayout(), operandType);
 
     // Thread X might hold the same input value in two registers.  Get the
     // indices in `offsets` that hold unique values, and only accumulate over
@@ -203,7 +203,7 @@ private:
         auto resultLayout = cast<SliceEncodingAttr>(resultTy.getEncoding());
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         SmallVector<SmallVector<unsigned>> resultOffset =
-            ::intel::emitOffsetForLayout(resultLayout, resultTy);
+            emitOffsetForLayout(resultLayout, resultTy);
         SmallVector<Value> resultVals;
         for (int j = 0; j < resultElems; j++) {
           auto key = resultOffset[j];
