@@ -189,8 +189,8 @@ public:
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto dstType = op.getType();
     Attribute dstEncoding = dstType.getEncoding();
-    auto indices = ::intel::emitIndices(op.getLoc(), rewriter, targetInfo,
-                                        dstEncoding, dstType, true);
+    auto indices = emitIndices(op.getLoc(), rewriter, targetInfo, dstEncoding,
+                               dstType, true);
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
       innerDimIndices.push_back(indices[i][0]);
