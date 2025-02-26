@@ -10,7 +10,7 @@ on:
       suite:
         description: Space separated lists of test suites or "all"
         type: string
-        default: ""
+        default: "all"
       runner_label:
         description: Runner label, keep empty for default
         type: string
