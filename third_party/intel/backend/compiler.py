@@ -255,12 +255,11 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         target_arch = "spir64"
-        intel.passes.ttgpuir.add_triton_annotate_module(pm,  16, # min(properties["sub_group_sizes"]),
-                                                        True, # properties["has_subgroup_2d_block_io"],
-                                                        True, # properties["has_subgroup_matrix_multiply_accumulate"],
-                                                        True, # properties["has_bfloat16_conversions"],
-                                                        opt.threads_per_warp,
-                                                        target_arch)
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, 16,  # min(properties["sub_group_sizes"]),
+                                                        True,  # properties["has_subgroup_2d_block_io"],
+                                                        True,  # properties["has_subgroup_matrix_multiply_accumulate"],
+                                                        True,  # properties["has_bfloat16_conversions"],
+                                                        opt.threads_per_warp, target_arch)
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
@@ -282,7 +281,8 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, True)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
