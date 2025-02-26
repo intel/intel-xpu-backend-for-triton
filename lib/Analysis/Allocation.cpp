@@ -121,11 +121,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   Attribute dstLayout = dstTy.getEncoding();
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
-  // FIXME: Change to the following line after fixing the issue with
-  // test_convert_mma2mma.
-  // auto outOrd = gpu::toLinearEncoding(dstLayout,
-  //                                     dstTy.getShape()).getOrder();
-  const auto &outOrd = gpu::getOrder(dstLayout);
+  auto outOrd = gpu::toLinearEncoding(dstLayout, dstTy.getShape()).getOrder();
   scratchConfig.order = outOrd;
 
   std::tie(scratchConfig.inVec, scratchConfig.outVec) =
