@@ -49,9 +49,7 @@ std::vector<SmallVector<unsigned>> factorizePowerOf2(int n, int rank) {
   return factors;
 }
 
-triton::gpu::DistributedEncodingTrait
-createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
-                ArrayRef<unsigned> warpsPerCTA) {
+Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA) {
   auto ctx = layout.getContext();
   if (auto src = dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(layout))
     return triton::gpu::AMDMfmaEncodingAttr::get(
@@ -67,9 +65,8 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
         ctx, src.getSizePerThread(), src.getThreadsPerWarp(), warpsPerCTA,
         src.getOrder(), src.getCTALayout());
   if (auto src = dyn_cast<triton::gpu::DotOperandEncodingAttr>(layout)) {
-    auto parent = cast<triton::gpu::DistributedEncodingTrait>(src.getParent());
     return triton::gpu::DotOperandEncodingAttr::get(
-        ctx, src.getOpIdx(), createTmpLayout(parent, warpsPerCTA),
+        ctx, src.getOpIdx(), createTmpLayout(src.getParent(), warpsPerCTA),
         src.getKWidth());
   }
   if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)) {
@@ -80,7 +77,7 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
         ctx, src.getDim(), createTmpLayout(src.getParent(), parentWarpsPerCTA));
   }
   assert("Encountered unsupported layout");
-  return {};
+  return Attribute();
 }
 
 std::pair<triton::gpu::ConvertLayoutOp, triton::gpu::ConvertLayoutOp>

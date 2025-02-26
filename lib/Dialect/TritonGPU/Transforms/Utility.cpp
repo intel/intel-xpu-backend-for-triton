@@ -302,9 +302,8 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 // -------------------------------------------------------------------------- //
 
 static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
-  return triton::gpu::SliceEncodingAttr::get(
-      op->getContext(), op.getAxis(),
-      cast<ttg::DistributedEncodingTrait>(encoding));
+  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
+                                             encoding);
 }
 
 static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
@@ -352,9 +351,8 @@ static Attribute inferSrcEncoding(triton::ReduceOp op, Attribute encoding) {
 }
 
 static Attribute inferSrcEncoding(triton::ExpandDimsOp op, Attribute encoding) {
-  return triton::gpu::SliceEncodingAttr::get(
-      op->getContext(), op.getAxis(),
-      cast<ttg::DistributedEncodingTrait>(encoding));
+  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
+                                             encoding);
 }
 
 static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {

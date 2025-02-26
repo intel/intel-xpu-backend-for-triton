@@ -67,8 +67,7 @@ struct DecomposeUnsupportedAMDConversions
       auto srcType = cvtOp.getSrc().getType();
       auto dstType = cvtOp.getType();
 
-      auto srcEnc =
-          cast<triton::gpu::DistributedEncodingTrait>(srcType.getEncoding());
+      auto srcEnc = srcType.getEncoding();
       auto dstBlocked =
           dyn_cast<triton::gpu::BlockedEncodingAttr>(dstType.getEncoding());
 

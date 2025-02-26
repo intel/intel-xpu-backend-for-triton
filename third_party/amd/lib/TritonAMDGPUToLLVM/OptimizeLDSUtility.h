@@ -16,9 +16,7 @@ std::vector<SmallVector<unsigned>> factorizePowerOf2(int n, int rank);
 /// \param layout original layout
 /// \param warpsPerCTA new warpsPerCTA
 /// \returns create layout
-triton::gpu::DistributedEncodingTrait
-createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
-                ArrayRef<unsigned> warpsPerCTA);
+Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA);
 
 /// Creates two chained convert layout operations
 ///

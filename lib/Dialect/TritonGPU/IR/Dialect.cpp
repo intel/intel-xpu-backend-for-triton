@@ -1654,12 +1654,7 @@ Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
   unsigned dim = mlir::cast<IntegerAttr>(attrs.get("dim")).getInt();
-  auto parent = mlir::dyn_cast<DistributedEncodingTrait>(attrs.get("parent"));
-  if (!parent) {
-    parser.emitError(parser.getNameLoc(),
-                     "expected a distributed encoding trait");
-    return {};
-  }
+  Attribute parent = attrs.get("parent");
   return parser.getChecked<SliceEncodingAttr>(parser.getContext(), dim, parent);
 }
 
@@ -2355,9 +2350,8 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
                         Attribute &resultEncoding) const override {
-    resultEncoding =
-        SliceEncodingAttr::get(getDialect()->getContext(), axis,
-                               cast<DistributedEncodingTrait>(operandEncoding));
+    resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                                            operandEncoding);
     return success();
   }
 
