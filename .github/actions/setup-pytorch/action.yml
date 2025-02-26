@@ -110,9 +110,6 @@ runs:
       shell: bash
       run: |
         source ${{ inputs.oneapi }}/setvars.sh
-        cd pytorch
-        pip install wheel
-        pip install -r requirements.txt
 
         # Limit AOT to PVC when compiling with LTS driver
         # See https://github.com/intel/intel-xpu-backend-for-triton/pull/3548#issuecomment-2685718019
@@ -123,6 +120,9 @@ runs:
           export TORCH_XPU_ARCH_LIST="pvc"
         fi
 
+        cd pytorch
+        pip install wheel
+        pip install -r requirements.txt
         USE_STATIC_MKL=1 CFLAGS="-Wno-error=maybe-uninitialized" python setup.py bdist_wheel 2>&1 | grep -v \
           "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)." | grep -v '^$'
 
