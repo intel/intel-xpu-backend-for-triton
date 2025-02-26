@@ -903,22 +903,10 @@ struct LoadOpConversion
     auto numIterationsInnerDimPerLoad =
         isOperandA ? origNumOperandsPer2DloadN : numOperandsPer2DLoadM;
 
-    if (isTransposeRequired) {
-      std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
-      std::swap(numIterationsOuterDimPerLoad, numIterationsInnerDimPerLoad);
-    }
-
-    unsigned numLoadPerOutRepCluster =
-        mlir::ceil<unsigned>(repCluster[dimOuter], numOperandsOuterDimPerLoad);
-
-    unsigned numValuesPerLoad = packedElemsPerLanePerDPASInst *
-                                numOperandsOuterDimPerLoad *
-                                numOperandsInnerDimPerLoad;
-
     if (!isTransposeRequired) {
-      tileLayout *= LinearLayout::identity1D(numIterationsOuterDimPerLoad,
+      tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
                                              kIteration, dimOuterStr);
-      tileLayout *= LinearLayout::identity1D(numIterationsInnerDimPerLoad,
+      tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
                                              kIteration, dimInnerStr);
       llvm::errs() << "\nnumOperandsOuterDimPerLoad: "
                    << numOperandsOuterDimPerLoad << "\n";
@@ -948,6 +936,17 @@ struct LoadOpConversion
         // operand per inst.
         // Note: the tileHeight and numOperandsPer2DLoadM are the column size
         // now.
+        llvm::errs() << "\n"
+                     << std::to_string((threadsPerWarp <= tileHeight)) << " ? "
+                     << repCluster[dimOuter] << " : " << 1 << "\n";
+        llvm::errs() << "numOperandsOuterDimPerLoad: "
+                     << numOperandsOuterDimPerLoad << "\n";
+        llvm::errs() << "numOperandsInnerDimPerLoad: "
+                     << numOperandsInnerDimPerLoad << "\n";
+        llvm::errs() << "numIterationsOuterDimPerLoad: "
+                     << numIterationsOuterDimPerLoad << "\n";
+        llvm::errs() << "numIterationsInnerDimPerLoad: "
+                     << numIterationsInnerDimPerLoad << "\n";
         tileLayout *= LinearLayout::identity1D(
             (threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1,
             kIteration, dimOuterStr);
@@ -994,16 +993,6 @@ struct LoadOpConversion
       llvm::dbgs() << "\n";
     });
 
-    Type load2DGenXType =
-        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
-
-    // The stride for the replicates.
-    unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
-    unsigned repStride =
-        elemsPerDPASInst[dimOuter] * numOperandsOuterDimPerLoad;
-    unsigned warpOuterStride = warpShape[dimOuter];
-    unsigned repKStride = elemsPerDPASInst[dimInner];
-
     unsigned numRepOuter = numReps[bool(opIdx) ? 2 : 1];
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
 
@@ -1012,16 +1001,40 @@ struct LoadOpConversion
     LLVM_DEBUG(llvm::dbgs() << "Packed elements per slot: "
                             << packedElementsPerSlot << "\n");
 
+    if (isTransposeRequired) {
+      llvm::errs() << "transpose required!\n";
+      std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
+      std::swap(numIterationsOuterDimPerLoad, numIterationsInnerDimPerLoad);
+    }
+
 #if 1
-    llvm::errs() << "numRepOuter: " << numRepOuter << " vs "
+    llvm::errs() << "dim outer load: \n";
+    llvm::errs() << "\tnumRepOuter: " << numRepOuter << "\n";
+    llvm::errs() << "\tpackedElementsPerSlot: " << packedElementsPerSlot
+                 << "\n";
+    llvm::errs() << "\tvblocks: " << vBlocks << "\n";
+    llvm::errs() << "\tnumRepOuter * packedElementsPerSlot * vBlocks: "
+                 << numRepOuter * packedElementsPerSlot * vBlocks << "\n";
+    llvm::errs() << "\tnumIterationsOuterDimPerLoad: "
+                 << numIterationsOuterDimPerLoad << "\n";
+    llvm::errs() << "\tdimOuter Val: "
                  << (numRepOuter * packedElementsPerSlot * vBlocks) /
                         numIterationsOuterDimPerLoad
                  << "\n";
-    llvm::errs() << "numRepInner: " << numRepInner << " vs "
-                 << (numRepInner) / numIterationsInnerDimPerLoad << "\n";
-    llvm::errs() << "vblocks: " << vBlocks << "\n";
-    llvm::errs() << "numRepOuter * repCluster[dimOuter]: "
-                 << numRepOuter * repCluster[dimOuter] << "\n";
+    llvm::errs() << "\tdimOuter Val swapped iterations: "
+                 << (numRepOuter * packedElementsPerSlot * vBlocks) /
+                        numIterationsInnerDimPerLoad
+                 << "\n";
+
+    llvm::errs() << "dim inner load: \n";
+    llvm::errs() << "\tnumRepInner: " << numRepInner << "\n";
+    llvm::errs() << "\tnumIterationsInnerDimPerLoad: "
+                 << numIterationsInnerDimPerLoad << "\n";
+    llvm::errs() << "\tdimInner Val: "
+                 << numRepInner / numIterationsInnerDimPerLoad << "\n";
+    llvm::errs() << "\tdimInner Val swapped iterations: "
+                 << numRepInner / numIterationsOuterDimPerLoad << "\n";
+
     if (isTransposeRequired && oneMatrixPerLoadForBT) {
       tileLayout *= LinearLayout::identity1D(numRepOuter * repCluster[dimOuter],
                                              kLoad, dimOuterStr);
@@ -1094,6 +1107,23 @@ struct LoadOpConversion
         llvm::dbgs() << "\n";
       }
     });
+
+    unsigned numLoadPerOutRepCluster =
+        mlir::ceil<unsigned>(repCluster[dimOuter], numOperandsOuterDimPerLoad);
+
+    unsigned numValuesPerLoad = packedElemsPerLanePerDPASInst *
+                                numOperandsOuterDimPerLoad *
+                                numOperandsInnerDimPerLoad;
+
+    Type load2DGenXType =
+        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
+
+    // The stride for the replicates.
+    unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
+    unsigned repStride =
+        elemsPerDPASInst[dimOuter] * numOperandsOuterDimPerLoad;
+    unsigned warpOuterStride = warpShape[dimOuter];
+    unsigned repKStride = elemsPerDPASInst[dimInner];
 
     Value pitch;
     if (memoryRowMajor) {
@@ -1199,9 +1229,31 @@ struct LoadOpConversion
             llvm::dbgs() << "y offset from layout: " << offset[dimInner].second
                          << "\n";
           });
-          const auto loadOffsetX = offset[dimOuter].second * outerDimWarpNum *
-                                   numLoadPerOutRepCluster *
-                                   packedElementsPerSlot;
+          llvm::errs() << "outer dim warp num: " << outerDimWarpNum << "\n";
+          llvm::errs() << "iteration num: "
+                       << tileLayout.getInDimSize(kIteration) << "\n";
+          llvm::errs() << "load num: " << tileLayout.getInDimSize(kLoad)
+                       << "\n";
+          llvm::errs() << "numLoadPerOutRepCluster: " << numLoadPerOutRepCluster
+                       << "\n";
+          llvm::errs() << "packedElementsPerSlot: " << packedElementsPerSlot
+                       << "\n";
+          llvm::errs() << "iteration / vblocks * load = "
+                       << offset[dimOuter].second *
+                              (tileLayout.getInDimSize(kIteration) / vBlocks) *
+                              tileLayout.getInDimSize(kLoad) *
+                              numLoadPerOutRepCluster
+                       << "\n";
+          llvm::errs() << "iteration * load = "
+                       << offset[dimOuter].second *
+                              tileLayout.getInDimSize(kIteration) *
+                              tileLayout.getInDimSize(kLoad) *
+                              numLoadPerOutRepCluster
+                       << "\n";
+          const auto loadOffsetX =
+              offset[dimOuter].second *
+              (tileLayout.getInDimSize(kIteration) / vBlocks) *
+              tileLayout.getInDimSize(kLoad) * numLoadPerOutRepCluster;
           const auto loadOffsetY = offset[dimInner].second;
           LLVM_DEBUG({
             llvm::dbgs() << "x offset ll: " << loadOffsetX << "\n";
@@ -1283,10 +1335,11 @@ struct LoadOpConversion
                                 ? tileHeight / elemsPerDPASInst[dimOuter] - 1
                                 : tileHeight;
           } else {
-            loadColStride = isOperandA ? tileHeight
-                            : (ll.getOutDimSize(dimInnerStr) > tileWidth)
-                                ? tileWidth
-                                : packedElemsPerLanePerDPASInst;
+            llvm::errs() << "tileWidth = " << tileWidth << "\n";
+            llvm::errs() << "elemSizeInBits/16 = " << elemSizeInBits / 16
+                         << "\n";
+            loadColStride = isOperandA ? tileHeight / (elemSizeInBits / 16)
+                                       : tileWidth / (elemSizeInBits / 16);
           }
 
           LLVM_DEBUG({
