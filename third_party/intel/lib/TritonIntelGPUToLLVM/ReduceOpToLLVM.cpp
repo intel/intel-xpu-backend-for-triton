@@ -139,9 +139,8 @@ private:
 
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
-    auto srcIndices =
-        ::intel::emitIndices(op.getLoc(), rewriter, targetInfo,
-                             helper.getSrcLayout(), operandType, true);
+    auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
+                                  helper.getSrcLayout(), operandType, true);
     // reduce within threads
     for (const auto &[_, i] : uniqueOffsets) {
       SmallVector<unsigned> key = offsets[i];
@@ -381,8 +380,8 @@ private:
         // nd-tensor where n >= 1
         auto resultLayout = cast<SliceEncodingAttr>(resultTy.getEncoding());
         unsigned resultElems = getTotalElemsPerThread(resultTy);
-        auto resultIndices = ::intel::emitIndices(loc, rewriter, targetInfo,
-                                                  resultLayout, resultTy, true);
+        auto resultIndices = emitIndices(loc, rewriter, targetInfo,
+                                         resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
         auto resultCTATile = getShapePerCTATile(resultLayout);
         assert(resultIndices.size() == resultElems);

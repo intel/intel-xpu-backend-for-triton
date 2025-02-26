@@ -490,38 +490,6 @@ emitOffsetForLayout(Attribute layout, RankedTensorType type) {
   return mlir::emitOffsetForLayout(layout, type);
 }
 
-// Emit indices calculation within each ConversionPattern, and returns a
-// [elemsPerThread X rank] index matrix.
-inline SmallVector<SmallVector<Value>>
-emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-            Attribute layout, RankedTensorType type, bool withCTAOffset) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  MLIRContext *ctx = rewriter.getContext();
-  auto shape = type.getShape();
-  std::optional<LinearLayout> ll = triton::gpu::toLinearLayout(shape, layout);
-  if (ll.has_value())
-    return mlir::emitIndices(loc, rewriter, target, layout, type,
-                             withCTAOffset);
-
-  // step 1, delinearize threadId to get the base index
-  auto multiDimBase = ::intel::emitBaseIndexForLayout(
-      loc, rewriter, target, layout, type, withCTAOffset);
-  // step 2, get offset of each element
-  auto offset = intel::emitOffsetForLayout(layout, type);
-  // step 3, add offset to base, and reorder the sequence
-  // of indices to guarantee that elems in the same
-  // sizePerThread are adjacent in order
-  unsigned rank = shape.size();
-  unsigned elemsPerThread = offset.size();
-  SmallVector<SmallVector<Value>> multiDimIdx(elemsPerThread,
-                                              SmallVector<Value>(rank));
-  for (unsigned n = 0; n < elemsPerThread; ++n)
-    for (unsigned k = 0; k < rank; ++k)
-      multiDimIdx[n][k] = b.add(multiDimBase[k], b.i32_val(offset[n][k]));
-
-  return multiDimIdx;
-}
-
 Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                         Value v);
 Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
