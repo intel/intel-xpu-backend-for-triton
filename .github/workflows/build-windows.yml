@@ -22,7 +22,6 @@ jobs:
     name: Build
     runs-on:
       - windows
-      - avc336
     steps:
       - name: Enable long paths
         run: |
@@ -36,27 +35,30 @@ jobs:
         with:
           python-version: '3.9'
 
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
       # Copy workspace to a temporary location with a shorter name.
       - name: Copy workspace
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
 
+      - name: Create venv
+        run:
+          python -m venv .venv
+
       # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
       # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
       # runner.
-      - name: Build Triton
+      - name: Setup Triton
         run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
-
-          cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 && set' | ForEach-Object {
-              if ($_ -match '^(.*?)=(.*)$') {
-                  [Environment]::SetEnvironmentVariable($matches[1], $matches[2])
-              }
-          }
-
           cd python
-          pip install -U wheel pybind11 certifi cython cmake setuptools>=65.6.1
-          python -m certifi
+          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
           pip install -v --no-build-isolation '.[build]'
 
       - name: Clean
