@@ -121,8 +121,25 @@ struct ConvertTritonGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       pipelineManager.populateFunctionConversionPatterns(
-          funcPatterns, typeConverter, numWarps);
+          funcPatterns, typeConverter, numWarps, targetInfo);
 
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
+
+    // initSharedMemory is run before the conversion of call and ret ops,
+    // because the call op has to know the shared memory base address of each
+    // function
+    initSharedMemory(typeConverter);
+
+    // Convert call and ret ops
+    {
+      mlir::LowerToLLVMOptions option(context);
+      TritonIntelGPUToLLVMTypeConverter typeConverter(
+          context, option, targetInfo, isAdvancedPathEnabled);
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
+      RewritePatternSet funcPatterns(context);
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
@@ -146,6 +163,26 @@ struct ConvertTritonGPUToLLVM
         funcOp.removeArgAttr(i, "tt.contiguity");
       }
     });
+  }
+
+private:
+  void initSharedMemory(LLVMTypeConverter &typeConverter) {
+    ModuleOp mod = getOperation();
+    OpBuilder b(mod.getBodyRegion());
+    auto ctx = mod.getContext();
+    auto loc = mod.getLoc();
+    auto elemTy = typeConverter.convertType(b.getIntegerType(8));
+    // Set array size 0 and external linkage indicates that we use dynamic
+    // shared allocation to allow a larger shared memory size for each kernel.
+    //
+    // Ask for 16B alignment on global_smem because that's the largest we should
+    // ever need (4xi32).
+    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
+    auto global = b.create<LLVM::GlobalOp>(
+        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+        "global_smem", /*value=*/Attribute(), /*alignment=*/16,
+        // Add ROCm support.
+        static_cast<unsigned>(TritonGEN::TritonGENMemorySpace::kWorkgroup));
   }
 };
 
