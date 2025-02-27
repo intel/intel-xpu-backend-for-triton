@@ -56,8 +56,14 @@ Value getFinalValue(Value value) {
     // look init values outside the loop
     BlockArgument blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp))
-      return getFinalValue(forOp.getInitArgs()[blockArg.getArgNumber()]);
+    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      int numIVs = forOp.getNumInductionVars();
+      int initArgIdx = blockArg.getArgNumber() - numIVs;
+      auto initArgs = forOp.getInitArgs();
+      assert(initArgIdx >= 0 && initArgIdx < initArgs.size() &&
+             "Unexpected 'initArgIdx' value");
+      return getFinalValue(initArgs[initArgIdx]);
+    }
 
     return value;
   }
