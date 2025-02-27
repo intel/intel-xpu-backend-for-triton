@@ -71,6 +71,7 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
+      max-parallel: 2
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
