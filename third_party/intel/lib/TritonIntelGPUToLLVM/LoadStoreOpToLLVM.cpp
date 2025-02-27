@@ -957,10 +957,6 @@ struct LoadOpConversion
       }
     }
 
-#if 1
-    llvm::errs() << "Block load tile layout after adding iterations: "
-                 << tileLayout << "\n";
-#else
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding iterations: "
                    << tileLayout << "\n";
@@ -1000,7 +996,6 @@ struct LoadOpConversion
       }
       llvm::dbgs() << "\n";
     });
-#endif
 
     unsigned numRepOuter = numReps[bool(opIdx) ? 2 : 1];
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
@@ -1016,7 +1011,7 @@ struct LoadOpConversion
       std::swap(numIterationsOuterDimPerLoad, numIterationsInnerDimPerLoad);
     }
 
-#if 1
+#if 0
     llvm::errs() << "dim outer load: \n";
     llvm::errs() << "\tnumRepOuter: " << numRepOuter << "\n";
     llvm::errs() << "\tpackedElementsPerSlot: " << packedElementsPerSlot
@@ -1043,6 +1038,7 @@ struct LoadOpConversion
                  << numRepInner / numIterationsInnerDimPerLoad << "\n";
     llvm::errs() << "\tdimInner Val swapped iterations: "
                  << numRepInner / numIterationsOuterDimPerLoad << "\n";
+#endif
 
     tileLayout *= LinearLayout::identity1D(
         numRepInner / numIterationsInnerDimPerLoad, kLoad, dimInnerStr);
@@ -1055,21 +1051,6 @@ struct LoadOpConversion
               numIterationsOuterDimPerLoad,
           kLoad, dimOuterStr);
     }
-
-#else
-    if (isTransposeRequired && oneMatrixPerLoadForBT) {
-      tileLayout *= LinearLayout::identity1D(numRepOuter * repCluster[dimOuter],
-                                             kLoad, dimOuterStr);
-    } else {
-      tileLayout *= LinearLayout::identity1D(
-          (numRepOuter * packedElementsPerSlot * (isOperandA ? vBlocks : 1)) /
-              numOperandsOuterDimPerLoad,
-          kLoad, dimOuterStr);
-    }
-    tileLayout *= LinearLayout::identity1D(
-        (numRepInner * (isOperandA ? 1 : vBlocks)) / numOperandsInnerDimPerLoad,
-        kLoad, dimInnerStr);
-#endif
 
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
@@ -1212,19 +1193,11 @@ struct LoadOpConversion
                          << k << "\n";
           });
 
-#if 0
-          const int loadIdx = outer + (rep) +
-                              ((k / numOperandsInnerDimPerLoad) *
-                               numLoadPerOutRepCluster);
-          LLVM_DEBUG(llvm::dbgs() << "loadIdx: " << loadIdx << " (" << outer << " + " << rep << " + " << k << " / " << numOperandsInnerDimPerLoad << " * " << numLoadPerOutRepCluster << ")\n");
-          LLVM_DEBUG(llvm::dbgs() << "alt load idx: " << ((outer * numLoadPerOutRepCluster * numRepInner) + rep*numRepInner + k) << "\n");
-#else
           const int loadIdx = (outer * numLoadPerOutRepCluster *
                                (numRepInner / numOperandsInnerDimPerLoad)) +
                               rep * (numRepInner / numOperandsInnerDimPerLoad) +
                               k / numOperandsInnerDimPerLoad;
           LLVM_DEBUG(llvm::dbgs() << "loadIdx: " << loadIdx << "\n");
-#endif
 
           Value offsetX, offsetY;
           auto offset = tileLayout.apply(
