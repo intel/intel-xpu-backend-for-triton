@@ -13,7 +13,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
-from triton_kernels_benchmark import xetla_kernel
+# from triton_kernels_benchmark import xetla_kernel
 
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
@@ -208,6 +208,37 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False):
     return c
 
 
+@triton.autotune(
+    configs=[
+        triton.Config(
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+            num_stages=s, num_warps=32) for s in [2, 3]
+    ]
+    # + [
+    #     triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
+    #                   num_stages=s, num_warps=w)
+    #     for s in [2]
+    #     for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
+    # ] + [
+    #     triton.Config(
+    #         {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 1024, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+    #         num_stages=s, num_warps=32) for s in [2, 3]
+    # ] + [
+    #     triton.Config(
+    #         {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
+    #         num_stages=s, num_warps=32) for s in [2]
+    # ] + [
+    #     triton.Config(
+    #         {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
+    #         num_stages=s, num_warps=32) for s in [2]
+    # ] + [
+    #     triton.Config(
+    #         {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
+    #         num_stages=s, num_warps=4) for s in [2]
+    # ]
+    ,
+    key=['M', 'N', 'K'],
+)
 @triton.jit()
 def matmul_tensor_pointer_kernel(a_ptr, b_ptr, c_ptr,  #
                                  M, N, K,  #
@@ -265,15 +296,6 @@ def matmul_tensor_pointer_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 def matmul_tensor_pointer(a, b, c, transpose_a=False, transpose_b=False):
-    configs = {
-        torch.float8_e4m3fn: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
-            "num_warps": 8
-        }, torch.float16: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
-            "num_warps": 8
-        }
-    }
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -296,12 +318,6 @@ def matmul_tensor_pointer(a, b, c, transpose_a=False, transpose_b=False):
         b.stride(1),  #
         c.stride(0),
         c.stride(1),  #
-        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
-        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
-        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
-        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
-        num_stages=configs[dtype]["num_stages"],  #
-        num_warps=configs[dtype]["num_warps"],  #
         threads_per_warp=16,
     )
     return c
@@ -322,27 +338,8 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
     return a_shape, b_shape
 
 
-X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
-    [1, 1, 13824, 5120],
-    [1, 4, 12288, 4096],
-    [1, 512, 8192, 8192],
-    [1, 512, 8192, 32768],
-    [1, 512, 32768, 8192],
-    [1, 1024, 8192, 16384],
-    [1, 1024, 8192, 28672],
-    [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
-    [1, 4096, 8192, 16384],
-    [1, 8192, 1024, 16384],
-    [1, 8192, 4096, 16384],
-    [1, 16384, 1024, 8192],
-    [1, 16384, 4096, 8192],
-    [1, 16384, 8192, 1024],
-    [1, 16384, 8192, 4096],
-    [4, 32768, 128, 4096],
-    [4, 32768, 4096, 128],
-    [32, 4096, 128, 4096],
-    [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
+X_VALS = [
+    [1, 128, 256, 64],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
