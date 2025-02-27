@@ -7,7 +7,7 @@ on:
       runner_label:
         description: Runner label
         type: string
-        default: win-a770
+        default: a770
       skip_list:
         description: Skip list
         type: string
