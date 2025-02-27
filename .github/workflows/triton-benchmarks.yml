@@ -36,8 +36,6 @@ on:
         type: boolean
         default: false
 
-  schedule:
-    - cron: "5 23 * * *"
   pull_request:
     branches:
       - main
@@ -57,6 +55,7 @@ jobs:
   build:
     name: Triton benchmarks
     runs-on:
+      - linux
       - ${{ inputs.runner_label || 'max1550' }}
     timeout-minutes: 720
     defaults:

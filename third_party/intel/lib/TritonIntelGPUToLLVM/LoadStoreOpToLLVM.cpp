@@ -217,8 +217,8 @@ struct LoadStoreConversionBase {
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for indices in block
-    auto indices = mlir::triton::intel::emitIndices(
-        loc, rewriter, targetInfo, tensorType.getEncoding(), tensorType, true);
+    auto indices = emitIndices(loc, rewriter, targetInfo,
+                               tensorType.getEncoding(), tensorType, true);
 
     auto linearize =
         [](ArrayRef<Value> A, ArrayRef<Value> B, Value init,

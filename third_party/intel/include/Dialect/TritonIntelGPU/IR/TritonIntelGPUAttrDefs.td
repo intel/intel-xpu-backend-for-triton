@@ -224,10 +224,6 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
       return getTotalElemsPerThreadForOperand(shape, eltTy, kWidth, static_cast<OpIdx>(opIdx));
     }
 
-    bool supportReduction() const {
-      return true;
-    }
-
     SmallVector<unsigned> getContigPerThread() const;
 
     struct DPASCapability {

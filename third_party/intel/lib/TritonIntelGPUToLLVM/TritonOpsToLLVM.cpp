@@ -782,7 +782,7 @@ class ConvertLayoutOpConversion : public ConvertTritonGPUOpToLLVMPattern<
       return failure();
 
     auto m = op->getParentOfType<ModuleOp>();
-    int size = TritonGEN::getSubgroupSize(m);
+    int size = triton::gpu::TritonGPUDialect::getThreadsPerWarp(m);
 
     Value res = rewriter.create<LLVM::PoisonOp>(loc, type);
     for (int i = 0; i < size; ++i) {

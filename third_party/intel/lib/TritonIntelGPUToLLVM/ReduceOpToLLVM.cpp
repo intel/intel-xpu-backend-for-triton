@@ -127,7 +127,7 @@ private:
     RankedTensorType operandType = op.getInputTypes()[0];
     // Assumes offsets don't actually depend on type
     SmallVector<SmallVector<unsigned>> offsets =
-        ::intel::emitOffsetForLayout(helper.getSrcLayout(), operandType);
+        emitOffsetForLayout(helper.getSrcLayout(), operandType);
 
     // Thread X might hold the same input value in two registers.  Get the
     // indices in `offsets` that hold unique values, and only accumulate over
@@ -139,9 +139,8 @@ private:
 
     unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
-    auto srcIndices =
-        ::intel::emitIndices(op.getLoc(), rewriter, targetInfo,
-                             helper.getSrcLayout(), operandType, true);
+    auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
+                                  helper.getSrcLayout(), operandType, true);
     // reduce within threads
     for (const auto &[_, i] : uniqueOffsets) {
       SmallVector<unsigned> key = offsets[i];
@@ -204,7 +203,7 @@ private:
         auto resultLayout = cast<SliceEncodingAttr>(resultTy.getEncoding());
         unsigned resultElems = getTotalElemsPerThread(resultTy);
         SmallVector<SmallVector<unsigned>> resultOffset =
-            ::intel::emitOffsetForLayout(resultLayout, resultTy);
+            emitOffsetForLayout(resultLayout, resultTy);
         SmallVector<Value> resultVals;
         for (int j = 0; j < resultElems; j++) {
           auto key = resultOffset[j];
@@ -381,8 +380,8 @@ private:
         // nd-tensor where n >= 1
         auto resultLayout = cast<SliceEncodingAttr>(resultTy.getEncoding());
         unsigned resultElems = getTotalElemsPerThread(resultTy);
-        auto resultIndices = ::intel::emitIndices(loc, rewriter, targetInfo,
-                                                  resultLayout, resultTy, true);
+        auto resultIndices = emitIndices(loc, rewriter, targetInfo,
+                                         resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
         auto resultCTATile = getShapePerCTATile(resultLayout);
         assert(resultIndices.size() == resultElems);

@@ -7,7 +7,7 @@ on:
       runner_label:
         description: Runner label
         type: string
-        default: win-a770
+        default: a770
       skip_list:
         description: Skip list
         type: string
@@ -30,7 +30,9 @@ env:
 jobs:
   build:
     name: Build and test
-    runs-on: ${{ inputs.runner_label }}
+    runs-on:
+      - windows
+      - ${{ inputs.runner_label }}
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
     timeout-minutes: 480
     steps:
@@ -64,10 +66,13 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          # FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/3522
+          $env:INCLUDE += ";C:\Program Files (x86)\Intel\oneAPI\dnnl\latest\include\oneapi\dnnl"
           # Required to build on Windows
           $env:CMAKE_SHARED_LINKER_FLAGS = "/FORCE:MULTIPLE"
           $env:CMAKE_MODULE_LINKER_FLAGS = "/FORCE:MULTIPLE"
           $env:CMAKE_EXE_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:TORCH_XPU_ARCH_LIST = "bmg,dg2,arl-h,mtl-h"
           bash -c "PYTORCH_PROJ=/c/pytorch ./scripts/install-pytorch.sh --source --check-wheel"
 
       - name: PyTorch version

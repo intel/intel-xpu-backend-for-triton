@@ -128,4 +128,4 @@ jobs:
       dtype: ${{ matrix.dtype }}
       models: subset
       only_one_model: ""
-      runner_label: "${{ matrix.runner_label }}"
+      runner_label: ${{ inputs.runner_label }}
