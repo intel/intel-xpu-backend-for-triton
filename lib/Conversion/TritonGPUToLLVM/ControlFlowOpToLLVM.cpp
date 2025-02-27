@@ -87,7 +87,6 @@ private:
     if (!caller->hasAttr("allocation.offset")) {
       auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
-
     } else {
       auto base = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, callOp);
       promotedOperands.push_back(base);

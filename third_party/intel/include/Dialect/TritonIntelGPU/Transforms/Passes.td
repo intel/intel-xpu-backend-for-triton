@@ -362,4 +362,17 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPURewriteStackPtr
+    : Pass<"tritonintelgpu-rewrite-stack-ptr", "mlir::ModuleOp"> {
+  let summary = "intel rewrite getstackptr";
+
+  let description =
+      [{intel rewrite getstackptr}];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect", "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
 #endif // TRITON_INTEL_GPU_PASSES

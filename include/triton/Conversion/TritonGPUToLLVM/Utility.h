@@ -512,13 +512,6 @@ inline Value getStackPointer(RewriterBase &rewriter,
   auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
   assert(globalBase);
   return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-  // Todo: Add a pass to convert public version to intel's impl
-  // auto mod = funcOp->getParentOfType<ModuleOp>();
-  // LLVM::LLVMPointerType ptrTy = ptr_ty(
-  //     rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
-  // if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0)
-  //   return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
-  // return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
 inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
