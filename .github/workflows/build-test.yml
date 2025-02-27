@@ -60,6 +60,13 @@ jobs:
     name: Pre-commit checks
     runs-on: Linux
     steps:
+      - name: Start Measurement
+        uses: DaxLynch/eco-ci-energy-estimation@main
+        with:
+          task: start-measurement
+          api-endpoint-add: "http://34.57.100.155:3000/environmental_data"
+          json-output: true
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -89,6 +96,11 @@ jobs:
           cd scripts
           pytest -n 4 test_*.py
 
+      - name: Show Energy Results
+        uses: DaxLynch/eco-ci-energy-estimation@main
+        with:
+          task: display-results
+
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/save
@@ -104,6 +116,13 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
 
     steps:
+      - name: Start Measurement
+        uses: DaxLynch/eco-ci-energy-estimation@main
+        with:
+          task: start-measurement
+          api-endpoint-add: "http://34.57.100.155:3000/environmental_data"
+          json-output: true
+          
       - name: Inputs
         run: |
           cat <<EOF
@@ -119,6 +138,11 @@ jobs:
             matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
           fi
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
+
+      - name: Show Energy Results
+        uses: DaxLynch/eco-ci-energy-estimation@main
+        with:
+          task: display-results
 
   integration-tests:
     name: Integration tests matrix
