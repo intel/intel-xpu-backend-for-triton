@@ -7,3 +7,5 @@ test/unit/language/test_core.py::test_scaled_dot[64-32-64-False-False-True-e4m3-
 test/unit/language/test_core.py::test_scaled_dot[64-64-128-False-True-True-e5m2-bf16-4-16-1]
 test/unit/language/test_core.py::test_scaled_dot[128-128-128-True-False-False-e4m3-bf16-4-16-1]
 test/unit/language/test_core.py::test_scaled_dot[128-128-128-True-False-False-e4m3-fp16-4-16-1]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/3439
+test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-256-256]
