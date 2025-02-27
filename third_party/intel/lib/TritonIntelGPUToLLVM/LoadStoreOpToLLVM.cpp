@@ -903,7 +903,7 @@ struct LoadOpConversion
     auto numIterationsOuterDimPerLoad =
         isOperandA ? numOperandsPer2DLoadM : origNumOperandsPer2DloadN;
     auto numIterationsInnerDimPerLoad =
-        isOperandA ? origNumOperandsPer2DloadN : numOperandsPer2DLoadM;
+        isOperandA ? numOperandsPer2DloadN : numOperandsPer2DLoadM;
 
     if (!isTransposeRequired) {
       tileLayout *= LinearLayout::identity1D(numIterationsOuterDimPerLoad,
@@ -955,6 +955,10 @@ struct LoadOpConversion
       }
     }
 
+#if 1
+    llvm::errs() << "Block load tile layout after adding iterations: "
+                 << tileLayout << "\n";
+#else
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding iterations: "
                    << tileLayout << "\n";
@@ -994,6 +998,7 @@ struct LoadOpConversion
       }
       llvm::dbgs() << "\n";
     });
+#endif
 
     unsigned numRepOuter = numReps[bool(opIdx) ? 2 : 1];
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
@@ -1037,6 +1042,8 @@ struct LoadOpConversion
     llvm::errs() << "\tdimInner Val swapped iterations: "
                  << numRepInner / numIterationsOuterDimPerLoad << "\n";
 
+    tileLayout *= LinearLayout::identity1D(
+        numRepInner / numIterationsInnerDimPerLoad, kLoad, dimInnerStr);
     if (isTransposeRequired && oneMatrixPerLoadForBT) {
       tileLayout *= LinearLayout::identity1D(numRepOuter * repCluster[dimOuter],
                                              kLoad, dimOuterStr);
@@ -1047,8 +1054,6 @@ struct LoadOpConversion
           kLoad, dimOuterStr);
     }
 
-    tileLayout *= LinearLayout::identity1D(
-        numRepInner / numIterationsInnerDimPerLoad, kLoad, dimInnerStr);
 #else
     if (isTransposeRequired && oneMatrixPerLoadForBT) {
       tileLayout *= LinearLayout::identity1D(numRepOuter * repCluster[dimOuter],
