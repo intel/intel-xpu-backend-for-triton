@@ -892,8 +892,6 @@ def mxfp8_mxfp4_matmul(  #
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else []))
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, CONST_SCALE, A_DATA_TYPE,
                             B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
-    if is_xpu():
-        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
     if is_cuda():
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("Requires compute capability >= 10")
@@ -912,7 +910,10 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
 
     if B_DATA_TYPE != 'float4' and B_TRANS:
-        pytest.skip(f'No need to transpose B for {B_DATA_TYPE}')
+        pytest.xfail(f'No need to transpose B for {B_DATA_TYPE}')
+
+    if is_xpu():
+        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
 
     if not is_hip() and BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
