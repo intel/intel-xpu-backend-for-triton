@@ -27,4 +27,5 @@ add_triton_library(TritonIntelGPUTransforms
   TritonGENIR
   TritonGPUIR
   TritonIntelGPUIR
+  TritonIntelUtils
 )

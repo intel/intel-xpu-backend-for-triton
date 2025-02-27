@@ -23,31 +23,12 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
-namespace {
 
 using namespace triton;
 using namespace triton::gpu;
 
-int getParentAxis(Attribute layout, int axis) {
-  if (auto sliceEncoding = dyn_cast<SliceEncodingAttr>(layout)) {
-    axis = axis < sliceEncoding.getDim() ? axis : axis + 1;
-    return getParentAxis(sliceEncoding.getParent(), axis);
-  }
-  return axis;
-}
-
-SmallVector<unsigned> getParentOrder(Attribute layout) {
-  if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    return getParentOrder(sliceEncoding.getParent());
-  }
-  return getThreadOrder(layout);
-}
-
-} // namespace
-
 SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto srcLayout = srcEncoding;
-  auto order = getOrder(srcLayout);
+  auto order = toLinearEncoding(srcEncoding, srcShape).getOrder();
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
   order.erase(it);
@@ -127,14 +108,7 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
-  auto srcLayout = srcEncoding;
-  // FIXME: In the default path tensors will always have a layout. Tensors do
-  // not have a layout only in the advanced path. We need to find a workaround
-  // in order to remove this change.
-  if (!srcLayout)
-    return true;
-  auto srcShape = getSrcShape();
-  return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
+  return getWarpsPerCTAWithUniqueData(srcEncoding, srcShape)[axis] == 1;
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
@@ -168,69 +142,59 @@ bool ReduceOpHelper::isReduceWithinCTA() {
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
-  return getEncoding().getSizePerThread()[getAxis()];
+  return getEncoding().getContigPerThread()[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  SmallVector<unsigned> sizePerThreads = getContigPerThread(getEncoding());
-  sizePerThreads[getAxis()] = 1;
-  return product<unsigned>(sizePerThreads);
+  auto contigPerThread = getEncoding().getContigPerThread();
+  contigPerThread[getAxis()] = 1;
+  return product<unsigned>(contigPerThread);
 }
 
 Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
 
-unsigned ScanLoweringHelper::getAxisNumThreadsPerWarp() {
-  return getThreadsPerWarp(getEncoding())[getAxis()];
-}
-
 unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
-  return getThreadsPerWarpWithUniqueData(getEncoding(), getShape())[getAxis()];
+  return getEncoding().getThreadsPerWarp()[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
-  threadsPerWarp[getAxis()] = 1;
-  return product<unsigned>(threadsPerWarp);
+  auto nThreads = product(getEncoding().getThreadsPerWarp());
+  return nThreads / getAxisNumThreadsPerWarpWithUniqueData();
 }
 
 // Return the flat numbers of threads computing independent scan results.
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
-  unsigned numParallelThreadsPerWarp = getNonAxisNumThreadsPerWarp();
-  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
-  warpsPerCTA[getAxis()] = 1;
-  unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
-  return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
-}
-
-unsigned ScanLoweringHelper::getAxisNumWarps() {
-  return getWarpsPerCTA(getEncoding())[getAxis()];
+  auto nWarps = product(getEncoding().getWarpsPerCTA());
+  return (nWarps / getAxisNumWarpsWithUniqueData()) *
+         getNonAxisNumThreadsPerWarp();
 }
 
 unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
-  return getWarpsPerCTAWithUniqueData(getEncoding(), getShape())[getAxis()];
+  return getEncoding().getWarpsPerCTA()[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
-  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   unsigned axis = getAxis();
   return ceil<unsigned>(
       getShape()[axis],
-      (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
+      (contigPerThread[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
-  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto rank = contigPerThread.size();
   unsigned axis = getAxis();
   unsigned numBlocks = 1;
-  for (unsigned i = 0; i < sizePerThreads.size(); i++) {
+  for (unsigned i = 0; i < rank; i++) {
     if (i == axis)
       continue;
     numBlocks *=
-        ceil<unsigned>(getShape()[i], (sizePerThreads[i] * threadsPerWarp[i] *
+        ceil<unsigned>(getShape()[i], (contigPerThread[i] * threadsPerWarp[i] *
                                        warpsPerCTA[i]));
   }
   return numBlocks;
@@ -239,7 +203,7 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
 bool ScanLoweringHelper::isSupported() {
   // TODO: Support the following cases:
   // 1. Scan on non-blocking encodings
-  if (!isa<BlockedEncodingAttr>(srcEncoding))
+  if (!isa<BlockedEncodingAttr>(legacyEncoding))
     return false;
   return true;
 }
@@ -527,42 +491,43 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape,
   return ret;
 }
 
-BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
-  return cast<BlockedEncodingAttr>(srcEncoding);
-}
-
 unsigned ScanLoweringHelper::getAxisElementStride() {
-  auto order = getOrder(getEncoding());
+  auto order = getOrder();
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= getContigPerThread(getEncoding())[dim];
+    stride *= getEncoding().getContigPerThread()[dim];
   }
   llvm_unreachable("Axis not found in order");
 }
 
 unsigned ScanLoweringHelper::getAxisThreadStride() {
-  auto order = getOrder(getEncoding());
+  auto encoding = getEncoding();
+  auto kThread = StringAttr::get(encoding.getContext(), "lane");
+  // OOOGHHH This is nasty. We should implement this lowering via LLs natively
+  // to avoid this
+  auto threadsPerWarp = encoding.basesPerDim(kThread, /*skipBroadcast=*/false);
+  auto order = getOrder();
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= getEncoding().getThreadsPerWarp()[dim];
+    stride *= threadsPerWarp[dim];
   }
   llvm_unreachable("Axis not found in order");
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {
-  auto order = getOrder(getEncoding());
+  auto order = getOrder();
   unsigned stride = 1;
-  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= ceil<unsigned int>(getShape()[dim], sizePerThreads[dim] *
+    stride *= ceil<unsigned int>(getShape()[dim], contigPerThread[dim] *
                                                       threadsPerWarp[dim] *
                                                       warpsPerCTA[dim]);
   }
@@ -735,75 +700,6 @@ bool supportMMA(Value value, int version) {
          (elemTy.isInteger(8) && version >= 2);
 }
 
-bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy) {
-  auto blockedLayout = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (blockedLayout == nullptr || dotOperandLayout == nullptr)
-    return false;
-  auto parentLayout =
-      dyn_cast<BlockedEncodingAttr>(dotOperandLayout.getParent());
-  if (parentLayout == nullptr)
-    return false;
-  auto opShape = srcTy.getShape();
-  auto rank = opShape.size();
-
-  int kDim = dotOperandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
-  int nonKDim = dotOperandLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
-  auto ctaLayout = blockedLayout.getCTALayout();
-
-  // The following logic checks that a source blocked layout matches a
-  // destination dot operand layout. This means that given tensor in source
-  // layout could be converted into destination layout without any data movement
-  // between registers or threads.
-  //
-  // It is considered a match if
-  // 1) Each thread in source layout holds a whole copy of all elements along
-  //    the K dimension of a tensor
-  // 2) Distribution of data along all other non-K dimensions(Batch/M/N)
-  //    matches between source and destination parent layouts.
-  //
-  // First condition comes from the property of dot operand layout with Blocked
-  // parent: size per threads along K dimension equals size of the tensor along
-  // K. Second condition comes from other property: dot operand layout
-  // inherits non-K dimensions from it's parent layout.
-  //
-  // clang-format off
-  //
-  // For example, following conversion is a no op:
-  //   tensor<128x32xf16,                          #blocked<{sizePerThread = [2, 32], threadsPerWarp = [32, 1]}>>
-  //     ->
-  //   tensor<128x32xf16, #dot_op<{opIdx=0, parent=#blocked<{sizePerThread = [2, 8], threadsPerWarp = [32, 1]}>>>
-  //
-  // clang-format on
-  bool ctaLayoutCompatible =
-      ctaLayout.getCTASplitNum()[kDim] == 1 &&
-      blockedLayout.getCTALayout() == parentLayout.getCTALayout();
-  bool threadHoldsWholeKDim =
-      blockedLayout.getSizePerThread()[kDim] == opShape[kDim];
-  bool nonKDimCompatible =
-      blockedLayout.getOrder() == parentLayout.getOrder() &&
-      blockedLayout.getSizePerThread()[nonKDim] ==
-          parentLayout.getSizePerThread()[nonKDim] &&
-      blockedLayout.getThreadsPerWarp()[nonKDim] ==
-          parentLayout.getThreadsPerWarp()[nonKDim] &&
-      blockedLayout.getWarpsPerCTA()[nonKDim] ==
-          parentLayout.getWarpsPerCTA()[nonKDim];
-  bool matrixDimsCompatible =
-      ctaLayoutCompatible && threadHoldsWholeKDim && nonKDimCompatible;
-  if (rank == 2)
-    return matrixDimsCompatible;
-
-  // additional check for batch dimension if it is present
-  assert(rank == 3);
-  bool bDimCompatible =
-      blockedLayout.getSizePerThread()[0] ==
-          parentLayout.getSizePerThread()[0] &&
-      blockedLayout.getThreadsPerWarp()[0] ==
-          parentLayout.getThreadsPerWarp()[0] &&
-      blockedLayout.getWarpsPerCTA()[0] == parentLayout.getWarpsPerCTA()[0];
-  return matrixDimsCompatible && bDimCompatible;
-}
-
 // For MMAV3 dotOperand layout matches mma operand for f16 and bf16 cases.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy) {
@@ -890,14 +786,12 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
-  // TODO(jlebar): Remove these special cases (`isBlockedToDotShortcut` and
-  // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
-  // checks.
+  // TODO(jlebar): Remove these special cases `isMfmaToDotShortcut` once
+  // they're fully subsumed by the linear-layout checks.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !(cvtNeedsWarpShuffle(srcTy, dstTy) &&
            getWarpLayoutConvertDecomposition(srcTy, dstTy)) &&
          !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy) &&
-         !isBlockedToDotShortcut(srcTy, dstTy) &&
          !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          // to be removed when generalized warp shuffle conversions
          // are ready:

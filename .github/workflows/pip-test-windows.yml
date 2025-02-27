@@ -42,7 +42,9 @@ env:
 jobs:
   build:
     name: Build and test
-    runs-on: ${{ inputs.runner_label || 'win-a770' }}
+    runs-on:
+      - windows
+      - ${{ inputs.runner_label || 'win-a770' }}
     steps:
       - name: Enable long paths
         run: |
