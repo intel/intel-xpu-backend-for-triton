@@ -69,7 +69,7 @@ private:
   }
 
   TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,
-                                         TypedValue<RankedTensorType> scale,
+                                         TypedValue<RankedTensorType> &scale,
                                          FloatType computeType) const {
     auto loc = scale.getLoc();
     auto scaleTy = scale.getType();
@@ -83,8 +83,10 @@ private:
     int intWidth = largeFpType.getIntOrFloatBitWidth();
     auto intType = rewriter.getIntegerType(intWidth);
 
-    auto zexted =
-        rewriter.create<arith::ExtUIOp>(loc, scaleTy.clone(intType), scale);
+    // Cast scale to large Int type, incase it mask non-NaN to NaN in maskNan().
+    scale = cast<TypedValue<RankedTensorType>>(
+        rewriter.create<arith::ExtUIOp>(loc, scaleTy.clone(intType), scale)
+            .getResult());
     // getFpMantissaWidth() returns the number of bits in the mantissa plus the
     // sign bit!
     int shiftValue = largeFpType.getFPMantissaWidth() - 1;
@@ -92,7 +94,7 @@ private:
         rewriter.create<arith::ConstantIntOp>(loc, shiftValue, intWidth);
     auto shift =
         rewriter.create<SplatOp>(loc, scaleTy.clone(intType), shiftConst);
-    auto shlRes = rewriter.create<arith::ShLIOp>(loc, zexted, shift);
+    auto shlRes = rewriter.create<arith::ShLIOp>(loc, scale, shift);
     Value scaleFP =
         rewriter.create<BitcastOp>(loc, scaleTy.clone(largeFpType), shlRes);
     if (largeFpType != computeType) {

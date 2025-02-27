@@ -1,10 +1,10 @@
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
-#include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -412,7 +412,7 @@ public:
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
     patterns.add<BlockedToDPAS>(context, dpasAnalysis);
-    ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
+    ttg::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
 
