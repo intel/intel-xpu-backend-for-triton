@@ -171,7 +171,7 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  auto order = ttg::getOrder(ty);
+  auto order = ttg::getOrder(ty.getEncoding());
   if (isTMALoad(op)) {
     // For TMA, the encoding compatible with it takes precedence over local
     // alloc created for the MMA operand.
