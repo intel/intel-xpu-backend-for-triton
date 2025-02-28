@@ -1,63 +1,60 @@
 # This benchmark requires a Pytorch version with FlexAttention support for XPU available
+from functools import lru_cache
+import os
 from torch.nn.attention.flex_attention import (
-    _DEFAULT_SPARSE_BLOCK_SIZE,
     create_block_mask,
     create_mask,
     flex_attention,
 )
 
-import random
-from functools import lru_cache, partial
-
 import torch
 import torch.nn.functional as F
 
-from tabulate import tabulate
-
-import os
-import contextlib
-
-from torch.profiler import record_function
 import triton_kernels_benchmark as benchmark_suit
-from triton_kernels_benchmark import xetla_kernel
 
 # Compile the flex_attention function
 flex_attention = torch.compile(flex_attention, dynamic=False)
 
+
 @lru_cache
-def create_block_mask_cached(score_mod, B, H, M, N, device="xpu"):
+def create_block_mask_cached(score_mod, B, H, M, N, device='xpu'):
     block_mask = create_block_mask(score_mod, B, H, M, N, device=device)
     return block_mask
 
+
 # Default values for NATTEN mask:
-# Consider a 2D image of size (H x W) flattened into a sequence of tokens.
+# Consider a 2D image of size (G_H x G_W) flattened into a sequence of tokens.
 # Queries attend to keys in a fixed kernel area (K_H x K_W)
-H = 128
-W = 128
+G_H = 128
+G_W = 128
 K_H = 13
 K_W = 13
-def get_x_y(idx):
-    return idx // W, idx % W
 
-def natten_mask(b, h, q_idx, kv_idx):
+
+def get_x_y(idx):
+    return idx // G_W, idx % G_W
+
+
+def natten_mask(_, __, q_idx, kv_idx):
     q_x, q_y = get_x_y(q_idx)
     kv_x, kv_y = get_x_y(kv_idx)
     # kernel nominally attempts to center itself on the query, but kernel center
     # is clamped to a fixed distance (kernel half-length) from the canvas edge
-    kernel_x = q_x.clamp(K_W // 2, (W - 1) - K_W // 2)
-    kernel_y = q_y.clamp(K_H // 2, (H - 1) - K_H // 2)
+    kernel_x = q_x.clamp(K_W // 2, (G_W - 1) - K_W // 2)
+    kernel_y = q_y.clamp(K_H // 2, (G_H - 1) - K_H // 2)
     hori_mask = (kernel_x - kv_x).abs() <= K_W // 2
     vert_mask = (kernel_y - kv_y).abs() <= K_H // 2
     return hori_mask & vert_mask
 
-def alibi_functional(score, b, h, q_idx, kv_idx):
-    scale = torch.exp2(-((h + 1) * 8.0 / H))
+
+def alibi_functional(score, _, h, q_idx, kv_idx):
+    scale = torch.exp2(-((h + 1) * 8.0 / G_H))
     bias = (kv_idx - q_idx) * scale
     return score + bias
 
 
 # Kernel profiling for Backward mode is not working as expected:
-# For details: https://github.com/pytorch/pytorch/issues/144778 
+# For details: https://github.com/pytorch/pytorch/issues/144778
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
@@ -91,11 +88,11 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
     v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
 
+    mask_mod = None
+    score_mod = None
     if MASK == 'NATTEN':
         mask_mod = natten_mask
-        score_mod = None
     elif MASK == 'Alibi':
-        mask_mod = None
         score_mod = alibi_functional
 
     if mask_mod is not None:
@@ -111,7 +108,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
         if MODE == 'bwd':
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
-            triton_fn = lambda: triton_o.backward(gradOut, retain_graph=True)
+            triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=5, n_repeat=5, quantiles=quantiles)
         # Values checking cannot be implemented for these case as :
         # "The operator 'aten::_scaled_dot_product_flash_attention_for_cpu' is not currently implemented for the XPU device"
@@ -122,7 +119,8 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
             xformers_o = xformers_fn()
             xformers_do = torch.randn_like(xformers_o)
             xformers_fn = lambda: xformers_o.backward(xformers_do, retain_graph=True)
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xformers_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xformers_fn, n_warmup=10, n_repeat=10,
+                                                              quantiles=quantiles)
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
@@ -133,7 +131,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     if MODE == 'bwd':
         tflops = lambda mean: 2.5 * 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
         gbps = lambda mean: 2.5 * Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
-    
+
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 

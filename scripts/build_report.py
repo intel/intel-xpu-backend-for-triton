@@ -24,7 +24,7 @@ def parse_args():
     parser.add_argument("--tflops_col", help="Column name with tflops.", required=True)
     parser.add_argument("--hbm_col", help="Column name with HBM results.", required=False, default=None)
     parser.add_argument("--tag", help="How to tag results", required=False, default="")
-    parser.add_argument("--mask", help="Mask identifiers among the params", required=False, action='store_true')
+    parser.add_argument("--mask", help="Mask identifiers among the params", required=False, action="store_true")
     return parser.parse_args()
 
 
@@ -81,16 +81,8 @@ def main():
     args = parse_args()
     param_cols = args.param_cols.split(",")
     df = pd.read_csv(args.source)
-    result_df = transform_df(
-        df,
-        param_cols=param_cols,
-        tflops_col=args.tflops_col,
-        hbm_col=args.hbm_col,
-        benchmark=args.benchmark,
-        compiler=args.compiler,
-        tag=args.tag,
-        mask=args.mask
-    )
+    result_df = transform_df(df, param_cols=param_cols, tflops_col=args.tflops_col, hbm_col=args.hbm_col,
+                             benchmark=args.benchmark, compiler=args.compiler, tag=args.tag, mask=args.mask)
     result_df.to_csv(args.target, index=False)
 
 

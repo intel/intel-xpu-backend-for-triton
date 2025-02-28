@@ -287,9 +287,9 @@ jobs:
       # Install Pytorch with FlexAttention XPU support enabled
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
-	with:
-	  repository: liangan1/pytorch
-	  ref: liangan1/flex_attention
+        with:
+          repository: liangan1/pytorch
+          ref: liangan1/flex_attention
 
       - name: Run Triton FlexAttention Casual Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_casual_mask.py') }}

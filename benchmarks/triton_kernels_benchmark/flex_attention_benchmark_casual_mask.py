@@ -1,40 +1,32 @@
 # This benchmark requires a Pytorch version with FlexAttention support for XPU available
+from functools import lru_cache
+import os
 from torch.nn.attention.flex_attention import (
-    _DEFAULT_SPARSE_BLOCK_SIZE,
     create_block_mask,
-    create_mask,
     flex_attention,
 )
 
-import random
-from functools import lru_cache, partial
-
 import torch
 import torch.nn.functional as F
-
-from tabulate import tabulate
-
-import os
-import contextlib
-
-from torch.profiler import record_function
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
 
 # Compile the flex_attention function
 flex_attention = torch.compile(flex_attention, dynamic=False)
 
+
 @lru_cache
-def create_block_mask_cached(score_mod, B, H, M, N, device="xpu"):
+def create_block_mask_cached(score_mod, B, H, M, N, device='xpu'):
     block_mask = create_block_mask(score_mod, B, H, M, N, device=device)
     return block_mask
 
-def causal_mask(b, h, q_idx, kv_idx):
+
+def causal_mask(_, __, q_idx, kv_idx):
     return q_idx >= kv_idx
 
 
 # Kernel profiling for Backward mode is not working as expected:
-# For details: https://github.com/pytorch/pytorch/issues/144778 
+# For details: https://github.com/pytorch/pytorch/issues/144778
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
@@ -44,9 +36,7 @@ def causal_mask(b, h, q_idx, kv_idx):
                 for (h, dhead) in [(16, 128), (32, 64)]
                 for causal in [True]
                 for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
-        + [[4, 48, 1024, 64, causal, mode]
-           for causal in [True]
-           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
+        + [[4, 48, 1024, 64, causal, mode] for causal in [True] for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -60,7 +50,7 @@ def causal_mask(b, h, q_idx, kv_idx):
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+def benchmark(Z, H, N_CTX, D_HEAD, _, MODE, provider):
     assert MODE in ['fwd', 'bwd']
     dtype = torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
@@ -77,8 +67,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         if MODE == 'bwd':
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
-            triton_fn = lambda: triton_o.backward(gradOut, retain_graph=True)
-        torch_fn = lambda: F.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(), is_causal=True, scale=sm_scale).to(torch.float32)
+            triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
+        torch_fn = lambda: F.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(), is_causal=True, scale=sm_scale).to(
+            torch.float32)
         if MODE == 'bwd':
             torch_o = torch_fn()
             torch_do = torch.randn_like(torch_o)
@@ -93,7 +84,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
     elif provider == 'xetla':
         xetla_fn = None
         if MODE == 'fwd':
-            module_name = f'flash_attn_causal_True'.lower()
+            module_name = 'flash_attn_causal_True'.lower()
             func = getattr(xetla_kernel, module_name)
             out = torch.empty_like(q, device='xpu', dtype=dtype)
             size_score = Z * H * N_CTX * N_CTX
@@ -105,7 +96,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
             xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
         if MODE == 'bwd':
-            module_name = f'flash_attn_bwd_causal_True'.lower()
+            module_name = 'flash_attn_bwd_causal_True'.lower()
             func = getattr(xetla_kernel, module_name)
             grad_out = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
             bias = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
@@ -139,7 +130,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
     if MODE == 'bwd':
         tflops = lambda mean: 2.5 * 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
         gbps = lambda mean: 2.5 * Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
-    
+
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
