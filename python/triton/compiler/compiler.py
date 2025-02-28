@@ -258,6 +258,7 @@ def compile(src, target=None, options=None):
         **options.__dict__,
         **env_vars,
     }
+    metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options)

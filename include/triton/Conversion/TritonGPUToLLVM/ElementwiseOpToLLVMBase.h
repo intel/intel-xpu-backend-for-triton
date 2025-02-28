@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 #define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Support/LLVM.h"
@@ -86,7 +87,8 @@ public:
       return resultVals;
     while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
       baseEncoding = sliced.getParent();
-    if (isa<LinearEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
+    if (isa<LinearEncodingAttr, DotOperandEncodingAttr,
+            intel::DpasEncodingAttr>(baseEncoding)) {
       // TODO: this logic seems incorrect for mma layout. Skip for now.
       // The following test crashes and some other miscompile:
       // test_core::test_fp8_dot_acc
@@ -101,7 +103,7 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> contigPerThread = getContigPerThread(encoding);
+    SmallVector<unsigned> contigPerThread = getContigPerThread(rtType);
     if (rank != contigPerThread.size())
       return resultVals;
 

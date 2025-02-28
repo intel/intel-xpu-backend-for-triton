@@ -108,6 +108,11 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
+  // FIXME: In the default path tensors will always have a layout. Tensors do
+  // not have a layout only in the advanced path. We need to find a workaround
+  // in order to remove this change.
+  if (!srcEncoding)
+    return true;
   return getWarpsPerCTAWithUniqueData(srcEncoding, srcShape)[axis] == 1;
 }
 
@@ -730,7 +735,6 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
   return dotOperandLayout.getParent() == mfmaLayout &&
          dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
          dotOperandLayout.getKWidth() == 8 &&
-         getContigPerThread(mfmaLayout)[1] == 4 &&
          ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
           (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
          triton::type::isFloat8(srcTy.getElementType()) &&
