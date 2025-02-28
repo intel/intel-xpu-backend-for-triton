@@ -296,7 +296,7 @@ module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps"
       // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[TRANS_A]] : tensor<64x128xf8E4M3FN, [[BLOCKED5]]> -> tensor<64x128xbf16, [[BLOCKED5]]>
       // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[FPTOFP]] : tensor<64x128xbf16, [[BLOCKED5]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
       // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG1]] : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> -> tensor<32x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>>
-      // CHECK: [[B:%.*]] = tt.fp_to_fp %25 : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
+      // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
       // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[ARG5]] : tensor<32x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> * tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<32x128xf32, [[BLOCKED4]]>
       // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<32x128xf32, [[BLOCKED4]]> -> tensor<32x128xf32, [[BLOCKED4]]>
       // CHECK: scf.yield [[RES]] : tensor<32x128xf32, [[BLOCKED4]]>
