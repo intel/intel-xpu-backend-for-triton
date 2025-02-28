@@ -42,30 +42,16 @@ public:
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcEncoding = srcType.getEncoding();
-      auto srcOrder = triton::gpu::getOrder(srcEncoding);
-      auto rank = srcOrder.size();
       if (isa<triton::gpu::SharedEncodingTrait>(srcEncoding))
         return;
       auto dstDotOp =
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding =
-              dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMmaEncoding.getVersionMajor() != 2 ||
-            (srcMmaEncoding.getWarpsPerCTA()[rank - 1] == 1 &&
-             dstDotOp.getParent() == srcMmaEncoding))
-          return;
-      }
-      if (auto srcMfmaEncoding =
-              dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMfmaEncoding.getWarpsPerCTA()[rank - 1] == 1 &&
-            srcMfmaEncoding.getIsTransposed() &&
-            dstDotOp.getParent() == srcMfmaEncoding)
-          return;
-      }
+      if (!cvtNeedsSharedMemory(srcType, dstType))
+        return;
+      auto srcOrder = triton::gpu::getOrder(srcType);
+      auto rank = srcOrder.size(); // TODO: maybe we can use upstream code.
       if (auto srcDpasEncoding =
               dyn_cast<triton::gpu::intel::DpasEncodingAttr>(srcEncoding)) {
         auto opIdx =
