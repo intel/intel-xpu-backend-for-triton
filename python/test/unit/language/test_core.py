@@ -3018,8 +3018,6 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.xfail("Skipping sum reduction on float16 due to accuracy issues")
     if is_hip() and isinstance(src_layout, LinearLayout):
         pytest.skip("FIXME: LinearLayout not supported on HIP")
-    if is_xpu() and isinstance(src_layout, LinearLayout) and epilogue_kind == "reduce1d":
-        pytest.skip("FIXME: Linear layout not supported on XPU")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout.instr_shape[2] = 16 if dtype_str == "float16" else 8
