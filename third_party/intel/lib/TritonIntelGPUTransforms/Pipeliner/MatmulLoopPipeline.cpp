@@ -84,12 +84,12 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp, Value ptr) {
+static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), ptr, loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+      loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(), loadOp.getCache(),
+      loadOp.getEvict(), loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -102,7 +102,7 @@ static void createPrefetchOps(scf::ForOp &forOp,
   assert(!loads.empty() && "Expecting at least one load operation");
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
-    createPrefetchOp(forOp, loadOp, loadOp.getPtr());
+    createPrefetchOp(forOp, loadOp);
   }
 }
 
@@ -157,7 +157,7 @@ static Value getPredMask(RewriterBase &rewriter, Type typeLike,
 static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                               Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isMemoryEffectFree(op) || isa<ttgi::PrefetchOp>(op))
+  if (mlir::isMemoryEffectFree(op))
     return op;
 
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
@@ -166,6 +166,14 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                              loadOp.getMask(), pred);
     loadOp.getMaskMutable().assign(mask);
     return loadOp;
+  }
+
+  if (auto prefetchOp = dyn_cast<ttgi::PrefetchOp>(op)) {
+    rewriter.setInsertionPoint(prefetchOp);
+    Value mask = getPredMask(rewriter, prefetchOp.getPtr().getType(),
+                             prefetchOp.getMask(), pred);
+    prefetchOp.getMaskMutable().assign(mask);
+    return prefetchOp;
   }
 
   llvm_unreachable("don't know how to predicate this operation");
