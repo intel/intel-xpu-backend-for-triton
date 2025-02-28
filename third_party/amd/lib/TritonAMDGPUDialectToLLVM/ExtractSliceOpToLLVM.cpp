@@ -67,7 +67,7 @@ struct ExtractSliceOpConversion
     auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
     auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
     auto totalSizePerThread = product<unsigned>(sizePerThread);
-    auto order = triton::gpu::getOrder(srcTy);
+    auto order = triton::gpu::getOrder(srcLayout);
 
     // Calculate valid total number of workers in each dimension
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcLayout);

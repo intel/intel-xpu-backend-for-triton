@@ -32,14 +32,13 @@ static int __builtin_ctz(unsigned x) {
 namespace {
 
 LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                                  LinearLayout regLayout,
-                                  triton::gpu::SharedEncodingTrait dstEnc,
+                                  LinearLayout regLayout, Attribute dstEnc,
                                   int elemBitWidth) {
   StringAttr kBlock = StringAttr::get(ctx, ("block"));
   int rank = shape.size();
 
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(shape, dstEnc);
-  auto sharedOrder = triton::gpu::getOrder(dstEnc, shape);
+  auto sharedOrder = triton::gpu::getOrder(dstEnc);
 
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
   // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional

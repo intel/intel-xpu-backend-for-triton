@@ -57,7 +57,7 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
     }
     ArrayRef<int64_t> shape = tensorType.getShape();
     SmallVector<unsigned> order;
-    for (int i : triton::gpu::getOrder(tensorType)) {
+    for (int i : triton::gpu::getOrder(tensorType.getEncoding())) {
       if (i != *reductionAxis)
         order.push_back(i);
     }
@@ -153,7 +153,8 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   // Now spread them along the other dimensions. Do this according to order
   // (arbitrary).
   unsigned threadsToAlloc = numThreadsPerWarp / maxThreadsInAxis;
-  for (unsigned dim : getThreadOrder(srcType)) {
+  auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
+  for (unsigned dim : distributedItf.getThreadOrder()) {
     if (dim == axis)
       continue;
     // The gather axis is now the fastest-changing dimension.
@@ -169,7 +170,7 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   warpsPerCTA[axis] = 1;
   // Allocate the remaining warps in the same manner.
   unsigned warpsToAlloc = numWarps;
-  for (unsigned dim : getWarpOrder(srcType)) {
+  for (unsigned dim : distributedItf.getWarpOrder()) {
     if (dim == axis)
       continue;
     unsigned warpsCanFit = srcType.getDimSize(dim) / threadsPerWarp[dim];

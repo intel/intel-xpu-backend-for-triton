@@ -134,19 +134,7 @@ getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 // the order of the elements within a thread.
 // For shared Layout, the order refers to which dimension of the original tensor
 // is contiguous in shared memory.
-SmallVector<unsigned> getOrder(DistributedEncodingTrait layout,
-                               ArrayRef<int64_t> shape);
-SmallVector<unsigned> getOrder(RankedTensorType type);
-
-SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
-                               ArrayRef<int64_t> shape);
-SmallVector<unsigned> getOrder(MemDescType type);
-SmallVector<unsigned> getOrder(TensorOrMemDesc type);
-
-// Order of the elements in the shared memory as defined at layout creation
-// If this layout is associated with a MemDesc with a different shape
-// it may return a different order than the actual order of the elements
-SmallVector<unsigned> getDefaultOrder(SharedEncodingTrait layout);
+SmallVector<unsigned> getOrder(Attribute layout);
 
 // Returns the dimensions along which warpId's are distributed.
 // warpsPerCTA only tells the warp layout in the CTA, e.g. warpsPerCTA = [2, 4]
@@ -155,16 +143,17 @@ SmallVector<unsigned> getDefaultOrder(SharedEncodingTrait layout);
 // E.g. warpOrder = [0, 1] means the warp IDs are distributed as follows
 // [warp0  warp2  warp4 warp6]
 // [warp1  warp3  warp5 warp7]
-SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
-                                   ArrayRef<int64_t> shape);
-SmallVector<unsigned> getWarpOrder(RankedTensorType type);
+// Note that in most cases, getWarpOrder and getOrder return the same results.
+// But this is not guaranteed.
+SmallVector<unsigned> getWarpOrder(Attribute layout);
 
 // Returns the dimensions along which threadId's are distributed.
 // Similar to warpOrder, threadOrder is necessary to tell the specific thread
 // distribution in the warp.
-SmallVector<unsigned> getThreadOrder(DistributedEncodingTrait layout,
-                                     ArrayRef<int64_t> shape);
-SmallVector<unsigned> getThreadOrder(RankedTensorType type);
+// Note that, in most cases, getThreadOrder and getOrder return the same
+// results. But this is not guaranteed. One exception is mfma.transposed layout,
+// in which getOrder returns [1, 0] but getThreadOrder returns [0, 1].
+SmallVector<unsigned> getThreadOrder(Attribute layout);
 
 CTALayoutAttr getCTALayout(Attribute layout);
 

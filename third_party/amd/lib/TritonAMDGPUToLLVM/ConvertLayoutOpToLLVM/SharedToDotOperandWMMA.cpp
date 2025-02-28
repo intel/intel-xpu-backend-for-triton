@@ -27,6 +27,7 @@
 
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
@@ -193,7 +194,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
-      shape[nonKDimIdx], nonKDimIdx, wmmaLayout.getDefaultOrder());
+      shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(wmmaLayout));
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,

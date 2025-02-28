@@ -44,7 +44,7 @@ public:
         return;
       if (!cvtNeedsSharedMemory(srcType, dstType))
         return;
-      auto srcOrder = triton::gpu::getOrder(srcType);
+      auto srcOrder = triton::gpu::getOrder(srcEncoding);
       auto rank = srcOrder.size();
       SmallVector<unsigned> sharedOrder;
       if (rank == 3) {

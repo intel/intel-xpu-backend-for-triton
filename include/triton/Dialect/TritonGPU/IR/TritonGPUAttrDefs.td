@@ -464,9 +464,6 @@ def NVMMASharedEncodingAttr :
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
-    SmallVector<unsigned> getOrder() const {
-      return getTransposed() ? SmallVector<unsigned>({0, 1}) : SmallVector<unsigned>({1, 0});
-    }
   }];
   let hasCustomAssemblyFormat = 1;
 }
@@ -520,10 +517,17 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getWarpsPerCTA">,
 
+    InterfaceMethod<"Get the order of the warps per CTA. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getWarpOrder">,
 
     InterfaceMethod<"Get the shape of the threads per warp",
                     "SmallVector<unsigned>",
                     "getThreadsPerWarp">,
+
+    InterfaceMethod<"Get the order of the threads per warp. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getThreadOrder">,
 
     InterfaceMethod<"Get the shape of the values per thread.",
                     "SmallVector<unsigned>",
@@ -531,22 +535,7 @@ We call each individual tile "rep".
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
-                    (ins "ArrayRef<int64_t>":$shape)>,
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    // that is, the fact that we use them to tile the tensor.
-    InterfaceMethod<"Get the default order of the registers per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultOrder">,
-
-    InterfaceMethod<"Get the default order of the threads per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultThreadOrder">,
-
-    InterfaceMethod<"Get the default order of the warps per CTA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultWarpOrder">
-
+                    (ins "ArrayRef<int64_t>":$shape)>
   ];
 }
 
@@ -594,16 +583,13 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
     SmallVector<unsigned> getWarpsPerCTA() const;
+    SmallVector<unsigned> getWarpOrder() const;
     SmallVector<unsigned> getThreadsPerWarp() const;
+    SmallVector<unsigned> getThreadOrder() const;
 
     SmallVector<unsigned> getSizePerThread() const;
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    SmallVector<unsigned> getDefaultWarpOrder() const;
-    SmallVector<unsigned> getDefaultThreadOrder() const;
-    SmallVector<unsigned> getDefaultOrder() const;
   }];
 }
 
@@ -634,8 +620,6 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> getContigPerThread() const;
     SmallVector<unsigned> getContigPerWarp() const;
     SmallVector<unsigned> getOrder() const;
-    SmallVector<unsigned> getWarpOrder() const;
-    SmallVector<unsigned> getThreadOrder() const;
 
     // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
     // Returns the order of the dimensions `dimName` of the layout.

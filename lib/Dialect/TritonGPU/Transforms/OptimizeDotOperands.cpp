@@ -58,7 +58,7 @@ public:
     // swizzling code.
     auto newInnerCvtEnc = SwizzledSharedEncodingAttr::get(
         getContext(), cvtEncoding, srcTy.getShape(),
-        /*order=*/getOrder(srcTy),
+        /*order=*/getOrder(srcTy.getEncoding()),
         triton::gpu::getCTALayout(srcTy.getEncoding()), srcTy.getElementType(),
         /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
@@ -107,9 +107,9 @@ public:
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
     // without transpose for other data types.)
-    auto newInnerCvtOrder = getOrder(srcTy);
+    auto newInnerCvtOrder = getOrder(srcTy.getEncoding());
     if (auto cvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
-      newInnerCvtOrder = getOrder(cvt.getSrc().getType());
+      newInnerCvtOrder = getOrder(cvt.getSrc().getType().getEncoding());
     }
     auto srcElemTy = allocType.getElementType();
     if (!srcElemTy.isF16() && !srcElemTy.isBF16()) {
@@ -221,7 +221,7 @@ private:
   }
 
   bool isDescendingOrder(triton::gpu::MemDescType scale) const {
-    auto order = triton::gpu::getOrder(scale);
+    auto order = triton::gpu::getOrder(scale.getEncoding());
     auto rank = scale.getRank();
     for (int i = 0; i < rank; ++i) {
       if (order[i] != rank - 1 - i)
