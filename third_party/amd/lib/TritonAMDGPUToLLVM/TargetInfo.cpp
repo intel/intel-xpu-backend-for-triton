@@ -460,6 +460,16 @@ Value TargetInfo::getStackPointer(RewriterBase &rewriter,
   return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
 }
 
+int TargetInfo::getAddressSpace(Attribute addressSpace) const {
+  int spaceId = 0;
+  if (isa<triton::gpu::SharedMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error("Only support SharedMemorySpace for now");
+  }
+  return spaceId;
+}
+
 bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.
