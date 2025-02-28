@@ -836,7 +836,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getDefaultOrder() const {
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getDefaultWarpOrder() const {
   // FIXME(Lezcano): Preexisting. Do we want to have this path at all?
-  if (mlir::isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(getParent())) {
+  if (mlir::isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr,
+                intel::DpasEncodingAttr>(getParent())) {
     return mlir::cast<DistributedEncodingTrait>(getParent())
         .getDefaultWarpOrder();
   }
