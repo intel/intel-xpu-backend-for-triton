@@ -185,7 +185,7 @@ Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
 $env:ZE_PATH = "C:\level_zero"
 ```
 
-Check that PyTorch and Triton are be available:
+Check that PyTorch and Triton are available:
 
 ```
 python -c 'import torch;print(torch.__version__)'
