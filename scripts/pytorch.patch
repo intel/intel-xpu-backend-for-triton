@@ -1,0 +1,41 @@
+diff --git a/torch/_inductor/codegen/cpp_wrapper_gpu.py b/torch/_inductor/codegen/cpp_wrapper_gpu.py
+index 1bbe1f60441..d99117d6e51 100644
+--- a/torch/_inductor/codegen/cpp_wrapper_gpu.py
++++ b/torch/_inductor/codegen/cpp_wrapper_gpu.py
+@@ -333,13 +333,12 @@ class CppWrapperGpu(CppWrapperCpu):
+                 constexprs,
+             )
+ 
+-        if not triton_version_uses_attrs_dict():
+-            # in C++ wrapper, we don't pass constexpr args, as they don't
+-            # get added as parameters to the PTX code compiled from the
+-            # user-defined Triton kernel (only non-constexpr args do)
+-            raw_args = [
+-                raw_arg for i, raw_arg in enumerate(raw_args) if i not in constexprs
+-            ]
++        # in C++ wrapper, we don't pass constexpr args, as they don't
++        # get added as parameters to the PTX code compiled from the
++        # user-defined Triton kernel (only non-constexpr args do)
++        raw_args = [
++            raw_arg for i, raw_arg in enumerate(raw_args) if i not in constexprs
++        ]
+         args = [self.val_to_arg_str(v) for v in raw_args]
+         arg_types = [
+             arg.get_dtype() if isinstance(arg, IRNode) else type(arg)
+@@ -583,16 +582,6 @@ class CppWrapperGpu(CppWrapperCpu):
+                     arg_signatures = [
+                         val for val in signatures.values() if val != "constexpr"
+                     ]
+-                    call_args = [
+-                        call_arg
+-                        for call_arg, arg_name in zip(call_args, signatures)
+-                        if signatures[arg_name] != "constexpr"
+-                    ]
+-                    arg_types = [
+-                        arg_type
+-                        for arg_type, arg_name in zip(arg_types, signatures)
+-                        if signatures[arg_name] != "constexpr"
+-                    ]
+                     assert len(call_args) == len(arg_signatures), (
+                         f"len of the following lists do not match: {call_args=} {arg_signatures=}"
+                     )
