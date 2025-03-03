@@ -603,6 +603,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_alloc_tensor(%arg0: !llvm.ptr<3>)
   tt.func @basic_alloc_tensor() {
     // CHECK-NEXT: llvm.mlir.constant
+    // CHECK-NEXT: llvm.mlir.addressof @global_smem
     // CHECK-NEXT: llvm.getelementptr
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared0, #smem, mutable>
     tt.return
@@ -1102,7 +1103,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:   llvm.br ^bb2([[CMPXCHG_RES]] : i32)
     // CHECK-NEXT: ^bb2([[RES:%.*]]: i32):
     // CHECK-NEXT:   [[RES_CAST:%.*]] = llvm.bitcast [[RES]] : i32 to f32
-    // CHECK:        [[GEP:%.*]] = llvm.getelementptr %arg3[{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT: llvm.cond_br [[MASK]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
@@ -1210,7 +1213,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:   llvm.br ^bb2([[RMW_RES]] : f32)
     // CHECK-NEXT: ^bb2([[RMW_PHI:%.*]]: f32):
     // CHECK-NEXT:   [[RMW_CAST:%.*]] = llvm.bitcast [[RMW_PHI]] : f32 to f32
-    // CHECK:        [[GEP:%.*]] = llvm.getelementptr %arg3[{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT:   llvm.cond_br [[PRED]], ^bb3, ^bb4
     // CHECK-NEXT:  ^bb3:

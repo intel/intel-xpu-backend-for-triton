@@ -75,9 +75,6 @@ public:
   void storeOpAnnotation(triton::gpu::LocalStoreOp op, size_t localStoreOpCount,
                          Type type) const override;
 
-  Value getStackPointer(RewriterBase &rewriter,
-                        FunctionOpInterface funcOp) const override;
-
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   RewriterBase &rewriter, bool useStdErr) const;
