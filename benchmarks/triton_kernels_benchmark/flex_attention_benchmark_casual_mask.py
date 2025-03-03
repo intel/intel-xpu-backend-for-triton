@@ -50,8 +50,9 @@ def causal_mask(_, __, q_idx, kv_idx):
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(Z, H, N_CTX, D_HEAD, _, MODE, provider):
+def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
     assert MODE in ['fwd', 'bwd']
+    assert CAUSAL
     dtype = torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
     k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
