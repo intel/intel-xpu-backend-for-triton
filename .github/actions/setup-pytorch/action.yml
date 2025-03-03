@@ -45,7 +45,7 @@ runs:
       if: inputs.ref != ''
       shell: bash
       run: |
-        if [[ ${{ inputs.repository == 'liangan1/pytorch' }} ]]; then
+        if [[ "${{ inputs.repository }}" = "liangan1/pytorch" ]]; then
           PYTORCH_COMMIT_ID="$(<.github/pins/pytorchFlexAttention.txt)"
           echo "PYTORCH_REPO=${{ inputs.repository }}" | tee -a "$GITHUB_ENV"
           echo "PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID" | tee -a "$GITHUB_ENV"
