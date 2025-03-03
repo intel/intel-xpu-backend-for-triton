@@ -24,7 +24,6 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
-    ViewOpToLLVM.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen
