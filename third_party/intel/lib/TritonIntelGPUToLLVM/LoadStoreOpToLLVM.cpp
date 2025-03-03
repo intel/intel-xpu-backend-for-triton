@@ -1230,12 +1230,18 @@ struct LoadOpConversion
                               tileLayout.getInDimSize(kLoad) *
                               numLoadPerOutRepCluster
                        << "\n";
+          // TODO: should itr / vblocks be outer dim warp #? 
           const auto loadOffsetX =
-              offset[dimOuter].second *
+              offset[1].second *
               (tileLayout.getInDimSize(kIteration) / vBlocks) *
               tileLayout.getInDimSize(kLoad) * numLoadPerOutRepCluster;
-          const auto loadOffsetY = offset[dimInner].second;
+          llvm::errs() << "itr size: " << tileLayout.getInDimSize(kIteration) << "\n";
+          llvm::errs() << "itr / vblocks: " << tileLayout.getInDimSize(kIteration) / vBlocks << "\n";
+          llvm::errs() << "load size: " << tileLayout.getInDimSize(kLoad) << "\n";
+          llvm::errs() << "numLoadPerOutRepCluster: " << numLoadPerOutRepCluster << "\n";
+          const auto loadOffsetY = offset[0].second;
           LLVM_DEBUG({
+            llvm::dbgs() << "isOperandA? " << isOperandA << "\n";
             llvm::dbgs() << "x offset ll: " << loadOffsetX << "\n";
             llvm::dbgs() << "y offset ll: " << loadOffsetY << "\n";
           });
