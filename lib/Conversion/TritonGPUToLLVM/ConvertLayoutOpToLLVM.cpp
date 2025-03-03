@@ -191,6 +191,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    RankedTensorType srcTy = op.getSrc().getType();
+    auto srcElemTy = srcTy.getElementType();
+    const bool isInt1 = srcElemTy.isInteger(1);
+
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
@@ -349,8 +353,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
             targetInfo.loadDShared(rewriter, loc, vecAddr, std::nullopt,
                                    vec_ty(elemTy, scratchConfig.outVec),
                                    /*pred=*/b.true_val());
-        for (Value v : unpackLLVector(loc, valsVec, rewriter))
-          outVals[outRegSlice++] = v;
+        for (Value v : unpackLLVector(loc, valsVec, rewriter)) {
+          if (isInt1) {
+            // TODO(Intel): special handling for the boolean case required. Does
+            // this prevent a later optimization that we can't handle, or is
+            // there something about the layout/SLM loads and stores that
+            // requires special "transcribing" the boolean to the result of the
+            // cmp?
+            outVals[outRegSlice++] =
+                b.icmp_ne(v, rewriter.create<LLVM::ConstantOp>(
+                                 loc, i8_ty, rewriter.getI8IntegerAttr(0)));
+          } else {
+            outVals[outRegSlice++] = v;
+          }
+        }
       }
     }
 
