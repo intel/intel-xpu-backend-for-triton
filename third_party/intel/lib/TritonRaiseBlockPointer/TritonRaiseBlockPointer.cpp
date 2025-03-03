@@ -695,12 +695,13 @@ private:
     Operation *defOp = value.getDefiningOp();
     if (!defOp) {
       // look init values outside the loop
-      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      BlockArgument blockArg = cast<BlockArgument>(value);
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
-      return forOp ? hasExpandOpInDefiningPath(
-                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
-                   : false;
+      return forOp && !forOp.getInitArgs().empty()
+                 ? hasExpandOpInDefiningPath(
+                       forOp.getInitArgs()[blockArg.getArgNumber() - 1])
+                 : false;
     }
 
     if (isa<tt::ExpandDimsOp>(defOp))
