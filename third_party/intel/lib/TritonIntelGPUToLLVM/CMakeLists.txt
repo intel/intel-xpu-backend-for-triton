@@ -3,7 +3,6 @@ add_triton_library(TritonIntelGPUToLLVM
     ArithOpsToLLVM.cpp
     BF16Casts.cpp
     ControlFlowOpToLLVM.cpp
-    ConvertLayoutOpToLLVM/SharedToDotOperandDPAS.cpp
     ConvertLayoutOpToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
     DotOpToLLVM/DPAS.cpp

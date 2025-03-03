@@ -111,7 +111,7 @@ public:
           LDBG("dotLayout: " << *dotLayout);
           auto opIdx =
               static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-          auto dotOrder = dotLayout->getThreadOrder();
+          auto dotOrder = mlir::triton::gpu::getThreadOrder(tensorType);
           const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
           if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
               valueRowMajor ^ isRowMajor) {
