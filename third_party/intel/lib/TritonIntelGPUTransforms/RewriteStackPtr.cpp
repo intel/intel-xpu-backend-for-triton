@@ -1,6 +1,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/raw_ostream.h"
@@ -38,44 +40,61 @@ public:
     bool usePoison =
         (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0);
 
-    OpBuilder builder(ctx);
-    mod.walk([&](FunctionOpInterface funcOp) {
-      if (!usePoison && allocation.isRoot(funcOp)) {
-        auto oldFuncType =
-            dyn_cast<LLVM::LLVMFunctionType>(funcOp.getFunctionType());
-        Type resultType = oldFuncType.getReturnType();
-        SmallVector<Type> newArgTypes(oldFuncType.getParams().begin(),
-                                      oldFuncType.getParams().end());
-        newArgTypes.push_back(ptrTy);
-        auto newFuncType = LLVM::LLVMFunctionType::get(resultType, newArgTypes);
-        funcOp.setType(newFuncType);
-        auto llvmFunc = cast<LLVM::LLVMFuncOp>(funcOp.getOperation());
-        Block &entryBlock = llvmFunc.getBody().front();
-        entryBlock.addArgument(ptrTy, funcOp.getLoc());
-      }
-      funcOp.walk([&](LLVM::AddressOfOp addressOp) {
-        updateStackptr(funcOp, addressOp, builder, usePoison, ptrTy);
+    // 1: Process function arguments for root functions
+    if (!usePoison) {
+      mod.walk([&](FunctionOpInterface funcOp) {
+        if (allocation.isRoot(funcOp)) {
+          insertFuncArguments(funcOp, ptrTy);
+        }
       });
+    }
+
+    // 2: Collect all AddressOfOp that need updating
+    SmallVector<LLVM::AddressOfOp> addressOps;
+    mod.walk([&](LLVM::AddressOfOp addressOp) {
+      if (addressOp.getGlobalName() != "global_smem")
+        return;
+      if (usePoison) {
+        addressOps.push_back(addressOp);
+      } else {
+        auto funcOp = addressOp->getParentOfType<FunctionOpInterface>();
+        if (funcOp && allocation.isRoot(funcOp)) {
+          addressOps.push_back(addressOp);
+        }
+      }
     });
+
+    // 3: Update collected AddressOfOp
+    OpBuilder builder(ctx);
+    for (LLVM::AddressOfOp addressOp : addressOps) {
+      builder.setInsertionPoint(addressOp);
+      Value newValue;
+      if (usePoison) {
+        newValue = builder.create<LLVM::PoisonOp>(addressOp.getLoc(), ptrTy);
+      } else {
+        auto funcOp = addressOp->getParentOfType<FunctionOpInterface>();
+        assert(funcOp && "AddressOfOp must be inside a function");
+        newValue = funcOp.getArgument(funcOp.getNumArguments() - 1);
+      }
+      addressOp.replaceAllUsesWith(newValue);
+      addressOp.erase();
+    }
   }
 
 private:
-  void updateStackptr(FunctionOpInterface funcOp, LLVM::AddressOfOp addressOp,
-                      OpBuilder &builder, bool usePoison,
-                      LLVM::LLVMPointerType ptrTy) {
-    Value newValue;
-    if (addressOp.getGlobalName() != "global_smem") {
-      return;
-    }
-    if (usePoison) {
-      OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPoint(addressOp);
-      newValue = builder.create<LLVM::PoisonOp>(addressOp.getLoc(), ptrTy);
-    } else {
-      newValue = funcOp.getArgument(funcOp.getNumArguments() - 1);
-    }
-    addressOp.replaceAllUsesWith(newValue);
-    addressOp.erase();
+  void insertFuncArguments(FunctionOpInterface funcOp,
+                           LLVM::LLVMPointerType ptrTy) {
+    auto oldFuncType =
+        dyn_cast<LLVM::LLVMFunctionType>(funcOp.getFunctionType());
+    Type resultType = oldFuncType.getReturnType();
+    SmallVector<Type> newArgTypes(oldFuncType.getParams().begin(),
+                                  oldFuncType.getParams().end());
+    newArgTypes.push_back(ptrTy);
+    auto newFuncType = LLVM::LLVMFunctionType::get(resultType, newArgTypes);
+    funcOp.setType(newFuncType);
+    auto llvmFunc = cast<LLVM::LLVMFuncOp>(funcOp.getOperation());
+    Block &entryBlock = llvmFunc.getBody().front();
+    entryBlock.addArgument(ptrTy, funcOp.getLoc());
   }
 };
 
