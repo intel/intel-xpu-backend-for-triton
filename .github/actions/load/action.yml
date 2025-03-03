@@ -37,12 +37,8 @@ runs:
         ITEM_PATH="${{ inputs.root }}/${{ inputs.key }}"
         echo "dest=$ITEM_PATH" >> $GITHUB_OUTPUT
         if [[ -d ${{ inputs.path }} ]]; then
-          if [[ ${{ inputs.repository == 'liangan1/pytorch' }} ]]; then
-            rm -rf ${{ inputs.path }}
-          else
-            echo "Directory ${{ inputs.path }} exists and will not be restored from cache"
-            exit 1
-          fi
+          echo "Directory ${{ inputs.path }} already exists and will not be removed"
+          rm -rf ${{ inputs.path }}
         fi
         if [[ ${{ inputs.enabled == 'true' }} && -d $ITEM_PATH ]]; then
           echo "Cache hit for ${{ inputs.key }}"
