@@ -21,20 +21,26 @@ namespace {
 
 // Abstract base class for mask validators.
 // Mask validators are used to check whether a given mask has an expected form.
-// Concreate subclasses define the expected form.
+// Concrete subclasses provide a member function used to select masked
+// operations that have a mask in a particular (e.g. desired) form.
+// Furthermore concrete mask validators classes might also provide a member
+// function
 class MaskValidatorBase {
 public:
   virtual ~MaskValidatorBase() = default;
 
   // Check whether the given mask is valid.
-  virtual bool isValidMask(Value mask, scf::ForOp &forOp) const = 0;
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const = 0;
+
+  // Create the loop versioning condition based on the mask.
+  virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const = 0;
 };
 
 // A mask validator which ensures that the mask can be reduced to the form:
 //  `END < N-i*END`.
 class CanonicalMaskValidator final : public MaskValidatorBase {
 public:
-  virtual bool isValidMask(Value mask, scf::ForOp &forOp) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
     assert(mask && "Expecting a valid mask");
 
     if (!mask.getDefiningOp() || !isa<arith::CmpIOp>(mask.getDefiningOp()))
@@ -82,7 +88,8 @@ public:
 
   // Create the loop versioning condition, assumes the loop upper bound is the
   // form `(N+END-1)/END`.
-  Value getVersioningCond(scf::ForOp forOp) const {
+  virtual Value getVersioningCond(scf::ForOp &forOp,
+                                  Value mask = nullptr) const {
     assert(hasValidUpperBound(forOp) && "Invalid upper bound");
 
     Value ub = tt::intel::getFinalValue(forOp.getUpperBound());
@@ -138,7 +145,7 @@ public:
   //   - N < M (with i1 data type)
   //   - [0..END] < splat(N)
   //   - splat(N) < [0..END]
-  virtual bool isValidMask(Value mask, scf::ForOp &forOp) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
     assert(mask && "Expecting a valid mask");
 
     if (!mask.getDefiningOp() || !isa<arith::CmpIOp>(mask.getDefiningOp()))
@@ -181,8 +188,8 @@ public:
     return false;
   }
 
-  Value getVersioningCond(Value mask, scf::ForOp &forOp) const {
-    assert(isValidMask(mask, forOp) && "Invalid mask");
+  virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
+    assert(isValidMask(forOp, mask) && "Invalid mask");
 
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
@@ -240,7 +247,7 @@ public:
                      : isa<tt::StoreOp>(op) ? cast<tt::StoreOp>(op).getMask()
                                             : nullptr;
         if (mask &&
-            maskValidator.isValidMask(tt::intel::getFinalValue(mask), forOp))
+            maskValidator.isValidMask(forOp, tt::intel::getFinalValue(mask)))
           maskedOps.insert(op);
       }
     };
@@ -271,9 +278,9 @@ public:
     // Currently we can version the loop only is it doesn't have downward
     // exposed uses of return values that are a tensor of pointers.
     // Note: this is due to the fact the results yielded by the 2 versioning
-    // branches have different types for ptr (only in one versioned loop tensor
-    // of ptrs are changed to block ptrs) 'then' part of the versioning branch
-    // and leave them as is in the 'else' branch).
+    // branches have different types for ptr (only in one versioned loop
+    // tensor of ptrs are changed to block ptrs) 'then' part of the versioning
+    // branch and leave them as is in the 'else' branch).
     auto canVersion = [](scf::ForOp &forOp) {
       return llvm::any_of(forOp.getResults(), [](Value res) {
         return !tt::isTensorPointerType(res.getType()) ||
@@ -283,8 +290,8 @@ public:
     if (!canVersion(forOp))
       return false;
 
-    // Retrieve the versioning condition, bail out if it doesn't exist (in which
-    // case the loop upper bound is not in canonical form).
+    // Retrieve the versioning condition, bail out if it doesn't exist (in
+    // which case the loop upper bound is not in canonical form).
     Value verCond = collector.getMaskValidator().getVersioningCond(forOp);
     if (!verCond)
       return false;
@@ -313,8 +320,8 @@ public:
     OpBuilder elseB = ifOp.getElseBodyBuilder();
     Operation *elseForLoop = elseB.clone(*forOp.getOperation());
 
-    // Collect results in 'clonedLoop' corresponding to downward exposed results
-    // of the given loop.
+    // Collect results in 'clonedLoop' corresponding to downward exposed
+    // results of the given loop.
     auto pruneUnusedResults = [&](const scf::ForOp &forOp,
                                   Operation *clonedLoop) {
       SmallVector<Value> prunedResults;
@@ -375,10 +382,10 @@ public:
     auto it = maskConds.begin();
     Value firstCond = (*it++)->getResult(0);
     auto maskValidator = collector.getMaskValidator();
-    Value verCond = maskValidator.getVersioningCond(firstCond, forOp);
+    Value verCond = maskValidator.getVersioningCond(forOp, firstCond);
     for (; it != maskConds.end(); ++it) {
       Value nextCond = (*it)->getResult(0);
-      Value cond = maskValidator.getVersioningCond(nextCond, forOp);
+      Value cond = maskValidator.getVersioningCond(forOp, nextCond);
       verCond = builder.create<arith::AndIOp>(loc, verCond, cond);
     }
 
@@ -449,8 +456,8 @@ public:
       return WalkResult::advance();
     });
 
-    // Version loops containing masked operation with a mask defined before the
-    // loop.
+    // Version loops containing masked operation with a mask defined before
+    // the loop.
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (scf::ForOp forOp = dyn_cast<scf::ForOp>(op)) {
         // Nested loop aren't currently handled.
