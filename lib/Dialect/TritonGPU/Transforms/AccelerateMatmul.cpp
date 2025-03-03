@@ -395,16 +395,9 @@ public:
 
 // Pick the layout to match MXFP scales layout in register so that it can be
 // copied directly using tmem st.
-static Attribute getTmemScales(unsigned N, unsigned numWarps,
-                               triton::gpu::CTALayoutAttr ctaLayout) {
-  assert(numWarps == 4 && "todo enable numWarps == 8");
-  SmallVector<unsigned> sizePerThread = {1, std::max<unsigned>(N, 4)};
-  SmallVector<unsigned> threadsPerWarp = {32, 1};
-  SmallVector<unsigned> warpsPerCTA = {1, numWarps};
-  SmallVector<unsigned> order = {1, 0};
-  return triton::gpu::BlockedEncodingAttr::get(ctaLayout.getContext(),
-                                               sizePerThread, threadsPerWarp,
-                                               warpsPerCTA, order, ctaLayout);
+static Attribute getTmemScales(RankedTensorType type, unsigned numWarps) {
+  return triton::gpu::LinearEncodingAttr::get(
+      type.getContext(), getScaleTMEMStoreLinearLayout(type, numWarps));
 }
 
 static bool canUseTwoCTAs(triton::DotOp dotOp) {
@@ -587,8 +580,8 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
       loadConsumer = cvt;
     } else {
       // Unrecognized pattern, bail out. In practice, this implies that MMA
-      // pipelining will not apply to the scaled dot op, since tmem_copy would
-      // not be inserted before the pipeline pass.
+      // pipelining will not apply to the scaled dot op, since scales will not
+      // be in passed through SMEM to tc_gen5_mma_scaled.
       return scale;
     }
   }
@@ -629,7 +622,7 @@ public:
         mlir::isa<NvidiaMmaEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
-    if (dotOp.getLhsScale() == nullptr || dotOp.getRhsScale() == nullptr) {
+    if (dotOp.getAScale() == nullptr || dotOp.getBScale() == nullptr) {
       return failure();
     }
 
@@ -643,18 +636,18 @@ public:
       return failure();
     Location loc = dotOp.getLoc();
     // operands
-    Value a = dotOp.getLhs();
-    Value b = dotOp.getRhs();
-    auto oldAType = dotOp.getLhs().getType();
-    auto oldBType = dotOp.getRhs().getType();
+    Value a = dotOp.getA();
+    Value b = dotOp.getB();
+    auto oldAType = a.getType();
+    auto oldBType = b.getType();
 
     bool IsAMixedPrecFp4 = false;
     bool IsBMixedPrecFp4 = false;
 
-    if (dotOp.getLhsType() != dotOp.getRhsType()) {
-      if (dotOp.getLhsType() == ScaleDotElemType::E2M1)
+    if (dotOp.getAElemType() != dotOp.getBElemType()) {
+      if (dotOp.getAElemType() == ScaleDotElemType::E2M1)
         IsAMixedPrecFp4 = true;
-      else if (dotOp.getRhsType() == ScaleDotElemType::E2M1)
+      else if (dotOp.getBElemType() == ScaleDotElemType::E2M1)
         IsBMixedPrecFp4 = true;
     }
 
@@ -676,8 +669,8 @@ public:
     // descriptor requires options that are unavailable to the .kind=mxf4 mma.
     // This is likely preferable over a silent runtime performance degradation
     // from running f4xf4 via .kind=mxf8f6f4
-    if (dotOp.getLhsType() == ScaleDotElemType::E2M1 &&
-        dotOp.getRhsType() == ScaleDotElemType::E2M1) {
+    if (dotOp.getAElemType() == ScaleDotElemType::E2M1 &&
+        dotOp.getBElemType() == ScaleDotElemType::E2M1) {
       k = 64;
     }
     SmallVector<unsigned> instrShape = {m, n, k};
@@ -701,8 +694,8 @@ public:
     auto acc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
         loc, accMemDescType, cvtAcc);
 
-    RankedTensorType oldScaleAType = dotOp.getLhsScale().getType();
-    RankedTensorType oldScaleBType = dotOp.getRhsScale().getType();
+    RankedTensorType oldScaleAType = dotOp.getAScale().getType();
+    RankedTensorType oldScaleBType = dotOp.getBScale().getType();
 
     Attribute scaleEncoding =
         triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
@@ -715,17 +708,15 @@ public:
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
-    Attribute scaleALayout =
-        getTmemScales(oldScaleAType.getDimSize(1), numWarps, CTALayout);
-    Attribute scaleBLayout =
-        getTmemScales(oldScaleBType.getDimSize(1), numWarps, CTALayout);
+    Attribute scaleALayout = getTmemScales(oldScaleAType, numWarps);
+    Attribute scaleBLayout = getTmemScales(oldScaleBType, numWarps);
     RankedTensorType newScaleAType = RankedTensorType::get(
         oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleALayout);
     RankedTensorType newScaleBType = RankedTensorType::get(
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleBLayout);
 
-    auto lhsScale = addSmemStageToScaleLoad(dotOp.getLhsScale(), rewriter);
-    auto rhsScale = addSmemStageToScaleLoad(dotOp.getRhsScale(), rewriter);
+    auto lhsScale = addSmemStageToScaleLoad(dotOp.getAScale(), rewriter);
+    auto rhsScale = addSmemStageToScaleLoad(dotOp.getBScale(), rewriter);
 
     Value newScaleA =
         rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
@@ -737,8 +728,8 @@ public:
         loc, scaleBType, newScaleB);
     auto vTrue = rewriter.create<arith::ConstantIntOp>(dotOp.getLoc(), 1, 1);
     rewriter.create<triton::nvidia_gpu::TCGen5MMAScaledOp>(
-        loc, a, b, acc, scaleA, scaleB, dotOp.getLhsType(), dotOp.getRhsType(),
-        vTrue, vTrue, Value());
+        loc, a, b, acc, scaleA, scaleB, dotOp.getAElemType(),
+        dotOp.getBElemType(), vTrue, vTrue, Value());
 
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
@@ -792,17 +783,17 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
 // Transpose scaled_dot ops that have a scale on lhs.
 static void transposeDotOp(DotScaledOp dotOp) {
   OpBuilder builder(dotOp);
-  Value lhs = dotOp.getLhs();
+  Value lhs = dotOp.getA();
   std::array<int, 2> transOrder = {1, 0};
   Value lhsTransposed = builder.create<TransOp>(lhs.getLoc(), lhs, transOrder);
-  Value rhs = dotOp.getRhs();
+  Value rhs = dotOp.getB();
   Value rhsTransposed = builder.create<TransOp>(rhs.getLoc(), rhs, transOrder);
   Value c = dotOp.getC();
   Value cTransposed = builder.create<TransOp>(c.getLoc(), c, transOrder);
   Value result = builder.create<DotScaledOp>(
       dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
-      cTransposed, dotOp.getRhsScale(), dotOp.getLhsScale(), dotOp.getRhsType(),
-      dotOp.getLhsType(), dotOp.getFastMath());
+      cTransposed, dotOp.getBScale(), dotOp.getAScale(), dotOp.getBElemType(),
+      dotOp.getAElemType(), dotOp.getFastMath());
   Operation *transposedResult =
       builder.create<TransOp>(result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transposedResult);
@@ -814,7 +805,7 @@ static void transposeDots(ModuleOp m) {
   // want to use rhs from register for mmav3.
   SmallVector<DotScaledOp> toTranspose;
   m.walk([&](DotScaledOp dotOp) -> void {
-    if (dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr)
+    if (dotOp.getAScale() == nullptr && dotOp.getBScale() != nullptr)
       toTranspose.push_back(dotOp);
   });
   for (DotScaledOp dotOp : toTranspose) {

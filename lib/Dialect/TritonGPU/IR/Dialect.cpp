@@ -116,46 +116,12 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto distributedLayout = dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distributedLayout.getContigPerThread();
-  } else {
-    llvm::report_fatal_error("getContigPerThread not implemented");
-    return {};
-  }
-}
-
-SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
-                                               ArrayRef<int64_t> shape) {
-  // If slice layout, call recursively on parent layout, and drop
-  // sliced dim
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto parentShape = sliceLayout.paddedShape(shape);
-    auto parentUniqueContigPerThread =
-        getUniqueContigPerThread(parentLayout, parentShape);
-    parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
-                                      sliceLayout.getDim());
-    return parentUniqueContigPerThread;
-  } else if (mlir::isa<LinearEncodingAttr>(layout)) {
-    // FIXME: This should be the impelmentation of the function, but at the
-    // moment it breaks some uses. For example, if we have a blocked layout
-    // with shape [128, 128] and size=[4, 1], that is tiled in the second
-    // dimension, then the default path will return [4, 1], but this path will
-    // return [4, 128]!
-    auto linearLayout = toLinearLayout(shape, layout);
-    auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
-    return llAttr.getContigPerThread();
-  }
-  // Base case
-  auto rank = shape.size();
-  SmallVector<unsigned> ret(rank);
-  auto contigPerThread = getContigPerThread(layout);
-  assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
-  for (int d = 0; d < rank; ++d) {
-    ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
-  }
-  return ret;
+SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType) {
+  auto layout = tensorType.getEncoding();
+  auto shape = tensorType.getShape();
+  auto linearLayout = toLinearLayout(shape, layout);
+  auto llAttr = LinearEncodingAttr::get(tensorType.getContext(), linearLayout);
+  return llAttr.getContigPerThread();
 }
 
 SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
@@ -187,6 +153,20 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
 }
 
 bool isExpensiveView(Type srcType, Type dstType) {
+  auto tensorSrcType = cast<RankedTensorType>(srcType);
+  auto tensorDstType = cast<RankedTensorType>(dstType);
+  auto llSrc =
+      toLinearLayout(tensorSrcType.getShape(), tensorSrcType.getEncoding());
+  auto llDst =
+      toLinearLayout(tensorDstType.getShape(), tensorDstType.getEncoding());
+  // In case there are replicated value we need to make sure the new and old
+  // layout have matching masks.
+  for (auto [srcMask, dstMask] :
+       llvm::zip(llSrc.getFreeVariableMasks(), llDst.getFreeVariableMasks())) {
+    assert(srcMask.first == dstMask.first);
+    if (srcMask.second != dstMask.second)
+      return true;
+  }
   return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
 }
 
@@ -353,7 +333,6 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
   unsigned rank = shape.size();
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    // This wrapping rule must be consistent with emitCTAOffsetForLayout
     unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
     shapePerCTA[i] = shape[i] / splitNum;
   }
@@ -2801,6 +2780,8 @@ struct TritonGPUInferLayoutInterface
     if (expected == got) {
       return success();
     }
+    if (!expected || !got)
+      return failure();
     // Check whether the encodings are structurally the same.
     auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
     auto gotLL = triton::gpu::toLinearLayout(shape, got);

@@ -16,7 +16,6 @@ add_triton_library(TritonIntelGPUToLLVM
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     TritonGPUToLLVM.cpp
-    ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
@@ -25,7 +24,6 @@ add_triton_library(TritonIntelGPUToLLVM
     TypeConverter.cpp
     UpcastMXFPToLLVM.cpp
     Utility.cpp
-    ViewOpToLLVM.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen

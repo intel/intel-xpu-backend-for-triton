@@ -71,6 +71,8 @@ public:
   Value getStackPointer(RewriterBase &rewriter,
                         FunctionOpInterface funcOp) const override;
 
+  int getAddressSpace(Attribute addressSpace) const override;
+
   Value getGlobalStringStart(Location loc, RewriterBase &rewriter,
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
