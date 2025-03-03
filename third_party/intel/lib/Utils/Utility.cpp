@@ -32,7 +32,7 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op) {
   if (results.size() != 1)
     return std::nullopt;
 
-  auto intAttr = getIntAttr(results[0]);
+  std::optional<int64_t> intAttr = getIntAttr(results[0]);
   if (intAttr.has_value())
     return intAttr.value();
 
@@ -44,7 +44,7 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op) {
   return getIntAttr(constOp.getValue());
 }
 
-bool isConstant(Value val, const unsigned expected) {
+bool isConstant(Value val, int64_t expected) {
   if (auto defOp = val.getDefiningOp())
     return (getFoldedConstantValue(defOp) == expected);
   return false;
@@ -54,10 +54,16 @@ Value getFinalValue(Value value) {
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
     // look init values outside the loop
-    BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+    BlockArgument blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp))
-      return getFinalValue(forOp.getInitArgs()[blockArg.getArgNumber() - 1]);
+    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      int numIVs = forOp.getNumInductionVars();
+      int initArgIdx = blockArg.getArgNumber() - numIVs;
+      auto initArgs = forOp.getInitArgs();
+      assert(initArgIdx >= 0 && initArgIdx < initArgs.size() &&
+             "Unexpected 'initArgIdx' value");
+      return getFinalValue(initArgs[initArgIdx]);
+    }
 
     return value;
   }
@@ -72,6 +78,12 @@ Value getFinalValue(Value value) {
     if (isConstant(addOp.getRhs(), 0))
       return getFinalValue(addOp.getLhs());
     return addOp.getResult();
+  }
+
+  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
+    if (isConstant(subOp.getRhs(), 0))
+      return getFinalValue(subOp.getLhs());
+    return subOp.getResult();
   }
 
   if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
