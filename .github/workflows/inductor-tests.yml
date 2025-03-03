@@ -6,7 +6,13 @@ on:
       pytorch_ref:
         description: PyTorch ref, keep empty for default
         type: string
-        default: ""
+        default: >-
+          inductor/test_codegen_triton.py
+          inductor/test_triton_extension_backend.py
+          inductor/test_triton_heuristics.py
+          inductor/test_triton_wrapper.py
+          inductor/test_triton_kernels.py
+          inductor/test_gpu_cpp_wrapper.py
       suite:
         description: Space separated lists of test suites or "all"
         type: string
