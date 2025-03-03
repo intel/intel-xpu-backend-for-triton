@@ -116,19 +116,11 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto distributedLayout = dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distributedLayout.getContigPerThread();
-  } else {
-    llvm::report_fatal_error("getContigPerThread not implemented");
-    return {};
-  }
-}
-
-SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
-                                               ArrayRef<int64_t> shape) {
+SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType) {
+  auto layout = tensorType.getEncoding();
+  auto shape = tensorType.getShape();
   auto linearLayout = toLinearLayout(shape, layout);
-  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  auto llAttr = LinearEncodingAttr::get(tensorType.getContext(), linearLayout);
   return llAttr.getContigPerThread();
 }
 
@@ -161,6 +153,20 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
 }
 
 bool isExpensiveView(Type srcType, Type dstType) {
+  auto tensorSrcType = cast<RankedTensorType>(srcType);
+  auto tensorDstType = cast<RankedTensorType>(dstType);
+  auto llSrc =
+      toLinearLayout(tensorSrcType.getShape(), tensorSrcType.getEncoding());
+  auto llDst =
+      toLinearLayout(tensorDstType.getShape(), tensorDstType.getEncoding());
+  // In case there are replicated value we need to make sure the new and old
+  // layout have matching masks.
+  for (auto [srcMask, dstMask] :
+       llvm::zip(llSrc.getFreeVariableMasks(), llDst.getFreeVariableMasks())) {
+    assert(srcMask.first == dstMask.first);
+    if (srcMask.second != dstMask.second)
+      return true;
+  }
   return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
 }
 
@@ -2774,6 +2780,8 @@ struct TritonGPUInferLayoutInterface
     if (expected == got) {
       return success();
     }
+    if (!expected || !got)
+      return failure();
     // Check whether the encodings are structurally the same.
     auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
     auto gotLL = triton::gpu::toLinearLayout(shape, got);
