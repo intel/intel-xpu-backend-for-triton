@@ -105,7 +105,7 @@ runs:
         path: pytorch
 
     - name: Apply additional PR patches
-      if: ${{ steps.pytorch-cache.outputs.status == 'miss'  && inputs.mode == 'source' && inputs.repository == 'pytorch/pytorch' || inputs.repository == 'liangan1/pytorch' }}
+      if: ${{ steps.pytorch-cache.outputs.status == 'miss'  && inputs.mode == 'source' && (inputs.repository == 'pytorch/pytorch' || inputs.repository == 'liangan1/pytorch') }}
       shell: bash
       run: |
         cd pytorch
