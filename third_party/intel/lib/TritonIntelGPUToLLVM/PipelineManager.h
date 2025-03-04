@@ -252,8 +252,6 @@ public:
                                                 targetInfo, benefit);
       intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                               patterns, benefit);
-      intel::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
-                                              targetInfo, benefit);
       intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
     }
 

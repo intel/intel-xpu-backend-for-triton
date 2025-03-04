@@ -38,11 +38,6 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
-void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                      RewritePatternSet &patterns,
-                                      const TargetInfo &targetInfo,
-                                      PatternBenefit benefit);
-
 void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
                                    PatternBenefit benefit);

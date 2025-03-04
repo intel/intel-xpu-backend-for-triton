@@ -22,7 +22,6 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGPUToLLVM.cpp
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
-    UpcastMXFPToLLVM.cpp
     Utility.cpp
 
     DEPENDS
