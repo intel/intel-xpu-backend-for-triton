@@ -36,7 +36,19 @@ def causal_mask(_, __, q_idx, kv_idx):
                 for (h, dhead) in [(16, 128), (32, 64)]
                 for causal in [True]
                 for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
-        + [[4, 48, 1024, 64, causal, mode] for causal in [True] for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
+        + [[4, 48, 1024, 64, causal, mode] for causal in [True] for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+        + [[z, h, 1024, dhead, True, mode]
+           for z in [1, 2, 4, 8, 16, 32, 64]
+           for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
+           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+        + [[z, h, 1024 + 64, dhead, True, mode]
+           for z in [1, 2, 4, 8, 16, 32]
+           for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
+           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+        + [[z, h, 1024 + 128 + 512, dhead, True, mode]
+           for z in [1, 2, 4, 8, 16, 32]
+           for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
+           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],  #
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -46,7 +58,7 @@ def causal_mask(_, __, q_idx, kv_idx):
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='flexAttnCasual-performance',
+        plot_name='flexAttnCausal-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))

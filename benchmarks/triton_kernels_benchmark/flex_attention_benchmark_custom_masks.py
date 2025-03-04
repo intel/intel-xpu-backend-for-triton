@@ -66,7 +66,22 @@ def alibi_functional(score, _, h, q_idx, kv_idx):
                 for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
         + [[4, 48, 1024, 64, mask, mode]
            for mask in ['NATTEN', 'Alibi']
-           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
+           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+        + [[z, h, 1024, dhead, mask, mode]
+           for z in [1, 2, 4, 8, 16, 32, 64]
+           for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
+           for mask in ['NATTEN', 'Alibi']
+           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+        + [[z, h, 1024 + 64, dhead, mask, mode]
+           for z in [1, 2, 4, 8, 16, 32]
+           for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
+           for mask in ['NATTEN', 'Alibi']
+           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
+        + [[z, h, 1024 + 128 + 512, dhead, mask, mode]
+           for z in [1, 2, 4, 8, 16]
+           for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
+           for mask in ['NATTEN', 'Alibi']
+           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],  #
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
