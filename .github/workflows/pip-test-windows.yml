@@ -75,9 +75,7 @@ jobs:
       - name: Install PyTorch (wheels)
         run: |
           .venv\Scripts\activate.ps1
-          # The latest wheel does not work, see https://github.com/intel/intel-xpu-backend-for-triton/issues/3177#issuecomment-2599817729
-          # Use the latest good one
-          pip install torch==2.7.0.dev20250110+xpu --index-url https://download.pytorch.org/whl/nightly/xpu
+          pip install torch --index-url https://download.pytorch.org/whl/nightly/xpu
 
       - name: PyTorch version
         run: |

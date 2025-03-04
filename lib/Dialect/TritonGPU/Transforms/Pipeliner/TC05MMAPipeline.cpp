@@ -570,24 +570,15 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   }
 }
 
-bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
-  auto getNumUsers = [](Value value) {
-    return std::distance(value.user_begin(), value.user_end());
-  };
-
-  auto isCopiedByTMEMCopy = [=](Value scale) {
-    if (getNumUsers(scale) != 2) {
-      // MMA and TMEM copy must be the only users
+bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot, scf::ForOp forOp) {
+  // MMAv5 scaled dot (tcgen05.mma mxf8f6f4) is safe to be pipelined only
+  // when its scales in TMEM are stored by the TMEMCopy op (tcgen05.cp).
+  // That condition is equivalent to scale arguments of
+  // ttng::TCGen5MMAScaledOp being in SMEM during SWP in our convention.
+  auto isCopiedByTMEMCopy = [&](Value scale) {
+    auto scaleAlloc = findShmemAlloc(scale);
+    if (!scaleAlloc || !forOp.isDefinedOutsideOfLoop(scaleAlloc))
       return false;
-    }
-
-    for (auto user : scale.getUsers()) {
-      if (!isa<ttng::TMEMCopyOp, ttng::TCGen5MMAScaledOp>(user)) {
-        // If the scale is used by TMEM copy and the only other user is the
-        // scaled dot op, MMA pipelining is safe to apply.
-        return false;
-      }
-    }
     return true;
   };
 
@@ -609,7 +600,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
       if (isa<ttng::TCGen5MMAOp>(op)) {
         mmaOps.push_back(op);
       } else if (auto scaledDot = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-        if (isSafeToPipeline(scaledDot)) {
+        if (isSafeToPipeline(scaledDot, forOp)) {
           mmaOps.push_back(op);
         } else {
           op->emitWarning("Skipping pipelining of an MMAv5 scaled op because "
@@ -619,7 +610,10 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
     }
   });
 
-  if (mmaOps.empty()) {
+  // Temporarily disable mma pipelining if there are more than one mmaOp in the
+  // loop. This is a workaround for difficult to solve scheduling issues with
+  // loads feeding into non-0 stage ops.
+  if (mmaOps.empty() || mmaOps.size() > 1) {
     return failure();
   }
 
