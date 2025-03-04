@@ -277,13 +277,6 @@ jobs:
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
-      - name: Upload benchmark reports
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-reports
-          path: reports
-
       # Install Pytorch with FlexAttention XPU support enabled
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
@@ -302,11 +295,19 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/flexAttnCasual-performance.csv $REPORTS/flexAttnCasual-xetla-report.csv --benchmark flexAttnCasual --compiler xetla --param_cols "Z,H,N_CTX,D_HEAD,CAUSAL" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton FlexAttention Custom Masks fwd kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_scores_masks.py') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_custom_masks.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          python flex_attention_benchmark_scores_masks.py --reports $REPORTS
+          python flex_attention_benchmark_custom_masks.py --reports $REPORTS
 
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-triton-report.csv --benchmark flexAttnMasks --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG --mask
           python ../../scripts/build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-onednn-report.csv --benchmark flexAttnMasks --compiler onednn --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG --mask
+
+
+      - name: Upload benchmark reports
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: reports
