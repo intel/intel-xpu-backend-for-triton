@@ -55,11 +55,17 @@ jobs:
       - name: Setup Triton
         run: |
           .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
           pip install -v --no-build-isolation '.[build]'
+
+      - name: Triton version
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          python -c 'import triton; print(triton.__version__)'
 
       - name: Clean
         if: ${{ always() }}
