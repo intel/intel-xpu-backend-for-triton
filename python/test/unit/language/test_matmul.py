@@ -448,10 +448,6 @@ def block_scale_mxfp_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-def _knob_disable_ptxas_opt(monkeypatch):
-    monkeypatch.setenv("DISABLE_PTXAS_OPT", "1")
-
-
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 128, 256), (128, 256, 256)])
@@ -462,10 +458,6 @@ def _knob_disable_ptxas_opt(monkeypatch):
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device, monkeypatch):
     if is_xpu():
         pytest.skip("FIXME: Fail RuntimeError on XPU")
-
-    if NUM_STAGES == 1 and USE_2D_SCALE_LOAD:
-        # Disabling ptxas optimization as a temporary workaround, otherwise the test does not pass
-        _knob_disable_ptxas_opt(monkeypatch)
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
