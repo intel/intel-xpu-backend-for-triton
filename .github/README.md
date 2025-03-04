@@ -22,6 +22,8 @@ Intel® XPU Backend for Triton\* is a out of tree backend module for [Triton](ht
 
 Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
 
+See also: [experimental support for Windows](WINDOWS.md).
+
 # Quick Installation
 
 ## Prerequisites
