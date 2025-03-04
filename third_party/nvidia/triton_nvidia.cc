@@ -1,4 +1,4 @@
-﻿#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
@@ -18,12 +18,11 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   // TODO: it is weird to pass mlir::triton::NVVM here since the conversion is
   // nvidia-specificontext
-  m.def("add_to_llvmir", [](mlir::PassManager &pm, int32_t capability) {
-    pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(capability));
-  });
-  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm) {
-    pm.addPass(NVIDIA::createDecomposeUnsupportedConversionsPass());
-  });
+  m.def("add_to_llvmir",
+        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
+          pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
+              capability, ptxVersion));
+        });
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
@@ -33,8 +32,18 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      mlir::createTritonNvidiaGPUTMALoweringPass);
+  ADD_PASS_WRAPPER_0("add_keep_acc_in_tmem",
+                     mlir::createTritonNvidiaGPUKeepAccInTMemPass);
+  ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
+                     mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
+                     mlir::triton::createConvertWarpSpecializeToLLVM);
+  ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
+                     mlir::createTensorMemoryAllocationPass);
+  ADD_PASS_WRAPPER_0("add_lower_mma",
+                     mlir::createTritonNvidiaGPUMMALoweringPass);
 }
 
 void init_triton_nvidia(py::module &&m) {

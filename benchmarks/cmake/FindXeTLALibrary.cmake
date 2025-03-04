@@ -3,13 +3,15 @@
 include(FetchContent)
 
 if (NOT XeTLALibrary_FOUND)
+    # TODO: switch ot FetchContent_MakeAvailable once XeTLA supports it
+    cmake_policy(SET CMP0169 OLD)
 
     set(XeTLALibrary_SOURCE_DIR
             "${CMAKE_CURRENT_BINARY_DIR}/XeTLALibrary")
     message(STATUS "XeTLALibrary is not specified. Will try to download
                   XeTLA library from https://github.com/intel/xetla into
                   ${XeTLALibrary_SOURCE_DIR}")
-    file(READ xetla-library.conf XeTLALibrary_TAG)
+    file(READ xetla_kernel/xetla-library.conf XeTLALibrary_TAG)
     # Strip the potential trailing newline from tag
     string(STRIP "${XeTLALibrary_TAG}" XeTLALibrary_TAG)
     FetchContent_Declare(xetla-library

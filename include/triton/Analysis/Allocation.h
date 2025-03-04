@@ -18,6 +18,12 @@ namespace mlir {
 namespace triton {
 class AllocationAnalysis;
 
+/// Callback to allow backends to specify target-specific scratch sizes for
+/// some operations.
+using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
+
+unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
+
 // To convert a tensor from one layout to another, we need to allocate a
 // temporary buffer (i.e., scratch buffer) in shared memory. The conversion may
 // require multiple iterations, with each iteration involving multiple
@@ -51,6 +57,12 @@ struct ScratchConfig {
     os << ", inVec: " << inVec << ", outVec: " << outVec << "\n";
   }
 };
+
+// For a layout conversion between `srcTy` and `dstTy`, return the vector length
+// that can be used for the stores to and loads from shared memory,
+// respectively.
+std::pair</*inVec*/ unsigned, /*outVec*/ unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy);
 
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy);
@@ -102,7 +114,8 @@ public:
   explicit Allocation(Operation *operation) : operation(operation) {}
 
   /// Runs allocation analysis on the given top-level operation.
-  void run(FuncAllocMapT &funcAllocMap);
+  void run(FuncAllocMapT &funcAllocMap,
+           triton::AllocationAnalysisScratchSizeFn scratchSizeGetter);
 
   /// Returns the operation this analysis was constructed from.
   Operation *getOperation() const { return operation; }
@@ -173,16 +186,14 @@ public:
 private:
   /// A class that represents a shared memory buffer
   struct BufferT {
-    /// Explicit: triton_gpu.local_alloc
-    /// Scratch: triton_gpu.convert_layout
+    /// Explicit: ttg.local_alloc
+    /// Scratch: ttg.convert_layout
     /// Virtual: triton.call
     enum class BufferKind { Explicit, Scratch, Virtual };
 
-    /// MT: thread-safe
-    inline static std::atomic<BufferId> nextId = 0;
-
     BufferKind kind;
     BufferId id;
+    Operation *owner;
     size_t size;
     size_t alignment;
     size_t offset;
@@ -190,10 +201,9 @@ private:
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
 
-    BufferT() : BufferT(BufferKind::Explicit, 0) {}
-    BufferT(BufferKind kind, size_t size, size_t alignment = 4,
-            size_t offset = 0)
-        : kind(kind), id(nextId++), size(size), alignment(alignment),
+    BufferT(BufferKind kind, BufferId id, Operation *owner, size_t size,
+            size_t alignment = 4, size_t offset = 0)
+        : kind(kind), id(id), owner(owner), size(size), alignment(alignment),
           offset(offset) {}
 
     size_t setOffsetAligned(size_t newOffset) {
@@ -202,7 +212,7 @@ private:
   };
 
   /// Op -> Scratch Buffer
-  using OpScratchMapT = DenseMap<Operation *, BufferT *>;
+  using OpScratchMapT = llvm::MapVector<Operation *, BufferT *>;
   /// Value -> Explicit Buffer
   using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
   /// Value -> Alias Buffer
@@ -213,14 +223,16 @@ private:
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
   void addBuffer(KeyType &key, Args &&...args) {
-    auto buffer = BufferT(Kind, std::forward<Args>(args)...);
-    bufferSet[buffer.id] = std::move(buffer);
+    BufferId nextId = bufferIdCounter++;
+    auto [it, inserted] = bufferSet.insert_or_assign(
+        nextId, BufferT(Kind, nextId, key, std::forward<Args>(args)...));
+    BufferT *buffer = &it->second;
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
-      valueBuffer[key] = &bufferSet[buffer.id];
+      valueBuffer[key] = buffer;
     } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
-      opVirtual[key] = &bufferSet[buffer.id];
+      opVirtual[key] = buffer;
     } else {
-      opScratch[key] = &bufferSet[buffer.id];
+      opScratch[key] = buffer;
     }
   }
 
@@ -237,6 +249,8 @@ private:
   BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
 
+  size_t bufferIdCounter = 0;
+
   friend class triton::AllocationAnalysis;
 };
 
@@ -250,7 +264,9 @@ class ModuleAllocation : public CallGraph<Allocation> {
 public:
   using FuncOffsetMapT = DenseMap<FunctionOpInterface, Value>;
 
-  explicit ModuleAllocation(ModuleOp moduleOp)
+  ModuleAllocation(ModuleOp moduleOp,
+                   triton::AllocationAnalysisScratchSizeFn scratchSizeGetter =
+                       triton::defaultAllocationAnalysisScratchSizeFn)
       : CallGraph<Allocation>(moduleOp) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order edge walk callback
@@ -259,7 +275,7 @@ public:
         [&](FunctionOpInterface funcOp) {
           auto [iter, inserted] = funcMap.try_emplace(funcOp, funcOp);
           if (inserted)
-            iter->second.run(funcMap);
+            iter->second.run(funcMap, scratchSizeGetter);
         });
   }
 

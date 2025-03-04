@@ -48,6 +48,13 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getBlockIOAttrName() {
       return "triton_intel_gpu.block_io";
     }
+
+    /// Get the name of the attribute used to specify the target architecture. This
+    /// attribute matches architecture in a target triple used for the resulting LLVM
+    /// IR module.
+    static constexpr llvm::StringRef getTargetArchAttrName() {
+      return "triton_intel_gpu.target_arch";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

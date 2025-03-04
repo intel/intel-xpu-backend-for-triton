@@ -1,10 +1,13 @@
 #include "TargetInfo.h"
+#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+using mlir::triton::AMD::DppCtrl;
 namespace mlir::triton::AMD {
 
 namespace {
@@ -26,11 +29,12 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
 Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto type = value.getType();
 
   if (isa<LLVM::LLVMPointerType>(type)) {
     // The llvm.ptrtoint op requires signless integer types.
-    return ptrtoint(i64_ty, value);
+    return b.ptrtoint(i64_ty, value);
   }
 
   assert(type.getIntOrFloatBitWidth() <= 64);
@@ -38,25 +42,32 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   if (auto floatType = dyn_cast<FloatType>(type)) {
     Value newValue = value;
     if (!floatType.isF64())
-      newValue = fpext(f64_ty, newValue);
-    return bitcast(newValue, i64_ty);
+      newValue = b.fpext(f64_ty, newValue);
+    return b.bitcast(newValue, i64_ty);
   }
 
   assert(type.isIntOrIndex());
   if (type.getIntOrFloatBitWidth() < 64) {
     if (type.isUnsignedInteger())
-      return zext(ui64_ty, value);
+      return b.zext(ui64_ty, value);
     if (type.isSignedInteger())
-      return sext(i64_ty, value);
+      return b.sext(i64_ty, value);
     // Signless integers are printed using unsigned integer formats.
-    return zext(i64_ty, value);
+    return b.zext(i64_ty, value);
   }
 
   return value;
 }
 } // namespace
 
-int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
+llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
+  return llvm::AMDGPU::parseArchAMDGCN(arch);
+}
+
+int TargetInfo::getSharedMemorySize() const {
+  int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
+  return kbytes * 1024;
+}
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 
@@ -84,6 +95,20 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
+bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
+                                ArrayRef<unsigned> repShape,
+                                ArrayRef<unsigned> paddedRepShape,
+                                ArrayRef<unsigned> order,
+                                int swizzleByteSize) const {
+  // AMD does not support stmatrix
+  return false;
+}
+
+bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
+  return getISAFamily() == ISAFamily::CDNA4 &&
+         llvm::is_contained({16, 8, 4, 6}, bitwidth);
+}
+
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
                                    Value ptr, Value val) const {
   llvm::report_fatal_error("AMDGPU does not support stmatrix");
@@ -103,22 +128,22 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleXor(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleXor(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
                             int i) const {
-  return LLVM::AMD::shuffleUp(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              Value i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i);
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
 }
 
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
@@ -126,11 +151,186 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 
+// Cast and sext values into specific-length int to meet the requirements of
+// instructions like UpdateDpp or readlane if necessary.
+static inline Type castToAndSExtInt(RewriterBase &rewriter, Location loc,
+                                    Value &val, Type fromType,
+                                    unsigned toBits) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned originalBits = fromType.getIntOrFloatBitWidth();
+  Type toType = fromType;
+
+  if (!fromType.isIntOrIndex()) {
+    val = b.bitcast(val, int_ty(originalBits));
+    toType = int_ty(originalBits);
+  }
+
+  if (originalBits < toBits) {
+    val = b.sext(int_ty(toBits), val);
+    toType = int_ty(toBits);
+  }
+
+  return toType;
+}
+
+// Trunc the value to specific length and then cast it to given type if
+// necessary. This function is typically used in conjunction with
+// castToAndSExtInt.
+static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
+                                        Value val, Type valType,
+                                        unsigned fromBits) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  unsigned originalBits = valType.getIntOrFloatBitWidth();
+  Value toVal = val;
+
+  if (originalBits < fromBits) {
+    toVal = b.trunc(int_ty(originalBits), toVal);
+  }
+
+  if (!valType.isIntOrIndex()) {
+    toVal = b.bitcast(toVal, valType);
+  }
+
+  return toVal;
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
-  return false;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (numLaneToReduce != 64)
+    return false;
+
+  if (!llvm::is_contained(
+          {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+          getISAFamily())) {
+    return false;
+  }
+
+  Operation *reduxOp = op.getSingleCombiner();
+  if (!reduxOp)
+    return false;
+
+  auto createDppReduxOpWithBoundCtrl = [&](Type valType, Value &src,
+                                           uint32_t dppCtrl, int rowMask,
+                                           int bankMask) -> Value {
+    // DPP has limited support for data types, so here we need to
+    // cast non-integer types or integer types shorter than 32 bits
+    // to int32, except for fp32.
+    Type actualType = valType;
+    if (!valType.isF32()) {
+      actualType = castToAndSExtInt(rewriter, loc, src, valType, 32);
+    }
+
+    Value dppResult =
+        rewriter
+            .create<ROCDL::DPPUpdateOp>(loc, actualType, src, src,
+                                        rewriter.getI32IntegerAttr(dppCtrl),
+                                        rewriter.getI32IntegerAttr(rowMask),
+                                        rewriter.getI32IntegerAttr(bankMask),
+                                        rewriter.getBoolAttr(true))
+            .getRes();
+
+    if (!valType.isF32()) {
+      src = truncAndCastFromInt(rewriter, loc, src, valType, 32);
+      dppResult = truncAndCastFromInt(rewriter, loc, dppResult, valType, 32);
+    }
+
+    IRMapping mapping;
+    mapping.map(reduxOp->getOperand(0), src);
+    mapping.map(reduxOp->getOperand(1), dppResult);
+    return rewriter.clone(*reduxOp, mapping)->getResult(0);
+  };
+
+  for (int i = 0; i < acc.size(); i++) {
+    Value buf;
+    auto valType = acc[i].getType();
+
+    // Here's the implementation of full-wavefront reduction using dpp.
+    // https://gpuopen.com/learn/amd-gcn-assembly-cross-lane-operations/
+    //
+    // Each step has a v_mov_dpp instruction following the redux op. In
+    // some cases, the lower-level compiler could merge them into single
+    // instruction. For example, v_mov_dpp + max => v_max_dpp.
+    //
+    // For gfx9, we have 64 threads per warp. These 64 threads are arranged
+    // into 4 rows, with each row being 16 threads. Each 16 threads are arranged
+    // further into 4 banks, with each bank being 4 threads. Overall it's in a
+    // (row, bank, thread) structure. When shuffling, we use row/bank mask to
+    // indicate which row/bank to participate. Then modifier like row_shr and
+    // row_bcast means exact data movement schemes. In the following
+    // instructions, taking row 0 as an example:
+    //
+    // Step 1: Right shift for 8 lanes.
+    //     lane 8-15 = redux(lane 0-7, lane 8-15)
+    //
+    // Step 2: Right shift for 4 lanes.
+    //     lane 12-15 = redux(lane 8-11, lane 12-15)
+    //
+    // Step 3: Right shift for 2 lanes.
+    //     lane 14-15 = redux(lane 12-13, lane 14-15)
+    //
+    // Step 4: Right shift for 1 lane.
+    //     lane 15 = redux(lane 14, lane 15)
+    //
+    // Step 5: Broadcast lane 15 of each row to all the lanes of its next row.
+    //     lane 16-31 = redux(lane 15, lane 16-31)
+    //
+    // Step 6: Broadcast lane 31 to lane 32-63.
+    //     lane 32-63 = redux(lane 31, lane 32-63)
+    //
+    // Now the reduction result is stored in lane 63.
+    //
+    // Step 7: Read the reduction result from lane 63 and broadcast with
+    // readlane.
+
+    const int allRows = 0xf;
+    const int allBanks = 0xf;
+
+    const uint32_t dppCtrlRowShr = static_cast<uint32_t>(DppCtrl::ROW_SHR0);
+
+    // row_shr:8
+    buf = createDppReduxOpWithBoundCtrl(valType, acc[i], 8 + dppCtrlRowShr,
+                                        allRows, allBanks);
+
+    // row_shr:4
+    buf = createDppReduxOpWithBoundCtrl(valType, buf, 4 + dppCtrlRowShr,
+                                        allRows, allBanks);
+
+    // row_shr:2
+    buf = createDppReduxOpWithBoundCtrl(valType, buf, 2 + dppCtrlRowShr,
+                                        allRows, allBanks);
+
+    // row_shr:1
+    buf = createDppReduxOpWithBoundCtrl(valType, buf, 1 + dppCtrlRowShr,
+                                        allRows, allBanks);
+
+    // row_bcast:15 row_mask:0xa
+    buf = createDppReduxOpWithBoundCtrl(
+        valType, buf, static_cast<uint32_t>(DppCtrl::BCAST15), 0xa, allBanks);
+
+    // row_bcast:31
+    buf = createDppReduxOpWithBoundCtrl(valType, buf,
+                                        static_cast<uint32_t>(DppCtrl::BCAST31),
+                                        allRows, allBanks);
+
+    // Similarly, we need to cast data types for readlane instruction.
+    Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 16);
+
+    // Get reduction result from lane 63
+    std::string intrinsic = "llvm.amdgcn.readlane";
+    Value result =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, actualType,
+                                        ValueRange{buf, b.i32_val(63)})
+            ->getResult(0);
+
+    result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
+
+    acc[i] = result;
+  }
+
+  return true;
 }
 
 void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
@@ -139,6 +339,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto *ctx = rewriter.getContext();
   mlir::Location loc = UnknownLoc::get(ctx);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // See
   // https://github.com/ROCm/ROCm-Device-Libs/blob/rocm-6.0.x/ockl/src/services.cl#L263-L361
@@ -164,16 +365,16 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   // Emit the intrinsic function call to begin the printf.
   Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, i64_ty, 0);
   Value message =
-      call(printBeginFn, useStdErr ? ValueRange() : zeroI64).getResult();
+      b.call(printBeginFn, useStdErr ? ValueRange() : zeroI64).getResult();
 
   // Emit the intrinsic function call to handle the printf format string.
-  Value oneI32 = i32_val(1);
-  Value zeroI32 = i32_val(0);
+  Value oneI32 = b.i32_val(1);
+  Value zeroI32 = b.i32_val(0);
   Value formatStrLen =
       rewriter.create<LLVM::ConstantOp>(loc, i64_ty, formatStrByteCount);
   SmallVector<Value, 4> arguments = {message, formatStrStart, formatStrLen,
                                      args.empty() ? oneI32 : zeroI32};
-  message = call(printStrFn, arguments).getResult();
+  message = b.call(printStrFn, arguments).getResult();
 
   // Emit the intrinsic function call to handle arguments iteratively.
   // We can only handle at most 7 values each time.
@@ -184,7 +385,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
 
     SmallVector<Value, 2 + kArgsPerGroup + 1> arguments;
     arguments.push_back(message);
-    arguments.push_back(i32_val(numArgs));
+    arguments.push_back(b.i32_val(numArgs));
     for (size_t i = group; i < bound; ++i) {
       arguments.push_back(printfPromoteValue(rewriter, args[i]));
     }
@@ -195,7 +396,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
 
     Value isLast = (bound == args.size()) ? oneI32 : zeroI32;
     arguments.push_back(isLast);
-    message = call(printArgsFn, arguments).getResult();
+    message = b.call(printArgsFn, arguments).getResult();
   }
 }
 
@@ -226,6 +427,7 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Compose and print an assert message.
   llvm::SmallString<256> msgBuffer;
   llvm::Twine("device assertion failed: '" + message + "', in " + func +
@@ -238,11 +440,45 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
   // Set block barrrier before aborting kernel, give a chance for all
   // the threads in a block to check/print the assert failure.
-  barrier();
+  b.barrier();
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
+
+Value TargetInfo::getStackPointer(RewriterBase &rewriter,
+                                  FunctionOpInterface funcOp) const {
+  // See NOTE: [Additional Function Arguments]
+  if (!LLVM::isKernel(funcOp)) {
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+  }
+
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+  assert(globalBase);
+  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
+
+int TargetInfo::getAddressSpace(Attribute addressSpace) const {
+  int spaceId = 0;
+  if (isa<triton::gpu::SharedMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error("Only support SharedMemorySpace for now");
+  }
+  return spaceId;
+}
+
+bool TargetInfo::supportVectorizedAtomics() const {
+  // Note: not currently tested or used, but AMD generally supports vectorized
+  // atomics.
+  return true;
+}
+
+void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
+                                   size_t localStoreOpCount, Type type) const {
+  storeOpSchedAnnotations(op, localStoreOpCount, type);
+}
 
 } // namespace mlir::triton::AMD

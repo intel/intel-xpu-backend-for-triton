@@ -39,6 +39,10 @@ on:
         description: Ignore pytest.skip
         type: boolean
         default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -60,3 +64,4 @@ jobs:
       skip_list: ${{ inputs.skip_list }}
       run_name: ${{ inputs.run_name || format('Build and test {0}', inputs.runner_label) }}
       enable_unskip: ${{ inputs.enable_unskip }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python || false }}

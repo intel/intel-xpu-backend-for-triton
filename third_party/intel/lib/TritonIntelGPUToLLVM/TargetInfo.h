@@ -11,6 +11,8 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
+#include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+
 namespace mlir::triton::intel {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
@@ -29,6 +31,10 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+  bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
+                      ArrayRef<unsigned> paddedRepShape,
+                      ArrayRef<unsigned> order,
+                      int swizzleByteSize) const override;
   void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
                          Value val) const override;
 
@@ -60,7 +66,24 @@ public:
                   StringRef file, StringRef func, int line) const override;
   int getSharedAddressSpace() const override;
 
+  bool supportVectorizedAtomics() const override;
+
+  Value getStackPointer(RewriterBase &rewriter,
+                        FunctionOpInterface funcOp) const override;
+
+  int getAddressSpace(Attribute addressSpace) const override;
+
+  Value getGlobalStringStart(Location loc, RewriterBase &rewriter,
+                             StringRef name, StringRef value,
+                             unsigned addressSpace) const;
+
 private:
+  LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
+                                 StringRef name, StringRef value,
+                                 unsigned addressSpace) const;
+
+  mutable llvm::DenseMap<std::pair<unsigned, StringAttr>, LLVM::GlobalOp>
+      globals;
 };
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H

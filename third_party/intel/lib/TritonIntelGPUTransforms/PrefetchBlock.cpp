@@ -39,6 +39,8 @@
 
 #include "TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -337,12 +339,10 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
     scf::ForOp loop, SmallVectorImpl<Value> &prefetchPtrs) const {
   assert(prefetchPtrs.empty() && "Expecting an empty vector");
 
-  ModuleOp mod = loop->getParentOfType<ModuleOp>();
   OpBuilder b(loop);
-
   for (tt::LoadOp load : loopLoads.at(loop)) {
     const LoadInfo &loadInfo = loadToLoadInfo.at(load);
-    const unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    const unsigned numWarps = ttg::lookupNumWarps(loop);
 
     b.setInsertionPoint(loadInfo.getBlockPtr());
     auto ptr = cast<tt::MakeTensorPtrOp>(
@@ -367,13 +367,13 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
   if (injectSplitBarriers) {
     Location loc = loop.getLoc();
     b.setInsertionPoint(loop);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<spirv::INTELControlBarrierArriveOp>(loc, spirv::Scope::Workgroup,
+                                                 spirv::Scope::Workgroup,
+                                                 spirv::MemorySemantics::None);
     b.setInsertionPoint(loop->getNextNode());
-    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<spirv::INTELControlBarrierWaitOp>(loc, spirv::Scope::Workgroup,
+                                               spirv::Scope::Workgroup,
+                                               spirv::MemorySemantics::None);
   }
 }
 
@@ -452,14 +452,14 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
 
   // FIXME: try to use a named barrier to increase performance.
   if (injectSplitBarriers) {
-    Location loc = loop.getLoc();
+    Location loc = newLoop.getLoc();
     b.setInsertionPoint(yield);
-    b.create<tt::TritonGEN::SplitBarrierWaitOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(
-        loc, tt::TritonGEN::MemFence::NONE,
-        tt::TritonGEN::MemScope::WORK_GROUP);
+    b.create<spirv::INTELControlBarrierWaitOp>(loc, spirv::Scope::Workgroup,
+                                               spirv::Scope::Workgroup,
+                                               spirv::MemorySemantics::None);
+    b.create<spirv::INTELControlBarrierArriveOp>(loc, spirv::Scope::Workgroup,
+                                                 spirv::Scope::Workgroup,
+                                                 spirv::MemorySemantics::None);
   }
 
   yield.getResultsMutable().append(advances);

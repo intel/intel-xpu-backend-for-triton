@@ -116,6 +116,8 @@ SmallVector<Value> distributeOffset(const SmallVector<Value> &oldOffsets,
                                     RankedTensorType tensorType, Value warpId,
                                     OpBuilder b, Location loc) {
   Attribute layout = tensorType.getEncoding();
+  if (auto dotEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(layout))
+    layout = dotEncoding.getParent();
   const SmallVector<unsigned> &warpsPerCTA = ttg::getWarpsPerCTA(layout);
   size_t dims = warpsPerCTA.size();
   assert(dims <= 2 && "no more than 2D shape");

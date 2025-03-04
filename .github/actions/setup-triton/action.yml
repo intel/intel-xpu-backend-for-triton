@@ -1,14 +1,19 @@
 # Builds and installs Triton. Uses git clone in the current directory.
 # Sets the following environment variables:
 # * LLVM_COMMIT_ID
+# * TRITON_USE_SPIRV_BACKEND (if use_spirv_backend is true)
+name: setup-triton
 description: Build and install Triton
 inputs:
   build_llvm:
     description: Build LLVM
-    default: false
+    default: "false"
+  use_spirv_backend:
+    description: Use SPIR-V backend
+    default: "false"
   command:
     description: Command to execute
-    default: DEBUG=1 pip install --no-build-isolation '.[build,tests,tutorials]'
+    default: DEBUG=1 pip install -v --no-build-isolation '.[build,tests,tutorials]'
 runs:
   using: "composite"
   steps:
@@ -18,16 +23,23 @@ runs:
         LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
         echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
 
+    - name: Generate LLVM cache key
+      if: ${{ inputs.build_llvm == 'true' }}
+      shell: bash
+      run: |
+        LLVM_CACHE_KEY=$(echo $LLVM_COMMIT_ID ${{ inputs.use_spirv_backend }} | sha256sum - | cut -d\  -f1)
+        echo "LLVM_CACHE_KEY=$LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
+
     - name: Load LLVM cache
       if: ${{ inputs.build_llvm == 'true' }}
       id: llvm-cache
       uses: ./.github/actions/load
       env:
         # Increase this value to reset cache
-        CACHE_NUMBER: 2
+        CACHE_NUMBER: 3
       with:
         path: $HOME/packages
-        key: packages-${{ env.LLVM_COMMIT_ID }}-${{ env.CACHE_NUMBER }}
+        key: packages-${{ env.LLVM_CACHE_KEY }}-${{ env.CACHE_NUMBER }}
 
     - name: Clone LLVM
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}
@@ -37,6 +49,12 @@ runs:
         ref: ${{ env.LLVM_COMMIT_ID }}
         path: llvm
         submodules: recursive
+
+    - name: Use SPIR-V backend
+      if: ${{ inputs.use_spirv_backend == 'true' }}
+      shell: bash
+      run: |
+        echo "TRITON_USE_SPIRV_BACKEND=1" | tee -a $GITHUB_ENV
 
     - name: Build LLVM
       if: ${{ inputs.build_llvm == 'true' && steps.llvm-cache.outputs.status == 'miss' }}

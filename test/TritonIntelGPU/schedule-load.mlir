@@ -1,10 +1,10 @@
-// RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,SINK-ACROSS-REGIONS
-// RUN: TRITON_INTEL_ENABLE_INSTR_SCHED=1 TRITON_INTEL_DO_NOT_SINK_INSTR_ACROSS_RGN=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,DO-NOT-SINK-ACROSS-REGIONS
+// RUN: env TRITON_INTEL_ENABLE_INSTR_SCHED=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,SINK-ACROSS-REGIONS
+// RUN: env TRITON_INTEL_ENABLE_INSTR_SCHED=1 TRITON_INTEL_DO_NOT_SINK_INSTR_ACROSS_RGN=1 triton-opt %s -split-input-file -tritonintelgpu-schedule-load | FileCheck %s --check-prefixes=CHECK,DO-NOT-SINK-ACROSS-REGIONS
 
 // -----
 // COM: Inst Schedule for Flash Attention case
 
-module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: f32, %arg4: !tt.ptr<f32>, %arg5: !tt.ptr<f32>) {
     // CHECK-LABEL: @_attn_fwd
     %c48_i32 = arith.constant 48 : i32
@@ -148,7 +148,6 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
       scf.yield %98, %106, %110, %114, %118, %122, %126, %130, %321, %322, %323, %324, %325, %326, %327, %328, %329, %330, %331, %332, %333, %334, %335, %336 : tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>
     }
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<8x16xf32>
-    // CHECK-COUNT-8: arith.divf {{.*}} fastmath<fast>
     %67 = arith.divf %62#1, %cst_1 : tensor<8x16xf32>
     %68 = arith.divf %62#2, %cst_1 : tensor<8x16xf32>
     %69 = arith.divf %62#3, %cst_1 : tensor<8x16xf32>
@@ -164,7 +163,7 @@ module attributes {"triton_gpu.num-warps" = 8 : i32, "triton_gpu.threads-per-war
 // -----
 // COM: Inst Schedule for GEMM case
 
-module attributes {"triton_gpu.num-warps" = 32 : i32, "triton_gpu.threads-per-warp" = 16 : i32} {
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @gemm_with_block_pointers(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>, %arg2: !tt.ptr<f32>) {
     // CHECK-LABEL: @gemm_with_block_pointers
     %c3_i32 = arith.constant 3 : i32

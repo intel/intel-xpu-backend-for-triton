@@ -13,19 +13,17 @@ add_triton_library(TritonIntelGPUToLLVM
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
-    MemoryOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     TritonGPUToLLVM.cpp
-    ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
     TritonGPUToLLVM.cpp
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
+    UpcastMXFPToLLVM.cpp
     Utility.cpp
-    ViewOpToLLVM.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen
@@ -33,6 +31,7 @@ add_triton_library(TritonIntelGPUToLLVM
     LINK_LIBS PUBLIC
     GPUToTritonGEN
     MLIRGPUToLLVMSPV
+    MLIRSPIRVToLLVM
     TritonGENIR
     TritonGENToLLVM
     TritonIntelGPUIR

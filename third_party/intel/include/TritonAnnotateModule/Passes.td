@@ -36,6 +36,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"threadsPerWarp", "threads-per-warp",
            "unsigned", /*default*/"32",
            "number of threads per warp (aka subgroup size)">,
+    Option<"targetArch", "target-arch", "std::string", /*default*/"\"spir64\"",
+           "target architecture name">
   ];
 }
 

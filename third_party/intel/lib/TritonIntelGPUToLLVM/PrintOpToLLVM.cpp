@@ -21,7 +21,7 @@ struct PrintOpConversion
                              PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::PrintOp>(typeConverter,
                                                          benefit),
-        targetInfo(targetInfo) {}
+        targetInfo(static_cast<const intel::TargetInfo &>(targetInfo)) {}
   using ConvertTritonGPUOpToLLVMPattern<
       triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -65,8 +65,8 @@ struct PrintOpConversion
       SmallVector<SmallVector<Value>> indices;
       if (auto rankedTy =
               dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
-        indices = ::intel::emitIndices(loc, rewriter, targetInfo,
-                                       rankedTy.getEncoding(), rankedTy, true);
+        indices = emitIndices(loc, rewriter, targetInfo, rankedTy.getEncoding(),
+                              rankedTy, true);
         for (int64_t dim : rankedTy.getShape()) {
           if (dim > 0) {
             dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -223,9 +223,9 @@ struct PrintOpConversion
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
     msgNewline.push_back('\0');
-    Value msgValue = LLVM::intel::addStringToModule(
-        UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-        msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
+    Value msgValue = targetInfo.getGlobalStringStart(
+        rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
+        /*addressSpace=*/TritonGEN::kUniformConstant);
     targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
     if (formatStrByteCount)
       *formatStrByteCount = msgNewline.size_in_bytes();
@@ -233,7 +233,7 @@ struct PrintOpConversion
   }
 
 protected:
-  const TargetInfoBase &targetInfo;
+  const intel::TargetInfo &targetInfo;
 };
 
 } // namespace

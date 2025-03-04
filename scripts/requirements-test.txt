@@ -12,6 +12,7 @@ tabulate
 
 # Used by test-triton.sh
 pytest-xdist
+pytest-forked
 pytest-rerunfailures
 pytest-select
 pytest-timeout

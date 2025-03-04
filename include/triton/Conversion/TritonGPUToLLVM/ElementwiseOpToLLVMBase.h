@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 #define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Support/LLVM.h"
@@ -14,17 +15,6 @@ using namespace mlir::triton;
 namespace mlir::triton {
 
 namespace gpu {
-
-SmallVector<Value> reorderValues(const SmallVector<Value> &values, Type inType,
-                                 Type ouType);
-
-SmallVector<Value> unpackI32(const SmallVector<Value> &inValues, Type srcTy,
-                             ConversionPatternRewriter &rewriter, Location loc,
-                             const LLVMTypeConverter *typeConverter);
-
-SmallVector<Value> packI32(const SmallVector<Value> &inValues, Type srcTy,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           const LLVMTypeConverter *typeConverter);
 
 Type getElementType(Value value);
 
@@ -88,15 +78,17 @@ public:
       // encoding not available
       return resultVals;
     Attribute baseEncoding = encoding;
-    if (isa<AMDMfmaEncodingAttr>(baseEncoding))
-      // TODO: this logic seems incorrect for mfma layout. Skip for now.
-      // We saw mismatches for some flash-attention tests on AMD backend.
-      // Note that this logic works for sliced layout whose parent is
+    if (isa<AMDMfmaEncodingAttr>(baseEncoding) ||
+        isa<AMDWmmaEncodingAttr>(baseEncoding))
+      // TODO: this logic seems incorrect for mfma and wmma layout. Skip for
+      // now. We saw mismatches for some flash-attention and dot tests on AMD
+      // backend. Note that this logic works for sliced layout whose parent is
       // mfma layout. Therefore, this is not combined with the following check.
       return resultVals;
     while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
       baseEncoding = sliced.getParent();
-    if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
+    if (isa<LinearEncodingAttr, DotOperandEncodingAttr,
+            intel::DpasEncodingAttr>(baseEncoding)) {
       // TODO: this logic seems incorrect for mma layout. Skip for now.
       // The following test crashes and some other miscompile:
       // test_core::test_fp8_dot_acc
@@ -111,7 +103,7 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> contigPerThread = getContigPerThread(encoding);
+    SmallVector<unsigned> contigPerThread = getContigPerThread(rtType);
     if (rank != contigPerThread.size())
       return resultVals;
 
@@ -186,8 +178,6 @@ public:
     for (auto operand : adaptor.getOperands()) {
       auto argTy = op->getOperand(0).getType();
       auto subOperands = unpackLLElements(loc, operand, rewriter);
-      subOperands = unpackI32(subOperands, argTy, rewriter, loc,
-                              this->getTypeConverter());
       allOperands.resize(subOperands.size());
       for (auto v : llvm::enumerate(subOperands))
         allOperands[v.index()].push_back(v.value());
@@ -208,13 +198,7 @@ public:
       }
       it += curr.size();
     }
-    if (op->getNumOperands() > 0) {
-      auto argTy = op->getOperand(0).getType();
-      resultVals = reorderValues(resultVals, argTy, resultTy);
-    }
     resultVals = maybeDeduplicate(op, resultVals);
-    resultVals =
-        packI32(resultVals, resultTy, rewriter, loc, this->getTypeConverter());
     Value view = packLLElements(loc, this->getTypeConverter(), resultVals,
                                 rewriter, resultTy);
     rewriter.replaceOp(op, view);
@@ -224,6 +208,27 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
+};
+
+// Trivial case where we map elementwise to an existing LLVM operator
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  // An interface to support variant DestOp builder.
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
+                                    adaptor.getAttributes().getValue())};
+  }
 };
 
 } // namespace gpu

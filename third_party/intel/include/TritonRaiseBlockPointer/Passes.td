@@ -22,8 +22,14 @@ def TritonRaiseBlockPointer
   }];
 
   let dependentDialects = [
-      "mlir::arith::ArithDialect",
-      "mlir::triton::TritonDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::triton::TritonDialect",
+  ];
+
+  let options = [
+    Option<"IgnoreMasks", "ignore-masks",
+            "bool", /*default*/"false",
+            "Drop masks from loads and stores">,
   ];
 }
 

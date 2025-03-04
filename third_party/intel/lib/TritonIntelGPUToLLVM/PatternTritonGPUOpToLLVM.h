@@ -3,8 +3,9 @@
 
 #include "TargetInfo.h"
 #include "TritonGPUToLLVMBase.h"
+#include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
-#include "triton/Analysis/AxisInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 namespace mlir::triton::intel {
 
@@ -28,10 +29,6 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
 
-void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  PatternBenefit benefit);
-
 void populateDotOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
@@ -40,6 +37,11 @@ void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
+
+void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                      RewritePatternSet &patterns,
+                                      const TargetInfo &targetInfo,
+                                      PatternBenefit benefit);
 
 void populateBF16CastsLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -53,16 +55,13 @@ void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateLoadStoreOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     const TargetInfo &targetInfo, RewritePatternSet &patterns,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
+    const ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit,
+    bool oneMatrixPerLoadForBT);
 
 void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     const TargetInfoBase &targetInfo,
                                     PatternBenefit benefit);
-void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  const TargetInfoBase &targetInfo,
-                                  PatternBenefit benefit);
 
 void populateTensorPtrOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,

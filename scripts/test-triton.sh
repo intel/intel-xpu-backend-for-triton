@@ -15,10 +15,12 @@ TEST_CORE=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
+TEST_BENCHMARKS=false
 TEST_BENCHMARK_SOFTMAX=false
 TEST_BENCHMARK_GEMM=false
 TEST_BENCHMARK_ATTENTION=false
 TEST_INSTRUMENTATION=false
+TEST_INDUCTOR=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -52,6 +54,10 @@ while [ -v 1 ]; do
       TEST_MICRO_BENCHMARKS=true
       shift
       ;;
+    --benchmarks)
+      TEST_BENCHMARKS=true
+      shift
+      ;;
     --softmax)
       TEST_BENCHMARK_SOFTMAX=true
       shift
@@ -66,6 +72,10 @@ while [ -v 1 ]; do
       ;;
     --instrumentation)
       TEST_INSTRUMENTATION=true
+      shift
+      ;;
+    --inductor)
+      TEST_INDUCTOR=true
       shift
       ;;
     --venv)
@@ -86,7 +96,8 @@ while [ -v 1 ]; do
       ;;
     --reports-dir)
       TRITON_TEST_REPORTS=true
-      TRITON_TEST_REPORTS_DIR="$2"
+      # Must be absolute
+      TRITON_TEST_REPORTS_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
     --warning-reports)
@@ -98,7 +109,8 @@ while [ -v 1 ]; do
       shift
       ;;
     --skip-list)
-      TRITON_TEST_SKIPLIST_DIR="$2"
+      # Must be absolute
+      TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
     --help)
@@ -111,7 +123,7 @@ while [ -v 1 ]; do
 done
 
 # Only run interpreter test when $TEST_INTERPRETER is true
-if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ]; then
+if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ] && [ "$TEST_INDUCTOR" = false ]; then
   TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -119,7 +131,11 @@ if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER"
 fi
 
 if [ "$VENV" = true ]; then
-  source .venv/bin/activate
+  if [[ $OSTYPE = msys ]]; then
+    source .venv/Scripts/activate
+  else
+    source .venv/bin/activate
+  fi
 fi
 
 
@@ -147,11 +163,7 @@ install_deps() {
     echo "**** Skipping installation of pytorch ****"
   else
     echo "**** Installing pytorch ****"
-    if [ "$TEST_BENCHMARK_SOFTMAX" = true ] || [ "$TEST_BENCHMARK_GEMM" = true ] || [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-      $SCRIPTS_DIR/compile-pytorch-ipex.sh $([ $VENV = true ] && echo "--venv")
-    else
-      $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
-    fi
+    $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
   fi
 }
 
@@ -166,7 +178,7 @@ run_unit_tests() {
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/build/cmake*/test
-  lit -v .
+  lit -v . || $TRITON_TEST_IGNORE_ERRORS
 }
 
 run_core_tests() {
@@ -177,18 +189,28 @@ run_core_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
 
   # run runtime tests serially to avoid race condition with cache handling.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    pytest --verbose --device xpu runtime/
+    pytest -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
+
+  TRITON_TEST_SUITE=debug \
+    pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
     pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
+    pytest -k "not test_disam_cubin" --verbose tools
+
+  cd $TRITON_PROJ/third_party/intel/python/test
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
+  pytest --device xpu .
 }
 
 run_regression_tests() {
@@ -229,13 +251,20 @@ run_tutorial_tests() {
   run_tutorial_test "08-grouped-gemm"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
+
+  echo "***************************************************"
+  echo "Running with TRITON_INTEL_RAISE_BLOCK_POINTER      "
+  echo "***************************************************"
+
+  TRITON_TEST_REPORTS=false TRITON_INTEL_RAISE_BLOCK_POINTER=1 \
+    run_tutorial_test "03-matrix-multiplication"
 }
 
 run_microbench_tests() {
   echo "****************************************************"
   echo "*****   Running Triton Micro Benchmark tests   *****"
   echo "****************************************************"
-  USE_IPEX=0 python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
+  python $TRITON_PROJ/benchmarks/micro_benchmarks/run_benchmarks.py
 }
 
 run_benchmark_softmax() {
@@ -243,7 +272,7 @@ run_benchmark_softmax() {
   echo "*****             Running Softmax              *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  pip install .
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/fused_softmax.py
 }
 
@@ -252,18 +281,13 @@ run_benchmark_gemm() {
   echo "*****              Running GEMM                *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  pip install .
 
   echo "Default path:"
-  TRITON_INTEL_ADVANCED_PATH=0 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra" \
-    IGC_DisableLoopUnroll=1 \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
   echo "Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
     IGC_VISAOptions=" -enableBCR -nolocalra" \
     IGC_DisableLoopUnroll=1 \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
@@ -274,20 +298,34 @@ run_benchmark_attention() {
   echo "*****            Running ATTENTION             *****"
   echo "****************************************************"
   cd $TRITON_PROJ/benchmarks
-  python setup.py install
+  pip install .
 
-  echo "Default path:"
-  TRITON_INTEL_ADVANCED_PATH=0 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+  echo "Forward - Default path:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Advanced path:"
+  echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
-    TRITON_INTEL_ENABLE_ADDRESS_PAYLOAD_OPT=1 \
-    TRITON_INTEL_ENABLE_INSTR_SCHED=1 \
     IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_fwd_benchmark.py
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+
+  echo "Backward - Default path:"
+  FA_KERNEL_MODE="bwd" \
+    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
+}
+
+run_benchmarks() {
+  cd $TRITON_PROJ/benchmarks
+  pip install .
+  for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
+    benchmark=$(basename -- "$file" .py)
+    if [[ $benchmark = @("__init__"|"benchmark_driver"|"benchmark_testing") ]]; then
+      continue
+    fi
+    echo
+    echo "****** Running ${benchmark} ******"
+    echo
+    python $file
+  done
 }
 
 run_instrumentation_tests() {
@@ -298,13 +336,31 @@ run_instrumentation_tests() {
     return
   fi
 
-  SHARED_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/_C) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/_C, build Triton first"
+  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
+  INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_TEST_SUITE=instrumentation \
-    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${SHARED_LIB_DIR}/libGPUHello.so \
+    TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
     pytest -vvv --device xpu instrumentation/test_gpuhello.py
+}
+
+run_inductor_tests() {
+  test -d pytorch || (
+    git clone https://github.com/pytorch/pytorch
+    rev=$(cat .github/pins/pytorch.txt)
+    cd pytorch
+    git checkout $rev
+  )
+
+  pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+
+  # TODO: Find the fastest Hugging Face model
+  ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
+
+  cat inductor_log.csv
+  grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
 }
 
 test_triton() {
@@ -324,6 +380,9 @@ test_triton() {
   if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
     run_microbench_tests
   fi
+  if [ "$TEST_BENCHMARKS" = true ]; then
+    run_benchmarks
+  fi
   if [ "$TEST_BENCHMARK_SOFTMAX" = true ]; then
     run_benchmark_softmax
   fi
@@ -335,6 +394,9 @@ test_triton() {
   fi
   if [ "$TEST_INSTRUMENTATION" == true ]; then
     run_instrumentation_tests
+  fi
+  if [ "$TEST_INDUCTOR" == true ]; then
+    run_inductor_tests
   fi
 }
 

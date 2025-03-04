@@ -61,7 +61,7 @@ bool GpuHello::runOnModule(Module &module) {
 
 PassPluginLibraryInfo getPassPluginInfo() {
   const auto callback = [](PassBuilder &pb) {
-    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto) {
+    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto, auto) {
       mpm.addPass(GpuHello());
       return true;
     });
@@ -74,3 +74,7 @@ extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
   return getPassPluginInfo();
 }
+
+#ifdef WIN32
+#pragma comment(linker, "/export:llvmGetPassPluginInfo")
+#endif

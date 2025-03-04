@@ -55,7 +55,15 @@ on:
       runner_version:
         description: Runner label for version
         type: string
-        default: runner-0.0.19
+        default: runner-0.0.22
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: false
+      use_spirv_backend:
+        description: Use SPIR-V backend
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -66,7 +74,7 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
-    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -90,15 +98,26 @@ jobs:
           path: $HOME/.cache/pip
           key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
 
-      - name: Install Python ${{ inputs.python_version }}
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
 
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
-          repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
@@ -110,6 +129,7 @@ jobs:
         uses: ./.github/actions/setup-triton
         with:
           build_llvm: ${{ inputs.build_llvm }}
+          use_spirv_backend: ${{ inputs.use_spirv_backend }}
 
       - name: Create test-triton command line
         run: |
@@ -159,7 +179,6 @@ jobs:
           echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
 
       - name: Install transformers
-        if: ${{ inputs.python_version != '3.12' }}
         uses: ./.github/actions/install-dependency
         with:
           package: transformers
@@ -168,17 +187,8 @@ jobs:
           try-tag-prefix: v
 
       - name: Run E2E test
-        if: ${{ inputs.python_version != '3.12' }}
         run: |
-          # Set WORKSPACE for inductor_xpu_test.sh to make sure it creates "inductor_log" outside of pytorch cloned directory
-          export WORKSPACE=$GITHUB_WORKSPACE
-          cd pytorch
-          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
-          # TODO: Find the fastest Hugging Face model
-          $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh huggingface float32 inference accuracy xpu 0 static 1 0 AlbertForMaskedLM
-          # The script above always returns 0, so we need an additional check to see if the accuracy test passed
-          cat $WORKSPACE/inductor_log/*/*/*.csv
-          grep AlbertForMaskedLM $WORKSPACE/inductor_log/*/*/*.csv | grep -q ,pass,
+          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
@@ -190,9 +200,9 @@ jobs:
       - name: Pass rate
         run: |
           source ./scripts/capture-hw-details.sh
-          python3 scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
-          python3 scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
-          python3 scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
+          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
+          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
 
       - name: Report environment details
         run: |

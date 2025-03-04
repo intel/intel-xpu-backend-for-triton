@@ -76,9 +76,33 @@ def get_sass(cubin_asm, fun=None):
 
 
 @functools.lru_cache()
+def get_spvdis(spvbin_asm):
+    fd, path = tempfile.mkstemp()
+    try:
+        with open(fd, 'wb') as spvbin:
+            spvbin.write(spvbin_asm)
+        dis = extract_spvbin(path)
+    finally:
+        os.remove(path)
+    return dis
+
+
+@functools.lru_cache()
 def path_to_cuobjdump():
     from triton.backends.nvidia.compiler import _path_to_binary
     return _path_to_binary("cuobjdump")
+
+
+@functools.lru_cache()
+def path_to_spvbin():
+    from triton.backends.intel.compiler import _path_to_binary
+    return _path_to_binary("spirv-dis")
+
+
+def extract_spvbin(file_path):
+    dis, _ = path_to_spvbin()
+    spv_str = subprocess.check_output([dis, file_path], text=True)
+    return spv_str
 
 
 def extract(file_path, fun):

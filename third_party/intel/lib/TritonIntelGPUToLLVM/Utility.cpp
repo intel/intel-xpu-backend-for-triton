@@ -7,9 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utility.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 using namespace mlir;
@@ -32,8 +30,9 @@ static Type findShuffleType(RewriterBase &rewriter, Type valType) {
   return valType;
 }
 
-static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
-                           Value i, mlir::gpu::ShuffleMode mode) {
+static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
+                               Value i, mlir::gpu::ShuffleMode mode) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type valType = val.getType();
   Type shuffleType = findShuffleType(rewriter, valType);
 
@@ -42,94 +41,64 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
     assert(shuffleType.isInteger() &&
            "expected to bitcast to an integer for unsupported shuffles");
     if (!valType.isInteger()) {
-      val = bitcast(val, int_ty(bitWidth));
+      val = b.bitcast(val, int_ty(bitWidth));
     }
     if (bitWidth < shuffleType.getIntOrFloatBitWidth()) {
-      val = zext(shuffleType, val);
+      val = b.zext(shuffleType, val);
     }
   }
 
-  int width = TritonGEN::getSubgroupSize(i.getDefiningOp());
-  Value widthConstant = i32_val(width);
+  int width = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+      i.getDefiningOp()->getParentOfType<ModuleOp>());
+  Value widthConstant = b.i32_val(width);
   Value result =
       rewriter.create<mlir::gpu::ShuffleOp>(loc, val, i, widthConstant, mode)
           .getShuffleResult();
 
   if (shuffleType != valType) {
     if (bitWidth < shuffleType.getIntOrFloatBitWidth()) {
-      result = trunc(int_ty(bitWidth), result);
+      result = b.trunc(int_ty(bitWidth), result);
     }
     if (!valType.isInteger()) {
-      result = bitcast(result, valType);
+      result = b.bitcast(result, valType);
     }
   }
 
   return result;
 }
 
-Value loadShared(ConversionPatternRewriter &rewriter, Location loc, Value ptr,
-                 Type elemTy, Value pred) {
-  assert(cast<LLVMPointerType>(ptr.getType()).getAddressSpace() == 3 &&
-         "Invalid addr space for loadShared");
-  Value undef = undef(elemTy);
-  Block &endBlock = createPredicatedBlock(rewriter, loc, pred,
-                                          SmallVector<Value, 1>{undef}, [&] {
-                                            Value ret = load(elemTy, ptr);
-                                            return SmallVector<Value, 1>{ret};
-                                          });
-  return *endBlock.args_begin();
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, mlir::gpu::ShuffleMode mode) {
+  // To shuffle pointers, convert them to i64.
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type valTy = val.getType();
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    val = b.ptrtoint(i64_ty, val);
+  Value result = shuffleCommonImpl(loc, rewriter, val, i, mode);
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    result = b.inttoptr(valTy, result);
+  return result;
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i),
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i),
                        mlir::gpu::ShuffleMode::XOR);
 }
 
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i),
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i),
                        mlir::gpu::ShuffleMode::UP);
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleIdx(loc, rewriter, val, i32_val(i));
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleIdx(loc, rewriter, val, b.i32_val(i));
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, mlir::gpu::ShuffleMode::IDX);
-}
-
-Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
-                        StringRef content, unsigned addressSpace) {
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto ctx = moduleOp.getContext();
-  unsigned stringNumber = 0;
-  SmallString<16> stringConstName;
-  do {
-    stringConstName.clear();
-    (key + Twine(stringNumber++)).toStringRef(stringConstName);
-  } while (moduleOp.lookupSymbol(stringConstName));
-
-  llvm::SmallString<64> contentStr(content);
-  size_t contentSize = contentStr.size_in_bytes();
-  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
-
-  LLVM::GlobalOp global;
-  {
-    RewriterBase::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-    global = rewriter.create<LLVM::GlobalOp>(
-        UnknownLoc::get(ctx), globalType,
-        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-        rewriter.getStringAttr(contentStr), /*alignment=*/0, addressSpace);
-  }
-
-  Value zero = i32_val(0);
-  Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
-  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
-      UnknownLoc::get(ctx), globalPtrType, global.getSymName());
-  Value stringStart = gep(ptr_ty(ctx, global.getAddrSpace()), i8_ty, globalPtr,
-                          SmallVector<Value>({zero}));
-  return stringStart;
 }
 
 // declare __spirv_ocl_printf(i8*, ...) as external function
@@ -157,6 +126,32 @@ LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
   printFunc->setAttr("nounwind", rewriter.getUnitAttr());
 
   return printFunc;
+}
+
+static LLVM::RoundingMode
+convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
+  LLVM::RoundingMode roundingMode;
+  switch (rounding) {
+  case triton::RoundingMode::RTNE:
+    return LLVM::RoundingMode::NearestTiesToEven;
+  case triton::RoundingMode::RTZ:
+    return LLVM::RoundingMode::TowardZero;
+  default:
+    llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
+                    "conversion: "
+                 << stringifyRoundingMode(rounding) << "\n";
+    llvm_unreachable("");
+  }
+}
+
+Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, const triton::RoundingMode rounding) {
+  MLIRContext *ctx = rewriter.getContext();
+  return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+      loc, f16_ty, v,
+      LLVM::RoundingModeAttr::get(ctx,
+                                  convertTritonRoundingModeToLLVM(rounding)),
+      arith::getLLVMDefaultFPExceptionBehavior(*ctx));
 }
 
 } // namespace mlir::LLVM::intel

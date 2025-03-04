@@ -8,7 +8,14 @@
 
 #include "triton/Tools/LinearLayout.h"
 
+namespace mlir::triton {
+enum class ScaleDotElemType : uint32_t;
+} // namespace mlir::triton
+
 namespace mlir::triton::gpu {
+class SwizzledSharedEncodingAttr;
+class NVMMASharedEncodingAttr;
+class AMDMfmaEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -17,7 +24,8 @@ namespace mlir::triton::gpu {
 //   "warp": warps in a block/CTA
 //   "block": blocks in a cluster
 //
-// - An n-dimensional SharedEncodingAttr has the following input dimensions.
+// - An n-dimensional SwizzledSharedEncodingAttr has the following input
+// dimensions.
 //
 //   "offset": the n'th element in the allocation, within a particular thread
 //      block (i.e. within a CTA).  The offset is measured in elements, not
@@ -35,18 +43,19 @@ namespace mlir::triton::gpu {
 //
 // elemBitWidth is the bit width of one element in the layout.  This is required
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
-// shared layouts with hasLeadingOffset == true) but is otherwise unused.
+// shared layouts with nvmma_shared layout) but is otherwise unused.
 //
 // Returns std::nullopt if the given layout can't be converted to an LL.
-// TODO(jlebar): Remove the std::optional once all layouts are supported.
-//
-std::optional<LinearLayout>
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth = std::nullopt);
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
-// Given a linear layout with input dims and output dims containing a "block"
-// dimension, determines if the layout moves data across block boundaries.
-bool isCrossCTAConversion(const LinearLayout &layout);
+// Convert the shared encoding of a tensor with `nvmma_shared` layout to a
+// LinearLayout that maps from a linear shared memory offset to tensor index.
+//
+// If `disableSwizzle` is set, then the resulting layout does not include
+// swizzling.
+LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
+                                               NVMMASharedEncodingAttr shared,
+                                               bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding
@@ -245,11 +254,35 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // TODO(Keren): We should replace tensorTy with a LinearLayout and the element
 // bit width of the tensor in the future to support more flexible tensor
 // encodings
-std::optional<LinearLayout>
-chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
-                     ArrayRef<unsigned> repShape,
-                     ArrayRef<unsigned> paddedRepShape,
-                     ArrayRef<unsigned> order, int swizzleByteSize);
+LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
+                                  int swizzleByteSize);
+
+// The primary goal of this function is to efficiently store 2D tiles of a
+// tensor into shared memory using the `ldmatrix` instruction.
+LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                  bool needTrans, int32_t elemBitWidth);
+
+// The primary goal of this function is to efficiently load 2D tiles of a
+// tensor from shared memory using the `ds_read_tr` instruction for AMD GPUs.
+LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                     int32_t elemBitWidth);
+
+// Create LinearLayout for mxfp4 and mxfp8 operand in scaled mfma.
+// For mxfp4, we use dot layout directly. Mxfp8 is not covered by dot
+// layout, so we need to manually create linear layout for it.
+LinearLayout
+chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
+                              int dotOperandIdx, ScaleDotElemType elemType,
+                              llvm::ArrayRef<int64_t> dotOperandShape);
+
+LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
+                                           int numWarps);
+
+// Create LinearLayout for scale in scaled mfma.
+LinearLayout chooseScaledMfmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx,
+    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
+    ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

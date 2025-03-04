@@ -1,30 +1,25 @@
+#include "flash_attention/fmha_backward.h"
 #include "flash_attention/fmha_forward_v5.h"
 #include "gemm/gemm.h"
 #include "softmax/softmax.h"
+#include "split_k_gemm/split_k_gemm.h"
 #include "stream_k_gemm/stream_k_gemm.h"
 #include <CL/sycl.hpp>
 #include <c10/core/ScalarType.h>
+#include <c10/xpu/XPUStream.h>
 #include <cstdint>
 #include <torch/extension.h>
 
-#ifdef USE_IPEX
-#include <ipex.h>
-#else
+#include <ATen/record_function.h>
 #include <c10/xpu/XPUStream.h>
-#endif
 
 sycl::queue get_current_sycl_queue() {
   // submit kernel
   c10::impl::VirtualGuardImpl impl(at::DeviceType::XPU);
   c10::Stream stream = impl.getStream(impl.getDevice());
 
-#ifdef USE_IPEX
-  auto queue = xpu::get_queue_from_stream(stream);
-#else
   auto xpu_stream = c10::xpu::XPUStream(stream);
   auto queue = xpu_stream.queue();
-#endif
-
   return queue;
 }
 
@@ -41,15 +36,10 @@ at::Tensor softmax(const at::Tensor &input, const at::Tensor &output,
                    const int64_t dim) {
   CHECK_INPUT(input);
   CHECK_INPUT(output);
-#ifdef USE_IPEX
   RECORD_FUNCTION("xetla softmax", {});
-#endif
 
   auto queue = get_current_sycl_queue();
   auto evt = softmax_forward<T>(input.data_ptr(), output.data_ptr(), queue);
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
   return output;
 }
 
@@ -61,16 +51,11 @@ at::Tensor bf16_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(b);
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
-#ifdef USE_IPEX
   RECORD_FUNCTION("xetla gemm", {});
-#endif
 
   auto queue = get_current_sycl_queue();
   auto evt = gemm_run<T>(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                          acc.data_ptr(), cnt.data_ptr(), queue);
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
   return acc;
 }
 
@@ -81,16 +66,29 @@ at::Tensor bf16_stream_k_gemm(const at::Tensor &a, const at::Tensor &b,
   CHECK_INPUT(b);
   CHECK_INPUT(c);
   CHECK_INPUT(acc);
-#ifdef USE_IPEX
   RECORD_FUNCTION("xetla stream_k_gemm", {});
-#endif
 
   auto queue = get_current_sycl_queue();
   auto evt = stream_k_gemm_run(a.data_ptr(), b.data_ptr(), c.data_ptr(),
                                acc.data_ptr(), cnt.data_ptr(), queue);
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
+  return acc;
+}
+
+template <int m, int k, int n,
+          kslicing_impl_t kslicing_type = kslicing_impl_t::none>
+at::Tensor bf16_split_k_gemm(const at::Tensor &a, const at::Tensor &b,
+                             const at::Tensor &c, const at::Tensor &acc,
+                             const at::Tensor &cnt) {
+  CHECK_INPUT(a);
+  CHECK_INPUT(b);
+  CHECK_INPUT(c);
+  CHECK_INPUT(acc);
+  RECORD_FUNCTION("xetla split_k_gemm", {});
+
+  auto queue = get_current_sycl_queue();
+  auto evt = split_k_gemm_run<m, k, n, kslicing_type>(
+      a.data_ptr(), b.data_ptr(), c.data_ptr(), acc.data_ptr(), cnt.data_ptr(),
+      queue);
   return acc;
 }
 
@@ -118,9 +116,7 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
   CHECK_INPUT(bias);
   CHECK_INPUT(m);
   CHECK_INPUT(l);
-#ifdef USE_IPEX
   RECORD_FUNCTION("xetla fa", {});
-#endif
 
   auto queue = get_current_sycl_queue();
 
@@ -140,9 +136,68 @@ void flash_attn(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v,
               << "\n";
   }
 
-#ifdef USE_IPEX
-  xpu::profiler_record("xetla kernel", evt);
-#endif
+  return;
+}
+
+#define CALL_IMPL_ATTENTION_BWD_FUNC(P)                                        \
+  fmha::xetla_fmha_backward_kernel<P, T, kUseBias, kIsCausal, kIsDropout>(     \
+      queue, grad_out.data_ptr(), q.data_ptr(), k.data_ptr(), v.data_ptr(),    \
+      bias.data_ptr(), dropout.data_ptr(), out.data_ptr(),                     \
+      log_sumexp.data_ptr(), workspace.data_ptr(), grad_q_tmp.data_ptr(),      \
+      alpha, dropout_prob, grad_query.data_ptr(), grad_key.data_ptr(),         \
+      grad_value.data_ptr(), grad_bias.data_ptr(), num_batches, num_heads,     \
+      head_size, num_queries, num_keys, bias_strideB, bias_strideN,            \
+      bias_strideF, attn_mask_padding)
+
+template <bool kUseBias = false, bool kIsCausal = false,
+          bool kIsDropout = false>
+void flash_attn_bwd(const at::Tensor &grad_out, const at::Tensor &q,
+                    const at::Tensor &k, const at::Tensor &v,
+                    const at::Tensor &bias, const at::Tensor &dropout,
+                    const at::Tensor &out, const at::Tensor &log_sumexp,
+                    const at::Tensor &workspace, const at::Tensor &grad_q_tmp,
+                    float alpha, float dropout_prob,
+                    const at::Tensor &grad_query, const at::Tensor &grad_key,
+                    const at::Tensor &grad_value, const at::Tensor &grad_bias,
+                    const int64_t num_batches, const int64_t num_heads,
+                    const int64_t head_size, const int64_t num_queries,
+                    const int64_t num_keys, const int64_t bias_strideB,
+                    const int64_t bias_strideN, const int64_t bias_strideF,
+                    const int64_t attn_mask_padding) {
+
+  CHECK_INPUT(grad_out);
+  CHECK_INPUT(q);
+  CHECK_INPUT(k);
+  CHECK_INPUT(v);
+  CHECK_INPUT(bias);
+  CHECK_INPUT(dropout);
+  CHECK_INPUT(out);
+  CHECK_INPUT(log_sumexp);
+  CHECK_INPUT(workspace);
+  CHECK_INPUT(grad_q_tmp);
+  CHECK_INPUT(grad_query);
+  CHECK_INPUT(grad_key);
+  CHECK_INPUT(grad_value);
+  CHECK_INPUT(grad_bias);
+
+  RECORD_FUNCTION("xetla fa", {});
+
+  auto queue = get_current_sycl_queue();
+
+  sycl::event evt;
+  if (head_size <= 64) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_128x128x64);
+  } else if (head_size <= 128) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_128x128x128);
+  } else if (head_size <= 256) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_128x128x256);
+  } else if (head_size <= 512) {
+    evt = CALL_IMPL_ATTENTION_BWD_FUNC(fmha_bwd_policy_64x128x512);
+  } else {
+    std::cout << "No policy available for current head_size " << head_size
+              << "\n";
+  }
+
   return;
 }
 
@@ -212,9 +267,30 @@ PYBIND11_MODULE(xetla_kernel, m) {
         &bf16_gemm<Test_4096x8x128x16384_row_row>, "bf16_gemm (XeTLA)");
   m.def("gemm_shape_4096_8_16384_128",
         &bf16_gemm<Test_4096x8x16384x128_row_row>, "bf16_gemm (XeTLA)");
+  // gemm stream k
+  m.def("gemm_streamk_shape_3072_4096_3072", &bf16_stream_k_gemm,
+        "bf16_gemm_streamk (XeTLA)");
+  // gemm split k
+  m.def("gemm_splitk_shape_512_32768_8192",
+        &bf16_split_k_gemm<512, 32768, 8192, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
+  m.def("gemm_splitk_shape_1024_28672_8192",
+        &bf16_split_k_gemm<1024, 28672, 8192, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
+  m.def("gemm_splitk_shape_3072_4096_3072",
+        &bf16_split_k_gemm<3072, 4096, 3072, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
+  m.def("gemm_splitk_shape_4096_4096_4096",
+        &bf16_split_k_gemm<4096, 4096, 4096, kslicing_impl_t::global>,
+        "bf16_gemm_splitk (XeTLA)");
   // flash_attn
   m.def("flash_attn_causal_false", &flash_attn<false, false, false>,
         "flash attn fwd (XeTLA)");
   m.def("flash_attn_causal_true", &flash_attn<false, true, false>,
         "flash attn fwd (XeTLA)");
+  // flash_attn_bwd
+  m.def("flash_attn_bwd_causal_false", &flash_attn_bwd<false, false, false>,
+        "flash attn bwd (XeTLA)");
+  m.def("flash_attn_bwd_causal_true", &flash_attn_bwd<false, true, false>,
+        "flash attn bwd (XeTLA)");
 }

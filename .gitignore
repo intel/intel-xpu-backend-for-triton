@@ -6,10 +6,22 @@ build-*/
 python/build/
 python/dist/
 python/triton*.egg-info/
+python/*.whl
 
 python/triton/_C/*.pyd
 python/triton/_C/*.so
 python/triton/_C/*.dylib
+python/triton/_C/*.pdb
+python/triton/_C/*.exe
+python/triton/_C/*.ilk
+
+benchmarks/dist
+benchmarks/*.egg-info/
+benchmarks/**/*.so
+.scripts_cache/
+
+# Logs
+inductor_log/
 
 # Backends copied from submodules
 python/triton/backends/
@@ -20,8 +32,17 @@ python/triton/backends/
 # Language extras
 python/triton/language/extra
 
+# Tools extras
+python/triton/tools/extra
+
 # Proton
 python/triton/profiler
+
+# Pytest
+pytest.ini
+
+# Instrumentation
+python/triton/instrumentation
 
 # Python caches
 __pycache__/
@@ -45,6 +66,7 @@ cmake-build-*
 cuobjdump
 nvdisasm
 ptxas
+ptxas-blackwell
 
 # Third-party include
 third_party/nvidia/backend/include

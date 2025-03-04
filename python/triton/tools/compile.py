@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import List
 
 import triton
-from triton.compiler.code_generator import kernel_suffix
-from triton.backends.nvidia.driver import ty_to_cpp
+from triton._internal_testing import is_cuda, is_xpu
+import triton.backends
 
 desc = """
 Triton ahead-of-time compiler:
@@ -45,12 +45,14 @@ if __name__ == "__main__":
     parser.add_argument("--kernel-name", "-n", type=str, default="", help="Name of the kernel to compile",
                         required=True)
     parser.add_argument("--num-warps", "-w", type=int, default=1, help="Number of warps to launch the kernel")
+    parser.add_argument("--threads-per-warp", "-tpw", type=int, default=32, help="Number of theads per warp")
     parser.add_argument("--num-stages", "-ns", type=int, default=3,
                         help="Number of stages (meta-parameter of the kernel)")
     parser.add_argument("--out-name", "-on", type=str, default=None, help="Out name for the compiled kernel")
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
+    parser.add_argument("--grf-mode", "-gm", type=str, default="large", help="Detemine spv build flags")
     args = parser.parse_args()
 
     out_name = args.out_name if args.out_name else args.kernel_name
@@ -90,30 +92,35 @@ if __name__ == "__main__":
             pass
         return None
 
-    hints = {i: constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
+    hints = {(i, ): constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
     hints = {k: v for k, v in hints.items() if v is not None}
     constants = {kernel.arg_names[i]: constexpr(s) for i, s in enumerate(signature)}
     constants = {k: v for k, v in constants.items() if v is not None}
-    signature = {
-        kernel.arg_names[i]: s.split(":")[0]
-        for i, s in enumerate(signature)
-        if kernel.arg_names[i] not in constants
-    }
+    for key, value in hints.items():
+        if value == 1:
+            constants[kernel.arg_names[key[0]]] = value
+    signature = {kernel.arg_names[i]: s.split(":")[0] for i, s in enumerate(signature)}
+    for key in constants:
+        signature[key] = 'constexpr'
     const_sig = 'x'.join([str(v) for v in constants.values()])
     doc_string = [f"{k}={v}" for k, v in constants.items()]
     doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
-
     # compile ast into cubin
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
-    divisible_by_16 = [i for i, h in hints.items() if h == 16]
-    equal_to_1 = [i for i, h in hints.items() if h == 1]
-    attrs = triton.compiler.AttrsDescriptor(divisible_by_16=divisible_by_16, equal_to_1=equal_to_1)
-    for i in equal_to_1:
-        constants.update({kernel.arg_names[i]: 1})
-    src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
+    attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
+    src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
+    if is_xpu():
+        opts = {
+            "num_warps": args.num_warps, "num_stages": args.num_stages, "threads_per_warp": args.threads_per_warp,
+            "grf_mode": args.grf_mode
+        }
     ccinfo = triton.compile(src, options=opts)
+    if is_cuda():
+        if ccinfo.metadata.global_scratch_size > 0:
+            raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
+
     arg_names = []
     arg_types = []
     arg_names_not_1 = []
@@ -124,33 +131,73 @@ if __name__ == "__main__":
             arg_types.append(signature[arg_name])
             arg_names_not_1.append(arg_name)
             arg_types_not_1.append(signature[arg_name])
-        elif i in equal_to_1:
+        elif hints.get((i, ), None) == 1:
             arg_names.append(arg_name)
-            arg_types.append(signature[arg_name])
+            arg_types.append("i32")
 
     # dump C stub code
-    suffix = kernel_suffix(signature.values(), attrs)
+    suffix = ''
+    for i, ty in enumerate(signature.values()):
+        suffix += str(i)
+        if hints.get((i, ), None) == 1:
+            suffix += 'c'
+        if hints.get((i, ), None) == 16:
+            suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
-    hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
-    params = {
-        "kernel_name": func_name,
-        "triton_kernel_name": args.kernel_name,
-        "bin_size": len(hex_),
-        "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
-        "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
-        "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1]),
-        "num_args": len(arg_names_not_1),
-        "kernel_docstring": doc_string,
-        "shared": ccinfo.metadata.shared,
-        "num_warps": args.num_warps,
-        "algo_info": '_'.join([const_sig, meta_sig]),
-        "gridX": grid[0],
-        "gridY": grid[1],
-        "gridZ": grid[2],
-        "_placeholder": "",
-    }
-    for ext in ['h', 'c']:
-        template_path = Path(__file__).parent / f"compile.{ext}"
-        with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
-            fp.write(Path(template_path).read_text().format(**params))
+    if is_cuda():
+        from triton.backends.nvidia.driver import ty_to_cpp
+        asm = ccinfo.asm["cubin"]  # store binary data once
+        hex_ = str(binascii.hexlify(asm))[2:-1]
+        params = {
+            "kernel_name": func_name,
+            "triton_kernel_name": args.kernel_name,
+            "bin_size": len(asm),
+            "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
+            "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
+            "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+            "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
+            "num_args": len(arg_names_not_1) + 1,
+            "kernel_docstring": doc_string,
+            "shared": ccinfo.metadata.shared,
+            "num_warps": args.num_warps,
+            "algo_info": '_'.join([const_sig, meta_sig]),
+            "gridX": grid[0],
+            "gridY": grid[1],
+            "gridZ": grid[2],
+            "_placeholder": "",
+        }
+        for ext in ['h', 'c']:
+            template_path = Path(__file__).parent / "extra" / "cuda" / f"compile.{ext}"
+            with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
+                fp.write(Path(template_path).read_text().format(**params))
+    if is_xpu():
+        from triton.backends.intel.driver import ty_to_cpp
+        asm = ccinfo.asm["spv"]  # store binary data once
+        hex_ = str(binascii.hexlify(asm))[2:-1]
+        params = {
+            "kernel_name": func_name,
+            "triton_kernel_name": args.kernel_name,
+            "bin_size": len(asm),
+            "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
+            "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
+            "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
+            "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1]),
+            "arg_types": ", ".join(ty_to_cpp(arg) for arg in arg_types_not_1),
+            "num_args": len(arg_names_not_1),
+            "kernel_docstring": doc_string,
+            "shared": ccinfo.metadata.shared,
+            "grf_mode": args.grf_mode,
+            "build_flags": ccinfo.metadata.build_flags,
+            "num_warps": args.num_warps,
+            "threads_per_warp": args.threads_per_warp,
+            "algo_info": '_'.join([const_sig, meta_sig]),
+            "gridX": grid[0],
+            "gridY": grid[1],
+            "gridZ": grid[2],
+            "_placeholder": "",
+        }
+        for ext in ['h', 'cpp']:
+            template_path = Path(__file__).parent / "extra" / "intel" / f"compile.{ext}"
+            print(template_path)
+            with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
+                fp.write(Path(template_path).read_text().format(**params))
