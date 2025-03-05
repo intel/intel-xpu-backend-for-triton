@@ -318,6 +318,8 @@ int main(int argc, char ** argv) {{
         if COMPILATION_HELPER.libsycl_dir:
             for lib_dir in COMPILATION_HELPER.libsycl_dir:
                 command.extend(["-L", lib_dir])
+        if os.name == "nt":
+            command.extend(["-Wno-deprecated-declarations"])
         command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
