@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import shutil
 
 import numpy as np
 
@@ -101,15 +102,22 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
+    gxx = shutil.which("g++")
+    icpx = shutil.which("icpx")
+    cl = shutil.which("cl")
+    cxx = icpx or cl if os.name == "nt" else icpx or gxx
+    if cxx is None:
+        raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
     subprocess.run(
-        ["g++"] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
-        ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl", "-fPIC"],
+        [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
+        ["-L" + dir
+         for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl"] + ["-fPIC"] if os.name != "nt" else [],
         check=True,
         cwd=dir,
     )
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
-    subprocess.run(["g++"] + [*o_files, "-shared", "-o", libname] +
+    subprocess.run([cxx] + [*o_files, "-shared", "-o", libname] +
                    ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
                    ["-L" + dir
                     for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl", "-lze_loader"], check=True, cwd=dir)
