@@ -128,9 +128,7 @@ def gen_kernel_library_xpu(dir, libname):
                     for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"], check=True, cwd=dir)
     if "icpx" in cxx and os.name == "nt":
         libname_without_ext = libname.split(".")[0]
-        llvm_lib = shutil.which(os.path.join("compiler", "llvm-lib"))
-        if llvm_lib is None:
-            raise RuntimeError("Failed to find llvm-lib.exe. Required to obtain .lib files")
+        llvm_lib = os.path.join(os.path.dirname(os.path.abspath(cxx)), "compiler", "llvm-lib.EXE")
         subprocess.run([llvm_lib, f"/out:{libname_without_ext}.lib", libname], check=True, cwd=dir)
     files = os.listdir(dir)
     print(f"{files=}")
