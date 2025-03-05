@@ -126,6 +126,8 @@ def gen_kernel_library_xpu(dir, libname):
                    ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
                    ["-L" + dir
                     for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"], check=True, cwd=dir)
+    files = os.listdir(dir)
+    print(f"{files=}")
 
 
 def gen_kernel_library(dir, libname):
@@ -432,7 +434,7 @@ def test_compile_link_matmul_no_specialization():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.lib")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -462,7 +464,7 @@ def test_compile_link_matmul():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.lib")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -493,7 +495,7 @@ def test_launcher_has_no_available_kernel():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.lib")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -536,7 +538,7 @@ def test_compile_link_autotune_matmul():
 
         link_aot_kernels(tmp_dir)
 
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.lib")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
 
         # compile test case
         M, N, K = 64, 64, 64
