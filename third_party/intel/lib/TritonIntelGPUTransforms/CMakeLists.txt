@@ -10,7 +10,6 @@ add_triton_library(TritonIntelGPUTransforms
   PrefetchBlock.cpp
   ReduceDataDuplication.cpp
   RemoveLayoutConversions.cpp
-  RewriteTensorPointer.cpp
   ScheduleLoad.cpp
   Utility.cpp
 
@@ -27,4 +26,5 @@ add_triton_library(TritonIntelGPUTransforms
   TritonGENIR
   TritonGPUIR
   TritonIntelGPUIR
+  TritonIntelUtils
 )

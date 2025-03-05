@@ -224,6 +224,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_combine(pm)
+        intel.passes.ttir.add_remove_masks(pm)
         if raise_block_ptr_flags['enabled']:
             ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False
             intel.passes.ttir.add_raise_block_pointer(pm, ignore_masks)
@@ -279,10 +280,9 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        if os.getenv("TRITON_INTEL_REWRITE_TENSOR_POINTER", "0") == "1":
-            intel.passes.ttgpuir.add_rewrite_tensor_pointer(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
 
+        passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)

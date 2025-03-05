@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-raise-block-pointer=ignore-masks=true -canonicalize | FileCheck %s
+// RUN: triton-opt %s -triton-intel-remove-masks -triton-raise-block-pointer -canonicalize | FileCheck %s
 
 module {
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) {
@@ -116,19 +116,30 @@ module {
 // CHECK:           [[VAR_23_:%.+]] = arith.extsi [[PARAM_7_]] : i32 to i64
 // CHECK:           [[VAR_24_:%.+]] = tt.make_tensor_ptr [[PARAM_1_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_23_]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[VAR_15_]]] {{.*}} : <tensor<32x128xf16>>
 // CHECK:           [[VAR_27_:%.+]] = arith.muli [[PARAM_7_]], [[CST_32_i32]] : i32
-// CHECK:           [[VAR_28_:%.+]]:3 = scf.for {{.*}} iter_args([[VAR_arg10_:%.+]] = [[VAR_cst_]], [[VAR_arg11_:%.+]] = [[VAR_21_]], [[VAR_arg12_:%.+]] = [[VAR_24_]]) -> (tensor<64x128xf32>, !tt.ptr<tensor<64x32xf16>>, !tt.ptr<tensor<32x128xf16>>)  : i32 {
-// CHECK-DAG:         [[VAR_39_:%.+]] = tt.load [[VAR_arg11_]] : !tt.ptr<tensor<64x32xf16>>
-// CHECK-DAG:         [[VAR_43_:%.+]] = tt.load [[VAR_arg12_]] : !tt.ptr<tensor<32x128xf16>>
-// CHECK:             [[VAR_44_:%.+]] = tt.dot [[VAR_39_]], [[VAR_43_]], [[VAR_arg10_]], inputPrecision = tf32 : tensor<64x32xf16> * tensor<32x128xf16> -> tensor<64x128xf32>
-// CHECK-DAG:         [[VAR_45_:%.+]] = tt.advance [[VAR_arg11_]], {{\[}}[[CST_0_i32]], [[CST_32_i32]]] : <tensor<64x32xf16>>
-// CHECK-DAG:         [[VAR_46_:%.+]] = tt.advance [[VAR_arg12_]], {{\[}}[[CST_0_i32]], [[VAR_27_]]] : <tensor<32x128xf16>>
-// CHECK:             scf.yield [[VAR_44_]], [[VAR_45_]], [[VAR_46_]] : tensor<64x128xf32>, !tt.ptr<tensor<64x32xf16>>, !tt.ptr<tensor<32x128xf16>>
+// CHECK:           [[REM:%.+]] = arith.remsi [[PARAM_5_]], [[CST_32_i32]] : i32
+// CHECK:           [[CMP1:%.+]] = arith.cmpi eq, [[REM]], [[CST_0_i32]] : i32
+// CHECK:           [[CMP2:%.+]] = arith.cmpi sgt, [[PARAM_5_]], [[CST_32_i32]] : i32
+// CHECK:           [[VER_COND:%.+]] = arith.andi [[CMP1]], [[CMP2]] : i1
+// CHECK:           [[LOOP_VER:%.+]] = scf.if [[VER_COND]] -> (tensor<64x128xf32>) {
+// CHECK:             [[THEN_LOOP_RES:%.+]]:3 = scf.for {{.*}} iter_args([[VAR_arg10_:%.+]] = [[VAR_cst_]], [[VAR_arg11_:%.+]] = [[VAR_21_]], [[VAR_arg12_:%.+]] = [[VAR_24_]]) -> (tensor<64x128xf32>, !tt.ptr<tensor<64x32xf16>>, !tt.ptr<tensor<32x128xf16>>)  : i32 {
+// CHECK-DAG:           [[LOAD_A:%.+]] = tt.load [[VAR_arg11_]] : !tt.ptr<tensor<64x32xf16>>
+// CHECK-DAG:           [[LOAD_B:%.+]] = tt.load [[VAR_arg12_]] : !tt.ptr<tensor<32x128xf16>>
+// CHECK:               [[DOT:%.+]] = tt.dot [[LOAD_A]], [[LOAD_B]], [[VAR_arg10_]], inputPrecision = tf32 : tensor<64x32xf16> * tensor<32x128xf16> -> tensor<64x128xf32>
+// CHECK-DAG:           [[ADV_A:%.+]] = tt.advance [[VAR_arg11_]], {{\[}}[[CST_0_i32]], [[CST_32_i32]]] : <tensor<64x32xf16>>
+// CHECK-DAG:           [[ADV_B:%.+]] = tt.advance [[VAR_arg12_]], {{\[}}[[CST_0_i32]], [[VAR_27_]]] : <tensor<32x128xf16>>
+// CHECK:               scf.yield [[DOT]], [[ADV_A]], [[ADV_B]] : tensor<64x128xf32>, !tt.ptr<tensor<64x32xf16>>, !tt.ptr<tensor<32x128xf16>>
+// CHECK:             }
+// CHECK:             scf.yield [[THEN_LOOP_RES]]#0 : tensor<64x128xf32>
+// CHECK:           } else {
+// CHECK:             [[ELSE_LOOP_RES:%.+]]:3 = scf.for {{.*}} iter_args([[VAR_arg10_:%.+]] = [[VAR_cst_]], [[VAR_arg11_:%.+]] = {{.*}}, [[VAR_arg12_:%.+]] = {{.*}}) -> (tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>)  : i32 {
+// CHECK-NOT:           tt.load {{.*}} : !tt.ptr<tensor<64x32xf16>>
+// CHECK-NOT:           tt.load {{.*}} : !tt.ptr<tensor<32x128xf16>>
+// CHECK-NOT:           tt.advance
+// CHECK:               scf.yield {{.*}}, {{.*}}, {{.*}} : tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>
+// CHECK:             }
+// CHECK:             scf.yield [[ELSE_LOOP_RES]]#0 : tensor<64x128xf32>
 // CHECK:           }
-// CHECK:           [[VAR_29_:%.+]] = arith.truncf [[VAR_28_]]#0 : tensor<64x128xf32> to tensor<64x128xf16>
-// CHECK:           [[VAR_30_:%.+]] = arith.muli {{.*}}, [[PARAM_8_]] : i32
-// CHECK:           [[VAR_31_:%.+]] = arith.extsi [[PARAM_8_]] : i32 to i64
-// CHECK:           [[VAR_32_:%.+]] = arith.divui [[VAR_30_]], [[PARAM_8_]] : i32
-// CHECK:           [[VAR_33_:%.+]] = tt.make_tensor_ptr [[PARAM_2_]], {{\[}}[[CST_0_i64]], [[CST_0_i64]]], {{\[}}[[VAR_31_]], [[CST_1_i64]]], {{\[}}[[VAR_32_]], [[VAR_15_]]] {{.*}} : <tensor<64x128xf16>>
-// CHECK:           tt.store [[VAR_33_]], [[VAR_29_]] : !tt.ptr<tensor<64x128xf16>>
+// CHECK:           [[TRUNCF:%.+]] = arith.truncf [[LOOP_VER]] : tensor<64x128xf32> to tensor<64x128xf16>
+// CHECK-NOT:       tt.make_tensor_ptr
 // CHECK:           tt.return
 // CHECK:         }

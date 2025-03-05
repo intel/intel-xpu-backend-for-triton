@@ -8,10 +8,10 @@
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 
+#include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 #include "intel/include/Target/LLVMIR/PostProcess.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
@@ -66,6 +66,7 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
+  ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
   ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
                          intel::createTritonRaiseBlockPointer, bool);
   ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
@@ -86,8 +87,6 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
-  ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
-                     gpu::intel::createTritonIntelGPURewriteTensorPointer);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
   ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
                          gpu::intel::createTritonIntelGPUPrefetchBlock, int,

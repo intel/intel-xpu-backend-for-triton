@@ -318,14 +318,14 @@ bool DotOp::verifyDims() {
 
 //-- DotScaledOp --
 bool DotScaledOp::verifyDims() {
-  auto aShape = this->getLhs().getType().getShape();
-  auto bShape = this->getRhs().getType().getShape();
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
 
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getLhsType() == ScaleDotElemType::E2M1)
+  if (this->getAElemType() == ScaleDotElemType::E2M1)
     aKdim *= 2;
-  if (this->getRhsType() == ScaleDotElemType::E2M1)
+  if (this->getBElemType() == ScaleDotElemType::E2M1)
     bKdim *= 2;
 
   return aKdim == bKdim;
@@ -882,7 +882,7 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
   auto tensorType = RankedTensorType::get(
       SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
       pointerType.getPointeeType());
-  auto result = PointerType::get(tensorType, 1);
+  auto result = PointerType::get(tensorType, pointerType.getAddressSpace());
 
   return build(builder, state, result, base, shape, strides, offsets,
                builder.getDenseI32ArrayAttr(order));
@@ -1027,17 +1027,9 @@ LogicalResult ReturnOp::verify() {
 // -- JoinOp --
 LogicalResult
 JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
-                         ValueRange operands, DictionaryAttr attributes,
-                         OpaqueProperties properties, RegionRange regions,
+                         JoinOp::Adaptor adaptor,
                          SmallVectorImpl<Type> &inferredReturnTypes) {
-  // These should have been checked by tablegen-generated code.
-  assert(operands.size() == 2);
-  assert(operands[0].getType() == operands[1].getType());
-  assert(isa<RankedTensorType>(operands[0].getType()));
-  assert(isa<RankedTensorType>(operands[1].getType()));
-
-  Value lhs = operands[0];
-  auto srcTy = cast<RankedTensorType>(lhs.getType());
+  auto srcTy = cast<RankedTensorType>(adaptor.getLhs().getType());
 
   SmallVector<int64_t> retShape(srcTy.getShape());
   retShape.push_back(2);
@@ -1058,15 +1050,9 @@ JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
 
 // -- SplitOp --
 LogicalResult SplitOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
-  // These should have been checked by tablegen-generated code.
-  assert(operands.size() == 1);
-  assert(isa<RankedTensorType>(operands[0].getType()));
-
-  Value src = operands[0];
-  auto srcTy = cast<RankedTensorType>(src.getType());
+    MLIRContext *context, std::optional<Location> location,
+    SplitOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
+  auto srcTy = cast<RankedTensorType>(adaptor.getSrc().getType());
   auto srcShape = srcTy.getShape();
 
   if (srcShape.empty() || srcShape.back() != 2) {

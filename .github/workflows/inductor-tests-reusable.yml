@@ -8,9 +8,9 @@ on:
         type: string
         default: ""
       suite:
-        description: Space separated lists of test suites, all if empty
+        description: Space separated lists of test suites or "all"
         type: string
-        default: ""
+        default: "all"
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -34,8 +34,9 @@ jobs:
   build:
     name: Test
     runs-on:
+      - linux
       - ${{ inputs.runner_label || 'rolling' }}
-    timeout-minutes: 720
+    timeout-minutes: 960
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/2025.0/oneapi-vars.sh > /dev/null; source {0}"
@@ -74,8 +75,8 @@ jobs:
 
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
 
-          test_cmd="python test/run_test.py --include "
-          if [[ -z "${{ inputs.suite }}" ]]; then
+          test_cmd="python test/run_test.py --keep-going --include "
+          if [[ "${{ inputs.suite }}" = "all" ]]; then
             for test in $(ls test/inductor | grep test);
             do
               test_cmd="${test_cmd} inductor/$test"

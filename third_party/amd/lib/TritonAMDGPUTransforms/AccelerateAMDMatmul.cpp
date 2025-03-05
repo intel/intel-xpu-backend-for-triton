@@ -9,12 +9,15 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include <memory>
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
+using mlir::triton::gpu::chooseScaledMfmaOperandLayout;
+using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
 
 namespace {
 using triton::AMD::ISAFamily;
@@ -43,28 +46,98 @@ int getWmmaVersion(StringRef archGen) {
   return 0;
 }
 
+FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
+  return llvm::TypeSwitch<Type, FailureOr<ScaleDotElemType>>(type)
+      .Case<Float8E4M3FNType>([](Type) { return ScaleDotElemType::E4M3; })
+      .Case<Float8E5M2Type>([](Type) { return ScaleDotElemType::E5M2; })
+      .Case<Float6E3M2FNType>([](Type) { return ScaleDotElemType::E3M2; })
+      .Case<Float6E2M3FNType>([](Type) { return ScaleDotElemType::E2M3; })
+      .Case<Float4E2M1FNType>([](Type) { return ScaleDotElemType::E2M1; })
+      .Default([](Type) { return failure(); });
+}
+
+// Check if the result of this tl.dot is used as opA of another tl.dot
+// in the same region
+bool isChainDotHead(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  ForwardSliceOptions fwdOpt;
+  fwdOpt.filter = isInSameRegion;
+  SetVector<mlir::Operation *> fwdSlices;
+  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
+  for (Operation *op : fwdSlices) {
+    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
+      assert(dOp != dotOp);
+      auto opA = dOp.getA().getDefiningOp();
+      if (opA && fwdSlices.contains(opA)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Check if the opA of this tl.dot is the result of another tl.dot
+// in the same region
+bool isChainDotTail(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = isInSameRegion;
+  SetVector<Operation *> bwdSlices;
+  Operation *opA = dotOp.getA().getDefiningOp();
+  if (!opA)
+    return false;
+  getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  if (llvm::find_if(bwdSlices, [](Operation *op) {
+        return isa<tt::DotOpInterface>(op);
+      }) != bwdSlices.end())
+    return true;
+  return false;
+}
+
 SmallVector<unsigned, 3>
 warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
              std::pair<int64_t, int64_t> shapePerWarp) {
   auto rank = shape.size();
-  // Early exit for batched matmul
+  // Case 1: Early exit for batched matmul
   if (rank == 3)
-    return {(unsigned)numWarps, 1, 1};
+    return {static_cast<unsigned>(numWarps), 1, 1};
 
-  auto filter = [dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  ForwardSliceOptions fwdOpt;
-  fwdOpt.filter = filter;
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = filter;
-  auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
-  for (Operation *op : slices) {
-    if (isa<mlir::triton::DotOpInterface>(op) && (op != dotOp))
-      return {(unsigned)numWarps, 1};
+  // Case 2: For FA-like pattern, i.e. result of 1st tl.dot is used as the opA
+  // of the 2nd dot, we will set warpsPerCTA differently for 1st and 2nd dot
+  auto ttDotOp = cast<tt::DotOpInterface>(dotOp);
+  bool isHeadDot = isChainDotHead(ttDotOp);
+  bool isTailDot = isChainDotTail(ttDotOp);
+  // For the 1st dot in chain-dot, we always set warpsPerCTA={numWarps, 1}
+  // because this eliminates
+  // 1) inter-warp reduction in the softmax step.
+  // 2) layout conversion from #mma to #dot_op of the second dot.
+  if (isHeadDot)
+    return {static_cast<unsigned>(numWarps), 1};
+  // For the 2nd dot in chain-dot, we always distribute warp along dim0 first,
+  // then dim1. Because
+  // 1) This is how we distribute the warps for the 1st dot. Now the
+  //    warpsPerCTA for the 1st dot become the warp layout of the dotOperand
+  //    layout of the 2nd dot, which must match the warpsPerCTA of the 2nd dot.
+  // 2) When shape[0] is small, as in decode kernels, we don't want to
+  //    distribute more warps than shape[0] // mDim. If we do so, each warp
+  //    needs to hold more elements in the final output, which increases
+  //    register pressure, especially for large head dim (e.g. 512) attention
+  //    kernels.
+  if (isTailDot) {
+    SmallVector<unsigned, 3> ret = {1, 1};
+    ret[0] = static_cast<unsigned>(std::min(
+        static_cast<int64_t>(numWarps),
+        static_cast<int64_t>(llvm::divideCeil(shape[0], shapePerWarp.first))));
+    ret[1] = numWarps / ret[0];
+    return ret;
   }
 
+  // Case 3: Regular cases
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 3> ret = {1, 1};
   do {
@@ -151,30 +224,31 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
-                                               int nonKDim) {
+                                               int nonKDim,
+                                               bool withScale = false) {
   RankedTensorType aType = dot.getA().getType();
   bool allowXF32 =
       dot.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
   return chooseMfmaInstruction(
       mfmaVersion, dot.getC().getType(), aType.getElementType(),
       dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
-      /*withScale=*/false, allowXF32);
+      withScale, allowXF32);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
                                                int mfmaVersion, int nonKDim) {
   auto ctx = dot.getContext();
-  int64_t inputKDim = dot.getLhs().getType().getShape().back();
-  if (dot.getLhsType() == ScaleDotElemType::E2M1) {
+  int64_t inputKDim = dot.getA().getType().getShape().back();
+  if (dot.getAElemType() == ScaleDotElemType::E2M1) {
     // Since two fp4 are packed into int8, to get the correct K dim size, we
     // need to multiply it by 2.
     inputKDim *= 2;
   }
-  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getLhsType());
-  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getRhsType());
+  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getAElemType());
+  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
   return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), aElemType,
                                bElemType, inputKDim, nonKDim,
-                               /*hasScale=*/true, /*allowXF32=*/false);
+                               /*withScale=*/true, /*allowXF32=*/false);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -183,10 +257,10 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   // For scaled dot, we handle it with fp16 or bf16 emulation for now.
   Builder b(dot.getContext());
   Type elemType = useFp16 ? b.getF16Type() : b.getBF16Type();
-  return chooseMfmaInstruction(
-      mfmaVersion, dot.getC().getType(), elemType, elemType,
-      dot.getLhs().getType().getShape().back(), nonKDim,
-      /*withScale=*/false, /*allowXF32=*/false);
+  return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), elemType,
+                               elemType, dot.getA().getType().getShape().back(),
+                               nonKDim,
+                               /*withScale=*/false, /*allowXF32=*/false);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
@@ -365,39 +439,6 @@ public:
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
         nonKDim(nonKDim), kPack(kPack) {}
 
-  bool isChainDot(tt::DotOp &dotOp) const {
-    auto filter = [&dotOp](Operation *op) {
-      return op->getParentRegion() == dotOp->getParentRegion();
-    };
-    ForwardSliceOptions fwdOpt;
-    fwdOpt.filter = filter;
-    BackwardSliceOptions bwdOpt;
-    bwdOpt.omitBlockArguments = true;
-    bwdOpt.filter = filter;
-    auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
-    for (Operation *op : slices) {
-      if (isa<tt::DotOp>(op) && (op != dotOp))
-        return true;
-    }
-    return false;
-  }
-
-  bool isSecondDot(tt::DotOp &dotOp) const {
-    auto filter = [&dotOp](Operation *op) {
-      return op->getParentRegion() == dotOp->getParentRegion();
-    };
-    BackwardSliceOptions bwdOpt;
-    bwdOpt.omitBlockArguments = true;
-    bwdOpt.filter = filter;
-    SetVector<Operation *> slices;
-    getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
-    if (llvm::find_if(slices, [](Operation *op) {
-          return isa<tt::DotOp>(op);
-        }) != slices.end())
-      return true;
-    return false;
-  }
-
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     RankedTensorType oldRetType = dotOp.getType();
@@ -421,11 +462,28 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto ctx = oldAType.getContext();
 
-    ttg::AMDMfmaEncodingAttr mfmaEnc;
+    Type aElemType = oldAType.getElementType();
+    Type bElemType = oldBType.getElementType();
+    bool withScale =
+        mfmaVersion == 4 && isF8F6F4(aElemType) && isF8F6F4(bElemType);
 
-    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
-    if (failed(mfmaInstr))
-      return failure();
+    // If mfmaVersion == 4 and both inputs are of F8F6F4 types, we will try to
+    // use the V_MFMA_*_F8F6F4 instructions since it has higher FLOPs per cycle.
+    // If we can't find a proper instruction, we will fall back to select from
+    // normal mfma instructions.
+    FailureOr<MfmaIntrinsic> mfmaInstr =
+        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
+    if (failed(mfmaInstr)) {
+      if (!withScale) {
+        return failure();
+      }
+      mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
+      if (failed(mfmaInstr))
+        return failure();
+
+      withScale = false;
+    }
+
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
     auto kDim = mfmaInstr->kDim;
@@ -438,9 +496,11 @@ public:
     // store instructions, except for fp8 matmul kernels due to regression
     // TODO (lixun): investigate the regression and enable this feature again
     auto aElemTy = mfmaInstr->aElementType;
-    bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType>(aElemTy);
-    bool isTransposed = isChainDot(dotOp) || !isFP8;
-    mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+    bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType,
+                           Float8E4M3FNType, Float8E5M2Type>(aElemTy);
+    bool isTransposed =
+        isChainDotHead(dotOp) || isChainDotTail(dotOp) || !isFP8;
+    ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
         /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
@@ -492,20 +552,48 @@ public:
     // to increase ds_read vector size
     // However, in FA, the second dot can only use kWidth = kBase since it's
     // limited by the result of the first dot, which is of mfmaLayout.
-    if (!isSecondDot(dotOp))
+    if (!isChainDotTail(dotOp))
       kWidth *= kPack;
 
-    auto newAEncoding =
-        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
-    auto newBEncoding =
-        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
-    a = convertAndCastTensor(rewriter, a, newAEncoding,
-                             mfmaInstr->aElementType);
-    b = convertAndCastTensor(rewriter, b, newBEncoding,
-                             mfmaInstr->bElementType);
-    auto newDot = rewriter.create<tt::DotOp>(
-        dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
-        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+    Value newDot;
+    if (withScale) {
+      // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
+      // DotScaledOp.
+      auto aScaledElemTy = mlirTypeToScaledElemType(aElemType);
+      auto bScaledElemTy = mlirTypeToScaledElemType(bElemType);
+      if (failed(aScaledElemTy) || failed(bScaledElemTy))
+        return failure();
+
+      auto aEncLL = chooseScaledMfmaOperandLayout(
+          mfmaEnc, kWidth, /*dotOperandIdx=*/0, aScaledElemTy.value(),
+          oldAType.getShape());
+      auto bEncLL = chooseScaledMfmaOperandLayout(
+          mfmaEnc, kWidth, /*dotOperandIdx=*/1, bScaledElemTy.value(),
+          oldBType.getShape());
+      auto newAEncoding = ttg::LinearEncodingAttr::get(ctx, aEncLL);
+      auto newBEncoding = ttg::LinearEncodingAttr::get(ctx, bEncLL);
+
+      a = convertAndCastTensor(rewriter, a, newAEncoding,
+                               mfmaInstr->aElementType);
+      b = convertAndCastTensor(rewriter, b, newBEncoding,
+                               mfmaInstr->bElementType);
+      newDot = rewriter.create<triton::DotScaledOp>(
+          dotOp.getLoc(), newAcc.getType(), a, b, newAcc, Value(), Value(),
+          aScaledElemTy.value(), bScaledElemTy.value(), /*fastMath=*/false);
+    } else {
+      auto newAEncoding =
+          ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
+      auto newBEncoding =
+          ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
+      a = convertAndCastTensor(rewriter, a, newAEncoding,
+                               mfmaInstr->aElementType);
+      b = convertAndCastTensor(rewriter, b, newBEncoding,
+                               mfmaInstr->bElementType);
+      newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newAcc.getType(), a,
+                                          b, newAcc, dotOp.getInputPrecision(),
+                                          dotOp.getMaxNumImpreciseAcc());
+    }
+
     Value dotOutput =
         convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
                              oldRetType.getElementType());
@@ -539,15 +627,15 @@ public:
     if (rank == 3)
       return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
 
-    TensorValue a = dotOp.getLhs();
-    TensorValue b = dotOp.getRhs();
-    TensorValue aScale = dotOp.getLhsScale();
-    TensorValue bScale = dotOp.getRhsScale();
+    TensorValue a = dotOp.getA();
+    TensorValue b = dotOp.getB();
+    TensorValue aScale = dotOp.getAScale();
+    TensorValue bScale = dotOp.getBScale();
     if (aScale && bScale)
       return rewriter.notifyMatchFailure(dotOp, "NYI: both LHS and RHS scale");
 
-    ScaleDotElemType aElemType = dotOp.getLhsType();
-    ScaleDotElemType bElemType = dotOp.getRhsType();
+    ScaleDotElemType aElemType = dotOp.getAElemType();
+    ScaleDotElemType bElemType = dotOp.getBElemType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
              elemType == ScaleDotElemType::E4M3 ||
@@ -566,8 +654,8 @@ public:
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.
-    bool useFp16 = dotOp.getLhsType() == ScaleDotElemType::FP16 ||
-                   dotOp.getRhsType() == ScaleDotElemType::FP16;
+    bool useFp16 = aElemType == ScaleDotElemType::FP16 ||
+                   bElemType == ScaleDotElemType::FP16;
     FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, useFp16);
     if (failed(mfmaInstr))
@@ -679,9 +767,9 @@ public:
     };
 
     Value scaledA =
-        upcastMXFP(a, aScale, dotOp.getLhsType(), dotOp.getFastMath());
+        upcastMXFP(a, aScale, dotOp.getAElemType(), dotOp.getFastMath());
     Value scaledB =
-        upcastMXFP(b, bScale, dotOp.getRhsType(), dotOp.getFastMath());
+        upcastMXFP(b, bScale, dotOp.getBElemType(), dotOp.getFastMath());
     auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, scaledA,
                                          scaledB, newAcc);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
@@ -719,20 +807,25 @@ public:
     if (rank == 3)
       return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
 
-    TensorValue a = dotOp.getLhs();
-    TensorValue b = dotOp.getRhs();
-    TensorValue aScale = dotOp.getLhsScale();
-    TensorValue bScale = dotOp.getRhsScale();
+    TensorValue a = dotOp.getA();
+    TensorValue b = dotOp.getB();
+    TensorValue aScale = dotOp.getAScale();
+    TensorValue bScale = dotOp.getBScale();
     auto oldShape = oldRetType.getShape();
 
-    ScaleDotElemType aElemType = dotOp.getLhsType();
-    ScaleDotElemType bElemType = dotOp.getRhsType();
+    ScaleDotElemType aElemType = dotOp.getAElemType();
+    ScaleDotElemType bElemType = dotOp.getBElemType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1;
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2;
     };
 
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6, mxfp8");
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
+      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
+    }
+
+    bool bothScalesAbsent = !aScale && !bScale;
 
     MLIRContext *ctx = dotOp.getContext();
 
@@ -763,6 +856,7 @@ public:
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+    auto warpOrder = mfmaEnc.getDefaultWarpOrder();
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
@@ -770,113 +864,43 @@ public:
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         dotOp.getC().getLoc(), newRetType, dotOp.getC());
 
+    auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
+    auto standardOutDims = standardOutDimNames(ctx, rank);
+
     // For the mfma_scale_f32_*_f8f6f4 instructions, each thread consumes 32
     // elements. But since two fp4 elements are packed into one int8, the
     // kWidth is 16 for fp4.
-    unsigned kWidth = kBase;
-    auto newAEncoding = DotOperandEncodingAttr::get(
-        ctx, /*idx=*/0, newRetType.getEncoding(),
-        aElemType == ScaleDotElemType::E2M1 ? kWidth / 2 : kWidth);
+    const unsigned kWidth = kBase;
+    using basisT = std::vector<std::vector<int32_t>>;
 
-    auto newBEncoding = DotOperandEncodingAttr::get(
-        ctx, /*idx=*/1, newRetType.getEncoding(),
-        bElemType == ScaleDotElemType::E2M1 ? kWidth / 2 : kWidth);
+    auto aShape = a.getType().getShape();
+    auto bShape = b.getType().getShape();
+    auto aEncLL = chooseScaledMfmaOperandLayout(
+        mfmaEnc, kWidth, /*dotOperandIdx=*/0, aElemType, aShape);
+    auto bEncLL = chooseScaledMfmaOperandLayout(
+        mfmaEnc, kWidth, /*dotOperandIdx=*/1, bElemType, bShape);
 
     auto convertInputLayout = [&](TensorValue v,
-                                  DotOperandEncodingAttr enc) -> TensorValue {
+                                  LinearLayout layout) -> TensorValue {
       auto vType = v.getType();
 
-      auto newVType =
-          RankedTensorType::get(vType.getShape(), vType.getElementType(), enc);
+      auto newEnc = ttg::LinearEncodingAttr::get(ctx, layout);
+      auto newVType = RankedTensorType::get(vType.getShape(),
+                                            vType.getElementType(), newEnc);
       return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
     };
-    a = convertInputLayout(a, newAEncoding);
-    b = convertInputLayout(b, newBEncoding);
+    a = convertInputLayout(a, aEncLL);
+    b = convertInputLayout(b, bEncLL);
 
-    StringAttr kRegister = StringAttr::get(ctx, "register");
-    StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
+    auto convertScaleLayout = [&](TensorValue scale,
+                                  llvm::ArrayRef<int64_t> valShape,
+                                  LinearLayout dotLL, int idx) -> Value {
+      if (bothScalesAbsent)
+        return Value();
 
-    auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
-
-    // Init register layout. Will be adjusted later
-    auto regs = tt::identityStandardND(kRegister, {1, 1}, order);
-
-    auto aEncLL = newAEncoding.toLinearLayout(a.getType().getShape());
-    auto standardOutDims = llvm::to_vector(aEncLL.getOutDimNames());
-
-    using basisT = std::vector<std::vector<int32_t>>;
-    auto createLinearLayout = [&](int idx, const basisT &warpBasis) {
-      LinearLayout lanes = LinearLayout::empty();
-      // In scaled dot, the shapes of operands(without batch dimension) are,
-      // respectively:
-      // - A: [M, K]
-      // - B: [K, N]
-      // - aScale: [M, K / 32]
-      // - bScale: [N, K / 32]
-      //
-      // To correctly feed A/B and its scale into instruction, we need to
-      // distribute aScale/bScale among warps in the same way as A/B. But bScale
-      // is not transposed like B. So we need to transpose the warp layout of
-      // bScale.
-      //
-      // The tricky part is, our desired outputs are [dim0, dim1], but
-      // at this position, the layouts are transposed to [dim1, dim0]. So
-      // instead of reverse bScale's layout, we need to reverse aScale's. There
-      // will be a transpose in the end to correct everything.
-      basisT warps = warpBasis;
-      if (idx == 0) {
-        for (auto &basis : warps) {
-          std::reverse(basis.begin(), basis.end());
-        }
-      }
-      // In general, for both 32x32 and 16x16 scaled mfma, and no matter what
-      // data type the A/B operand is, each lane takes 32 elements from A/B
-      // alone K dim, and 1 or 2 elements from scale accordingly. The number of
-      // scale's elements in a lane varies because the 32 elements from A/B may
-      // not be consecutive.
-      //
-      // For mxfp4, these 32 elements are consecutive, so only 1 scale element
-      // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
-      // blocks, so 2 scale elements are required.
-      if (mDim == 32) {
-        // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
-        // takes 32 consecutive elements from A alone K dimension. The first
-        // 32 lanes collectively handle A[0:32][0:32], and the other 32 lanes
-        // collectively handle A[0:32][32:64]. Each lane take 1 scale element
-        // accordingly. Similar to B and bScale.
-        lanes = LinearLayout(
-            {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}}},
-             {kWarp, warps},
-             {kBlock, {}}},
-            {standardOutDims[order[0]], standardOutDims[order[1]]});
-      } else {
-        assert(mDim == 16);
-        // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
-        // takes 32 consecutive elements from A alone K dimension. The first
-        // 16 lanes collectively handle A[0:16][0:32], and another 16 lanes
-        // collectively handle A[0:16][32:64] and so on. Each lane take 1 scale
-        // element accordingly. Similar to B and bScale.
-        lanes = LinearLayout(
-            {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
-             {kWarp, warps},
-             {kBlock, {}}},
-            {standardOutDims[order[0]], standardOutDims[order[1]]});
-      }
-      return regs * lanes;
-    };
-
-    auto convertScaleLayout = [&](TensorValue val, TensorValue scale,
-                                  DotOperandEncodingAttr enc,
-                                  int idx) -> Value {
-      auto valShape = val.getType().getShape();
-
-      auto dotLL = enc.toLinearLayout(valShape);
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto &warpBases = scaleBases[kWarp];
-
-      LinearLayout newLL = createLinearLayout(idx, warpBases);
 
       SmallVector<int64_t> shape;
       if (!scale) {
@@ -889,15 +913,9 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      // Adjust register-level layout to fill the shape, at this level, both
-      // aScale and bScale should align with A operand.
-      for (auto d : newAEncoding.getRepOrder()) {
-        auto outDim = standardOutDims[d];
-        auto dimSize = newLL.getOutDimSize(outDim);
-        newLL *=
-            LinearLayout::identity1D(shape[d] / dimSize, kRegister, outDim);
-      }
-      newLL = newLL.transposeOuts(standardOutDims);
+      LinearLayout newLL =
+          chooseScaledMfmaScaleLayout(ctx, idx, warpBases, shape, mDim);
+
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
       auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);
@@ -912,8 +930,10 @@ public:
                                                      newScaleType, scale);
       }
     };
-    auto newAScale = convertScaleLayout(a, aScale, newAEncoding, 0);
-    auto newBScale = convertScaleLayout(b, bScale, newBEncoding, 1);
+    auto newAScale =
+        convertScaleLayout(aScale, aShape, aEncLL, /*dotOperandIdx=*/0);
+    auto newBScale =
+        convertScaleLayout(bScale, bShape, bEncLL, /*dotOperandIdx=*/1);
 
     auto newDot = rewriter.create<triton::DotScaledOp>(
         dotOp.getLoc(), newRetType, a, b, newAcc, newAScale, newBScale,
@@ -921,6 +941,7 @@ public:
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
+
     return success();
   }
 };

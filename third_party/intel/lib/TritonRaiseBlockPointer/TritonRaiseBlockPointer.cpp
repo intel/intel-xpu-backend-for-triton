@@ -5,8 +5,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/TritonRaiseBlockPointer/Passes.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Verifier.h"
@@ -36,7 +36,6 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
-namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DEF_TRITONRAISEBLOCKPOINTER
@@ -115,50 +114,6 @@ Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
                    loc, source, zeros, strides, offsets, sizes, order);
 }
 
-Value getFinalValue(Value value) {
-  Operation *defOp = value.getDefiningOp();
-  if (!defOp) {
-    // look init values outside the loop
-    BlockArgument blockArg = dyn_cast<BlockArgument>(value);
-    Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp))
-      return getFinalValue(forOp.getInitArgs()[blockArg.getArgNumber() - 1]);
-
-    return value;
-  }
-
-  if (isa<tt::ExpandDimsOp, tt::BroadcastOp, tt::SplatOp, arith::IndexCastOp>(
-          defOp))
-    return getFinalValue(defOp->getOperand(0));
-
-  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
-    if (ttgi::isConstant(addOp.getLhs(), 0))
-      return getFinalValue(addOp.getRhs());
-    if (ttgi::isConstant(addOp.getRhs(), 0))
-      return getFinalValue(addOp.getLhs());
-    return addOp.getResult();
-  }
-
-  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
-    if (ttgi::isConstant(mulOp.getLhs(), 1) ||
-        ttgi::isConstant(mulOp.getRhs(), 0))
-      return getFinalValue(mulOp.getRhs());
-    if (ttgi::isConstant(mulOp.getRhs(), 1) ||
-        ttgi::isConstant(mulOp.getLhs(), 0))
-      return getFinalValue(mulOp.getLhs());
-    return mulOp.getResult();
-  }
-
-  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
-    if (ttgi::isConstant(divOp.getRhs(), 1) ||
-        ttgi::isConstant(divOp.getLhs(), 0))
-      return getFinalValue(divOp.getLhs());
-    return divOp.getResult();
-  }
-
-  return value;
-}
-
 // Data structure used to decode pointer arithmetics. Offsets, sizes, and
 // strides are in unit of elements in a linearly laid-out memory, which is the
 // same as pointer arithmetic operations in Triton language. Scalar is a
@@ -200,7 +155,7 @@ struct PtrState {
     // When PtrState describes a non-block pointer, shape field indicates how
     // address wraps around. As a result, a constant 0 indicates no wrap
     // around (i.e. modulo) for the dimension.
-    return !ttgi::isConstant(shape[dim], 0);
+    return !tt::intel::isConstant(shape[dim], 0);
   }
 
   // @return true if addresses wrap around in any of the pointer dimension.
@@ -231,7 +186,7 @@ struct PtrState {
     if (lhsState.scalar && rhsState.scalar) {
       scalar =
           builder.create<arith::AddIOp>(loc, lhsState.scalar, rhsState.scalar);
-      scalar = findOrCreateCast(loc, getFinalValue(scalar),
+      scalar = findOrCreateCast(loc, tt::intel::getFinalValue(scalar),
                                 lhsState.scalar.getType(), builder);
 
     } else if (lhsState.getRank() == 0)
@@ -240,15 +195,15 @@ struct PtrState {
     for (unsigned i = 0; i < lhsState.getRank(); ++i) {
       Value newOffset = builder.create<arith::AddIOp>(loc, lhsState.offsets[i],
                                                       rhsState.offsets[i]);
-      offsets.push_back(findOrCreateCast(loc, getFinalValue(newOffset),
-                                         lhsState.offsets[i].getType(),
-                                         builder));
+      offsets.push_back(
+          findOrCreateCast(loc, tt::intel::getFinalValue(newOffset),
+                           lhsState.offsets[i].getType(), builder));
 
       Value newStride = builder.create<arith::AddIOp>(loc, lhsState.strides[i],
                                                       rhsState.strides[i]);
-      strides.push_back(findOrCreateCast(loc, getFinalValue(newStride),
-                                         lhsState.strides[i].getType(),
-                                         builder));
+      strides.push_back(
+          findOrCreateCast(loc, tt::intel::getFinalValue(newStride),
+                           lhsState.strides[i].getType(), builder));
 
       sizes.push_back(lhsState.sizes[i]);
     }
@@ -285,7 +240,7 @@ struct PtrState {
       std::swap(lhs, rhs);
 
     for (unsigned i = 0; i < lhs->getRank(); ++i) {
-      if (!lhs->dimHasModulo(i) || ttgi::isConstant(rhs->offsets[i], 0)) {
+      if (!lhs->dimHasModulo(i) || tt::intel::isConstant(rhs->offsets[i], 0)) {
         shape.push_back(lhs->shape[i]);
       } else {
         op->emitRemark("TritonRaiseBlockPointer: do not support adding to "
@@ -328,7 +283,7 @@ struct PtrState {
           findOrCreateCast(loc, rhs->scalar,
                            builder.getIntegerType(offsetBitwidth), builder));
       newOffset =
-          findOrCreateCast(loc, getFinalValue(newOffset),
+          findOrCreateCast(loc, tt::intel::getFinalValue(newOffset),
                            builder.getIntegerType(offsetBitwidth), builder);
 
       Value newStride = builder.create<arith::MulIOp>(
@@ -340,7 +295,7 @@ struct PtrState {
                            builder.getIntegerType(shapeAndStridesBitwidth),
                            builder));
       newStride = findOrCreateCast(
-          loc, getFinalValue(newStride),
+          loc, tt::intel::getFinalValue(newStride),
           builder.getIntegerType(shapeAndStridesBitwidth), builder);
 
       Value newDim = builder.create<arith::MulIOp>(
@@ -351,7 +306,7 @@ struct PtrState {
           findOrCreateCast(loc, rhs->scalar,
                            builder.getIntegerType(shapeAndStridesBitwidth),
                            builder));
-      newDim = findOrCreateCast(loc, getFinalValue(newDim),
+      newDim = findOrCreateCast(loc, tt::intel::getFinalValue(newDim),
                                 builder.getIntegerType(shapeAndStridesBitwidth),
                                 builder);
 
@@ -398,7 +353,7 @@ struct PtrState {
     // therefore we give up if none of the strides is one.
 
     bool noStrideIsOne = llvm::all_of(makeTPtrOp.getStrides(), [&](Value str) {
-      return !ttgi::isConstant(getFinalValue(str), 1);
+      return !tt::intel::isConstant(tt::intel::getFinalValue(str), 1);
     });
     if (noStrideIsOne)
       return std::nullopt;
@@ -410,7 +365,7 @@ struct PtrState {
     //     2b) offsets: (off0, 0) strides: (*, 1) ==> tt.advance ptr, (0, off0)
 
     bool allOffsetsNotZero = llvm::all_of(offsets, [&](Value offset) {
-      return !ttgi::isConstant(getFinalValue(offset), 0);
+      return !tt::intel::isConstant(tt::intel::getFinalValue(offset), 0);
     });
 
     // Case 1: all offsets are non-zero.
@@ -419,7 +374,7 @@ struct PtrState {
              "TODO: can we generate tt.advance ptr, (0, off0*str0 + off1) ?");
 
       if (llvm::any_of(makeTPtrOp.getStrides(), [&](Value stride) {
-            return !ttgi::isConstant(getFinalValue(stride), 1);
+            return !tt::intel::isConstant(tt::intel::getFinalValue(stride), 1);
           }))
         return std::nullopt;
 
@@ -432,11 +387,13 @@ struct PtrState {
 
     // Case 2: at least one offset is zero.
     assert(offsets.size() == 2 && "Expecting two offsets");
-    bool zeroIdx = !ttgi::isConstant(getFinalValue(offsets[0]), 0);
+    bool zeroIdx =
+        !tt::intel::isConstant(tt::intel::getFinalValue(offsets[0]), 0);
     Value nonZeroOffset = offsets[!zeroIdx];
     Value zeroOffset = offsets[zeroIdx];
 
-    if (ttgi::isConstant(getFinalValue(makeTPtrOp.getStrides()[0]), 1))
+    if (tt::intel::isConstant(
+            tt::intel::getFinalValue(makeTPtrOp.getStrides()[0]), 1))
       newOffsets = {nonZeroOffset, zeroOffset};
     else
       newOffsets = {zeroOffset, nonZeroOffset};
@@ -448,7 +405,7 @@ struct PtrState {
 private:
   Value computeOffset(Value offset, Value stride, OpBuilder &builder,
                       Location loc) const {
-    if (ttgi::isConstant(stride, 0))
+    if (tt::intel::isConstant(stride, 0))
       return findOrCreateCast(loc, offset,
                               builder.getIntegerType(offsetBitwidth), builder);
 
@@ -458,7 +415,7 @@ private:
                          builder),
         findOrCreateCast(loc, stride, builder.getIntegerType(offsetBitwidth),
                          builder));
-    return findOrCreateCast(loc, getFinalValue(divOffset),
+    return findOrCreateCast(loc, tt::intel::getFinalValue(divOffset),
                             builder.getIntegerType(offsetBitwidth), builder);
   }
 };
@@ -498,12 +455,15 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    // Drop the mask or version loops containing masked operations.
     if (IgnoreMasks)
       dropMasks(moduleOp);
 
+    // Perform the transformation.
     if (failed(rewriteOp(moduleOp)))
       moduleOp->emitWarning("TritonRaiseToBlockPointer failed");
 
+    // Cleanup unused operations.
     for (Operation *op : cleanUp) {
       if (op->getUsers().empty())
         op->erase();
@@ -678,7 +638,7 @@ private:
   }
 
   bool lookForMultiplyingValueInDefiningPath(Value &val, Value &ref) const {
-    if (Operation *defOp = getFinalValue(val).getDefiningOp()) {
+    if (Operation *defOp = tt::intel::getFinalValue(val).getDefiningOp()) {
       if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
         if ((mulOp.getLhs() == ref) || (mulOp.getRhs() == ref))
           return true;
@@ -694,8 +654,8 @@ private:
     Operation *op1 = val1.getDefiningOp();
     Operation *op2 = val2.getDefiningOp();
     if (op1 && op2) {
-      std::optional<int64_t> intVal1 = ttgi::getFoldedConstantValue(op1);
-      std::optional<int64_t> intVal2 = ttgi::getFoldedConstantValue(op2);
+      std::optional<int64_t> intVal1 = tt::intel::getFoldedConstantValue(op1);
+      std::optional<int64_t> intVal2 = tt::intel::getFoldedConstantValue(op2);
       if (intVal1.has_value() && intVal2.has_value())
         return intVal1.value() == intVal2.value();
     }
@@ -710,7 +670,7 @@ private:
     SmallVector<Value> finalStrides;
     // check whether all strides are different, if not => skip
     for (auto stride : strides) {
-      Value currentVal = getFinalValue(stride);
+      Value currentVal = tt::intel::getFinalValue(stride);
       if (llvm::any_of(finalStrides, [&](Value val) {
             return areValuesEqual(val, currentVal);
           }))
@@ -723,7 +683,7 @@ private:
       // search for a mul to finalStride in the predecessors
       if (lookForMultiplyingValueInDefiningPath(operand, finalStride))
         return axis;
-      if (ttgi::isConstant(finalStride, 1))
+      if (tt::intel::isConstant(finalStride, 1))
         return axis;
       ++axis;
     }
@@ -898,7 +858,7 @@ private:
       auto scaledOffset =
           builder.createOrFold<arith::MulIOp>(loc, offsetCst, strideCst);
       state.offsets.push_back(
-          findOrCreateCast(loc, getFinalValue(scaledOffset),
+          findOrCreateCast(loc, tt::intel::getFinalValue(scaledOffset),
                            builder.getIntegerType(offsetBitwidth), builder));
     }
     state.strides = makeTPtrOp.getStrides();
@@ -1009,12 +969,8 @@ private:
 
     Operation *definingOp = operand.getDefiningOp();
     if (!definingOp) {
-      if (!knownPtrs.contains(operand)) {
-        llvm::errs() << "TritonRaiseBlockPointer: encountered addptr block "
-                        "argument operand\n"
-                     << operand << "\n";
+      if (!knownPtrs.contains(operand))
         return failure();
-      }
 
       // This operand must be an iter-arg of an inner-loop in a multiple-level
       // nested loop, which means its PtrState must have already been
@@ -1095,7 +1051,7 @@ private:
     if (auto iter = knownPtrs.find(ptr); iter != knownPtrs.end()) {
       PtrState state = iter->second;
       for (int axis = 0; axis < state.shape.size(); ++axis) {
-        if (!ttgi::isConstant(state.shape[axis], 0))
+        if (!tt::intel::isConstant(state.shape[axis], 0))
           boundary.push_back(axis);
       }
     }
