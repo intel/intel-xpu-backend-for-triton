@@ -45,10 +45,9 @@ inline std::string parseZeResultCode(const ze_result_t code) {
   return ss.str();
 }
 
-#define ZE_CHECK(code, error_msg)                                              \
+#define ZE_CHECK(code)                                                         \
   {                                                                            \
     if (code != ZE_RESULT_SUCCESS) {                                           \
-      std::cerr << error_msg << std::endl;                                     \
       return std::make_tuple(nullptr, code);                                   \
     }                                                                          \
   }
@@ -101,15 +100,14 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
   if (error_no != ZE_RESULT_SUCCESS) {
     size_t szLog = 0;
-    std::cerr << "zeModuleCreate failed" << std::endl;
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr), "zeModuleBuildLogGetString first call failed");
+    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
     char *strLog = (char *)malloc(szLog);
-    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog), "zeModuleBuildLogGetString second call failed");
+    ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, strLog));
     std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
     free(strLog);
-    ZE_CHECK(zeModuleBuildLogDestroy(buildlog), "zeModuleBuildLogDestroy failed");
+    ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
   }
-  ZE_CHECK(error_no, "zeModuleCreate failed");
+  ZE_CHECK(error_no);
   return std::make_tuple(module, error_no);
 }
 
@@ -126,7 +124,7 @@ create_function(ze_module_handle_t module, ze_kernel_flags_t flag,
   if (getBoolEnv("MLIR_ENABLE_DUMP")) {
     std::cout << "create kernel:" << func_name << std::endl;
   }
-  ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel), "zeKernelCreate failed");
+  ZE_CHECK(zeKernelCreate(module, &kernel_description, &kernel));
   return std::make_tuple(kernel, ZE_RESULT_SUCCESS);
 }
 

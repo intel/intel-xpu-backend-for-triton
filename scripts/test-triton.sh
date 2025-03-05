@@ -188,9 +188,7 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  mkdir $IGC_DumpToCustomDir
-  IGC_ShaderDumpEnable=1 python test_bmg.py
-  pytest --verbose test_pytorch_clean_cache.py --device xpu
+  pytest -k "not test_disam_cubin" --verbose tools --device xpu
 
 }
 
