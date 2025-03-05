@@ -112,7 +112,7 @@ def gen_kernel_library_xpu(dir, libname):
     subprocess.run(
         [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
         ["-L" + dir
-         for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl"] + ["-fPIC"] if os.name != "nt" else [],
+         for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl"] + (["-fPIC"] if os.name != "nt" else []),
         check=True,
         cwd=dir,
     )
