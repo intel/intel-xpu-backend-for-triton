@@ -110,13 +110,14 @@ def select_compiler():
         raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
     return cxx
 
+
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     cxx = select_compiler()
     subprocess.run(
         [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
-        ["-L" + dir
-         for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl"] + (["-fPIC"] if os.name != "nt" else []),
+        ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl8"] +
+        ["-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"],
         check=True,
         cwd=dir,
     )
@@ -125,7 +126,7 @@ def gen_kernel_library_xpu(dir, libname):
     subprocess.run([cxx] + [*o_files, "-shared", "-o", libname] +
                    ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
                    ["-L" + dir
-                    for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl", "-lze_loader"], check=True, cwd=dir)
+                    for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"], check=True, cwd=dir)
 
 
 def gen_kernel_library(dir, libname):
@@ -317,7 +318,7 @@ int main(int argc, char ** argv) {{
         if COMPILATION_HELPER.libsycl_dir:
             for lib_dir in COMPILATION_HELPER.libsycl_dir:
                 command.extend(["-L", lib_dir])
-        command.extend(["-lsycl", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
+        command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
 
