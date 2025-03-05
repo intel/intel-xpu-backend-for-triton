@@ -126,6 +126,9 @@ def gen_kernel_library_xpu(dir, libname):
                    ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
                    ["-L" + dir
                     for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"], check=True, cwd=dir)
+    if "icpx" in cxx and os.name == "nt":
+        libname_without_ext = libname.split(".")[0]
+        subprocess.run(["llvm-lib.exe", f"/out:{libname_without_ext}.lib", libname], check=True, cwd=dir)
     files = os.listdir(dir)
     print(f"{files=}")
 
