@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import shutil
+import sysconfig
 
 import numpy as np
 
@@ -424,7 +425,8 @@ def test_compile_link_matmul_no_specialization():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        suffix = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+        gen_kernel_library(tmp_dir, f"libkernel.{suffix}")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -454,7 +456,8 @@ def test_compile_link_matmul():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        suffix = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+        gen_kernel_library(tmp_dir, f"libkernel.{suffix}")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -485,7 +488,8 @@ def test_launcher_has_no_available_kernel():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        suffix = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+        gen_kernel_library(tmp_dir, f"libkernel.{suffix}")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -528,7 +532,8 @@ def test_compile_link_autotune_matmul():
 
         link_aot_kernels(tmp_dir)
 
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        suffix = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
+        gen_kernel_library(tmp_dir, f"libkernel.{suffix}")
 
         # compile test case
         M, N, K = 64, 64, 64
