@@ -122,14 +122,17 @@ def gen_kernel_library_xpu(dir, libname):
     )
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
+    extra_link_args = []
+    if "icpx" in cxx and os.name == "nt":
+        libname_without_ext = libname.split(".")[0]
+        extra_link_args = [f"-Wl,/IMPLIB:{libname_without_ext}.lib"]
+
     subprocess.run([cxx] + [*o_files, "-shared", "-o", libname] +
                    ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
                    ["-L" + dir
-                    for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"], check=True, cwd=dir)
-    if "icpx" in cxx and os.name == "nt":
-        libname_without_ext = libname.split(".")[0]
-        llvm_lib = os.path.join(os.path.dirname(os.path.abspath(cxx)), "compiler", "llvm-lib.EXE")
-        subprocess.run([llvm_lib, f"/out:{libname_without_ext}.lib", libname], check=True, cwd=dir)
+                    for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args,
+                   check=True, cwd=dir)
+
     files = os.listdir(dir)
     print(f"{files=}")
 
