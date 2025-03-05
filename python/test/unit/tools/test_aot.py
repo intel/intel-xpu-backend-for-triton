@@ -101,14 +101,18 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 }"""
 
 
-def gen_kernel_library_xpu(dir, libname):
-    cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
+def select_compiler():
     gxx = shutil.which("g++")
     icpx = shutil.which("icpx")
     cl = shutil.which("cl")
     cxx = icpx or cl if os.name == "nt" else icpx or gxx
     if cxx is None:
         raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
+    return cxx
+
+def gen_kernel_library_xpu(dir, libname):
+    cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
+    cxx = select_compiler()
     subprocess.run(
         [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
         ["-L" + dir
@@ -304,7 +308,8 @@ int main(int argc, char ** argv) {{
         command.extend(["-l", "cuda", "-L", dir, "-l", "kernel", "-o", exe])
 
     if is_xpu():
-        command = ["g++", "test.cpp"]
+        cxx = select_compiler()
+        command = [cxx, "test.cpp"]
         for inc_dir in COMPILATION_HELPER.include_dir:
             command.extend(["-I", inc_dir])
         for lib_dir in COMPILATION_HELPER.library_dir:
