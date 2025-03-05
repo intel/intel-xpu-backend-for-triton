@@ -171,7 +171,7 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  auto order = ttg::getOrder(ty.getEncoding());
+  auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
     // For TMA, the encoding compatible with it takes precedence over local
     // alloc created for the MMA operand.
@@ -560,7 +560,7 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
     ttg::LocalAllocOp alloc =
         dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
     if (alloc && alloc->hasOneUse()) {
-      if (isa<ttng::TMEMCopyOp>(*alloc->getUsers().begin())) {
+      if (isa<ttng::TCGen5MMAScaledOp>(*alloc->getUsers().begin())) {
         return true;
       }
     }

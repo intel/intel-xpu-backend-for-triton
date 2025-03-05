@@ -258,7 +258,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
 // Intel Warp Encoding
 //===----------------------------------------------------------------------===//
 
-def WarpEncodingAttr : TritonGPU_Attr<"WarpEncoding", "intel_warp_encoding",
+def WarpEncodingAttr : DistributedEncoding<"WarpEncoding", "intel_warp_encoding",
                                      [], TritonIntelGPU_Dialect> {
   let mnemonic = "warp";
 
@@ -270,12 +270,12 @@ def WarpEncodingAttr : TritonGPU_Attr<"WarpEncoding", "intel_warp_encoding",
 
   let parameters = (
     ins
-    ArrayRefParameter<"unsigned">:$sizePerThread,
-    ArrayRefParameter<"unsigned">:$threadsPerWarp,
-    ArrayRefParameter<"unsigned">:$order // the fastest-changing axis first
+    ArrayRefParameter<"unsigned">:$sizePerThread_,
+    ArrayRefParameter<"unsigned">:$threadsPerWarp_,
+    ArrayRefParameter<"unsigned">:$order_ // the fastest-changing axis first
   );
 
-  let extraClassDeclaration = [{
+  let extraClassDeclaration = extraDistributedDeclaration #  [{
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
   }];

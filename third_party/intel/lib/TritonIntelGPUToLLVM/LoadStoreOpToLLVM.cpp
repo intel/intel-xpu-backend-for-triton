@@ -36,15 +36,16 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto sizePerThread = triton::gpu::getSizePerThread(layout);
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto order = triton::gpu::getOrder(layout);
+    auto threadOrder = triton::gpu::getThreadOrder(tensorTy);
+    auto warpOrder = triton::gpu::getWarpOrder(tensorTy);
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
     Value warpSize = LLVM::intel::getModuleWarpSize(rewriter, loc);
     Value laneId = b.urem(tid, warpSize);
     Value warpId = b.udiv(tid, warpSize);
     SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+        delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
     SmallVector<Value> multiDimThreadId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+        delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
     for (unsigned dim = 0; dim < rank; ++dim) {
       // if there is no data replication across threads on this dimension
       if (shape[dim] >= shapePerCTATile[dim])
@@ -562,7 +563,8 @@ struct LoadOpConversion
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
-    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(dpasLayout);
+    SmallVector<unsigned> dpasWarpsOrder =
+        triton::gpu::getWarpOrder(tensorType);
     int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
@@ -1195,15 +1197,15 @@ struct StoreOpConversion
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
-    SmallVector<unsigned> order = triton::gpu::getOrder(dpasLayout);
+    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
     unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
                                                  /*upperBound=*/nullptr));
-    SmallVector<Value> multiDimWarpId =
-        mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
+    SmallVector<Value> multiDimWarpId = mlir::LLVM::delinearize(
+        rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
 
     int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
     Type store2DGenXType =

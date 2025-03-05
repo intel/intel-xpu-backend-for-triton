@@ -43,6 +43,11 @@ on:
       - .github/workflows/triton-benchmarks.yml
       - benchmarks/**
 
+# Cancels in-progress PR runs when the PR is updated.  Manual runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 env:

@@ -150,8 +150,24 @@ SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
   return res;
 }
 
+SmallVector<unsigned> DpasEncodingAttr::getDefaultOrder() const {
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
+}
+
+SmallVector<unsigned> DpasEncodingAttr::getDefaultThreadOrder() const {
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
+}
+
+SmallVector<unsigned> DpasEncodingAttr::getDefaultWarpOrder() const {
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
+}
+
 SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
-  llvm::report_fatal_error("NYI. DpasEncodingAttr::getRepOrder");
+  auto rank = getWarpsPerCTA().size();
+  return getMatrixOrder(rank, /*rowMajor*/ true);
 }
 
 SmallVector<unsigned>
@@ -275,16 +291,6 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
   } break;
   }
   llvm_unreachable("unexpected opIdx");
-}
-
-SmallVector<unsigned> DpasEncodingAttr::getWarpOrder() const {
-  size_t rank = getWarpsPerCTA().size();
-  return llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank)));
-}
-
-SmallVector<unsigned> DpasEncodingAttr::getThreadOrder() const {
-  size_t rank = getWarpsPerCTA().size();
-  return llvm::to_vector(llvm::reverse(llvm::seq<unsigned>(rank)));
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getWarpsPerCTA() const {
@@ -512,8 +518,8 @@ LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 SmallVector<unsigned>
 WarpEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
   size_t rank = shape.size();
-  ArrayRef<unsigned> sizePerThread = getSizePerThread();
-  ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp();
+  ArrayRef<unsigned> sizePerThread = getSizePerThread_();
+  ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp_();
   assert(rank == sizePerThread.size() &&
          "unexpected rank in WarpEncodingAttr::getElemsPerThread");
   SmallVector<unsigned> elemsPerThread(rank);
@@ -527,6 +533,52 @@ WarpEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
 unsigned WarpEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
                                                   Type eltTy) const {
   return product<unsigned>(getElemsPerThread(shape, eltTy));
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getThreadsPerWarp() const {
+  auto threadsPerWarp = getThreadsPerWarp_();
+  return SmallVector<unsigned>{threadsPerWarp.begin(), threadsPerWarp.end()};
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getSizePerThread() const {
+  auto sizePerThread = getSizePerThread_();
+  return SmallVector<unsigned>{sizePerThread.begin(), sizePerThread.end()};
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getRepOrder() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getRepOrder");
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getWarpsPerCTA() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getWarpsPerCTA");
+}
+
+LinearLayout WarpEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::toLinearLayout");
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getDefaultOrder() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getDefaultOrder");
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getDefaultThreadOrder() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getDefaultThreadOrder");
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getDefaultWarpOrder() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getDefaultWarpOrder");
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getCTAsPerCGA() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getCTAsPerCGA");
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getCTAOrder() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getCTAOrder");
+}
+
+SmallVector<unsigned> WarpEncodingAttr::getCTASplitNum() const {
+  llvm::report_fatal_error("NYI. WarpEncodingAttr::getCTASplitNum");
 }
 
 Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -568,12 +620,12 @@ Attribute WarpEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
-  ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp();
-  ArrayRef<unsigned> sizePerThread = getSizePerThread();
+  ArrayRef<unsigned> threadsPerWarp = getThreadsPerWarp_();
+  ArrayRef<unsigned> sizePerThread = getSizePerThread_();
   printer << "<{"
           << "sizePerThread = [" << sizePerThread << "]"
           << ", threadsPerWarp = [" << threadsPerWarp << "]"
-          << ", order = [" << getOrder() << "]"
+          << ", order = [" << getOrder_() << "]"
           << "}>";
 }
 
@@ -588,8 +640,9 @@ struct TritonIntelGPUInferLayoutInterface
   LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
                         Attribute &resultEncoding) const override {
-    resultEncoding = mlir::triton::gpu::SliceEncodingAttr::get(
-        getDialect()->getContext(), axis, operandEncoding);
+    resultEncoding =
+        SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                               cast<DistributedEncodingTrait>(operandEncoding));
     return success();
   }
 
