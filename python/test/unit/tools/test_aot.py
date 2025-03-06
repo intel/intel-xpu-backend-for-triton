@@ -124,8 +124,9 @@ def gen_kernel_library_xpu(dir, libname):
 
     extra_link_args = []
     if "icpx" in cxx and os.name == "nt":
+        print("here")
         libname_without_ext = libname.split(".")[0]
-        extra_link_args = [f"-Wl,/IMPLIB:{libname_without_ext}.lib"]
+        extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
 
     subprocess.run([cxx] + [*o_files, "-shared", "-o", libname] +
                    ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
