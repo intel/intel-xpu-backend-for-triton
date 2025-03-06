@@ -459,7 +459,7 @@ def test_compile_link_matmul_no_specialization():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([f".{os.sep}test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
         c_tri = c.reshape((M, N)).view(np.float32)
@@ -489,7 +489,7 @@ def test_compile_link_matmul():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([f".{os.sep}test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
@@ -521,7 +521,7 @@ def test_launcher_has_no_available_kernel():
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
         result = subprocess.run(
-            ["./test", a_path, b_path, c_path],
+            [f".{os.sep}test", a_path, b_path, c_path],
             env=env,
             cwd=tmp_dir,
             capture_output=True,
@@ -570,7 +570,7 @@ def test_compile_link_autotune_matmul():
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
             subprocess.run(
-                [f"./{test_name}", a_path, b_path, c_path],
+                [f".{os.sep}{test_name}", a_path, b_path, c_path],
                 check=True,
                 cwd=tmp_dir,
                 env=env,
