@@ -142,9 +142,9 @@ void unload_{name}();
         """
     if is_xpu():
         return f"""
-int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])});
-void load_{name}();
-void unload_{name}();
+EXPORT_FUNC int32_t {name}(sycl::queue &stream, {gen_signature_with_full_args(metas[-1])});
+EXPORT_FUNC void load_{name}();
+EXPORT_FUNC void unload_{name}();
         """
 
 
@@ -159,10 +159,10 @@ void unload_{meta.orig_kernel_name}();
         """
     if is_xpu():
         return f"""
-int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
-int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
-void load_{meta.orig_kernel_name}();
-void unload_{meta.orig_kernel_name}();
+EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
+EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
+EXPORT_FUNC void load_{meta.orig_kernel_name}();
+EXPORT_FUNC void unload_{meta.orig_kernel_name}();
         """
 
 
@@ -344,6 +344,11 @@ if __name__ == "__main__":
             out += "#include <sycl/sycl.hpp>\n"
             out += "#include <stdint.h>\n"
             out += "#include <stdio.h>\n"
+            out += "#if defined(_WIN32)\n"
+            out += "#define EXPORT_FUNC __declspec(dllexport)\n"
+            out += "#else\n"
+            out += "#define EXPORT_FUNC\n"
+            out += "#endif\n"
         out += "\n".join(algo_decls)
         out += "\n"
         out += get_num_algos_decl
