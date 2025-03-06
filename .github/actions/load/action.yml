@@ -37,7 +37,7 @@ runs:
         ITEM_PATH="${{ inputs.root }}/${{ inputs.key }}"
         echo "dest=$ITEM_PATH" >> $GITHUB_OUTPUT
         if [[ -d ${{ inputs.path }} ]]; then
-          echo "Directory ${{ inputs.path }} already exists and will not be removed"
+          echo "Directory ${{ inputs.path }} already exists and will be removed"
           rm -rf ${{ inputs.path }}
         fi
         if [[ ${{ inputs.enabled == 'true' }} && -d $ITEM_PATH ]]; then
