@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import shutil
+import sysconfig
 
 import numpy as np
 
@@ -165,6 +166,8 @@ def gen_kernel_library(dir, libname):
 
 
 def gen_test_bin(dir, M, N, K, exe="test", algo_id=0):
+    exe_extension = sysconfig.get_config_var("EXE")
+    exe = exe + exe_extension
     test_src = f"""
 int main(int argc, char **argv) {{
   int M = {M}, N = {N}, K = {K};
@@ -467,7 +470,7 @@ def test_compile_link_matmul_no_specialization():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run([f".{os.sep}test.EXE", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([f".{os.sep}test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
         c_tri = c.reshape((M, N)).view(np.float32)
