@@ -47,12 +47,12 @@ const auto l0_device =
 const auto l0_context =
     sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
-extern "C" EXPORT_FUNC void unload_{kernel_name}(void) {{
+EXPORT_FUNC void unload_{kernel_name}(void) {{
     // Not implemeted
 }}
 
 // TODO: support `is_spv` + some code duplication with `third_party/intel/backend/driver.c` and `SPIRVRunner`
-extern "C" EXPORT_FUNC void load_{kernel_name}() {{
+EXPORT_FUNC void load_{kernel_name}() {{
     uint8_t *binary_ptr = (uint8_t *)&SPV_NAME;
     size_t binary_size = {bin_size};
 
@@ -113,7 +113,7 @@ static inline void set_argument(sycl::handler &cgh, int index, const std::string
   }}
 }}
 
-extern "C" EXPORT_FUNC int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
+EXPORT_FUNC int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   auto sycl_mod = sycl::make_kernel_bundle<sycl::backend::ext_oneapi_level_zero,
                                       sycl::bundle_state::executable>(
       {{{kernel_name}_mod, sycl::ext::oneapi::level_zero::ownership::transfer}}, ctx);
