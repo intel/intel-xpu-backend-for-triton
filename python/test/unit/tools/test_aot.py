@@ -338,7 +338,15 @@ int main(int argc, char ** argv) {{
         if os.name == "nt":
             command.extend(["-Wno-deprecated-declarations"])
         command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
-    subprocess.run(command, check=True, cwd=dir)
+    files = os.listdir(dir)
+    print(f"{files=}")
+    print(f"{exe=}")
+    out = subprocess.run(command, cwd=dir, capture_output=True)
+    print(f"{out.stdout=}")
+    print(f"{out.stderr=}")
+    if out.returncode != 0:
+        raise RuntimeError(f"{out.returncode=}, {out=}")
+
 
 
 def write_triton_kernels(dir, src, util_src):
@@ -459,7 +467,7 @@ def test_compile_link_matmul_no_specialization():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run([f".{os.sep}test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([f".{os.sep}test.EXE", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
         c_tri = c.reshape((M, N)).view(np.float32)
