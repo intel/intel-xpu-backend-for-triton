@@ -27,7 +27,6 @@ env:
   PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
-  PYTEST_MAX_PROCESSES: 8
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
 
