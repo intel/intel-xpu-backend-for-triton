@@ -102,8 +102,7 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     subprocess.run(
-        ["g++"] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
-        ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl", "-fPIC"],
+        ["g++"] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] + ["-c", "-fPIC"],
         check=True,
         cwd=dir,
     )
