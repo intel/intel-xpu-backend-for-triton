@@ -10,7 +10,13 @@
 
 #endif
 
-void unload_{kernel_name}(void);
-void load_{kernel_name}(void);
+#if defined(_WIN32)
+#define EXPORT_FUNC __declspec(dllexport)
+#else
+#define EXPORT_FUNC
+#endif
+
+EXPORT_FUNC void unload_{kernel_name}(void);
+EXPORT_FUNC void load_{kernel_name}(void);
 // tt-linker: {kernel_name}:{full_signature}:{algo_info}
-int32_t{_placeholder} {kernel_name}(sycl::queue &stream, {signature});
+EXPORT_FUNC int32_t{_placeholder} {kernel_name}(sycl::queue &stream, {signature});
