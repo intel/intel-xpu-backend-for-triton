@@ -1204,9 +1204,9 @@ struct LoadOpConversion
           // adjust the load offset to compensate for strides related to the
           // DPAS layout
           LLVM_DEBUG({
-            llvm::dbgs() << "x offset from layout: " << offset[dimOuter].second
+            llvm::dbgs() << "x offset from layout: " << offset[0].second
                          << "\n";
-            llvm::dbgs() << "y offset from layout: " << offset[dimInner].second
+            llvm::dbgs() << "y offset from layout: " << offset[1].second
                          << "\n";
           });
           llvm::errs() << "outer dim warp num: " << outerDimWarpNum << "\n";
@@ -1218,23 +1218,8 @@ struct LoadOpConversion
                        << "\n";
           llvm::errs() << "packedElementsPerSlot: " << packedElementsPerSlot
                        << "\n";
-          llvm::errs() << "iteration / vblocks * load = "
-                       << offset[dimOuter].second *
-                              (tileLayout.getInDimSize(kIteration) / vBlocks) *
-                              tileLayout.getInDimSize(kLoad) *
-                              numLoadPerOutRepCluster
-                       << "\n";
-          llvm::errs() << "iteration * load = "
-                       << offset[dimOuter].second *
-                              tileLayout.getInDimSize(kIteration) *
-                              tileLayout.getInDimSize(kLoad) *
-                              numLoadPerOutRepCluster
-                       << "\n";
-          // TODO: should itr / vblocks be outer dim warp #? 
           const auto loadOffsetX =
-              offset[1].second *
-              (tileLayout.getInDimSize(kIteration) / vBlocks) *
-              tileLayout.getInDimSize(kLoad) * numLoadPerOutRepCluster;
+              isOperandA ? offset[1].second : offset[1].second * (tileLayout.getInDimSize(kIteration) / vBlocks) * tileLayout.getInDimSize(kLoad);
           llvm::errs() << "itr size: " << tileLayout.getInDimSize(kIteration) << "\n";
           llvm::errs() << "itr / vblocks: " << tileLayout.getInDimSize(kIteration) / vBlocks << "\n";
           llvm::errs() << "load size: " << tileLayout.getInDimSize(kLoad) << "\n";
