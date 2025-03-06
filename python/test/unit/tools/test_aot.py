@@ -115,8 +115,7 @@ def gen_kernel_library_xpu(dir, libname):
     cxx = select_compiler()
     subprocess.run(
         [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
-        ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-c", "-lsycl8"] +
-        ["-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"],
+        ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"],
         check=True,
         cwd=dir,
     )
