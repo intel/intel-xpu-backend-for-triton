@@ -113,12 +113,18 @@ def select_compiler():
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     cxx = select_compiler()
-    subprocess.run(
-        [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] +
-        ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"],
-        check=True,
+    command = [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir
+                                   ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
+    print(f"{command=}")
+    out = subprocess.run(
+        command,
         cwd=dir,
+        capture_output=True,
     )
+    print(f"{out.stdout=}")
+    print(f"{out.stderr=}")
+    if out.returncode != 0:
+        raise RuntimeError(f"{out.returncode=}, {out=}")
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
     extra_link_args = []
@@ -127,12 +133,14 @@ def gen_kernel_library_xpu(dir, libname):
         libname_without_ext = libname.split(".")[0]
         extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
 
-    subprocess.run([cxx] + [*o_files, "-shared", "-o", libname] +
-                   ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
-                   ["-L" + dir
-                    for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args,
-                   check=True, cwd=dir)
-
+    command = [cxx] + [*o_files, "-shared", "-o", libname] + [
+        "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
+    ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args
+    out = subprocess.run(command, cwd=dir)
+    print(f"{out.stdout=}")
+    print(f"{out.stderr=}")
+    if out.returncode != 0:
+        raise RuntimeError(f"{out.returncode=}, {out=}")
     files = os.listdir(dir)
     print(f"{files=}")
 
