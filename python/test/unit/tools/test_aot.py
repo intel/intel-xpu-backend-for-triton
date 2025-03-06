@@ -136,7 +136,8 @@ def gen_kernel_library_xpu(dir, libname):
     command = [cxx] + [*o_files, "-shared", "-o", libname] + [
         "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
     ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args
-    out = subprocess.run(command, cwd=dir)
+    print(f"{command=}")
+    out = subprocess.run(command, cwd=dir, capture_output=True)
     print(f"{out.stdout=}")
     print(f"{out.stderr=}")
     if out.returncode != 0:
