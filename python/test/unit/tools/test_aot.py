@@ -338,10 +338,10 @@ int main(int argc, char ** argv) {{
         if os.name == "nt":
             command.extend(["-Wno-deprecated-declarations"])
         command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
+    out = subprocess.run(command, cwd=dir, capture_output=True)
     files = os.listdir(dir)
     print(f"{files=}")
     print(f"{exe=}")
-    out = subprocess.run(command, cwd=dir, capture_output=True)
     print(f"{out.stdout=}")
     print(f"{out.stderr=}")
     if out.returncode != 0:
