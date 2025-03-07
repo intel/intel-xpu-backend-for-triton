@@ -116,7 +116,7 @@ def gen_kernel_library_xpu(dir, libname):
     cxx = select_compiler()
     if "cl.EXE" in cxx or "clang-cl" in cxx:
         command = [cxx] + cpp_files + ["/I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] + [
-            "/Zc:__cplusplus", "/std:c++17", "/nologo", "/O2", "/EHsc", "/c", "/wd4996"
+            "/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/c", "/wd4996"
         ]
     else:
         command = [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir
@@ -139,7 +139,7 @@ def gen_kernel_library_xpu(dir, libname):
         extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
 
     if "cl.EXE" in cxx or "clang-cl" in cxx:
-        command = [cxx] + [*o_files, "/LD", "/MD", f"/OUT:{libname}"] + [
+        command = [cxx] + [*o_files, "/LD", "/link", f"/OUT:{libname}"] + [
             "/LIBPATH:" + library_dir for library_dir in COMPILATION_HELPER.library_dir
         ] + ["/LIBPATH:" + dir
              for dir in COMPILATION_HELPER.libsycl_dir] + ["sycl8.lib", "ze_loader.lib"] + extra_link_args
