@@ -115,8 +115,9 @@ def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     cxx = select_compiler()
     if "cl.EXE" in cxx or "clang-cl" in cxx:
-        command = [cxx] + cpp_files + ["/I" + include_dir
-                                       for include_dir in COMPILATION_HELPER.include_dir] + ["/c", "/wd4996"]
+        command = [cxx] + cpp_files + ["/I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] + [
+            "/Zc:__cplusplus", "/std:c++17", "/nologo", "/O2", "/EHsc", "/c", "/wd4996"
+        ]
     else:
         command = [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir
                                        ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
@@ -138,7 +139,7 @@ def gen_kernel_library_xpu(dir, libname):
         extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
 
     if "cl.EXE" in cxx or "clang-cl" in cxx:
-        command = [cxx] + [*o_files, "/LD", f"/OUT:{libname}"] + [
+        command = [cxx] + [*o_files, "/LD", "/MD", f"/OUT:{libname}"] + [
             "/LIBPATH" + library_dir for library_dir in COMPILATION_HELPER.library_dir
         ] + ["/LIBPATH" + dir
              for dir in COMPILATION_HELPER.libsycl_dir] + ["sycl8.lib", "ze_loader.lib"] + extra_link_args
@@ -348,8 +349,11 @@ int main(int argc, char ** argv) {{
             for lib_dir in COMPILATION_HELPER.libsycl_dir:
                 command.extend(["-L", lib_dir])
         if os.name == "nt":
-            command.extend(["-Wno-deprecated-declarations"])
-        command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
+            if "icpx" in cxx:
+                command.extend(["-Wno-deprecated-declarations"])
+            else:
+                command.extend(["/wd4996"])
+        command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-lkernel", "-o", exe])
     out = subprocess.run(command, cwd=dir, capture_output=True)
     files = os.listdir(dir)
     print(f"{files=}")
@@ -469,7 +473,7 @@ def test_compile_link_matmul_no_specialization():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.dll")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -499,7 +503,7 @@ def test_compile_link_matmul():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.dll")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -530,7 +534,7 @@ def test_launcher_has_no_available_kernel():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.dll")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -574,7 +578,7 @@ def test_compile_link_autotune_matmul():
 
         link_aot_kernels(tmp_dir)
 
-        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.dll")
 
         # compile test case
         M, N, K = 64, 64, 64
