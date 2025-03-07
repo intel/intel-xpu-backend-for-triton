@@ -343,18 +343,23 @@ int main(int argc, char ** argv) {{
         cxx = select_compiler()
         command = [cxx, "test.cpp"]
         for inc_dir in COMPILATION_HELPER.include_dir:
-            command.extend(["-I", inc_dir])
+            command.extend([("/I" if os.name == "nt" else "-I") + inc_dir])
+        if os.name == "nt":
+            command.extend("/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996", "/link")
         for lib_dir in COMPILATION_HELPER.library_dir:
-            command.extend(["-L", lib_dir])
+            command.extend([("/LIBPATH:" if os.name == "nt" else "-L") + lib_dir])
         if COMPILATION_HELPER.libsycl_dir:
             for lib_dir in COMPILATION_HELPER.libsycl_dir:
-                command.extend(["-L", lib_dir])
+                command.extend([("/LIBPATH:" if os.name == "nt" else "-L") + lib_dir])
         if os.name == "nt":
             if "icpx" in cxx:
                 command.extend(["-Wno-deprecated-declarations"])
             else:
                 command.extend(["/wd4996"])
-        command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-lkernel", "-o", exe])
+        if os.name == "nt":
+            command.extend(["sycl8.lib", "ze_loader.lib", "/LIBPATH:" + dir, "kernel.lib", "/OUT:" + exe])
+        else:
+            command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-lkernel", "-o", exe])
     out = subprocess.run(command, cwd=dir, capture_output=True)
     files = os.listdir(dir)
     print(f"{files=}")
