@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import shutil
+import sysconfig
 
 import numpy as np
 
@@ -99,19 +101,33 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {
 }"""
 
 
+def select_compiler():
+    gxx = shutil.which("g++")
+    icpx = shutil.which("icpx")
+    cl = shutil.which("cl")
+    cxx = icpx or cl if os.name == "nt" else icpx or gxx
+    if cxx is None:
+        raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
+    return cxx
+
+
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
-    subprocess.run(
-        ["g++"] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] + ["-c", "-fPIC"],
-        check=True,
-        cwd=dir,
-    )
+    cxx = select_compiler()
+    command = [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir
+                                   ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
+    subprocess.run(command, check=True, cwd=dir)
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
-    subprocess.run(["g++"] + [*o_files, "-shared", "-o", libname] +
-                   ["-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir] +
-                   ["-L" + dir
-                    for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl", "-lze_loader"], check=True, cwd=dir)
+    extra_link_args = []
+    if "icpx" in cxx and os.name == "nt":
+        libname_without_ext = libname.split(".")[0]
+        extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
+
+    command = [cxx] + [*o_files, "-shared", "-o", libname] + [
+        "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
+    ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args
+    subprocess.run(command, check=True, cwd=dir)
 
 
 def gen_kernel_library(dir, libname):
@@ -133,6 +149,8 @@ def gen_kernel_library(dir, libname):
 
 
 def gen_test_bin(dir, M, N, K, exe="test", algo_id=0):
+    exe_extension = sysconfig.get_config_var("EXE")
+    exe = exe + exe_extension
     test_src = f"""
 int main(int argc, char **argv) {{
   int M = {M}, N = {N}, K = {K};
@@ -294,7 +312,8 @@ int main(int argc, char ** argv) {{
         command.extend(["-l", "cuda", "-L", dir, "-l", "kernel", "-o", exe])
 
     if is_xpu():
-        command = ["g++", "test.cpp"]
+        cxx = select_compiler()
+        command = [cxx, "test.cpp"]
         for inc_dir in COMPILATION_HELPER.include_dir:
             command.extend(["-I", inc_dir])
         for lib_dir in COMPILATION_HELPER.library_dir:
@@ -302,7 +321,9 @@ int main(int argc, char ** argv) {{
         if COMPILATION_HELPER.libsycl_dir:
             for lib_dir in COMPILATION_HELPER.libsycl_dir:
                 command.extend(["-L", lib_dir])
-        command.extend(["-lsycl", "-lze_loader", "-L", dir, "-l", "kernel", "-o", exe])
+        if os.name == "nt":
+            command.extend(["-Wno-deprecated-declarations"])
+        command.extend(["-lsycl8" if os.name == "nt" else "-lsycl", "-lze_loader", "-L", dir, "-lkernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
 
@@ -415,7 +436,7 @@ def test_compile_link_matmul_no_specialization():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -424,7 +445,7 @@ def test_compile_link_matmul_no_specialization():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
         c_tri = c.reshape((M, N)).view(np.float32)
@@ -445,7 +466,7 @@ def test_compile_link_matmul():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -454,7 +475,7 @@ def test_compile_link_matmul():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
@@ -476,7 +497,7 @@ def test_launcher_has_no_available_kernel():
 
         # compile test case
         M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
         gen_test_bin(tmp_dir, M, N, K)
 
         # initialize test data
@@ -486,7 +507,7 @@ def test_launcher_has_no_available_kernel():
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
         result = subprocess.run(
-            ["./test", a_path, b_path, c_path],
+            [os.path.join(tmp_dir, "test"), a_path, b_path, c_path],
             env=env,
             cwd=tmp_dir,
             capture_output=True,
@@ -494,7 +515,8 @@ def test_launcher_has_no_available_kernel():
         )
 
         # It should fail since the launcher requires all the strides be 1 while they are not.
-        assert result.returncode == -6
+        # On windows: 3221226505 == 0xc0000409: STATUS_STACK_BUFFER_OVERRUN
+        assert result.returncode == -6 if os.name != "nt" else 0xc0000409
         assert "kernel launch failed" in result.stderr
 
 
@@ -519,7 +541,7 @@ def test_compile_link_autotune_matmul():
 
         link_aot_kernels(tmp_dir)
 
-        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_kernel_library(tmp_dir, "libkernel.so" if os.name != "nt" else "kernel.pyd")
 
         # compile test case
         M, N, K = 64, 64, 64
@@ -535,7 +557,7 @@ def test_compile_link_autotune_matmul():
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
             subprocess.run(
-                [f"./{test_name}", a_path, b_path, c_path],
+                [os.path.join(tmp_dir, test_name), a_path, b_path, c_path],
                 check=True,
                 cwd=tmp_dir,
                 env=env,
