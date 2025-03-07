@@ -906,10 +906,18 @@ struct LoadOpConversion
         isOperandA ? numOperandsPer2DloadN : numOperandsPer2DLoadM;
 
     if (!isTransposeRequired) {
+#if 0 
+      tileLayout *= LinearLayout::identity1D(numIterationsOuterDimPerLoad,
+        kIteration, S("dim0"));
+      tileLayout *= LinearLayout::identity1D(numIterationsInnerDimPerLoad,
+        kIteration, S("dim1"));
+#else
       tileLayout *= LinearLayout::identity1D(numIterationsOuterDimPerLoad,
                                              kIteration, dimOuterStr);
       tileLayout *= LinearLayout::identity1D(numIterationsInnerDimPerLoad,
                                              kIteration, dimInnerStr);
+#endif 
+
       llvm::errs() << "\nnumOperandsOuterDimPerLoad: "
                    << numOperandsOuterDimPerLoad << "\n";
       llvm::errs() << "numOperandsInnerDimPerLoad: "
@@ -1309,8 +1317,12 @@ struct LoadOpConversion
             llvm::errs() << "tileWidth = " << tileWidth << "\n";
             llvm::errs() << "elemSizeInBits/16 = " << elemSizeInBits / 16
                          << "\n";
+#if 1
+            loadColStride = isOperandA ? tileHeight : tileWidth;
+#else
             loadColStride = isOperandA ? tileHeight / (elemSizeInBits / 16)
                                        : tileWidth / (elemSizeInBits / 16);
+#endif 
           }
 
           LLVM_DEBUG({
