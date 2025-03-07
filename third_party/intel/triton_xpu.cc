@@ -79,6 +79,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                          bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
+  ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
+                     gpu::intel::createTritonIntelGPURewriteStackPtr);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
                      gpu::intel::createIntelDecomposeUnsupportedConversions);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
