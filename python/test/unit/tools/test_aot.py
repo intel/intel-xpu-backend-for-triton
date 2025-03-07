@@ -131,7 +131,6 @@ def gen_kernel_library_xpu(dir, libname):
     print(f"{out.stderr=}")
     if out.returncode != 0:
         raise RuntimeError(f"{out.returncode=}, {out=}")
-    o_files = glob.glob(os.path.join(dir, "*.o"))
 
     extra_link_args = []
     if os.name == "nt":
@@ -139,11 +138,13 @@ def gen_kernel_library_xpu(dir, libname):
         extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
 
     if "cl.EXE" in cxx or "clang-cl" in cxx:
+        o_files = glob.glob(os.path.join(dir, "*.obj"))
         command = [cxx] + [*o_files, "/LD", "/link", f"/OUT:{libname}"] + [
             "/LIBPATH:" + library_dir for library_dir in COMPILATION_HELPER.library_dir
         ] + ["/LIBPATH:" + dir
              for dir in COMPILATION_HELPER.libsycl_dir] + ["sycl8.lib", "ze_loader.lib"] + extra_link_args
     else:
+        o_files = glob.glob(os.path.join(dir, "*.o"))
         command = [cxx] + [*o_files, "-shared", "-o", libname] + [
             "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
         ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args
