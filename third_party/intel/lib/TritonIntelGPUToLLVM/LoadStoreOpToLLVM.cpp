@@ -1421,7 +1421,11 @@ struct LoadOpConversion
                     elemsPerDPASInst[0];
                 llvm::errs() << "\tshuffle y offset: " << y_offset << "\n";
 
-                y_offset *= isTransposeRequired ? 1 : elemsPerDPASInst[1];
+#if 1
+                y_offset *= isTransposeRequired ? 1 : tileHeight / opsPerChannel; 
+#else
+                y_offset *= isTransposeRequired ? 1 : (isOperandA ? elemsPerDPASInst[1] : packedElemsPerLanePerDPASInst);
+#endif 
                 llvm::errs() << "\tshuffle y stride: " << y_offset << "\n";
 
                 llvm::errs()
@@ -1458,6 +1462,9 @@ struct LoadOpConversion
                                     << ", " << tensorCoord[1].second << "\n");
             llvm::errs() << "packedElementsPerSlot: " << packedElementsPerSlot
                          << "\n";
+            llvm::errs() << "packedElemsPerLanePerDPASInst: " << packedElemsPerLanePerDPASInst << "\n";
+            llvm::errs() << "elemsPerLanePerDPASInst: " << elemsPerLanePerDPASInst << "\n";
+            llvm::errs() << "opsPerChannel: " << opsPerChannel << "\n";
             llvm::errs() << "elemsPerDPASInst: " << elemsPerDPASInst[0] << ", "
                          << elemsPerDPASInst[1] << "\n";
             llvm::errs() << "tile height, width: " << tileHeight << ", "
