@@ -469,7 +469,7 @@ def test_compile_link_matmul_no_specialization():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run([os.path.join(tmp_dir, "test.exe"), a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
         c_tri = c.reshape((M, N)).view(np.float32)
@@ -499,7 +499,7 @@ def test_compile_link_matmul():
         # run test case
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
-        subprocess.run([os.path.join(tmp_dir, "test.exe"), a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+        subprocess.run([os.path.join(tmp_dir, "test"), a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
         # read data and compare against reference
         c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
@@ -531,7 +531,7 @@ def test_launcher_has_no_available_kernel():
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
         result = subprocess.run(
-            [os.path.join(tmp_dir, "test.exe"), a_path, b_path, c_path],
+            [os.path.join(tmp_dir, "test"), a_path, b_path, c_path],
             env=env,
             cwd=tmp_dir,
             capture_output=True,
@@ -539,7 +539,8 @@ def test_launcher_has_no_available_kernel():
         )
 
         # It should fail since the launcher requires all the strides be 1 while they are not.
-        assert result.returncode == -6
+        # On windows: 3221226505 ~ 0xc0000409: STATUS_STACK_BUFFER_OVERRUN
+        assert result.returncode == -6 if os.name != "nt" else 0xc0000409
         assert "kernel launch failed" in result.stderr
 
 
@@ -580,7 +581,7 @@ def test_compile_link_autotune_matmul():
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = tmp_dir + ":" + env.get("LD_LIBRARY_PATH", "")
             subprocess.run(
-                [os.path.join(tmp_dir, f"{test_name}.exe"), a_path, b_path, c_path],
+                [os.path.join(tmp_dir, test_name), a_path, b_path, c_path],
                 check=True,
                 cwd=tmp_dir,
                 env=env,
