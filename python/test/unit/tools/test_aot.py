@@ -345,7 +345,7 @@ int main(int argc, char ** argv) {{
         for inc_dir in COMPILATION_HELPER.include_dir:
             command.extend([("/I" if os.name == "nt" else "-I") + inc_dir])
         if os.name == "nt":
-            command.extend("/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996", "/link")
+            command.extend(["/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996", "/link"])
         for lib_dir in COMPILATION_HELPER.library_dir:
             command.extend([("/LIBPATH:" if os.name == "nt" else "-L") + lib_dir])
         if COMPILATION_HELPER.libsycl_dir:
