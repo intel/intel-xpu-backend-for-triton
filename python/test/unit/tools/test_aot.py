@@ -140,8 +140,8 @@ def gen_kernel_library_xpu(dir, libname):
 
     if "cl.EXE" in cxx or "clang-cl" in cxx:
         command = [cxx] + [*o_files, "/LD", "/MD", f"/OUT:{libname}"] + [
-            "/LIBPATH" + library_dir for library_dir in COMPILATION_HELPER.library_dir
-        ] + ["/LIBPATH" + dir
+            "/LIBPATH:" + library_dir for library_dir in COMPILATION_HELPER.library_dir
+        ] + ["/LIBPATH:" + dir
              for dir in COMPILATION_HELPER.libsycl_dir] + ["sycl8.lib", "ze_loader.lib"] + extra_link_args
     else:
         command = [cxx] + [*o_files, "-shared", "-o", libname] + [
