@@ -114,8 +114,12 @@ def select_compiler():
 def gen_kernel_library_xpu(dir, libname):
     cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
     cxx = select_compiler()
-    command = [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir
-                                   ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
+    if "cl.EXE" in cxx or "clang-cl" in cxx:
+        command = [cxx] + cpp_files + ["/I" + include_dir
+                                       for include_dir in COMPILATION_HELPER.include_dir] + ["/c", "/wd4996"]
+    else:
+        command = [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir
+                                       ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
     print(f"{command=}")
     out = subprocess.run(
         command,
@@ -129,14 +133,19 @@ def gen_kernel_library_xpu(dir, libname):
     o_files = glob.glob(os.path.join(dir, "*.o"))
 
     extra_link_args = []
-    if "icpx" in cxx and os.name == "nt":
-        print("here")
+    if os.name == "nt":
         libname_without_ext = libname.split(".")[0]
         extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
 
-    command = [cxx] + [*o_files, "-shared", "-o", libname] + [
-        "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
-    ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args
+    if "cl.EXE" in cxx or "clang-cl" in cxx:
+        command = [cxx] + [*o_files, "/LD", f"/OUT:{libname}"] + [
+            "/LIBPATH" + library_dir for library_dir in COMPILATION_HELPER.library_dir
+        ] + ["/LIBPATH" + dir
+             for dir in COMPILATION_HELPER.libsycl_dir] + ["sycl8.lib", "ze_loader.lib"] + extra_link_args
+    else:
+        command = [cxx] + [*o_files, "-shared", "-o", libname] + [
+            "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
+        ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args
     print(f"{command=}")
     out = subprocess.run(command, cwd=dir, capture_output=True)
     print(f"{out.stdout=}")
