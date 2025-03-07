@@ -35,6 +35,12 @@ jobs:
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
     timeout-minutes: 480
     steps:
+      - name: Show runner settings
+        run: |
+          echo MAX_JOBS = $env:MAX_JOBS
+          echo TRITON_PARALLEL_LINK_JOBS = $env:TRITON_PARALLEL_LINK_JOBS
+          echo PYTEST_MAX_PROCESSES = $env:PYTEST_MAX_PROCESSES
+
       - name: Enable long paths
         run: |
           git config --system core.longPaths true
