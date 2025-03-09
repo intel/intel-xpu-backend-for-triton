@@ -105,7 +105,7 @@ def select_compiler():
     gxx = shutil.which("g++")
     icpx = shutil.which("icpx")
     cl = shutil.which("cl")
-    cxx = icpx or cl if os.name == "nt" else icpx or gxx
+    cxx = (icpx or cl) if os.name == "nt" else (icpx or gxx)
     if cxx is None:
         raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
     return cxx
