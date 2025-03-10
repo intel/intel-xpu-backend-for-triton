@@ -328,9 +328,7 @@ struct PrefetchOpConversion
     Value ptr = op.getPtr();
     if (isTensorPointerType(ptr.getType()))
       return rewriteTensorPointerPrefetch(op, adaptor, rewriter);
-
-    llvm_unreachable("Unexpected prefetch operation on 'regular' ptr");
-    return failure();
+    return rewriteRegularPointerPrefetch(op, adaptor, rewriter);
   }
 
   LogicalResult
@@ -369,6 +367,9 @@ struct PrefetchOpConversion
       // Swap the shape to make it row major and then get the tiling
       // size base on row major shape.
       std::swap(tensorShape[0], tensorShape[1]);
+
+      tensorType = RankedTensorType::get(
+          tensorShape, tensorType.getElementType(), tensorType.getEncoding());
     }
 
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
@@ -475,6 +476,222 @@ struct PrefetchOpConversion
           // lowered further to a builtin call.
           return failure();
         }
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  LogicalResult
+  rewriteRegularPointerPrefetch(triton::gpu::intel::PrefetchOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr) {
+      llvm_unreachable("Unexpected prefetch operation on unstructured memory "
+                       "which may pollute the cache");
+      return failure();
+    }
+
+    // Only support rank 2 block pointer, either row major or column major.
+    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
+    assert((memoryLayoutInfo == "row_major" ||
+            memoryLayoutInfo == "column_major") &&
+           "Only row_major or column_major is supported");
+
+    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
+
+    // TODO: To support more layouts on memory.
+    if (!memoryRowMajor) {
+      return failure();
+    }
+
+    Value ptr = op.getPtr();
+    auto tensorOfPointers = cast<RankedTensorType>(ptr.getType());
+
+    // TODO: To support more layouts in register.
+    if (!hasDotDpasEncoding(tensorOfPointers))
+      return failure();
+
+    auto encoding = getDotEncoding(tensorOfPointers).value();
+    auto dpasLayout = cast<DpasEncodingAttr>(encoding.getParent());
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto cluster = dpasLayout.getRepCluster();
+    SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
+    auto tensorShape = tensorOfPointers.getShape();
+
+    DpasEncodingAttr::OpIdx opIdx;
+    auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
+      auto dotLayout = getDotEncoding(tensorOfPointers).value();
+      return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+    };
+    opIdx = getOpIdx();
+
+    auto repetitions = dpasLayout.getDPASRepetitions(tensorShape, opIdx);
+    // getDPASRepetitions always return rank 3 size.
+    SmallVector<unsigned> numReps{repetitions.begin() + 1, repetitions.end()};
+    SmallVector<int64_t, 2> shardTensorShape;
+    if (opIdx == DpasEncodingAttr::OpIdx::OperandA) {
+      auto opAShape = dpasLayout.getShapeA();
+      shardTensorShape = {std::min<unsigned>(tensorShape[0], opAShape[0]),
+                          tensorShape[1]};
+      warpsPerCTA[1] = 1;
+      repCluster[1] = 1;
+      numReps[1] = 1;
+    } else {
+      auto opBShape = dpasLayout.getShapeB();
+      shardTensorShape = {tensorShape[0],
+                          std::min<unsigned>(tensorShape[1], opBShape[1])};
+      warpsPerCTA[0] = 1;
+      repCluster[0] = 1;
+      numReps[0] = 1;
+    }
+
+    auto ptrType = cast<PointerType>(tensorOfPointers.getElementType());
+    Type elementType = ptrType.getPointeeType();
+    RankedTensorType tensorType = RankedTensorType::get(
+        shardTensorShape, elementType, tensorOfPointers.getEncoding());
+
+    SmallVector<unsigned, 2> prefetchShape =
+        get2DPrefetchShapePerWarp(tensorType);
+
+    Value mask = op.getMask();
+    unsigned maskConstancyHor = std::numeric_limits<unsigned>::max(),
+             maskConstancyVer = std::numeric_limits<unsigned>::max();
+    if (mask) {
+      if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
+        auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                            axisAnalysisPass)
+                            .getAxisInfo(mask);
+        if (axisInfo) {
+          maskConstancyHor = axisInfo->getConstancy(1);
+          maskConstancyVer = axisInfo->getConstancy(0);
+        } else {
+          maskConstancyHor = 1;
+          maskConstancyVer = 1;
+        }
+      }
+      /*else {
+        // scalar mask. No need to check the constancy.
+      }*/
+    }
+    prefetchShape = {std::min<unsigned>(prefetchShape[0], maskConstancyVer),
+                     std::min<unsigned>(prefetchShape[1], maskConstancyHor)};
+
+    SmallVector<int64_t> numPrefetchsPerRep = {
+        mlir::ceil<int64_t>(shardTensorShape[0], prefetchShape[0]),
+        mlir::ceil<int64_t>(shardTensorShape[1], prefetchShape[1])};
+
+    Type eltTy = tensorType.getElementType();
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    unsigned tileWidthInElem = prefetchShape[1];
+    unsigned tileHeightInElem = prefetchShape[0];
+    unsigned vBlocks = 1;
+    switch (elemSizeInBits) {
+    case 8:
+      if (tileWidthInElem == 64) {
+        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 32;
+      }
+      break;
+    case 16:
+      if (tileWidthInElem == 32) {
+        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 16;
+      }
+      break;
+    }
+
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    std::map<SmallVector<unsigned>, Value> baseAddrs, masks;
+    Value llPtr = adaptor.getPtr();
+    Value llMask = adaptor.getMask();
+
+    SmallVector<Value> ptrElems, maskElems;
+    // Get the LLVM values for pointers
+    ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    if (llMask) {
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+    }
+
+    // re-arrange the baseAddrs and masks to for large 2D block IO.
+    // Layout is unrelated to the scalar type.
+    SmallVector<SmallVector<unsigned>> offsets =
+        mlir::emitOffsetForLayout(encoding, tensorOfPointers);
+    for (size_t i = 0; i < ptrElems.size(); ++i) {
+      SmallVector<unsigned> offset = offsets[i];
+      baseAddrs[offset] = ptrElems[i];
+      if (llMask && maskElems.size() > 1)
+        masks[offset] = maskElems[i];
+    }
+
+    Value base, baseWidth, baseHeight, rowStrideInBytes, colStride, offsetBaseX,
+        offsetBaseY;
+
+    baseWidth = b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
+    baseHeight = b.i32_val(tileHeightInElem);
+    offsetBaseX = b.i32_val(0);
+    offsetBaseY = b.i32_val(0);
+    rowStrideInBytes = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
+                             b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
+    rowStrideInBytes =
+        targetInfo.shuffleIdx(rewriter, loc, rowStrideInBytes, 0);
+    rowStrideInBytes = b.umax(b.trunc(i32_ty, rowStrideInBytes), baseWidth);
+    rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+
+    for (int row = 0; row < numReps[0]; ++row) {
+      for (int col = 0; col < numReps[1]; ++col) {
+        // Prefetch the data for each repetitions.
+        for (int i = 0; i < numPrefetchsPerRep[0]; ++i)
+          for (int j = 0; j < numPrefetchsPerRep[1]; ++j) {
+            unsigned offsetN = col * warpsPerCTA[1] * shardTensorShape[1] +
+                               j * prefetchShape[1];
+            unsigned offsetM = row * warpsPerCTA[0] * shardTensorShape[0] +
+                               i * prefetchShape[0];
+            Value pred;
+            if (llMask) {
+              if (maskElems.size() > 1) {
+                pred = targetInfo.shuffleIdx(rewriter, loc,
+                                             masks[{offsetM, offsetN}], 0);
+              } else {
+                pred = maskElems[0];
+              }
+            } else {
+              pred = b.int_val(1, 1);
+            }
+            Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
+            auto addr = targetInfo.shuffleIdx(rewriter, loc,
+                                              baseAddrs[{offsetM, offsetN}], 0);
+
+            auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+                loc,
+                /*ptr*/ addr,
+                /*base_width*/ baseWidth,
+                /*base_height*/ baseHeight,
+                /*base_pitch*/ rowStrideInBytes,
+                /*x*/ offsetBaseX,
+                /*y*/ offsetY,
+                /*elem_size_in_bits*/ elemSizeInBits,
+                /*tile_width*/ tileWidthInElem,
+                /*tile_height*/ tileHeightInElem,
+                /*v_blocks*/ vBlocks,
+                /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+            if (failed(newOp.verify())) {
+              // Explicitly invoke verifier because `triton_gen` ops are
+              // immediately lowered further to a builtin call.
+              return failure();
+            }
+          }
       }
     }
 
