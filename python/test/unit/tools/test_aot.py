@@ -278,7 +278,7 @@ static void read_csv_to_buffer(char *filename, int16_t *buffer, int size) {{
     fclose(file);
 }}
 int main(int argc, char ** argv) {{
-    int M = {M}, N = {N}, K = {K};
+    constexpr int M = {M}, N = {N}, K = {K};
 
     // initialize sycl handles
     sycl::queue q{{sycl::gpu_selector_v}};
