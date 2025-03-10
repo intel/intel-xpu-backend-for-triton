@@ -23,15 +23,15 @@ env:
   PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
-  SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --ignore-errors
+  SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
 
 jobs:
   build:
     name: Build and test
     runs-on:
       - windows
-      - ${{ inputs.runner_label }}
+      - ${{ inputs.runner_label || 'a770' }}
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
     timeout-minutes: 480
     steps:
@@ -95,6 +95,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
+          # $env:DEBUG = 1
           pip install -v --no-build-isolation '.[build,tests,tutorials]'
 
       - name: Triton version

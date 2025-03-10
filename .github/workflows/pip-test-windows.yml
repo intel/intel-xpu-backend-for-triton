@@ -21,8 +21,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - third_party/intel/backend/driver.py
   push:
     branches:
       - main
