@@ -105,7 +105,7 @@ def select_compiler():
     gxx = shutil.which("g++")
     icpx = shutil.which("icpx")
     cl = shutil.which("cl")
-    cxx = icpx or cl if os.name == "nt" else icpx or gxx
+    cxx = (icpx or cl) if os.name == "nt" else (icpx or gxx)
     if cxx is None:
         raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
     return cxx
@@ -141,13 +141,14 @@ def gen_kernel_library_xpu(dir, libname):
         o_files = glob.glob(os.path.join(dir, "*.obj"))
         command = [cxx] + [*o_files, "/LD", "/link", f"/OUT:{libname}"] + [
             "/LIBPATH:" + library_dir for library_dir in COMPILATION_HELPER.library_dir
-        ] + ["/LIBPATH:" + dir
-             for dir in COMPILATION_HELPER.libsycl_dir] + ["sycl8.lib", "ze_loader.lib"] + extra_link_args
+        ] + ["/LIBPATH:" + dir for dir in COMPILATION_HELPER.libsycl_dir
+             ] + ["sycl8.lib" if os.name == "nt" else "sycl.lib", "ze_loader.lib"] + extra_link_args
     else:
         o_files = glob.glob(os.path.join(dir, "*.o"))
         command = [cxx] + [*o_files, "-shared", "-o", libname] + [
             "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
-        ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir] + ["-lsycl8", "-lze_loader"] + extra_link_args
+        ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir
+             ] + ["-lsycl8" if os.name == "nt" else "-lsycl", "-lze_loader"] + extra_link_args
     print(f"{command=}")
     out = subprocess.run(command, cwd=dir, capture_output=True)
     print(f"{out.stdout=}")
@@ -357,9 +358,13 @@ int main(int argc, char ** argv) {{
             else:
                 command.extend(["/wd4996"])
         if os.name == "nt":
-            command.extend(["sycl8.lib", "ze_loader.lib", "/LIBPATH:" + dir, "kernel.lib", "/OUT:" + exe])
+            command.extend([
+                "sycl8.lib" if os.name == "nt" else "sycl.lib", "ze_loader.lib", "/LIBPATH:" + dir, "kernel.lib",
+                "/OUT:" + exe
+            ])
         else:
-            command.extend(["-lsycl8", "-lze_loader", "-L", dir, "-lkernel", "-o", exe])
+            command.extend(
+                ["-lsycl8" if os.name == "nt" else "-lsycl", "-lze_loader", "-L", dir, "-lkernel", "-o", exe])
     out = subprocess.run(command, cwd=dir, capture_output=True)
     files = os.listdir(dir)
     print(f"{files=}")
@@ -558,7 +563,7 @@ def test_launcher_has_no_available_kernel():
         )
 
         # It should fail since the launcher requires all the strides be 1 while they are not.
-        # On windows: 3221226505 ~ 0xc0000409: STATUS_STACK_BUFFER_OVERRUN
+        # On windows: 3221226505 == 0xc0000409: STATUS_STACK_BUFFER_OVERRUN
         assert result.returncode == -6 if os.name != "nt" else 0xc0000409
         assert "kernel launch failed" in result.stderr
 
