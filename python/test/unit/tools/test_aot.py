@@ -355,8 +355,6 @@ int main(int argc, char ** argv) {{
         if os.name == "nt":
             if "icpx" in cxx:
                 command.extend(["-Wno-deprecated-declarations"])
-            else:
-                command.extend(["/wd4996"])
         if os.name == "nt":
             command.extend([
                 "sycl8.lib" if os.name == "nt" else "sycl.lib", "ze_loader.lib", "/LIBPATH:" + dir, "kernel.lib",
