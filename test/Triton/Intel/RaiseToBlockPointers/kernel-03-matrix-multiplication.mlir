@@ -1,6 +1,7 @@
 // RUN: triton-opt %s -triton-intel-remove-masks -triton-raise-block-pointer -canonicalize | FileCheck %s
 
 module {
+  // COM: Derived from tutorial 03-matrix-multiplication.
   tt.func public @matmul_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) {
     %c31_i32 = arith.constant 31 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf32>
