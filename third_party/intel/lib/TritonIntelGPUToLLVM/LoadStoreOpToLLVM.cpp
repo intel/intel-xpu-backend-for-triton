@@ -390,7 +390,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int tileHeight;
     int tileWidth;
     int numElemPerPackedVal;
-    const int vBlocks;
+    int vBlocks;
     int rowDim;
     int colDim;
     std::optional<SetVector<unsigned>> regPackedBases;
@@ -2664,9 +2664,6 @@ struct StoreOpToBlockIOConversion
     if (!isBlockIOCandidate(op, enableBlockIOForAllLayout))
       return failure();
 
-    if (!isTensorPointerType(op.getPtr().getType()))
-      return failure();
-
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type resultType = op.getValue().getType();
@@ -2684,13 +2681,14 @@ struct StoreOpToBlockIOConversion
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           regPackedBases] =
         getBlockIOTileSize<8 /*MAX_TILE_HEIGHT*/>(*llEncoding);
+    // Limit vBlock to 1
+    vBlocks = 1;
     // no valid tile shape for 2D block IO.
     if (colDim < 0)
       return failure();
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     unsigned numElems = getTotalElemsPerThread(tensorType);
     // 2D block store supports 64 bits element at most.
@@ -2734,17 +2732,79 @@ struct StoreOpToBlockIOConversion
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
                                                  /*upperBound=*/nullptr));
 
-    Value blockPtr = adaptor.getPtr();
-    auto [base, width, height, rowStride, colStride, offsetBaseX, offsetBaseY] =
-        getValuesFromBlockPointerStruct(blockPtr, rewriter);
+    Value llPtr = adaptor.getPtr();
 
-    width = b.trunc(i32_ty, width);
-    rowStride = b.trunc(i32_ty, rowStride);
-    // encoded as bytes.
-    Value baseWidth = b.mul(width, elemSizeInBytes);
-    Value baseHeight = b.trunc(i32_ty, height);
-    // encoded as bytes.
-    Value pitch = b.mul(rowStride, elemSizeInBytes);
+    SmallVector<Value> ptrElems, maskElems;
+    Value baseWidth, baseHeight, pitch, offsetBaseX, offsetBaseY;
+
+    Value ptr = op.getPtr();
+    bool isBlockPointer = isTensorPointerType(ptr.getType());
+    if (isBlockPointer) {
+      auto [base, width, height, rowStride, colStride, offsetX, offsetY] =
+          getValuesFromBlockPointerStruct(llPtr, rewriter);
+
+      ptrElems = SmallVector<Value>(numElems, base);
+
+      Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
+      width = b.trunc(i32_ty, width);
+      rowStride = b.trunc(i32_ty, rowStride);
+      // encoded as bytes.
+      baseWidth = b.mul(width, elemSizeInBytes);
+      baseHeight = b.trunc(i32_ty, height);
+      // encoded as bytes.
+      pitch = b.mul(rowStride, elemSizeInBytes);
+      offsetBaseX = offsetX;
+      offsetBaseY = offsetY;
+    } else {
+      static const bool enableBlockStore = triton::tools::getBoolEnv(
+          "TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR");
+      if (!enableBlockStore)
+        return failure();
+      // Get the LLVM values for pointers
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+      assert(ptrElems.size() == numElems &&
+             "the number of pointer values is not matched with the number of "
+             "elements");
+
+      unsigned maskConstancyHor = 1, maskConstancyVer = 1;
+      Value llMask = adaptor.getMask();
+      // Get the LLVM values for mask
+      if (llMask) {
+        Value mask = op.getMask();
+        maskElems = unpackLLElements(loc, llMask, rewriter);
+        assert(maskElems.size() == numElems &&
+               "the number of mask values is not matched with the number of "
+               "elements");
+        auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                            axisAnalysisPass)
+                            .getAxisInfo(mask);
+        if (axisInfo) {
+          maskConstancyHor = axisInfo->getConstancy(colDim);
+          maskConstancyVer = axisInfo->getConstancy(rowDim);
+        } else {
+          maskConstancyHor = 1;
+          maskConstancyVer = 1;
+        }
+      } else {
+        // no mask
+        maskConstancyHor = std::numeric_limits<unsigned>::max();
+        maskConstancyVer = std::numeric_limits<unsigned>::max();
+      }
+
+      // Check the constancy of the mask support to load the memory in 2D block.
+      if (!(maskConstancyHor >= (tileWidth * numPackedVals) &&
+            maskConstancyVer >= tileHeight))
+        return failure();
+
+      baseWidth = b.i32_val(
+          std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+      baseHeight = b.i32_val(tileHeight);
+      pitch = getPitch(rewriter, ptr, elemSizeInBits);
+      if (!pitch)
+        return failure();
+      offsetBaseX = b.i32_val(0);
+      offsetBaseY = b.i32_val(0);
+    }
 
     // Get the LLVM values for store values
     SmallVector<Value> valElems =
@@ -2789,47 +2849,67 @@ struct StoreOpToBlockIOConversion
     for (size_t valIdx = 0; valIdx < numElems; valIdx += numElemsPerStore) {
       unsigned registerIdx = regMapping.apply({{kRegister, valIdx}})[0].second;
 
-      // Need to apply the linear layout to get the offsets to the base of the
-      // block pointer.
-      // TODO: add annotation uniform to the offsets. Make sure the IGC detect
-      // the offsets as uniform.
-      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                       {{kRegister, b.i32_val(registerIdx)},
-                                        {kLane, b.i32_val(0)},
-                                        {kWarp, warpId},
-                                        {kBlock, b.i32_val(0)}});
-      // TODO: To support rank > 2 tensor, we need to add the offsets of other
-      // dim to the base.
-      assert(offsets.size() == 2 && "only support 2D tensor for now.");
-      Value offsetX = b.add(offsetBaseX, offsets[colDim].second);
-      Value offsetY = b.add(offsetBaseY, offsets[rowDim].second);
+      // TODO: the threadPred has to be the uniform value. Maybe just add an
+      // attribute to notify IGC about this information.
+      Value pred = threadPred;
+      Value addrElem = ptrElems[registerIdx];
+      Value offsetX, offsetY;
+      if (isBlockPointer) {
+        // Need to apply the linear layout to get the offsets to the base of the
+        // block pointer.
+        // TODO: add annotation uniform to the offsets. Make sure the IGC detect
+        // the offsets as uniform.
+        auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                         {{kRegister, b.i32_val(registerIdx)},
+                                          {kLane, b.i32_val(0)},
+                                          {kWarp, warpId},
+                                          {kBlock, b.i32_val(0)}});
+        // TODO: To support rank > 2 tensor, we need to add the offsets of other
+        // dim to the base.
+        assert(offsets.size() == 2 && "only support 2D tensor for now.");
+        offsetX = b.add(offsetBaseX, offsets[colDim].second);
+        offsetY = b.add(offsetBaseY, offsets[rowDim].second);
 
-      // To prevent triggering hardware boundary protection, expand the base
-      // shape sufficiently when boundary check is absent.
-      SetVector<unsigned> boundaryCheck(op.getBoundaryCheck().begin(),
-                                        op.getBoundaryCheck().end());
-      Value addrElem = base;
-      if (!boundaryCheck.contains(colDim)) {
-        const int vBlocks = 1; // 2D block store only supports vBlocks = 1.
-        baseWidth = b.i32_val(
-            std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
-        // The offsetX is number of elements instead of packed elements.
-        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
-        offsetX = b.i32_val(0);
-      }
-      if (!boundaryCheck.contains(rowDim)) {
-        baseHeight = b.i32_val(tileHeight);
-        // Use i8_ty as pitch is in number of bytes.
-        Value off = b.mul(offsetY, pitch);
-        addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
-        offsetY = b.i32_val(0);
+        // To prevent triggering hardware boundary protection, expand the base
+        // shape sufficiently when boundary check is absent.
+        SetVector<unsigned> boundaryCheck(op.getBoundaryCheck().begin(),
+                                          op.getBoundaryCheck().end());
+
+        if (!boundaryCheck.contains(colDim)) {
+          baseWidth = b.i32_val(
+              std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
+          // The offsetX is number of elements instead of packed elements.
+          addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
+          offsetX = b.i32_val(0);
+        }
+        if (!boundaryCheck.contains(rowDim)) {
+          baseHeight = b.i32_val(tileHeight);
+          // Use i8_ty as pitch is in number of bytes.
+          Value off = b.mul(offsetY, pitch);
+          addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
+          offsetY = b.i32_val(0);
+        }
+      } else {
+        addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+
+        offsetX = offsetBaseX;
+        offsetY = offsetBaseY;
+        // Use the top-left address and mask of the block to store the data.
+        // (The first value refer by the registerIdx.)
+        if (maskElems.size()) {
+          assert(maskElems.size() == valElems.size() &&
+                 "Invalid size of the masks.");
+          auto mask = maskElems[registerIdx];
+          pred = maybeAnd(rewriter, loc, pred, mask);
+          pred = targetInfo.shuffleIdx(rewriter, loc, pred, 0);
+        }
       }
 
-      if (threadPred) {
+      if (pred) {
         // We leverage the GPU block I/O hardware out-of-bound protection
         // feature by setting the offset to an invalid value when 'pred'
         // is false (the HW will not read out-of-bounds values).
-        offsetY = b.select(threadPred, offsetY, baseHeight);
+        offsetY = b.select(pred, offsetY, baseHeight);
       }
 
       // Compose the matrix by stacking the scalar into vector.
