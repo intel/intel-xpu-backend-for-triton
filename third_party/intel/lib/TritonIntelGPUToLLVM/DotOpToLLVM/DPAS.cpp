@@ -160,6 +160,26 @@ public:
 
     auto dpasType = DPASAnalysis::getDPASType(op);
     auto dpasEncoding = cast<DpasEncodingAttr>(DTensorTy.getEncoding());
+#if 0
+    Value programIdX =
+        targetInfo.programId(rewriter, loc,
+                             rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+                             0);
+    Value programIdY =
+        targetInfo.programId(rewriter, loc,
+                             rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+                             1);
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value pred = b.and_(b.icmp_eq(programIdX, b.i32_val(0)),
+                        b.icmp_eq(programIdY, b.i32_val(0)));
+    mlir::LLVM::intel::createPredicatedBlock(
+        rewriter, loc, pred, SmallVector<Value, 1>{}, [&]() {
+          mlir::triton::intel::printTensor("johnlu tensor A: ", loadedA, ATensorTy,
+                                           rewriter, targetInfo);
+          return SmallVector<Value, 1>{};
+        });
+#endif
     Type aTy, bTy, cTy, dTy;
     std::tie(dTy, cTy, aTy, bTy) =
         getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
