@@ -111,16 +111,48 @@ def select_compiler():
     return cxx
 
 
-def gen_kernel_library_xpu(dir, libname):
-    cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
-    cxx = select_compiler()
+def _cxx_compile_cmd(cxx: str, src: list, include_dirs: list) -> list:
     if "cl.EXE" in cxx or "clang-cl" in cxx:
-        command = [cxx] + cpp_files + ["/I" + include_dir for include_dir in COMPILATION_HELPER.include_dir] + [
+        command = [cxx] + src + ["/I" + include_dir for include_dir in include_dirs] + [
             "/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/c", "/wd4996"
         ]
     else:
-        command = [cxx] + cpp_files + ["-I" + include_dir for include_dir in COMPILATION_HELPER.include_dir
-                                       ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
+        command = [cxx] + src + ["-I" + include_dir for include_dir in include_dirs
+                                 ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
+    return command
+
+
+def _cxx_link_cmd(cxx, o_files, out, extra_library_dirs=[], extra_libraries=[], shared_lib=True) -> list:
+    extra_link_args = []
+    if os.name == "nt":
+        libname_without_ext = out.split(".")[0]
+        extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
+
+    library_dirs = COMPILATION_HELPER.library_dir + COMPILATION_HELPER.libsycl_dir + extra_library_dirs
+    if "cl.EXE" in cxx or "clang-cl" in cxx:
+        command = [cxx] + [*o_files, *(["/LD"] if shared_lib else []), "/link", f"/OUT:{out}"] + [
+            "/LIBPATH:" + library_dir for library_dir in library_dirs
+        ] + ["sycl8.lib", "ze_loader.lib"] + [f"{lib}.lib" for lib in extra_libraries] + extra_link_args
+    else:
+        command = [cxx] + [*o_files, *(["-shared"] if shared_lib else []), "-o", out] + [
+            "-L" + library_dir for library_dir in library_dirs
+        ] + ["-lsycl8" if os.name == "nt" else "-lsycl", "-lze_loader"] + [f"-l{lib}"
+                                                                           for lib in extra_libraries] + extra_link_args
+
+    return command
+
+
+def _cxx_cmd(cxx: str, src: list, out: str, include_dirs: list, extra_library_dirs: list,
+             extra_libraries: list) -> list:
+    compile_command = _cxx_compile_cmd(cxx, src, include_dirs)
+    link_command = _cxx_link_cmd(cxx, [], out, extra_library_dirs, extra_libraries, shared_lib=False)
+    return compile_command + link_command[1:]
+
+
+def gen_kernel_library_xpu(dir, libname):
+    cpp_files = glob.glob(os.path.join(dir, "*.cpp"))
+    cxx = select_compiler()
+    command = _cxx_compile_cmd(cxx, cpp_files, COMPILATION_HELPER.include_dir)
     print(f"{command=}")
     out = subprocess.run(
         command,
@@ -132,23 +164,11 @@ def gen_kernel_library_xpu(dir, libname):
     if out.returncode != 0:
         raise RuntimeError(f"{out.returncode=}, {out=}")
 
-    extra_link_args = []
-    if os.name == "nt":
-        libname_without_ext = libname.split(".")[0]
-        extra_link_args = [f"/IMPLIB:{libname_without_ext}.lib"]
-
     if "cl.EXE" in cxx or "clang-cl" in cxx:
         o_files = glob.glob(os.path.join(dir, "*.obj"))
-        command = [cxx] + [*o_files, "/LD", "/link", f"/OUT:{libname}"] + [
-            "/LIBPATH:" + library_dir for library_dir in COMPILATION_HELPER.library_dir
-        ] + ["/LIBPATH:" + dir for dir in COMPILATION_HELPER.libsycl_dir
-             ] + ["sycl8.lib" if os.name == "nt" else "sycl.lib", "ze_loader.lib"] + extra_link_args
     else:
         o_files = glob.glob(os.path.join(dir, "*.o"))
-        command = [cxx] + [*o_files, "-shared", "-o", libname] + [
-            "-L" + library_dir for library_dir in COMPILATION_HELPER.library_dir
-        ] + ["-L" + dir for dir in COMPILATION_HELPER.libsycl_dir
-             ] + ["-lsycl8" if os.name == "nt" else "-lsycl", "-lze_loader"] + extra_link_args
+    command = _cxx_link_cmd(cxx, o_files, libname)
     print(f"{command=}")
     out = subprocess.run(command, cwd=dir, capture_output=True)
     print(f"{out.stdout=}")
@@ -342,27 +362,7 @@ int main(int argc, char ** argv) {{
 
     if is_xpu():
         cxx = select_compiler()
-        command = [cxx, "test.cpp"]
-        for inc_dir in COMPILATION_HELPER.include_dir:
-            command.extend([("/I" if os.name == "nt" else "-I") + inc_dir])
-        if os.name == "nt":
-            command.extend(["/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996", "/link"])
-        for lib_dir in COMPILATION_HELPER.library_dir:
-            command.extend([("/LIBPATH:" if os.name == "nt" else "-L") + lib_dir])
-        if COMPILATION_HELPER.libsycl_dir:
-            for lib_dir in COMPILATION_HELPER.libsycl_dir:
-                command.extend([("/LIBPATH:" if os.name == "nt" else "-L") + lib_dir])
-        if os.name == "nt":
-            if "icpx" in cxx:
-                command.extend(["-Wno-deprecated-declarations"])
-        if os.name == "nt":
-            command.extend([
-                "sycl8.lib" if os.name == "nt" else "sycl.lib", "ze_loader.lib", "/LIBPATH:" + dir, "kernel.lib",
-                "/OUT:" + exe
-            ])
-        else:
-            command.extend(
-                ["-lsycl8" if os.name == "nt" else "-lsycl", "-lze_loader", "-L", dir, "-lkernel", "-o", exe])
+        command = _cxx_cmd(cxx, ["test.cpp"], exe, COMPILATION_HELPER.include_dir, [dir], ["kernel"])
     out = subprocess.run(command, cwd=dir, capture_output=True)
     files = os.listdir(dir)
     print(f"{files=}")
