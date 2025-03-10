@@ -111,14 +111,17 @@ def select_compiler():
     return cxx
 
 
-def _cxx_compile_cmd(cxx: str, src: list, include_dirs: list) -> list:
+def _cxx_compile_cmd(cxx: str, src: list, include_dirs: list, only_compile=True) -> list:
     if "cl.EXE" in cxx or "clang-cl" in cxx:
-        command = [cxx] + src + ["/I" + include_dir for include_dir in include_dirs] + [
-            "/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/c", "/wd4996"
-        ]
+        command = [cxx] + src + ["/I" + include_dir for include_dir in include_dirs
+                                 ] + ["/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996"]
+        if only_compile:
+            command += ["/c"]
     else:
         command = [cxx] + src + ["-I" + include_dir for include_dir in include_dirs
-                                 ] + ["-c", "-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
+                                 ] + ["-fPIC" if os.name != "nt" else "-Wno-deprecated-declarations"]
+        if only_compile:
+            command += ["-c"]
     return command
 
 
@@ -144,7 +147,7 @@ def _cxx_link_cmd(cxx, o_files, out, extra_library_dirs=[], extra_libraries=[], 
 
 def _cxx_cmd(cxx: str, src: list, out: str, include_dirs: list, extra_library_dirs: list,
              extra_libraries: list) -> list:
-    compile_command = _cxx_compile_cmd(cxx, src, include_dirs)
+    compile_command = _cxx_compile_cmd(cxx, src, include_dirs, only_compile=False)
     link_command = _cxx_link_cmd(cxx, [], out, extra_library_dirs, extra_libraries, shared_lib=False)
     return compile_command + link_command[1:]
 
@@ -363,6 +366,7 @@ int main(int argc, char ** argv) {{
     if is_xpu():
         cxx = select_compiler()
         command = _cxx_cmd(cxx, ["test.cpp"], exe, COMPILATION_HELPER.include_dir, [dir], ["kernel"])
+        print(f"{command=}")
     out = subprocess.run(command, cwd=dir, capture_output=True)
     files = os.listdir(dir)
     print(f"{files=}")
