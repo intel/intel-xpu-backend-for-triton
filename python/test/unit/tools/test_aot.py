@@ -111,7 +111,7 @@ def select_compiler():
     return cxx
 
 
-def _cxx_compile_cmd(cxx: str, src: list, include_dirs: list, only_compile=True) -> list:
+def _cxx_compile_cmd(cxx: str, src: list, include_dirs: list, only_compile: bool = True) -> list:
     if "cl.EXE" in cxx or "clang-cl" in cxx:
         command = [cxx] + src + ["/I" + include_dir for include_dir in include_dirs
                                  ] + ["/Zc:__cplusplus", "/std:c++17", "/MD", "/nologo", "/O2", "/EHsc", "/wd4996"]
