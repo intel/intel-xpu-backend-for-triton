@@ -86,6 +86,12 @@ static unsigned getDimSize(Type type, unsigned dim) {
 
 namespace mlir::triton::gpu::intel {
 
+void PrefetchOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                       CacheModifier cache, EvictionPolicy evict,
+                       bool isVolatile) {
+  PrefetchOp::build(builder, state, ptr, /*mask=*/{}, cache, evict, isVolatile);
+}
+
 LogicalResult GlueOp::verify() {
   SmallVector<Type> inputTypes;
   for (Value input : getOperands())
