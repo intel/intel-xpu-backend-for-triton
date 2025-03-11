@@ -40,6 +40,7 @@ def is_interpreter():
                                                       ("device_print_negative", "int32"),
                                                       ("device_print_uint", "uint32"),
                                                       ("device_print_2d_tensor", "int32"),
+                                                      ("device_print", "bool"),
                                                   ])
 def test_print(func_type: str, data_type: str, device: str):
     if device == "xpu" and data_type == "float64" and not tr.driver.active.get_current_target().arch['has_fp64']:
@@ -66,7 +67,7 @@ def test_print(func_type: str, data_type: str, device: str):
     # Format is
     #   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...) <prefix> (operand <n>) <elem>
     expected_lines = Counter()
-    if func_type in ("print", "device_print", "device_print_uint"):
+    if func_type in ("print", "device_print", "device_print_uint") and data_type != "bool":
         for i in range(N):
             offset = (1 << 31) if data_type == "uint32" else 0
             line = f"pid (0, 0, 0) idx ({i:3}) x: {i + offset}"
@@ -115,6 +116,10 @@ def test_print(func_type: str, data_type: str, device: str):
         for x in range(x_dim):
             for y in range(y_dim):
                 expected_lines[f"pid (0, 0, 0) idx ({x}, {y:2}): {(x * y_dim + y)}"] = 1
+    elif data_type == "bool":
+        expected_lines["pid (0, 0, 0) idx (  0) x: 0"] = 1
+        for i in range(1, N):
+            expected_lines[f"pid (0, 0, 0) idx ({i:3}) x: 1"] = 1
 
     actual_lines = Counter()
     for line in outs:
