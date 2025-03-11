@@ -134,22 +134,6 @@ SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
   return resShape;
 }
 
-SmallVector<unsigned> DpasEncodingAttr::getSizePerThread() const {
-  size_t rank = getWarpsPerCTA().size();
-  SmallVector<unsigned> res(rank, 1);
-  unsigned threadsPerWarp = getThreadsPerWarp__();
-  SmallVector<unsigned> shapeC = getDPASInstShapeC();
-  unsigned elemsNum = product<unsigned>(shapeC);
-  unsigned elemsPerThread = elemsNum / threadsPerWarp;
-  auto repCluster = getRepCluster();
-  // The Value is shard to lanes to threads per DPAS instruction.
-  if (rank == 3)
-    res[0] = repCluster[0];
-  res[rank - 2] = elemsPerThread * repCluster[rank - 2];
-  res[rank - 1] = repCluster[rank - 1];
-  return res;
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getDefaultOrder() const {
   auto rank = getWarpsPerCTA().size();
   return getMatrixOrder(rank, /*rowMajor*/ true);
@@ -310,51 +294,6 @@ SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
   res[rank - 2] = subGroupSize / executionSize;
   res[rank - 1] = executionSize;
   return res;
-}
-
-SmallVector<unsigned>
-DpasEncodingAttr::getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const {
-  ArrayRef<unsigned> repCluster = getRepCluster();
-  size_t rank = repCluster.size();
-  assert((rank == 2 || rank == 3) && "unexpected rank number for Dpas layout");
-
-  switch (opIdx) {
-  case OpIdx::OperandA: {
-    SmallVector<unsigned> shapeA = getDPASInstShapeA();
-    unsigned subGroupSize = getThreadsPerWarp__();
-    unsigned opsPerChannel = getOpsPerChannel();
-
-    // pack the value to i16 for scalar bit width <=16.
-    assert((opsPerChannel == 4 || opsPerChannel == 2 || opsPerChannel == 1) &&
-           "invalid opsPerChannel number.");
-    unsigned packedOpsPerLane = opsPerChannel == 4 ? 2 : 1;
-    unsigned packedColNum = shapeA[1] / packedOpsPerLane;
-
-    if (subGroupSize < packedColNum) {
-      llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
-                               "be smaller than the threads required per row.");
-    }
-    unsigned rowsPerWarp = mlir::ceil<unsigned>(subGroupSize, packedColNum);
-    return {shapeA[0] / rowsPerWarp * repCluster[rank - 2], packedOpsPerLane};
-  } break;
-  case OpIdx::OperandB: {
-    SmallVector<unsigned> shapeB = getShapeB();
-    unsigned subGroupSize = getThreadsPerWarp__();
-    unsigned executionSize = getExecutionSize();
-    if (subGroupSize < executionSize) {
-      llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
-                               "be smaller than the execution size");
-    }
-    SmallVector<unsigned, 2> threadsPerWarp = {subGroupSize / executionSize,
-                                               executionSize};
-    return {shapeB[rank - 2] / threadsPerWarp[0],
-            shapeB[rank - 1] / threadsPerWarp[1] * repCluster[rank - 1]};
-  } break;
-  case OpIdx::OperandC: {
-    llvm_unreachable("unexpected OpIdx::OperandC");
-  } break;
-  }
-  llvm_unreachable("unexpected opIdx");
 }
 
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
