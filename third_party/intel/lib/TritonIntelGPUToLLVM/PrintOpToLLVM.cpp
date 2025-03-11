@@ -160,7 +160,15 @@ struct PrintOpConversion
       auto elem = elems[i];
 
       os << getFormatSubstr(elem, hex, /*width=*/std::nullopt, isSigned);
-      printfOperands.push_back(elem);
+      if (isa<IntegerType>(elem.getType()) &&
+          elem.getType().getIntOrFloatBitWidth() == 1) {
+        // FIXME: There is some problem when using i1 type now,
+        // remove this code once IGC fix the problem.
+        TritonLLVMOpBuilder b(rewriter.getUnknownLoc(), rewriter);
+        printfOperands.push_back(b.zext(i8_ty, elem));
+      } else {
+        printfOperands.push_back(elem);
+      }
 
       // It's the same format string each iteration, but it's a lot easier if we
       // construct the format string at the same time as we populate
