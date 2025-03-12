@@ -1,7 +1,7 @@
 #include "intel/include/Analysis/Allocation.h"
-#include "llvm/ADT/TypeSwitch.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "intel/include/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::intel {
 namespace {
