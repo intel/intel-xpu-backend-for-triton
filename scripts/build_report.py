@@ -44,9 +44,11 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, 
     # Changing it without changing dashboards and database will
     # break comparison of old and new results
     if mask:
-        df_results["mask"] = df[param_cols[-1]]
+        df_results["MASK"] = df[param_cols[-1]]
         param_cols = param_cols[:-1]
-    df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
+    for p in param_cols:
+        df[p] = df[p].astype(int)
+    df_results["params"] = [json.dumps(j) for j in df[[*param_cols, "MASK"]].to_dict("records")]
     df_results["tflops"] = df[tflops_col]
     if hbm_col is not None:
         df_results["hbm_gbs"] = df[hbm_col]
