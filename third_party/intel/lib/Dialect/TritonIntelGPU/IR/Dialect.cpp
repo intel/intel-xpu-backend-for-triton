@@ -967,9 +967,9 @@ struct TritonIntelGPUInferLayoutInterface
   }
 
   LogicalResult
-  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
-                      ArrayRef<int64_t> shape,
-                      std::optional<Location> loc) const override {
+  inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                             ArrayRef<int64_t> shape,
+                             std::optional<Location> loc) const override {
     // TODO
     return failure();
   }
