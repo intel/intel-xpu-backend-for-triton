@@ -20,12 +20,12 @@ def transform_df(df, tag):
 
     df = df[df["metric_name"].eq("speed") & ~df["gpu_name"].str.contains("NVIDIA")]
 
-    if len(df_results) == 0:
+    if len(df) == 0:
         raise ValueError("No new results found, did all benchmarks just fail?")
 
+    df_results["benchmark"] = df["kernel_name"] + "-" + df["kernel_operation_mode"]
     df_results["run_uuid"] = uuid.uuid4().hex  # Generate a unique run ID
     df_results["datetime"] = datetime.datetime.now()
-    df_results["benchmark"] = df["kernel_name"] + "-" + df["kernel_operation_mode"]
     df_results["compiler"] = df["kernel_provider"]
     # Use the 50th percentile value.
     df_results["time_ms"] = df["y_value_50"]
