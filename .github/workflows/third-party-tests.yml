@@ -81,7 +81,8 @@ jobs:
         run: |
           pip install python/dist/*.whl
 
-      - name: Install benchmark dependencies
+      - name: Install dependencies
+        id: install
         run: |
           pip install transformers pandas
 
@@ -91,7 +92,7 @@ jobs:
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
       - name: Run Liger-Kernel tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py_advanced') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           cd benchmarks/third_party/liger_kernels
 
