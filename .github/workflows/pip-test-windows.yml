@@ -68,6 +68,10 @@ jobs:
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
 
+      - name: Emulate L0 installation
+        run: |
+          tar -xf ${{ env.NEW_WORKSPACE }}\LevelZeroSDK.tar -C C:\
+
       - name: Create venv
         run:
           python -m venv .venv
