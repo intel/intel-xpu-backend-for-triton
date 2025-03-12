@@ -114,6 +114,7 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
 
   let dependentDialects = ["mlir::arith::ArithDialect",
                            "mlir::scf::SCFDialect",
+                           "mlir::spirv::SPIRVDialect",
                            "mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 

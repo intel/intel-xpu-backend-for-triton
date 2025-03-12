@@ -7,6 +7,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 
 using namespace mlir;
 namespace ttgi = mlir::triton::gpu::intel;
@@ -53,6 +55,21 @@ static void pipelineLoop(scf::ForOp forOp, int numStages,
   rewriter.setInsertionPoint(forOp);
   FailureOr<scf::ForOp> newForOp =
       mlir::scf::pipelineForLoop(rewriter, forOp, options);
+
+  bool injectSplitBarriers = true;
+  if (injectSplitBarriers) {
+    scf::ForOp loop = (*newForOp);
+    OpBuilder b(loop);
+    Location loc = loop.getLoc();
+    b.setInsertionPointToStart(loop.getBody());
+    auto scope = spirv::Scope::Subgroup; //spirv::Scope::Workgroup;
+    b.create<spirv::INTELControlBarrierArriveOp>(loc, scope, scope,
+						 spirv::MemorySemantics::None);
+    auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+    b.setInsertionPoint(yield);
+    b.create<spirv::INTELControlBarrierWaitOp>(loc, scope, scope,
+					       spirv::MemorySemantics::None);
+  }
 }
 
 namespace {
