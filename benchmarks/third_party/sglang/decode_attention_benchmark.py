@@ -82,19 +82,8 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, VALIDATE, provider):
         B, N_CTX, H_Q, H_KV, D, dtype, 'xpu')
 
     if provider == 'triton':
-        triton_fn = lambda: decode_attention_fwd(
-            q,
-            k_buffer,
-            v_buffer,
-            o,
-            kv_indptr,
-            kv_indices,
-            attn_logits,
-            attn_lse,
-            num_kv_splits,
-            max_kv_splits,
-            sm_scale,
-        )
+        triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse,
+                                                 num_kv_splits, max_kv_splits, sm_scale)
 
         # TODO: decode attention should have the validation function
         if VALIDATE:
