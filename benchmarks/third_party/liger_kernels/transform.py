@@ -8,9 +8,7 @@ import pandas as pd
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Transform microbenchmark CSV for database upload."
-    )
+    parser = argparse.ArgumentParser(description="Transform Liger-Kernel CSV with benchmark results to better format.")
     parser.add_argument("source", help="Path to source CSV file with benchmark results")
     parser.add_argument("target", help="Path to target CSV file for database upload")
     parser.add_argument("--tag", help="Tag for the benchmark run", default="")
@@ -20,9 +18,11 @@ def parse_args():
 def transform_df(df, tag):
     df_results = pd.DataFrame()
 
-    df_results = df_results[
-        df_results["metric_name"].eq("speed") & ~df_results["gpu_name"].str.contains("NVIDIA")
-    ]
+    df = df[df["metric_name"].eq("speed") & ~df["gpu_name"].str.contains("NVIDIA")]
+
+    if len(df_results) == 0:
+        raise ValueError("No new results found, did all benchmarks just fail?")
+
     df_results["run_uuid"] = uuid.uuid4().hex  # Generate a unique run ID
     df_results["datetime"] = datetime.datetime.now()
     df_results["benchmark"] = df["kernel_name"] + "-" + df["kernel_operation_mode"]
@@ -59,9 +59,7 @@ def transform_df(df, tag):
         ]
     }
     if not host_info["gpu_device"]:
-        raise RuntimeError(
-            "Could not find GPU device description, was `capture-hw-details.sh` called?"
-        )
+        raise RuntimeError("Could not find GPU device description, was `capture-hw-details.sh` called?")
     for name, val in host_info.items():
         df_results[name] = val
 

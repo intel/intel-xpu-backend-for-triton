@@ -1,4 +1,4 @@
-name: Liger-Kernels benchmarks
+name: Third party benchmarks
 run-name: ${{ inputs.run_name }}
 
 on:
