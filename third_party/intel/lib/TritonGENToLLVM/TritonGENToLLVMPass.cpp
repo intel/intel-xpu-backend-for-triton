@@ -36,7 +36,6 @@
 #include "llvm/Support/ModRef.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
