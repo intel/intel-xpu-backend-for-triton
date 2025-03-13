@@ -38,8 +38,7 @@ namespace {
 SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
   SmallVector<int64_t> sizePerWarp;
   if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    const SmallVector<unsigned> &sizePerThread =
-        blockedLayout.getSizePerThread();
+    const auto &sizePerThread = blockedLayout.getSizePerThread();
     const SmallVector<unsigned> &threadsPerWarp =
         blockedLayout.getThreadsPerWarp();
     for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp))
