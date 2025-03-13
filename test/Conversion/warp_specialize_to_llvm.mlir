@@ -1,6 +1,4 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -convert-warp-specialize-to-llvm | FileCheck %s
-// COM: convert-warp-specialize-to-llvm only exists on NV.
-// XFAIL: *
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
 
