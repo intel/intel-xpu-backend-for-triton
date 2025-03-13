@@ -159,10 +159,10 @@ void unload_{meta.orig_kernel_name}();
         """
     if is_xpu():
         return f"""
-int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
-int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
-void load_{meta.orig_kernel_name}();
-void unload_{meta.orig_kernel_name}();
+EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)});
+EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id);
+EXPORT_FUNC void load_{meta.orig_kernel_name}();
+EXPORT_FUNC void unload_{meta.orig_kernel_name}();
         """
 
 
@@ -172,7 +172,7 @@ def make_default_algo_kernel(meta: KernelLinkerMeta) -> str:
         src = f"CUresult {meta.orig_kernel_name}_default(CUstream stream, {gen_signature_with_full_args(meta)}){{\n"
         src += f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n"
     if is_xpu():
-        src = f"int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)}){{\n"
+        src = f"EXPORT_FUNC int32_t {meta.orig_kernel_name}_default(sycl::queue &stream, {gen_signature_with_full_args(meta)}){{\n"
         src += f"  return {meta.orig_kernel_name}(stream, {', '.join(meta.arg_names)}, 0);\n"
     src += "}\n"
     return src
@@ -245,7 +245,7 @@ def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
     if is_cuda():
         src = f"CUresult {meta.orig_kernel_name}(CUstream stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     if is_xpu():
-        src = f"int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
+        src = f"EXPORT_FUNC int32_t {meta.orig_kernel_name}(sycl::queue &stream, {gen_signature_with_full_args(meta)}, int algo_id){{\n"
     src += f"  assert (algo_id < (int)sizeof({meta.orig_kernel_name}_kernels));\n"
     if is_cuda():
         src += f"  return {meta.orig_kernel_name}_kernels[algo_id](stream, {', '.join(meta.arg_names)});\n"
@@ -273,7 +273,7 @@ def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
 def make_kernel_load_def(names: str, meta: KernelLinkerMeta) -> str:
     src = ""
     for mode in ["load", "unload"]:
-        src += f"void {mode}_{meta.orig_kernel_name}(void){{\n"
+        src += f"EXPORT_FUNC void {mode}_{meta.orig_kernel_name}(void){{\n"
         for name in names:
             src += f"  {mode}_{name}();\n"
         src += "}\n\n"
@@ -344,6 +344,11 @@ if __name__ == "__main__":
             out += "#include <sycl/sycl.hpp>\n"
             out += "#include <stdint.h>\n"
             out += "#include <stdio.h>\n"
+            out += "#if defined(_WIN32)\n"
+            out += "#define EXPORT_FUNC __declspec(dllexport)\n"
+            out += "#else\n"
+            out += "#define EXPORT_FUNC\n"
+            out += "#endif\n"
         out += "\n".join(algo_decls)
         out += "\n"
         out += get_num_algos_decl
@@ -386,6 +391,11 @@ if __name__ == "__main__":
             out += "#include <stdint.h>\n"
             out += "#include <assert.h>\n"
             out += "#include <cstdint>\n"
+            out += "#if defined(_WIN32)\n"
+            out += "#define EXPORT_FUNC __declspec(dllexport)\n"
+            out += "#else\n"
+            out += "#define EXPORT_FUNC\n"
+            out += "#endif\n"
             out += "\n"
             out += "\n".join(defs)
             out += "\n"

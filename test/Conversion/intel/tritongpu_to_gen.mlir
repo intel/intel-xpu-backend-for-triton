@@ -603,6 +603,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_alloc_tensor(%arg0: !llvm.ptr<3>)
   tt.func @basic_alloc_tensor() {
     // CHECK-NEXT: llvm.mlir.constant
+    // CHECK-NEXT: llvm.mlir.addressof @global_smem
     // CHECK-NEXT: llvm.getelementptr
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared0, #smem, mutable>
     tt.return
@@ -1102,7 +1103,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:   llvm.br ^bb2([[CMPXCHG_RES]] : i32)
     // CHECK-NEXT: ^bb2([[RES:%.*]]: i32):
     // CHECK-NEXT:   [[RES_CAST:%.*]] = llvm.bitcast [[RES]] : i32 to f32
-    // CHECK:        [[GEP:%.*]] = llvm.getelementptr %arg3[{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT: llvm.cond_br [[MASK]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
@@ -1127,10 +1130,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[EV1_ARG2:%.*]] = llvm.extractvalue %arg2[1] : !llvm.struct<(f32, f32)>
     // CHECK:      [[EV0_ARG0:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK-NEXT: [[EV1_ARG0:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
+    // CHECK:      llvm.mlir.constant(true) : i1
     // CHECK:      [[CST_TRUE:%.*]] = llvm.mlir.constant(true) : i1
-    // CHECK:      [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xf32>
+    // CHECK:      [[PRED0:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
+    // CHECK-NEXT: [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK:      [[IE1:%.*]] = llvm.insertelement [[EV0_ARG2]], [[UNDEF1]][{{.*}} : i64] : vector<1xf32>
-    // CHECK-NEXT: [[PRED1:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
+    // CHECK-NEXT: [[PRED1:%.*]] = llvm.and [[PRED0]], {{.*}} : i1
     // CHECK-NEXT: [[ZERO1:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK:      llvm.cond_br [[PRED1]], ^bb1, ^bb2([[ZERO1]] : f32)
     // CHECK-NEXT: ^bb1:
@@ -1141,7 +1146,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT:   [[RMW_CAST:%.*]] = llvm.bitcast [[RMW_PHI1]] : f32 to f32
     // CHECK-NEXT:   [[UNDEF2:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK:        [[IE2:%.*]] = llvm.insertelement [[EV1_ARG2]], [[UNDEF2]][{{.*}} : i64] : vector<1xf32>
-    // CHECK-NEXT:   [[PRED2:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
+    // CHECK-NEXT:   [[PRED2:%.*]] = llvm.and [[PRED0]], {{.*}} : i1
     // CHECK-NEXT:   [[ZERO2:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK:        [[WGSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK:        [[WGMEMSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -1210,7 +1215,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:   llvm.br ^bb2([[RMW_RES]] : f32)
     // CHECK-NEXT: ^bb2([[RMW_PHI:%.*]]: f32):
     // CHECK-NEXT:   [[RMW_CAST:%.*]] = llvm.bitcast [[RMW_PHI]] : f32 to f32
-    // CHECK:        [[GEP:%.*]] = llvm.getelementptr %arg3[{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT:   llvm.cond_br [[PRED]], ^bb3, ^bb4
     // CHECK-NEXT:  ^bb3:
@@ -1287,10 +1294,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK-NEXT: [[ARG1_0:%.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(f32, f32)>
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(f32, f32)>
-    // CHECK:      [[TRUE:%.*]] = llvm.mlir.constant(true) : i1
+    // CHECK:      llvm.mlir.constant(true) : i1
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
-    // CHECK:      llvm.cond_br [[TRUE]], ^bb1, ^bb2
+    // CHECK:      [[TRUE1:%.*]] = llvm.mlir.constant(true) : i1
+    // CHECK:      [[TRUE2:%.*]] = llvm.mlir.constant(true) : i1
+    // CHECK:      [[PRED:%.*]] = llvm.and [[TRUE1]], [[TRUE2]] : i1
+    // CHECK:      llvm.cond_br [[PRED]], ^bb1, ^bb2
     // CHECK-NEXT: ^bb1:
     // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
@@ -1299,7 +1309,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK:        [[VEC:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[IE1:%.*]] = llvm.insertelement {{.*}}, [[VEC]][[[ZERO]] : i32] : vector<1xi32>
-    // CHECK:        llvm.cond_br [[TRUE]], ^bb3, ^bb4
+    // CHECK:        llvm.cond_br [[PRED]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
     // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT:   llvm.store [[IE1]], [[BCAST1]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>

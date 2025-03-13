@@ -11,7 +11,7 @@ std::optional<int64_t> getFoldedConstantValue(Operation *op);
 
 // Return true if the `val` value is a constant containing a value equal to
 // expected.
-bool isConstant(Value val, const unsigned expected);
+bool isConstant(Value val, int64_t expected);
 
 mlir::Value getFinalValue(Value value);
 

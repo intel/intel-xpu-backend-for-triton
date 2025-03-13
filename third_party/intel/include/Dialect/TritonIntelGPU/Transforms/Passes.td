@@ -174,19 +174,6 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
 
 }
 
-def TritonIntelGPURewriteTensorPointer : Pass<"tritonintelgpu-rewrite-tensor-pointer", "mlir::ModuleOp"> {
-  let summary = "Rewrite load/store operations using tensor pointers that cannot be lowered to 2D Block Load/Store intrinsics";
-  let description = [{
-    This pass determines whether a load/store operation can be lowered to 2D
-    Block Load/Store intrinsic. If it cannot, it replaces the load/store
-    operation with a legacy pointer and removes the Triton operations that
-    create and advance the block pointer (that is `tt.make_tensor_tr` and
-    `tt.advance`).
-  }];
-
-  let dependentDialects = ["mlir::triton::TritonDialect"];
-}
-
 def TritonIntelGPUPrefetchBlock : Pass<"tritonintelgpu-prefetch-block", "mlir::ModuleOp"> {
   let summary = "Prefetch a tensor block around loop";
 
@@ -375,4 +362,19 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPURewriteStackPtr
+    : Pass<"tritonintelgpu-rewrite-stack-ptr", "mlir::ModuleOp"> {
+  let summary = "rewrite the getStackPointer for Intel by addressofOp replacement";
+
+  let description = [{
+    This pass searches for the global_smem symbol and replaces the addressOfOp with a newly inserted
+    SLM parameter or a PoisonOp to rewrite the getStackPointer for Intel.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect", "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
 #endif // TRITON_INTEL_GPU_PASSES

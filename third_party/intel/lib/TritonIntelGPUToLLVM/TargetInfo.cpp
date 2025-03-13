@@ -211,8 +211,28 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   return funcName;
 }
 
+Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
+  auto type = value.getType();
+  if (isa<IntegerType>(type) && type.getIntOrFloatBitWidth() == 1) {
+    // FIXME: There is some problem when using i1 type now,
+    // remove this code once IGC fix the problem.
+    TritonLLVMOpBuilder b(rewriter.getUnknownLoc(), rewriter);
+    return b.zext(i8_ty, value);
+  } else if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
+    TritonLLVMOpBuilder b(rewriter.getUnknownLoc(), rewriter);
+    if (isSigned) {
+      return b.sext(i32_ty, value);
+    } else {
+      return b.zext(i32_ty, value);
+    }
+  } else {
+    return value;
+  }
+}
+
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
-                        int /*formatStrByteCount*/, ValueRange args) const {
+                        int /*formatStrByteCount*/, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -222,14 +242,15 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
 
   SmallVector<Value> operands;
   operands.push_back(formatStrStart);
-  for (auto arg : args) {
-    operands.push_back(arg);
+  for (auto [i, arg] : llvm::enumerate(args)) {
+    operands.push_back(printfPromoteValue(
+        rewriter, arg, isSigned.empty() ? true : isSigned[i]));
   }
   b.call(funcOp, operands);
 }
 
-void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
@@ -237,7 +258,7 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   Value msgValue = getGlobalStringStart(
       rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
       /*addressSpace=*/TritonGEN::kUniformConstant);
-  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args, isSigned);
 }
 
 static LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
@@ -309,16 +330,6 @@ bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.
   return true;
-}
-
-Value TargetInfo::getStackPointer(RewriterBase &rewriter,
-                                  FunctionOpInterface funcOp) const {
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  LLVM::LLVMPointerType ptrTy = ptr_ty(
-      rewriter.getContext(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
-  if (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0)
-    return rewriter.create<LLVM::PoisonOp>(funcOp.getLoc(), ptrTy);
-  return funcOp.getArgument(funcOp.getNumArguments() - 1);
 }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {
