@@ -1,5 +1,4 @@
 name: Third party benchmarks
-run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -12,10 +11,6 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
-      run_name:
-        description: Run name
-        type: string
-        default: "Triton benchmarks"
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -92,7 +87,7 @@ jobs:
       - name: Install benchmark dependencies
         id: install
         run: |
-          pip install transformers pandas
+          pip install transformers pandas pytest
 
       - name: Create reports dir
         run: |
