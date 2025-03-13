@@ -43,7 +43,7 @@ struct PrintOpConversion
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")"
          << op.getPrefix();
-      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, rewriter);
+      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, {}, rewriter);
       rewriter.eraseOp(op);
       return success();
     }
@@ -160,26 +160,20 @@ struct PrintOpConversion
       auto elem = elems[i];
 
       os << getFormatSubstr(elem, hex, /*width=*/std::nullopt, isSigned);
-      if (isa<IntegerType>(elem.getType()) &&
-          elem.getType().getIntOrFloatBitWidth() == 1) {
-        // FIXME: There is some problem when using i1 type now,
-        // remove this code once IGC fix the problem.
-        TritonLLVMOpBuilder b(rewriter.getUnknownLoc(), rewriter);
-        printfOperands.push_back(b.zext(i8_ty, elem));
-      } else {
-        printfOperands.push_back(elem);
-      }
+      printfOperands.push_back(elem);
 
       // It's the same format string each iteration, but it's a lot easier if we
       // construct the format string at the same time as we populate
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
+      auto isSignedOperands =
+          llvm::SmallVector<bool>(printfOperands.size(), isSigned);
       if (i == 0) {
-        formatStrValue =
-            llPrintf(formatStr, printfOperands, rewriter, &formatStrByteCount);
+        formatStrValue = llPrintf(formatStr, printfOperands, isSignedOperands,
+                                  rewriter, &formatStrByteCount);
       } else {
         targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
-                          printfOperands);
+                          printfOperands, isSignedOperands);
       }
     }
   }
@@ -224,7 +218,7 @@ struct PrintOpConversion
 
   // Returns a Value for the format string, which you can reuse. Writes the byte
   // count for the string to |formatStrByteCount| if not null.
-  Value llPrintf(StringRef msg, ValueRange args,
+  Value llPrintf(StringRef msg, ValueRange args, ArrayRef<bool> isSigned,
                  ConversionPatternRewriter &rewriter,
                  int *formatStrByteCount = nullptr) const {
     assert(!msg.empty() && "printf with empty string not supported");
@@ -234,7 +228,8 @@ struct PrintOpConversion
     Value msgValue = targetInfo.getGlobalStringStart(
         rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
         /*addressSpace=*/TritonGEN::kUniformConstant);
-    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args,
+                      isSigned);
     if (formatStrByteCount)
       *formatStrByteCount = msgNewline.size_in_bytes();
     return msgValue;
