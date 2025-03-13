@@ -1,5 +1,4 @@
 name: Third party tests
-run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -78,13 +77,9 @@ jobs:
           command: DEBUG=1 python setup.py bdist_wheel
 
       - name: Install Triton
-        run: |
-          pip install python/dist/*.whl
-
-      - name: Install dependencies
         id: install
         run: |
-          pip install transformers pandas
+          pip install python/dist/*.whl
 
       - name: Create reports dir
         run: |
@@ -94,7 +89,7 @@ jobs:
       - name: Run Liger-Kernel tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/third_party/liger_kernels
+          pip install transformers pandas pytest
 
           git clone https://github.com/linkedin/Liger-Kernel
           pip install transformers datasets -e Liger-Kernel
