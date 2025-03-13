@@ -1,5 +1,4 @@
 name: Third party tests
-run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
