@@ -94,8 +94,6 @@ jobs:
       - name: Run Liger-Kernel tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          cd benchmarks/third_party/liger_kernels
-
           git clone https://github.com/linkedin/Liger-Kernel
           pip install transformers datasets -e Liger-Kernel
 
