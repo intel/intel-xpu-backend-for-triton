@@ -140,9 +140,6 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
-        # barrier makes it easier for compielr to schedule the
-        # two loops independently
-        tl.debug_barrier()
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
@@ -159,8 +156,8 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
-    for BN in [32, 64] \
-    for s in [3, 4] \
+    for BN in [32, 64, 128] \
+    for s in [2, 3, 4] \
     for w in [8, 16, 32] \
     ]
 

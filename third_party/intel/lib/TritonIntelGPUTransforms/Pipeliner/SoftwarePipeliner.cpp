@@ -62,13 +62,13 @@ static void pipelineLoop(scf::ForOp forOp, int numStages,
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
-    auto scope = spirv::Scope::Subgroup; //spirv::Scope::Workgroup;
+    auto scope = spirv::Scope::Subgroup;
     b.create<spirv::INTELControlBarrierArriveOp>(loc, scope, scope,
-						 spirv::MemorySemantics::None);
+                                                 spirv::MemorySemantics::None);
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
     b.create<spirv::INTELControlBarrierWaitOp>(loc, scope, scope,
-					       spirv::MemorySemantics::None);
+                                               spirv::MemorySemantics::None);
   }
 }
 
