@@ -1,6 +1,6 @@
 #include "LLVMPasses.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 
