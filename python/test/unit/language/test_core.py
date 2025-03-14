@@ -305,8 +305,6 @@ def warps_per_cta(layout, shape):
 def is_layout_applicable(layout) -> bool:
     if isinstance(layout, (BlockedLayout, SharedLayout, LinearLayout)):
         return True
-    elif isinstance(layout, BlockedLayout) or isinstance(layout, SharedLayout):
-        return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
     elif is_cuda():
