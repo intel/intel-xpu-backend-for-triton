@@ -155,7 +155,7 @@ struct LoadStoreConversionBase {
 
   unsigned getContiguity(Value ptr) const {
     return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-        .getPtrContiguity(ptr);
+        .getContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
