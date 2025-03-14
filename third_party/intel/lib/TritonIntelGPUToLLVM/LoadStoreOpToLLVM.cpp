@@ -155,7 +155,7 @@ struct LoadStoreConversionBase {
 
   unsigned getContiguity(Value ptr) const {
     return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-        .getPtrContiguity(ptr);
+        .getContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
@@ -460,6 +460,497 @@ struct PrefetchOpConversion
     }
 
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct LoadOpToBlockIOConversion
+    : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
+      public LoadStoreConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
+
+  using ValueTable = std::map<std::pair<int, int>, Value>;
+
+  LoadOpToBlockIOConversion(
+      TritonIntelGPUToLLVMTypeConverter &converter,
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr)
+      return failure();
+
+    Location loc = op.getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value ptr = op.getPtr();
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    Type resultType = op.getType();
+    auto tensorType = cast<RankedTensorType>(resultType);
+
+    const bool hasDpasLayout = hasDpasEncoding(tensorType);
+    if (!hasDpasLayout && !hasDotDpasEncoding(tensorType))
+      return failure();
+
+    // Only lower loadOp with dpas layout encoding.
+    auto encoding = tensorType.getEncoding();
+
+    // TODO: To support more layouts on memory.
+    // Only support rank 2 dot layout, either row major or column major.
+    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
+    assert((memoryLayoutInfo == "row_major" ||
+            memoryLayoutInfo == "column_major") &&
+           "Only row_major or column_major is supported");
+    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
+
+    auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
+      if (hasDpasLayout)
+        return DpasEncodingAttr::OpIdx::OperandC;
+
+      assert(hasDotDpasEncoding(tensorType) && "Expecting dot layout");
+      DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
+      return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+    };
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx();
+
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorType.getShape());
+    assert(llEncoding.has_value() && "invalid dot layout to linear layout");
+    auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
+    SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
+    size_t rank = threadOrder.size();
+    const bool valueRowMajor =
+        (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
+    assert((valueRowMajor ||
+            (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
+           "Only row_major or column_major is allowed");
+    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+
+    Type eltTy = tensorType.getElementType();
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+    auto dpasLayout = hasDpasLayout
+                          ? cast<DpasEncodingAttr>(encoding)
+                          : cast<DpasEncodingAttr>(
+                                getDotEncoding(tensorType).value().getParent());
+
+    const ArrayRef<int64_t> tensorShape = tensorType.getShape();
+    unsigned numElems = getTotalElemsPerThread(resultType);
+    SmallVector<int64_t> numReps =
+        dpasLayout.getDPASRepetitions(tensorShape, opIdx);
+    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
+    unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+
+    Value warpId = rewriter.create<arith::IndexCastOp>(
+        loc, i32_ty,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
+
+    SmallVector<Value> multiDimWarpId =
+        delinearize(rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
+
+    bool isOperandA = (opIdx == DpasEncodingAttr::OpIdx::OperandA);
+    SmallVector<unsigned> dpasInstShape = isOperandA
+                                              ? dpasLayout.getDPASInstShapeA()
+                                              : dpasLayout.getDPASInstShapeB();
+    SmallVector<unsigned> elemsPerDPASInst = {dpasInstShape[0],
+                                              dpasInstShape[1]};
+    unsigned elemsPerLanePerDPASInst =
+        product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
+    TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    Type unpackedDPASOperandType = LLVM::getFixedVectorType(
+        typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
+
+    // By default, use the unpacked type for the 2D load result type.
+    Type loadResultElemType = typeConverter->convertType(eltTy);
+    bool usePackedType = false;
+    unsigned packedElemsNum = 1;
+    unsigned packedElemsPerLanePerDPASInst = elemsPerLanePerDPASInst;
+    // The tensor values are distributed as DotOp layout of DPAS.
+    // If the element size of the tensor matches the DPAS packed layout, then
+    // use the packed type for the 2D load result type. For example,
+    // The intermediate ops generated by ConvertTritonGPUToLLVM:
+    //   %0 = load_2d %ptr : vector<8 x i32>
+    //   %1 = bitcast %0 : vector<8 x i32> -> vector<16 x f16>
+    //   %2 = bitcast %1 : vector<16 x f16> -> vector<8 x i32>
+    //   %3 = dpas %2
+    // And the LLVM dialect optimization pass can eliminate the duplicated
+    // bitcast. Then there is a shortcut to use the load result directly as the
+    // input operands to DPAS.
+    // TODO: add support for int4 and int2.
+    unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+    if ((opsPerChannel == 4 && elemSizeInBits == 8) ||
+        (opsPerChannel == 2 && elemSizeInBits == 16) ||
+        (opsPerChannel == 1 && elemSizeInBits == 32)) {
+      loadResultElemType =
+          (isOperandA && elemSizeInBits != 32) ? i16_ty : i32_ty;
+      packedElemsNum =
+          isOperandA ? (opsPerChannel == 4 ? 2 : 1) : opsPerChannel;
+      packedElemsPerLanePerDPASInst = elemsPerLanePerDPASInst / packedElemsNum;
+      usePackedType = true;
+    } else {
+      if (isOperandA && opsPerChannel == 4) {
+        packedElemsNum = 2;
+        unsigned packedBitWidht = elemSizeInBits * packedElemsNum;
+        if (packedBitWidht > 64) {
+          // Be conservative to avoid the packed type exceeds 64 bits.
+          return failure();
+        }
+        // Need to pack two column into one to work around vectorization
+        // limitation.
+        loadResultElemType = int_ty(packedBitWidht);
+        packedElemsPerLanePerDPASInst =
+            elemsPerLanePerDPASInst / packedElemsNum;
+        usePackedType = true;
+      }
+    }
+
+    Type packedDPASOperandType = LLVM::getFixedVectorType(
+        loadResultElemType, packedElemsPerLanePerDPASInst);
+
+    // Outer dim: Dim M or N. Inner dim: Dim K.
+    // Round the warp id fit into the tensor shape.
+    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+    SmallVector<unsigned> warpShape =
+        isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
+
+    assert(rank == 2 && "unexpected rank");
+    unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
+    unsigned dimInner = bool(opIdx) ? rank - 2 : rank - 1;
+    unsigned outerDimRequiredWarpNum =
+        mlir::ceil<unsigned>(tensorShape[dimOuter], warpShape[dimOuter]);
+    unsigned outerDimWarpNum =
+        std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
+    Value outerDimWarpId =
+        b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
+
+    unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
+    unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
+    unsigned vBlocks = 1;
+    unsigned numOperandsOuterDimPerLoad = 1;
+    unsigned numOperandsInnerDimPerLoad = 1;
+    unsigned maskConstancyHor = 1, maskConstancyVer = 1;
+    unsigned instWidth = elemsPerDPASInst[threadOrder[rank - 2]];
+    unsigned instHeight = elemsPerDPASInst[threadOrder[rank - 1]];
+
+    bool otherIsSplatConstInt = false;
+    int64_t splatVal = 0;
+
+    std::map<SmallVector<unsigned>, Value> ptrs;
+    std::map<SmallVector<unsigned>, Value> masks;
+    std::map<SmallVector<unsigned>, Value> others;
+    if (isTensorPointerType(ptr.getType())) {
+      // TODO: move the tensor pointer rewrite code here.
+      return failure();
+    } else {
+      Value llPtr = adaptor.getPtr();
+      Value llMask = adaptor.getMask();
+      Value llOther = adaptor.getOther();
+
+      SmallVector<Value> ptrElems, maskElems, otherElems;
+      // Get the LLVM values for pointers
+      ptrElems = unpackLLElements(loc, llPtr, rewriter);
+      assert(ptrElems.size() == numElems &&
+             "the number of pointer values is not matched with the number of "
+             "elements");
+
+      // Get the LLVM values for mask
+      if (llMask) {
+        maskElems = unpackLLElements(loc, llMask, rewriter);
+        assert(maskElems.size() == numElems &&
+               "the number of mask values is not matched with the number of "
+               "elements");
+        auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                            axisAnalysisPass)
+                            .getAxisInfo(mask);
+        if (axisInfo) {
+          maskConstancyHor = axisInfo->getConstancy(rank - 1);
+          maskConstancyVer = axisInfo->getConstancy(rank - 2);
+        } else {
+          maskConstancyHor = 1;
+          maskConstancyVer = 1;
+        }
+      } else {
+        // no mask
+        maskConstancyHor = std::numeric_limits<unsigned>::max();
+        maskConstancyVer = std::numeric_limits<unsigned>::max();
+      }
+
+      // Check the constancy of the mask support to load the memory in 2D block.
+      if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
+        return failure();
+
+      // Get the LLVM values for `other`
+      DenseElementsAttr constAttr;
+      if (other && isa<IntegerType>(eltTy) &&
+          matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
+          isa<IntegerType>(constAttr.getElementType())) {
+        otherIsSplatConstInt = true;
+        splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
+      }
+      if (other) {
+        otherElems = unpackLLElements(loc, llOther, rewriter);
+      }
+
+      // re-arrange the ptrs and masks to for large 2D block IO.
+      // Layout is unrelated to the scalar type.
+      SmallVector<SmallVector<unsigned>> offsets =
+          mlir::emitOffsetForLayout(encoding, tensorType);
+      for (size_t i = 0; i < ptrElems.size(); ++i) {
+        SmallVector<unsigned> offset = offsets[i];
+        ptrs[offset] = ptrElems[i];
+        if (llMask)
+          masks[offset] = maskElems[i];
+        if (otherElems.size())
+          others[offset] = otherElems[i];
+      }
+    }
+
+    unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
+    if (!isTransposeRequired) {
+      numOperandsPer2DLoadM =
+          isOperandA ? repCluster[dimOuter] : numReps[unsigned(opIdx) ? 1 : 2];
+      numOperandsPer2DloadN =
+          isOperandA ? numReps[unsigned(opIdx) ? 1 : 2] : repCluster[dimOuter];
+    } else {
+      if (isOperandA)
+        return failure();
+
+      if (!usePackedType)
+        return failure();
+
+      std::swap(tileHeight, tileWidth);
+
+      // We can decompose the matrix returned by transposed large 2d load
+      // when threads per warp < column size. Otherwise we have to load one
+      // operand per inst.
+      // Note: the tileHeight and numOperandsPer2DLoadM are the column size
+      // now.
+      numOperandsPer2DLoadM =
+          (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+      // The transpose 2d load only support 1 operand per inst on column.
+      // (vBlocks = 1)
+      numOperandsPer2DloadN = 1;
+    }
+
+    // adjust the mask constancy to fit the 2D load.
+    numOperandsPer2DLoadM =
+        std::min(numOperandsPer2DLoadM, maskConstancyHor / instWidth);
+    numOperandsPer2DloadN =
+        std::min(numOperandsPer2DloadN, maskConstancyVer / instHeight);
+
+    // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
+    // enlarging the tileHeight.
+    numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
+
+    // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
+    // by enlarging the vBlocks.
+    unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
+    numOperandsPer2DloadN =
+        std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
+
+    tileHeight = instHeight * numOperandsPer2DLoadM;
+    tileWidth = instWidth;
+    vBlocks = numOperandsPer2DloadN;
+
+    numOperandsOuterDimPerLoad =
+        isOperandA ? numOperandsPer2DLoadM : numOperandsPer2DloadN;
+    numOperandsInnerDimPerLoad =
+        isOperandA ? numOperandsPer2DloadN : numOperandsPer2DLoadM;
+
+    if (isTransposeRequired)
+      std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
+
+    unsigned numLoadPerOutRepCluster =
+        mlir::ceil<unsigned>(repCluster[dimOuter], numOperandsOuterDimPerLoad);
+
+    unsigned numValuesPerLoad = packedElemsPerLanePerDPASInst *
+                                numOperandsOuterDimPerLoad *
+                                numOperandsInnerDimPerLoad;
+    Type load2DGenXType =
+        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
+
+    // The stride for the replicates.
+    unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
+    unsigned repStride =
+        elemsPerDPASInst[dimOuter] * numOperandsOuterDimPerLoad;
+    unsigned warpOuterStride = warpShape[dimOuter];
+    unsigned repKStride = elemsPerDPASInst[dimInner];
+
+    unsigned numRepOuter = numReps[bool(opIdx) ? 2 : 1];
+    unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
+
+    Value baseWidth = b.i32_val(vBlocks * tileWidth * (elemSizeInBits / 8));
+    Value baseHeight = b.i32_val(tileHeight);
+    Value pitch = b.sub(b.ptrtoint(i64_ty, ptrs[{1, 0}]),
+                        b.ptrtoint(i64_ty, ptrs[{0, 0}]));
+    pitch = targetInfo.shuffleIdx(rewriter, loc, pitch, 0);
+    pitch = b.umax(b.trunc(i32_ty, pitch), baseWidth);
+
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+    ValueTable loadVals;
+    for (int inner = 0; inner < numRepInner;
+         inner += numOperandsInnerDimPerLoad) {
+      for (int outer = 0; outer < numRepOuter; ++outer) {
+        for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
+          unsigned offsetOuter =
+              outer * repOuterStride +
+              rep * dpasInstShape[dimOuter] * numOperandsOuterDimPerLoad;
+          unsigned offsetInner = inner * dpasInstShape[dimInner];
+          unsigned offsetM = (isOperandA ? offsetOuter : offsetInner);
+          unsigned offsetN = (isOperandA ? offsetInner : offsetOuter);
+
+          Value pred =
+              masks.size() ? masks[{offsetM, offsetN}] : b.int_val(1, 1);
+          pred = targetInfo.shuffleIdx(rewriter, loc, pred, 0);
+          Value other_ = b.undef(load2DGenXType);
+          if (others.size()) {
+            VectorType vecTy = vec_ty(eltTy, numValuesPerLoad * packedElemsNum);
+
+            Value v = b.undef(vecTy);
+            unsigned nWords = 0;
+            for (int vblk = 0; vblk < vBlocks; ++vblk)
+              for (int i = 0; i < tileHeight; ++i) {
+                unsigned numColPerPackedValue = isOperandA ? packedElemsNum : 1;
+                unsigned numPackedValuesPerRow = mlir::ceil<unsigned>(
+                    (tileWidth / numColPerPackedValue), threadsPerWarp);
+                for (int col = 0; col < numPackedValuesPerRow; ++col) {
+                  for (int packedCol = 0; packedCol < numColPerPackedValue;
+                       ++packedCol) {
+                    unsigned N = packedCol +
+                                 col * threadsPerWarp * numColPerPackedValue +
+                                 vblk * tileWidth + offsetN;
+                    unsigned M = i + offsetM;
+                    Value falseVal = others[{M, N}];
+                    Value sVal = createIndexAttrConstant(
+                        rewriter, loc, typeConverter->getIndexType(), nWords++);
+                    v = b.insert_element(vecTy, v, falseVal, sVal);
+                  }
+                }
+              }
+
+            other_ = b.bitcast(v, load2DGenXType);
+
+          } else {
+            other_ = rewriter.create<LLVM::ConstantOp>(
+                loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
+          }
+
+          // Create a predicated load operation.
+          Block &endBlock = LLVM::intel::createPredicatedBlock(
+              rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
+                // Use the top-left address of the block to load the data.
+                Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
+                                           ptr_ty(ctx, 1 /*global*/));
+                addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+
+                auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+                    loc, load2DGenXType,
+                    /*ptr*/ addrElem,
+                    /*base_width*/ baseWidth,
+                    /*base_height*/ baseHeight,
+                    /*base_pitch*/ pitch,
+                    /*x*/ b.i32_val(0),
+                    /*y*/ b.i32_val(0),
+                    /*elem_size_in_bits*/ elemSizeInBits,
+                    /*tile_width*/ tileWidth,
+                    /*tile_height*/ tileHeight,
+                    /*v_blocks*/ vBlocks,
+                    /*transpose*/ false,
+                    /*vnni_transform*/ opIdx ==
+                            DpasEncodingAttr::OpIdx::OperandB &&
+                        usePackedType);
+                return SmallVector<Value, 1>{load2dOp};
+              });
+          Value ret = *endBlock.args_begin();
+
+          unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
+                                      ? numOperandsOuterDimPerLoad
+                                      : numOperandsInnerDimPerLoad;
+          unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
+                                      ? numOperandsInnerDimPerLoad
+                                      : numOperandsOuterDimPerLoad;
+
+          // Decompose the return value to multiple operands.
+          unsigned packedColNumPerVBlock = packedColNum / vBlocks;
+          for (int vblk = 0; vblk < vBlocks; ++vblk)
+            for (int row = 0; row < packedRowNum; ++row)
+              for (int col = 0; col < packedColNumPerVBlock; ++col) {
+
+                unsigned operandStartOffset = (vblk * packedRowNum + row) *
+                                              packedColNumPerVBlock *
+                                              packedElemsPerLanePerDPASInst;
+
+                SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
+                for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
+                     ++elemIdx) {
+                  indices[elemIdx] = operandStartOffset +
+                                     elemIdx * packedColNumPerVBlock + col;
+                }
+                DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+                Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
+                    loc, packedDPASOperandType, ret, ret, attr);
+
+                // Save the decomposed vals to the map;
+                switch (opIdx) {
+                case DpasEncodingAttr::OpIdx::OperandA: {
+                  loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
+                                rep * packedRowNum + row,
+                            inner + vblk * packedColNumPerVBlock + col}] =
+                      b.bitcast(loadVal, unpackedDPASOperandType);
+                } break;
+                case DpasEncodingAttr::OpIdx::OperandB: {
+                  loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
+                                rep * packedColNum +
+                                vblk * packedColNumPerVBlock + col,
+                            inner + row}] =
+                      b.bitcast(loadVal, unpackedDPASOperandType);
+                } break;
+                case DpasEncodingAttr::OpIdx::OperandC: {
+                  llvm_unreachable("unexpected OpIdx::OperandC");
+                } break;
+                }
+              }
+        }
+      }
+    }
+
+    // Extract the value returned by the load ops. And put the values in the
+    // expected order for the layout.
+    SmallVector<Value> unpackedLoadedVals;
+    for (int outer = 0; outer < numRepOuter; ++outer) {
+      for (int k = 0; k < numRepInner; ++k) {
+        for (int rep = 0; rep < repCluster[unsigned(opIdx)]; ++rep) {
+          Value loadVal =
+              loadVals.at({outer * repCluster[unsigned(opIdx)] + rep, k});
+          VectorType loadTy = cast<VectorType>(loadVal.getType());
+          for (int i = 0; i < loadTy.getNumElements(); ++i) {
+            auto val = b.extract_element(loadVal, b.i32_val(i));
+            unpackedLoadedVals.push_back(val);
+          }
+        }
+      }
+    }
+
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
+                                        rewriter, llvmResultStructTy);
+    rewriter.replaceOp(op, {resultStruct});
+
     return success();
   }
 };
@@ -1828,6 +2319,9 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, StoreOpConversion,
                PrefetchOpConversion>(typeConverter, targetInfo,
                                      axisInfoAnalysis, benefit);
+  // BlockIO is more efficient than gather load.
+  patterns.add<LoadOpToBlockIOConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2);
   patterns.add<LoadOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
                                  benefit, oneMatrixPerLoadForBT);
 }

@@ -1,4 +1,3 @@
-
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
