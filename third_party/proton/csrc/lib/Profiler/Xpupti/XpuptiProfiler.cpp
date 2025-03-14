@@ -128,7 +128,7 @@ processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
       auto scopeId = parentId;
       if (apiExternIds.contain(scopeId)) {
         // It's triggered by a CUDA op but not triton op
-        scopeId = data->addScope(parentId, kernel->_name);
+        scopeId = data->addOp(parentId, kernel->_name);
       }
       data->addMetric(scopeId, convertActivityToMetric(activity));
     }
@@ -143,7 +143,7 @@ processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     // 3. corrId -> numKernels
     std::cout << "MARK#1\n" << std::flush;
     for (auto *data : dataSet) {
-      auto externId = data->addScope(parentId, kernel->_name);
+      auto externId = data->addOp(parentId, kernel->_name);
       std::cout << "MARK#2\n" << std::flush;
       data->addMetric(externId, convertActivityToMetric(activity));
     }
@@ -225,6 +225,7 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
       : GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~XpuptiProfilerPimpl() = default;
 
+  void setLibPath(const std::string &libPath) override {}
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -249,8 +250,7 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
     std::cout << "OnEnterCommandListAppendLaunchKernel::demangled kernel_name: "
               << Demangle(name.data()) << "\n";
 
-    auto scopeId = threadState.record();
-    threadState.enterOp(scopeId);
+    threadState.enterOp();
 
     size_t numInstances = 1;
     // FIXME: 4 - debug value
@@ -263,8 +263,7 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
       ze_result_t result, void *global_user_data, void **instance_user_data) {
     std::cout << "Function zeCommandListAppendLaunchKernel is called on enter"
               << std::endl;
-    auto scopeId = threadState.record();
-    threadState.enterOp(scopeId);
+    threadState.enterOp();
     // FIXME: 4 - debug value
     threadState.profiler.correlation.correlate(4, 1);
   }

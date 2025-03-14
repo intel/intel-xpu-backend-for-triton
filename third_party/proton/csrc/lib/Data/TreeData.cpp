@@ -220,7 +220,7 @@ void TreeData::dumpHatchet(std::ostream &os) const {
             std::string deviceTypeName =
                 getDeviceTypeString(static_cast<DeviceType>(deviceType));
             std::cout << "\t dumpHatchet::deviceTypeName: " << deviceTypeName
-                  << "\n";
+                      << "\n";
             (*jsonNode)["metrics"]
                        [kernelMetric->getValueName(KernelMetric::Duration)] =
                            duration;

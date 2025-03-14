@@ -96,7 +96,7 @@ def get_min_time_flops(df, device_info):
                     elif arch == "100":
                         max_flops = (num_sms * 16384 * (clock_rate / 1e3) * 1e6) / (width / 8)
                 elif device_type == "XPU":
-                    raise NotImplemented
+                    raise NotImplementedError
                 elif device_type == "HIP":
                     if arch == "gfx90a":
                         max_flops = 383e12 / (width / 8)
