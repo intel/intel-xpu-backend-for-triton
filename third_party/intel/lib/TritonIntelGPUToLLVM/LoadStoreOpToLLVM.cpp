@@ -933,9 +933,14 @@ struct LoadOpConversion
         // operand per inst.
         // Note: the tileHeight and numOperandsPer2DLoadM are the column size
         // now.
+        llvm::errs() << "transpose layout multiple: " << ((threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1) << "\n";
+#if 1
+        tileLayout *= LinearLayout::identity1D(1, kIteration, dimOuterStr);
+#else
         tileLayout *= LinearLayout::identity1D(
             (threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1,
             kIteration, dimOuterStr);
+#endif 
       }
     }
 
@@ -987,11 +992,6 @@ struct LoadOpConversion
     LLVM_DEBUG(llvm::dbgs() << "Packed elements per slot: "
                             << packedElementsPerSlot << "\n");
 
-    if (isTransposeRequired) {
-      std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
-      std::swap(numIterationsOuterDimPerLoad, numIterationsInnerDimPerLoad);
-    }
-
     tileLayout *= LinearLayout::identity1D(
         numRepInner / numIterationsInnerDimPerLoad, kLoad, dimInnerStr);
     if (isTransposeRequired && oneMatrixPerLoadForBT) {
@@ -1002,6 +1002,11 @@ struct LoadOpConversion
           (numRepOuter * packedElementsPerSlot * vBlocks) /
               numIterationsOuterDimPerLoad,
           kLoad, dimOuterStr);
+    }
+    
+    if (isTransposeRequired) {
+      std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
+      std::swap(numIterationsOuterDimPerLoad, numIterationsInnerDimPerLoad);
     }
 
     LLVM_DEBUG({
@@ -1327,7 +1332,11 @@ struct LoadOpConversion
 
             // for operand B we need extra iterations for each vblock. probably
             // true for operand A also!
-            const auto vBlockIterations = isOperandA ? 1 : vBlocks;
+            const auto vBlockIterations = isTransposeRequired ? numIterationsOuterDimPerLoad : (isOperandA ? 1 : vBlocks);
+            llvm::errs() << "vBlock Iterations: " << vBlockIterations << "\n";
+            llvm::errs() << "numIterationsOuterDimPerLoad: " << numIterationsOuterDimPerLoad << "\n";
+            const auto jStride = isTransposeRequired ? 1 : packedElemsPerLanePerDPASInst * tileWidth;
+            const auto jOffset = isTransposeRequired ? 1 : 0;
             for (size_t j = 0; j < vBlockIterations; j++) {
 
               SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
@@ -1338,34 +1347,14 @@ struct LoadOpConversion
                            << ", vs packedElemsPerLanePerDPASInst "
                            << packedElemsPerLanePerDPASInst << "\n";
               for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
-                   elemIdx += packedElementsPerSlot) {
-
-                // TODO: add j * 8 here? not quite...
-                auto shuffleVectorOffset = tileLayout.apply(
-                    {{kOffset,
-                      (elemIdx * tileWidth * packedElementsPerSlot) +
-                          j * packedElemsPerLanePerDPASInst * tileWidth},
-                     {kIteration, i},
-                     {kLoad, loadIdx},
-                     {kRep, 0}});
-
-                assert(shuffleVectorOffset.size() == 2);
-                LLVM_DEBUG(llvm::dbgs()
-                           << "\tshuffle vector offset: "
-                           << shuffleVectorOffset[0].second << ", "
-                           << shuffleVectorOffset[1].second << "\n");
-                shuffleVectorOffset[0].second -= itrOffsetCoord_[0].second;
-                shuffleVectorOffset[1].second -= itrOffsetCoord_[1].second;
-                LLVM_DEBUG(llvm::dbgs()
-                           << "\tshuffle vector offset after handing loads: "
-                           << shuffleVectorOffset[0].second << ", "
-                           << shuffleVectorOffset[1].second << "\n");
-
+                   elemIdx++) {
 #if 1
                 const int offsetIdx =
-                    elemIdx * (tileWidth / packedElementsPerSlot) +
-                    j * packedElemsPerLanePerDPASInst * tileWidth;
+                    elemIdx * tileWidth * packedElementsPerSlot +
+                    j * jStride;
                 llvm::errs() << "\toffset = " << offsetIdx << "\n";
+
+                // TODO: still consider subtracting off load 0 offsets, having issues with # loads > 2
                 auto shuffleVectorOffset_2 =
                     tileLayout.apply({{kOffset, offsetIdx},
                                       {kIteration, i},
@@ -1385,6 +1374,13 @@ struct LoadOpConversion
                     << ")"
                        "\n";
 
+#if 1
+                indices[elemIdx] = regVal + (j*jOffset);
+                LLVM_DEBUG({
+                  llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                              << indices[elemIdx] << "\n";
+                });
+#else
                 for (size_t s = 0; s < packedElementsPerSlot; s++) {
                   indices[elemIdx + s] = regVal + s * packedElementsPerSlot;
                   LLVM_DEBUG({
@@ -1392,6 +1388,7 @@ struct LoadOpConversion
                                  << indices[elemIdx + s] << "\n";
                   });
                 }
+#endif 
 #else
                 for (size_t s = 0; s < packedElementsPerSlot; s++) {
                   const auto x_offset =
