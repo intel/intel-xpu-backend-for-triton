@@ -126,10 +126,6 @@ def benchmark(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, provider
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    def tflops(ms):
-        scale_ops = N * K if rhs_scale else M * K
-        return (2 * M * N * K + scale_ops) * (1e-12) / (ms * 1e-3)
-
     def gbps(ms):
 
         def size_x(m, n, ty):
