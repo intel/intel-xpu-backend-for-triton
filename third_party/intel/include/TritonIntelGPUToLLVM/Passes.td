@@ -21,7 +21,6 @@ def ConvertTritonIntelGPUToLLVM
                            "mlir::math::MathDialect",
                            "mlir::gpu::GPUDialect",
                            "mlir::scf::SCFDialect",
-                           "mlir::spirv::SPIRVDialect",
                            "mlir::LLVM::LLVMDialect",
                            "mlir::tensor::TensorDialect",
                            "mlir::triton::TritonDialect",
