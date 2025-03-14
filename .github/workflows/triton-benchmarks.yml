@@ -302,7 +302,7 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           python ../../scripts/build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-triton-report.csv --benchmark flexAttnMasks --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG --mask
-          python ../../scripts/build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-onednn-report.csv --benchmark flexAttnMasks --compiler onednn --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col onednn-TFlops --hbm_col "onednn-GB/s" --tag $TAG --mask
+          python ../../scripts/build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-onednn-report.csv --benchmark flexAttnMasks --compiler onednn --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG --mask
 
 
       - name: Upload benchmark reports

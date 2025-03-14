@@ -29,7 +29,6 @@ def causal_mask(_, __, q_idx, kv_idx):
 # For details: https://github.com/pytorch/pytorch/issues/144778
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
-        # argument names to use as an x-axis for the plot
         x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
         x_vals=[[z, h, 16384 // z, dhead, causal, mode]
                 for z in [1, 2, 4, 8, 16, 32]
@@ -42,16 +41,11 @@ def causal_mask(_, __, q_idx, kv_idx):
            for (h, dhead) in [(8, 128), (32, 96), (4, 128)]
            for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
         line_arg='provider',
-        # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
         line_vals=['triton', 'xetla'],
-        # label name for the lines
         line_names=['Triton', 'XeTLA'],
-        # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+        ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
-        # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
