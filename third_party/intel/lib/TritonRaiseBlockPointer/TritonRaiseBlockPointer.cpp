@@ -85,18 +85,28 @@ Value findOrCreateCast(Location loc, Value val, Type tgtType,
 
 Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
                                 ValueRange strides, ValueRange offsets,
-                                ArrayRef<int> order, ArrayRef<int> sizes,
-                                OpBuilder &builder) {
+                                ArrayRef<int32_t> order,
+                                ArrayRef<int32_t> sizes, OpBuilder &builder) {
   Block *block = builder.getInsertionBlock();
   const Block::iterator insertPoint = builder.getInsertionPoint();
 
   auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
     if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+      triton::PointerType resType = makeTensorPtrOp.getResult().getType();
+      auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
+      auto sameShape = [](ArrayRef<int64_t> arr1, ArrayRef<int32_t> arr2) {
+        for (auto [dim1, dim2] : llvm::zip(arr1, arr2)) {
+          if (dim1 != dim2)
+            return false;
+        }
+        return true;
+      };
       return makeTensorPtrOp.getBase() == source &&
              makeTensorPtrOp.getShape() == shape &&
              makeTensorPtrOp.getStrides() == strides &&
              makeTensorPtrOp.getOffsets() == offsets &&
-             makeTensorPtrOp.getOrder() == order;
+             makeTensorPtrOp.getOrder() == order &&
+             sameShape(tensorType.getShape(), sizes);
     }
     return false;
   });
@@ -127,8 +137,8 @@ struct PtrState {
   SmallVector<Value> offsets;
   SmallVector<Value> strides;
   SmallVector<Value> shape;
-  SmallVector<int> sizes;
-  SmallVector<int> order;
+  SmallVector<int32_t> sizes;
+  SmallVector<int32_t> order;
   Value source;
   Value scalar;
 
@@ -463,12 +473,7 @@ public:
     if (failed(rewriteOp(moduleOp)))
       moduleOp->emitWarning("TritonRaiseToBlockPointer failed");
 
-    // Cleanup unused operations.
-    for (Operation *op : cleanUp) {
-      if (op->getUsers().empty())
-        op->erase();
-    }
-
+    finalize();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -486,8 +491,6 @@ private:
             if (failed(rewriteAddPtrOp(addptr))) {
               addptr->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite AddPtrOp");
-              if (isNested)
-                fail = true;
             }
             return WalkResult::advance();
           })
@@ -596,7 +599,7 @@ private:
     // Update the loop body.
     constexpr bool isNested = true;
     if (failed(rewriteOp(newOp, isNested))) {
-      newOp->erase();
+      cleanUp.insert(newOp);
       op->emitRemark("TritonRaiseToBlockPointer: update loop body failed when "
                      "rewriting for op");
       return failure();
@@ -626,7 +629,7 @@ private:
     ResultRange resultsToReplaceWith(newOp.result_begin(),
                                      newOp.result_begin() + op.getNumResults());
     op->replaceAllUsesWith(resultsToReplaceWith);
-    op->erase();
+    cleanUp.insert(op);
 
     LLVM_DEBUG({
       auto modOp =
@@ -748,9 +751,6 @@ private:
         LLVM_DEBUG({
           llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp
                        << "\n";
-          auto modOp =
-              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-          llvm::dbgs() << "Module:\n" << modOp << "\n";
         });
 
         return success();
@@ -785,9 +785,6 @@ private:
         LLVM_DEBUG({
           llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << newAdvanceOp
                        << "\n";
-          auto modOp =
-              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-          llvm::dbgs() << "Module:\n" << modOp << "\n";
         });
 
         return success();
@@ -823,9 +820,6 @@ private:
 
     LLVM_DEBUG({
       llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << makePtrOp << "\n";
-      auto modOp =
-          builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-      llvm::dbgs() << "Module:\n" << modOp << "\n";
     });
 
     return success();
@@ -864,7 +858,7 @@ private:
     }
     state.strides = makeTPtrOp.getStrides();
     state.shape = makeTPtrOp.getShape();
-    state.order = SmallVector<int>(makeTPtrOp.getOrder());
+    state.order = SmallVector<int32_t>(makeTPtrOp.getOrder());
 
     return success();
   }
@@ -917,12 +911,12 @@ private:
       }
     }
 
+    LLVM_DEBUG(llvm::dbgs() << "Base: " << ptrState << "\n"
+                            << "Offset: " << offsetState << "\n";);
+
     assert(ptrState.source && "ptr field should provide source / base pointer");
     assert(ptrState.getRank() == offsetState.getRank() &&
            "ptr and offset field should have the same rank");
-
-    LLVM_DEBUG(llvm::dbgs() << "Base: " << ptrState << "\n"
-                            << "Offset: " << offsetState << "\n";);
 
     return state.addState(ptrState, offsetState, addptrOp, builder);
   }
@@ -1072,13 +1066,7 @@ private:
       LLVM_DEBUG(llvm::dbgs() << "Created: " << storeOp << "\n";);
     }
 
-    op->erase();
-
-    LLVM_DEBUG({
-      auto modOp =
-          builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-      llvm::dbgs() << "Module:\n" << modOp << "\n";
-    });
+    cleanUp.insert(op);
 
     return success();
   }
@@ -1126,6 +1114,31 @@ private:
             if (maskOpToErase)
               maskOpToErase->erase();
           });
+    }
+  }
+
+  void finalize() {
+    // Cleanup unused operations.
+    bool erasedOperation;
+    do {
+      erasedOperation = false;
+      SmallPtrSet<Operation *, 8> erased;
+      for (Operation *op : cleanUp) {
+        if (!op->getUsers().empty() || !op->getRegions().empty())
+          continue;
+
+        erased.insert(op);
+        op->erase();
+        erasedOperation = true;
+      }
+      cleanUp.remove_if([&](Operation *op) { return erased.contains(op); });
+    } while (erasedOperation);
+
+    // Remove operations that contain a region.
+    for (Operation *op : cleanUp) {
+      if (!op->getUsers().empty())
+        continue;
+      op->erase();
     }
   }
 

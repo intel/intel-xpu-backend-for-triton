@@ -247,8 +247,11 @@ public:
                      : isa<tt::StoreOp>(op) ? cast<tt::StoreOp>(op).getMask()
                                             : nullptr;
         if (mask &&
-            maskValidator.isValidMask(forOp, tt::intel::getFinalValue(mask)))
+            maskValidator.isValidMask(forOp, tt::intel::getFinalValue(mask))) {
           maskedOps.insert(op);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "Collected masked operation: " << *op << "\n");
+        }
       }
     };
 
@@ -275,7 +278,7 @@ public:
   static bool version(scf::ForOp &forOp,
                       MaskedOpsCollector<CanonicalMaskValidator> &collector) {
     // Limitation
-    // Currently we can version the loop only is it doesn't have downward
+    // Currently we can version the loop only if it doesn't have downward
     // exposed uses of return values that are a tensor of pointers.
     // Note: this is due to the fact the results yielded by the 2 versioning
     // branches have different types for ptr (only in one versioned loop
@@ -338,12 +341,8 @@ public:
 
     // Drop the mask from candidate masked operations in the "then" region.
     for (Operation *maskedOp : collector.getMaskedOps()) {
-      llvm::errs() << "maskedOp: " << *maskedOp << "\n";
       Operation *mappedOp = map.lookup(maskedOp);
-      llvm::errs() << "mappedOp: " << *mappedOp << "\n";
-
       if (auto loadOp = dyn_cast<tt::LoadOp>(mappedOp)) {
-        llvm::errs() << "BINGO, load: " << *loadOp << "\n";
         OpBuilder builder(mappedOp);
         auto newLoad = builder.create<tt::LoadOp>(
             loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
