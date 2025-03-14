@@ -156,8 +156,8 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
-    for BN in [32, 64] \
-    for s in [3, 4] \
+    for BN in [32, 64, 128] \
+    for s in [2, 3, 4] \
     for w in [8, 16, 32] \
     ]
 
@@ -447,6 +447,7 @@ class _attention(torch.autograd.Function):
                 N_CTX=q.shape[2],  #
                 BLOCK_DMODEL=Lk,  #
                 STAGE=stage,  #
+                split_barriers_scope='Subgroup' if causal else 'Workgroup',  #
             )
         else:
             _attn_fwd[grid](
