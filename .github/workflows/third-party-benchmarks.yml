@@ -98,10 +98,15 @@ jobs:
           git clone https://github.com/linkedin/Liger-Kernel
           pip install -e Liger-Kernel
 
-          bash ./run_benchmarks.sh
+          # To remember return code, but still copy results 
+          RET_CODE=0
+          bash ./run_benchmarks.sh || RET_CODE=$?
 
           cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
           python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv
+
+          # Return the captured return code at the end
+          exit "$RET_CODE"
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
