@@ -1,6 +1,7 @@
 #ifndef TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 #define TRITON_CONVERSION_TRITONGPU_TO_ELEMENTWISE_OP_H
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Support/LLVM.h"
@@ -86,7 +87,8 @@ public:
       return resultVals;
     while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
       baseEncoding = sliced.getParent();
-    if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
+    if (isa<LinearEncodingAttr, DotOperandEncodingAttr,
+            intel::DpasEncodingAttr>(baseEncoding)) {
       // TODO: this logic seems incorrect for mma layout. Skip for now.
       // The following test crashes and some other miscompile:
       // test_core::test_fp8_dot_acc
@@ -101,7 +103,7 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> contigPerThread = getContigPerThread(encoding);
+    SmallVector<unsigned> contigPerThread = getContigPerThread(rtType);
     if (rank != contigPerThread.size())
       return resultVals;
 
@@ -135,7 +137,7 @@ public:
     if (rank > 1) {
       // reorder the shape and constancy vectors by the axis order:
       // from the fastest-changing to the smallest-changing axis
-      SmallVector<unsigned> order = getOrder(encoding);
+      SmallVector<unsigned> order = getOrder(rtType);
       if (rank != order.size())
         return resultVals;
       elemsPerThread = applyPermutation(elemsPerThread, order);
@@ -206,6 +208,27 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
+};
+
+// Trivial case where we map elementwise to an existing LLVM operator
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  // An interface to support variant DestOp builder.
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
+                                    adaptor.getAttributes().getValue())};
+  }
 };
 
 } // namespace gpu

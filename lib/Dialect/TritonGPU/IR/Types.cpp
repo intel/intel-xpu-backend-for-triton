@@ -9,24 +9,6 @@ using namespace mlir::triton::gpu;
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Types.cpp.inc"
 
-Type TokenType::parse(AsmParser &parser) {
-  if (parser.parseLess())
-    return Type();
-
-  int type = 1;
-  if (parser.parseInteger(type))
-    return Type();
-
-  if (parser.parseGreater())
-    return Type();
-
-  return TokenType::get(parser.getContext(), type);
-}
-
-void TokenType::print(AsmPrinter &printer) const {
-  printer << "<" << getType() << ">";
-}
-
 static constexpr llvm::StringRef kMutableMemory = "mutable";
 
 Type MemDescType::parse(AsmParser &parser) {
@@ -69,6 +51,10 @@ Type MemDescType::parse(AsmParser &parser) {
 
   if (parser.parseGreater())
     return Type();
+
+  if (allocShape.size() > 0)
+    return MemDescType::get(parser.getContext(), dimensions, elementType,
+                            encoding, memorySpace, mutableMemory, allocShape);
 
   return MemDescType::get(parser.getContext(), dimensions, elementType,
                           encoding, memorySpace, mutableMemory, dimensions);

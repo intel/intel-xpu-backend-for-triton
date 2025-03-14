@@ -5,8 +5,8 @@
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
-#shared = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 32]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
@@ -21,6 +21,7 @@ tt.func @one_dep(%lb : index, %ub : index, %step : index,
     %res = arith.addf %acc, %a : tensor<128x32xf16, #A>
     scf.yield %res : tensor<128x32xf16, #A>
   }
+  // CHECK: tt.scheduled_max_stage
   tt.return %loop#0 : tensor<128x32xf16, #A>
 }
 
@@ -333,5 +334,20 @@ tt.func @indirect_load(%lb : index, %ub : index, %step : index,
     scf.yield %next_a_ind_ptr, %next_a_ptr, %next_b_ptr, %c : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<128x32x!tt.ptr<f16>, #AL>, tensor<32x128x!tt.ptr<f16>, #BL>, tensor<128x128xf32, #C>
   }
   tt.return %loop#3: tensor<128x128xf32, #C>
+}
+
+// Verify that we don't schedule/pipeline loops with gpu.barrier
+// CHECK-LABEL: @gpu_barrier
+tt.func @gpu_barrier(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> tensor<128x32xf16, #A> {
+  %init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> (tensor<128x32xf16, #A>) {
+    // CHECK-NOT: loop.cluster
+    %a = tt.load %a_ptr_init {tt.latency = 2 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
+    %res = arith.addf %acc, %a : tensor<128x32xf16, #A>
+    gpu.barrier
+    scf.yield %res : tensor<128x32xf16, #A>
+  }
+  tt.return %loop#0 : tensor<128x32xf16, #A>
 }
 }

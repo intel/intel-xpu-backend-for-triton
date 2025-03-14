@@ -1,5 +1,5 @@
 #include "../TritonGPUToLLVMBase.h"
-#include "../Utility.h"
+#include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 #include "intel/include/Analysis/DPAS.h"
@@ -36,7 +36,7 @@ public:
     Type i16Ty = type::i16Ty(ctx);
     Type s32Ty = IntegerType::get(ctx, 32, IntegerType::Signed);
 
-    unsigned threadsPerWarp = layout.getSubGroupSize();
+    unsigned threadsPerWarp = product<unsigned>(layout.getThreadsPerWarp());
     unsigned opsPerChannel = layout.getOpsPerChannel();
     SmallVector<unsigned> shapeC = layout.getDPASInstShapeC();
     unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
@@ -148,13 +148,16 @@ public:
         getDPASOperandsType(dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
         loadedA, repBatch, repM, repK,
-        typeConverter->convertType(ATensorTy.getElementType()), 0);
+        typeConverter->convertType(ATensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::OperandA);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
         loadedB, repBatch, repN, repK,
-        typeConverter->convertType(BTensorTy.getElementType()), 1);
+        typeConverter->convertType(BTensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::OperandB);
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
         loadedC, repBatch, repM, repN,
-        typeConverter->convertType(CTensorTy.getElementType()), 2);
+        typeConverter->convertType(CTensorTy.getElementType()),
+        DpasEncodingAttr::OpIdx::OperandC);
 
     Type resElemTy = DTensorTy.getElementType();
 
@@ -175,6 +178,7 @@ public:
     });
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
+      auto tb = TritonLLVMOpBuilder(loc, rewriter);
       Value valA = ha.at({b, m, k});
       Value valB = hb.at({b, n, k});
       Value valc = fc.at({b, m, n});
@@ -186,8 +190,8 @@ public:
       auto RC = IntegerAttr::get(rewriter.getIntegerType(32),
                                  dpasEncoding.getRepeatCount());
       fc.at({b, m, n}) = rewriter.create<TritonGEN::MatrixDPASOp>(
-          loc, dTy, bitcast(valc, cTy), bitcast(valA, aTy), bitcast(valB, bTy),
-          pA, pB, RC);
+          loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
+          tb.bitcast(valB, bTy), pA, pB, RC);
     };
 
     ArrayRef<unsigned> repCluster = dpasEncoding.getRepCluster();
@@ -266,6 +270,7 @@ private:
                                               int64_t dimBatch, int64_t dimRow,
                                               int64_t dimCol,
                                               Type elemTy) const {
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     std::vector<Value> elems;
@@ -279,7 +284,7 @@ private:
               VectorType vecType = cast<mlir::VectorType>(matVal.getType());
               Type valTy = vecType.getElementType();
               for (int i = 0; i < vecType.getNumElements(); ++i) {
-                Value val = extract_element(valTy, matVal, i32_val(i));
+                Value val = tb.extract_element(valTy, matVal, tb.i32_val(i));
                 elems.push_back(val);
               }
             }
@@ -296,33 +301,30 @@ private:
     return packLLElements(loc, typeConverter, elems, rewriter, structTy);
   }
 
-  ValueTable getValuesFromDotOperandLayoutStruct(Value val, int64_t batch,
-                                                 int64_t outer, int64_t inner,
-                                                 Type elemTy,
-                                                 uint32_t opIdx) const {
+  ValueTable
+  getValuesFromDotOperandLayoutStruct(Value val, int64_t batch, int64_t outer,
+                                      int64_t inner, Type elemTy,
+                                      DpasEncodingAttr::OpIdx opIdx) const {
     SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
     unsigned repClusterInner = 0u;
     switch (opIdx) {
-    case 0:
+    case DpasEncodingAttr::OpIdx::OperandA:
       // operand A
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = 1;
       break;
-    case 1:
+    case DpasEncodingAttr::OpIdx::OperandB:
       // operand B
       repClusterInner = 1;
       repClusterOuter = repCluster[rank - 1];
       break;
-    case 2:
+    case DpasEncodingAttr::OpIdx::OperandC:
       // operand C
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = repCluster[rank - 1];
-      break;
-    default:
-      assert(false && "invalid operand type in lowering");
       break;
     }
 
@@ -332,6 +334,7 @@ private:
         ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
 
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     int offset = 0;
     ValueTable vals;
     for (unsigned b = 0; b < batch; ++b) {
@@ -341,8 +344,8 @@ private:
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
               Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
               for (int k = 0; k < numElemsPerOperand; ++k) {
-                matVal = insert_element(dotOpTy, matVal, elems[offset++],
-                                        i32_val(k));
+                matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
+                                           tb.i32_val(k));
               }
               vals[{b, i * repClusterOuter + repOuter,
                     j * repClusterInner + repInner}] = matVal;

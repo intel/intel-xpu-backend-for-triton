@@ -55,9 +55,13 @@ on:
       runner_version:
         description: Runner label for version
         type: string
-        default: runner-0.0.20
+        default: runner-0.0.22
       use_pyenv_python:
         description: Use Python built with pyenv
+        type: boolean
+        default: false
+      use_spirv_backend:
+        description: Use SPIR-V backend
         type: boolean
         default: false
 
@@ -70,7 +74,7 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
-    runs-on: ${{ fromJson(inputs.runner_label && format('["{0}"]', inputs.runner_label) || format('["{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -114,7 +118,6 @@ jobs:
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
-          repository: pytorch/pytorch
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
@@ -126,6 +129,7 @@ jobs:
         uses: ./.github/actions/setup-triton
         with:
           build_llvm: ${{ inputs.build_llvm }}
+          use_spirv_backend: ${{ inputs.use_spirv_backend }}
 
       - name: Create test-triton command line
         run: |
@@ -203,9 +207,9 @@ jobs:
       - name: Pass rate
         run: |
           source ./scripts/capture-hw-details.sh
-          python3 scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
-          python3 scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
-          python3 scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
+          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
+          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
 
       - name: Report environment details
         run: |

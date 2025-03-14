@@ -41,26 +41,8 @@ def TritonNvidiaGPU_Dialect : Dialect {
     "mlir::gpu::GPUDialect",
   ];
 
-  let extraClassDeclaration = [{
-    static std::string getNumWarpsAttrName() { return "ttg.num-warps"; }
-    static int getNumWarps(ModuleOp mod) {
-      if(!mod->hasAttr("ttg.num-warps"))
-        llvm::report_fatal_error(
-            "TritonGPU module should contain a ttg.num-warps attribute");
-      return cast<IntegerAttr>(mod->getAttr("ttg.num-warps")).getInt();
-    }
-    static int getNumCTAs(ModuleOp mod) {
-      if(!mod->hasAttr("ttg.num-ctas"))
-        llvm::report_fatal_error(
-            "TritonGPU module should contain a ttg.num-ctas attribute");
-      return cast<IntegerAttr>(mod->getAttr("ttg.num-ctas")).getInt();
-    }
-    void registerTypes();
-  }];
-
-  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
-
-include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUTypes.td"
 
 #endif

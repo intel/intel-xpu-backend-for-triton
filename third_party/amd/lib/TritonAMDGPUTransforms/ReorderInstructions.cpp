@@ -3,8 +3,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -17,9 +17,9 @@ namespace ttg = mlir::triton::gpu;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
-// Return true if the given moduleOp contains a pure matmul problem; i.e.,
-// single dot in the main loop.
-static bool isPureMatmulProblem(triton::FuncOp funcOp) {
+// Return true if the given funcOp is a pure matmul problem; i.e.,
+// a single main loop with a single dot.
+static bool isPureMatmulFunc(triton::FuncOp funcOp) {
   bool isMatmul = true;
   bool foundLoop = false;
   funcOp.walk([&](scf::ForOp forOp) -> void {
@@ -29,6 +29,20 @@ static bool isPureMatmulProblem(triton::FuncOp funcOp) {
     foundLoop = true;
   });
   return foundLoop && isMatmul;
+}
+
+// Return true if the given ForOp contains a pure matmul problem; i.e.,
+// single dot and at least 2 glboal loads in the main loop.
+static bool isPureMatmulLoop(scf::ForOp forOp) {
+  int dotCounter = 0;
+  int loadCounter = 0;
+  forOp.walk([&](Operation *op) {
+    if (isa<triton::DotOp>(op))
+      ++dotCounter;
+    else if (isa<triton::LoadOp>(op))
+      ++loadCounter;
+  });
+  return dotCounter == 1 && loadCounter >= 2;
 }
 
 // Search through block to find earliest insertion point for move op. This can
@@ -117,77 +131,6 @@ static void sinkDotConversion(triton::FuncOp funcOp) {
     kv.first->moveBefore(kv.second);
 }
 
-// Adjust the placement of shared memory writes and reads to immediately follow
-// the definition of their operands in case where shared memory write is in the
-// loop but its operand is not.
-//
-// This is a heuristic driven by optimizing fused attention by hoisting Q tensor
-// shared memory read/write operations outside of the loop, as Q is a loop
-// invariant and can be loaded once before entering the loop. But it should be
-// generally applicable.
-//
-// There are two possible patterns for this adjustment depending on whether the
-// write to shared memory is performed using an optional `local_alloc` argument
-// or a `local_store` instruction.
-//
-// 1) %1 = some_op ... (typically a load or an operation that scales the tensor
-//                      after loading)
-//    %2 = local_alloc %1
-//    %3 = local_load %2
-//
-// 2) %1 = some_op ...
-//    %2 = local_alloc
-//    %3 = local_store %1, %2
-//    %4 = local_load %2
-static void hoistLocalLoad(triton::FuncOp funcOp) {
-  funcOp.walk([&](ttg::LocalLoadOp localLoad) {
-    auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
-    if (!localAlloc)
-      return;
-
-    // Case when localAlloc has operands
-    if (localAlloc->getNumOperands() == 1) {
-      if (!localAlloc->hasOneUse())
-        return;
-
-      auto srcTensorOp = localAlloc.getSrc().getDefiningOp();
-      // Check if localAlloc is in the loop but it's src tensor defining op is
-      // outside of it.
-      if (!srcTensorOp || !isCrossLoopBoundary(localAlloc, srcTensorOp))
-        return;
-
-      localAlloc->moveAfter(srcTensorOp);
-      localLoad->moveAfter(localAlloc);
-      return;
-    }
-
-    // Case when localAlloc has no operands
-    assert(localAlloc->getNumOperands() < 1);
-    auto allocVal = localAlloc->getResult(0);
-
-    // Check if the localAlloc has exactly two uses (localStore and localLoad)
-    int numUses = std::distance(allocVal.use_begin(), allocVal.use_end());
-    if (numUses != 2)
-      return;
-
-    // localStore comes before localLoad in block.
-    Operation *localStore = getFirstUseInSameBlock(localAlloc);
-    if (!isa<ttg::LocalStoreOp>(localStore))
-      return;
-
-    auto srcTensorOp = localStore->getOperand(0).getDefiningOp();
-    // Check if localStore is in the loop but it's src tensor defining op is
-    // outside of it.
-    if (!srcTensorOp || !isCrossLoopBoundary(localStore, srcTensorOp)) {
-      return;
-    }
-
-    localAlloc->moveAfter(srcTensorOp);
-    localStore->moveAfter(localAlloc);
-    localLoad->moveAfter(localStore);
-  });
-}
-
 // Sink conversion after the last dealloc but before the first use in its block.
 // This helps to avoid unnecessary shared memory allocation.
 static void moveDownCoversion(triton::FuncOp funcOp) {
@@ -214,35 +157,57 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
 }
 
 // Schedule global load and local store ops for better GEMM performance.
-static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
+static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
   SmallVector<Operation *> moveOps;
-  // Move local_stores early if dependence distance greater than one iteration.
-  // Best perf on GEMM when these precede global loads.
-  funcOp.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
-  // Move global loads early to prefetch. This may increase register pressure
-  // but it enables issuing global loads early.
-  funcOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+
+  // Search through the forOp initArgs to find global loads for a GEMM that
+  // the pipeliner may have peeled into a loop prologue.
+  if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+    SmallVector<Value> vals = forOp.getInitArgs();
+    while (!vals.empty()) {
+      SmallVector<Value> nextVals; // Next set of values to search via BFS.
+      for (size_t i = 0; i < vals.size(); ++i) {
+        Operation *defOp = vals[i].getDefiningOp();
+        if (isa_and_nonnull<triton::LoadOp>(defOp)) {
+          moveOps.push_back(defOp);
+          continue;
+        }
+
+        // Find uses of the op that are local_store
+        for (Operation *op : vals[i].getUsers()) {
+          if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
+            // Recurse on operands of the local_store (to find a global_load).
+            nextVals.push_back(storeOp.getSrc());
+          }
+        }
+      }
+      vals.swap(nextVals);
+    }
+  }
+
+  // Move local_store ops inside the loop early if dependence distance greater
+  // than one iteration (i.e., num_stages > 2). For such case, better perf on
+  // GEMM when local_store ops precede global loads.
+  parentOp->walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+  // Move global_load ops inside the loop early to prefetch. This may increase
+  // register pressure but it enables issuing global loads early.
+  parentOp->walk([&](triton::LoadOp op) { moveOps.push_back(op); });
 
   for (auto op : llvm::reverse(moveOps)) {
     // Gather use-def chain in block.
     Block *block = op->getBlock();
     bool leadsToLoad = false;
-    bool dontReorder = false;
     SetVector<Operation *> backwardSet;
 
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.inclusive = false;
+    // Slice should inlcude values flowing into op regions
+    options.omitUsesFromAbove = false;
     options.filter = [&](Operation *defOp) -> bool {
       Block *defBlock = defOp->getBlock();
       if (!block->findAncestorOpInBlock(*defOp))
         return false;
-      // Don't hoist control flow as we don't track backtraces of ops within
-      // their regions.
-      if (isa<scf::IfOp, scf::ForOp, scf::WhileOp>(defOp)) {
-        dontReorder = true;
-        return false;
-      }
 
       // Check for a `load` dependent path.
       leadsToLoad |= isa<triton::LoadOp>(defOp);
@@ -252,9 +217,6 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
     mlir::getBackwardSlice(op, &backwardSet, options);
     backwardSet.insert(op);
 
-    // If we found ops in the slice we don't want to hoist.
-    if (dontReorder)
-      continue;
     // Don't move a local_store if its source is a load from
     // the same iteration.
     if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
@@ -322,38 +284,44 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
 // are experimenting how to better control instruction scheduling and enable
 // such optimizations.
 //===-------------------------------------------------------------------===//
-static void sinkSecondLoad(triton::FuncOp funcOp) {
-  funcOp.walk([&](scf::ForOp forOp) -> void {
-    SetVector<triton::LoadOp> loadOps;
-    triton::DotOp dotOp;
-    for (Operation &op : forOp) {
-      if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
-        loadOps.insert(loadOp);
-      if (auto curOp = dyn_cast<triton::DotOp>(&op))
-        dotOp = curOp;
-    }
-    // Only apply the optimization when there are 2 load's in the loop
-    if (loadOps.size() != 2)
-      return;
-    // Only apply the optimization when tile size is large enough
-    // 1. nonKDim >= 128
-    // 2. kDim >= 64
-    auto ldAOp = loadOps[0];
-    auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
-    auto ldBOp = loadOps[1];
-    auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
-    if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
-      return;
-    // Only apply the optimization when the moving is legal
-    // 1. Make sure the 2nd loadOp is before the dot
-    // 2. Make sure the first user of the 2nd loadOp is after the dot.
-    bool isBeforeDotOp = ldBOp->isBeforeInBlock(dotOp);
-    auto firstUser = *ldBOp.getResult().getUsers().begin();
-    bool firstUserAfterDotOp = dotOp->isBeforeInBlock(firstUser);
-    if (isBeforeDotOp && firstUserAfterDotOp)
-      // move ldBOp right before tt.dot
-      ldBOp->moveBefore(dotOp);
-  });
+static void sinkSecondLoad(scf::ForOp forOp) {
+  SetVector<triton::LoadOp> loadOps;
+  triton::DotOp dotOp;
+  for (Operation &op : forOp) {
+    if (auto loadOp = dyn_cast<triton::LoadOp>(&op))
+      loadOps.insert(loadOp);
+    if (auto curOp = dyn_cast<triton::DotOp>(&op))
+      dotOp = curOp;
+  }
+  // Only apply the optimization when there are 2 load's in the loop
+  if (loadOps.size() != 2)
+    return;
+
+  auto ldAOp = loadOps[0];
+  auto loadAType = dyn_cast<RankedTensorType>(ldAOp.getType());
+  auto ldBOp = loadOps[1];
+  auto loadBType = dyn_cast<RankedTensorType>(ldBOp.getType());
+  // Only apply the optimization when loading a 2D tensor
+  if (!loadAType || !loadBType)
+    return;
+  auto tileAShape = loadAType.getShape();
+  auto tileBShape = loadBType.getShape();
+  if (tileAShape.size() != 2 || tileBShape.size() != 2)
+    return;
+  // Only apply the optimization when tile size is large enough
+  // 1. nonKDim >= 128
+  // 2. kDim >= 64
+  if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
+    return;
+  // Only apply the optimization when the moving is legal
+  // 1. Make sure the 2nd loadOp is before the dot
+  // 2. Make sure the first user of the 2nd loadOp is after the dot.
+  bool isBeforeDotOp = ldBOp->isBeforeInBlock(dotOp);
+  auto firstUser = *ldBOp.getResult().getUsers().begin();
+  bool firstUserAfterDotOp = dotOp->isBeforeInBlock(firstUser);
+  if (isBeforeDotOp && firstUserAfterDotOp)
+    // move ldBOp right before tt.dot
+    ldBOp->moveBefore(dotOp);
 }
 
 //===----------------------------------------------------------------------===//
@@ -370,16 +338,22 @@ struct TritonAMDGPUReorderInstructionsPass
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<triton::FuncOp>()) {
-      hoistLocalLoad(funcOp);
-
       sinkDotConversion(funcOp);
       moveDownCoversion(funcOp);
 
       moveUpTranspose(funcOp);
 
-      if (isPureMatmulProblem(funcOp)) {
+      if (isPureMatmulFunc(funcOp)) {
         scheduleGlobalLoadLocalStore(funcOp);
-        sinkSecondLoad(funcOp);
+        funcOp.walk([&](scf::ForOp forOp) -> void { sinkSecondLoad(forOp); });
+      } else {
+        SmallVector<scf::ForOp> leafForOps = triton::AMD::getLeafForOps(funcOp);
+        for (auto forOp : leafForOps) {
+          if (isPureMatmulLoop(forOp)) {
+            scheduleGlobalLoadLocalStore(forOp);
+            sinkSecondLoad(forOp);
+          }
+        }
       }
     }
   }

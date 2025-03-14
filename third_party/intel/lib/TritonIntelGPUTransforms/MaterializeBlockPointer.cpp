@@ -1,10 +1,9 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -64,7 +63,7 @@ public:
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
       int fastChangeDim = -1;
       for (size_t i = 0; i < strides.size(); ++i) {
-        if (mlir::triton::gpu::intel::isConstant(strides[i], 1)) {
+        if (tt::intel::isConstant(strides[i], 1)) {
           fastChangeDim = i;
           break;
         }
@@ -89,7 +88,7 @@ public:
           fastChangeStride.print(llvm::dbgs());
           llvm::dbgs() << "\n";
         });
-        if (!mlir::triton::gpu::intel::isConstant(fastChangeStride, 1))
+        if (!tt::intel::isConstant(fastChangeStride, 1))
           return;
 
         // Across Intel platforms, the strictest pitch restriction is to be a
@@ -110,10 +109,12 @@ public:
           // so, skip the block ptr attribute as performance is worse than if we
           // remove the tensor pointer.
           LDBG("dotLayout: " << *dotLayout);
-          const unsigned opIdx = dotLayout->getOpIdx();
-          auto dotOrder = dotLayout->getThreadOrder();
+          auto opIdx =
+              static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
+          auto dotOrder = mlir::triton::gpu::getThreadOrder(tensorType);
           const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-          if (opIdx == 0 && valueRowMajor ^ isRowMajor) {
+          if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
+              valueRowMajor ^ isRowMajor) {
             LDBG("Skipping block pointer attribute for transposed A matrix in "
                  "dot operation");
             return;

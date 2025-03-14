@@ -80,9 +80,18 @@ static cl::opt<std::string> TensorStr(
 //===--------------------------------------------------------------------===//
 
 LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
-  // Dispatch to the corresponding dialect helper function to print the layout.
-  os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
-  return success();
+  // DistributedEncodingTrait and SharedEncodingTrait implements the
+  // toLinearLayout interface.
+  mlir::Attribute layout = tensorType.getEncoding();
+  if (isa<mlir::triton::gpu::DistributedEncodingTrait,
+          mlir::triton::gpu::SharedEncodingTrait>(layout)) {
+    os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
+    return success();
+  }
+
+  llvm::errs() << "Unsupported tensor layout attribute: "
+               << tensorType.getEncoding() << "\n";
+  return failure();
 }
 
 LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,

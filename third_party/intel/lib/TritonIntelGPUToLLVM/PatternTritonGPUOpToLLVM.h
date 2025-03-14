@@ -29,10 +29,6 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
 
-void populateViewOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  PatternBenefit benefit);
-
 void populateDotOpToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
@@ -42,10 +38,9 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
-void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                      RewritePatternSet &patterns,
-                                      const TargetInfo &targetInfo,
-                                      PatternBenefit benefit);
+void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
 
 void populateBF16CastsLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -66,10 +61,6 @@ void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     const TargetInfoBase &targetInfo,
                                     PatternBenefit benefit);
-void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                  RewritePatternSet &patterns,
-                                  const TargetInfoBase &targetInfo,
-                                  PatternBenefit benefit);
 
 void populateTensorPtrOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
@@ -84,10 +75,10 @@ void populatePrintOpToLLVMPattern(
     RewritePatternSet &patterns, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
-void populateMemoryOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit,
-    std::optional<BackendCallbacks> backendCallbacks = std::nullopt);
+void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,

@@ -2,7 +2,7 @@
 
 // CHECK: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(!llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.readonly}) attributes {no_unwind, will_return}
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=2}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_no_scf_with_advance_kernel(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>, %arg3: i64, %arg4: i64, %arg5: i64, %arg6: i64, %arg7: i64) {
@@ -359,7 +359,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @blocked_layout_no_boundary_check
   // COM: Check mask is not generated when boundary_check is not set.
-  // CHECK-COUNT-1: llvm.icmp "slt"
+  // CHECK-NOT: llvm.icmp "slt"
   tt.func public @blocked_layout_no_boundary_check(%arg0: !tt.ptr<f16>, %col_stride: i64) {
       %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf16, #blocked>
       %c64_i64 = arith.constant 64 : i64

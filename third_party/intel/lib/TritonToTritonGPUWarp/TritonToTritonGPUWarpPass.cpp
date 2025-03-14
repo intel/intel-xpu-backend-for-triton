@@ -346,8 +346,10 @@ public:
           auto src = reduce.getSrcs()[0];
           assert(valueAttrMap.count(src) != 0 &&
                  "reduce source attr should be already figured out");
-          auto sliceAttr =
-              ttg::SliceEncodingAttr::get(ctx, axis, valueAttrMap[src]);
+          auto sliceAttr = ttg::SliceEncodingAttr::get(
+              ctx, axis,
+              cast<mlir::triton::gpu::DistributedEncodingTrait>(
+                  valueAttrMap[src]));
           auto result = reduce.getResults()[0];
           DenseSet<Value> chainedVals;
           chainedVals.insert(result);
@@ -427,7 +429,8 @@ public:
           // use.
           if (auto expand = dyn_cast<tt::ExpandDimsOp>(op)) {
             Attribute sliceLayout = triton::gpu::SliceEncodingAttr::get(
-                blockLayout.getContext(), expand.getAxis(), blockLayout);
+                blockLayout.getContext(), expand.getAxis(),
+                cast<mlir::triton::gpu::DistributedEncodingTrait>(blockLayout));
             DenseSet<Value> chainedVals;
             expandDefChain(expand.getSrc(), chainedVals);
             for (auto cv : chainedVals)
@@ -438,11 +441,11 @@ public:
     }
 
     /// adding module attributes
-    mod->setAttr(tt::AttrNumWarpsName,
+    mod->setAttr(ttg::AttrNumWarpsName,
                  IntegerAttr::get(i32Ty, llvm::APInt(32, numWarps.getValue())));
-    mod->setAttr(tt::AttrNumThreadsPerWarp,
+    mod->setAttr(ttg::AttrNumThreadsPerWarp,
                  IntegerAttr::get(i32Ty, llvm::APInt(32, 1)));
-    mod->setAttr(tt::AttrNumCTAsName,
+    mod->setAttr(ttg::AttrNumCTAsName,
                  IntegerAttr::get(i32Ty, llvm::APInt(32, 1)));
   }
 

@@ -26,7 +26,6 @@ endif()
 
 # Define the option with the determined default value
 option(TRITON_BUILD_PROTON "Build the Triton Proton profiler" ${DEFAULT_BUILD_PROTON})
-option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
 option(TRITON_BUILD_UT "Build C++ Triton Unit Tests" ON)
 option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
@@ -59,17 +58,29 @@ endif()
 # used conditionally in this file and by lit tests
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
-if(NOT MSVC)
+if(WIN32)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+    message(STATUS "Using Intel icx compiler")
+    set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /permissive-")
+    set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /permissive-")
+    set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug /INCREMENTAL")
+    set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug /INCREMENTAL")
+    set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug /INCREMENTAL")
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    message(STATUS "Using Microsoft cl compiler")
+    set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
+    set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
+    set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+    set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+    set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
+  else()
+    message(FATAL_ERROR "Unsupported compiler")
+  endif()
+else()
   set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
   set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
   set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
-else()
-  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
-  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "/Zi /RTC1 /bigobj /Zc:preprocessor /permissive-")
-  set(CMAKE_EXE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
-  set(CMAKE_MODULE_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
-  set(CMAKE_SHARED_LINKER_FLAGS_TRITONRELBUILDWITHASSERTS "/debug:fastlink /INCREMENTAL")
 endif()
 
 # Default build type
@@ -170,7 +181,7 @@ add_subdirectory(lib)
 # TODO: Figure out which target is sufficient to fix errors; triton is
 # apparently not enough. Currently set linking libstdc++fs for all targets
 # to support some old version GCC compilers like 8.3.0.
-if (NOT WIN32 AND NOT APPLE)
+if (NOT WIN32 AND NOT APPLE AND NOT BSD)
   link_libraries(stdc++fs)
 endif()
 
@@ -299,6 +310,12 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE ${CMAKE_DL_LIBS})
     set_target_properties(triton PROPERTIES SUFFIX ".pyd")
     set_target_properties(triton PROPERTIES PREFIX "lib")
+    if(DEFINED TRITON_PYD_PATH)
+      string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_CMAKE_BUILD_TYPE)
+      set_target_properties(triton PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${UPPER_CMAKE_BUILD_TYPE}
+      "${TRITON_PYD_PATH}")
+    endif(DEFINED TRITON_PYD_PATH)
   else()
     target_link_libraries(triton PRIVATE z)
   endif()

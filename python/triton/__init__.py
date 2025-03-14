@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '3.2.0'
+__version__ = '3.3.0'
 
 # ---------------------------------------
 # Note: import order is significant here.
@@ -33,7 +33,6 @@ __all__ = [
     "compile",
     "Config",
     "heuristics",
-    "impl",
     "InterpreterError",
     "jit",
     "JITFunction",
@@ -41,7 +40,6 @@ __all__ = [
     "language",
     "MockTensor",
     "next_power_of_2",
-    "ops",
     "OutOfResources",
     "reinterpret",
     "runtime",

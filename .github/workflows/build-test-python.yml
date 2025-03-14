@@ -71,9 +71,12 @@ jobs:
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
       fail-fast: false
+      max-parallel: 2
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
+      # For this workflow, use max1550 runners to reduce cache consumption on max1100 runners.
+      device: ${{ matrix.driver == 'rolling' && 'max1550' || 'max1100' }}
       driver_version: ${{ matrix.driver }}
       runner_label: ${{ inputs.runner_label }}
       pytorch_ref: ${{ inputs.pytorch_ref }}

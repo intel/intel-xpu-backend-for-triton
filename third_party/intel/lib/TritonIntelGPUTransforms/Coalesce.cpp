@@ -209,8 +209,8 @@ private:
         continue;
       }
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
+          propagateLayoutToLoopResults(forOp, layout, rewriter);
         continue;
       }
       changeAndPropagateLayout(user, layout, rewriter);
@@ -227,8 +227,8 @@ private:
 
       LDBG("arg's user: " << *user << "\n");
       if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto forOp = yieldOp->getParentOfType<scf::ForOp>();
-        propagateLayoutToLoopResults(forOp, layout, rewriter);
+        if (auto forOp = yieldOp->getParentOfType<scf::ForOp>())
+          propagateLayoutToLoopResults(forOp, layout, rewriter);
         continue;
       }
       changeAndPropagateLayout(user, layout, rewriter);
@@ -308,7 +308,7 @@ private:
     for (Value operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
-          !isa<ttg::SharedEncodingAttr>(tensorType.getEncoding())) {
+          !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
         RankedTensorType newType = getNewType(tensorType, encoding);
         newArgs.push_back(builder.create<ttg::ConvertLayoutOp>(
             op->getLoc(), newType, operand));
@@ -372,7 +372,7 @@ public:
       if (!refTensorType || !refTensorType.getEncoding())
         return;
 
-      int numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
+      int numWarps = ttg::lookupNumWarps(curr);
       int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
       setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
                            layoutMap);

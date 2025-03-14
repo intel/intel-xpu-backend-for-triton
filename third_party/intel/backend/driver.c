@@ -11,8 +11,13 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
+
+#if defined(_WIN32)
+#define EXPORT_FUNC __declspec(dllexport)
+#else
+#define EXPORT_FUNC __attribute__((visibility("default")))
+#endif
 
 #include "sycl_functions.h"
 
@@ -35,11 +40,7 @@ static inline T checkSyclErrors(const std::tuple<T, ze_result_t> tuple) {
   return std::get<0>(tuple);
 }
 
-static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
-  int device_id;
-  if (!PyArg_ParseTuple(args, "i", &device_id))
-    return NULL;
-
+extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
   if (device_id > g_sycl_l0_device_list.size()) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
@@ -91,6 +92,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
                        mem_bus_width, "max_work_group_size", max_group_size,
                        "sub_group_sizes", subgroup_sizes);
 }
+
 void freeKernel(PyObject *p) {
   delete reinterpret_cast<sycl::kernel *>(PyCapsule_GetPointer(p, "kernel"));
 }
@@ -186,7 +188,7 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 #endif
 }
 
-static PyObject *loadBinary(PyObject *self, PyObject *args) {
+extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
@@ -295,11 +297,8 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   }
 }
 
-static PyObject *initContext(PyObject *self, PyObject *args) {
-  PyObject *cap;
+extern "C" EXPORT_FUNC PyObject *init_context(PyObject *cap) {
   void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
   if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
@@ -319,11 +318,8 @@ static PyObject *initContext(PyObject *self, PyObject *args) {
   return Py_BuildValue("(K)", (uint64_t)context);
 }
 
-static PyObject *initDevices(PyObject *self, PyObject *args) {
-  PyObject *cap;
+extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
   if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
@@ -346,43 +342,12 @@ static PyObject *initDevices(PyObject *self, PyObject *args) {
   return Py_BuildValue("(i)", deviceCount);
 }
 
-static PyObject *waitOnSYCLQueue(PyObject *self, PyObject *args) {
-  PyObject *cap;
+extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   void *queue = NULL;
-  if (!PyArg_ParseTuple(args, "O", &cap))
-    return NULL;
   if (!(queue = PyLong_AsVoidPtr(cap)))
     return NULL;
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   sycl_queue->wait();
 
   return Py_None;
-}
-
-static PyMethodDef ModuleMethods[] = {
-    {"load_binary", loadBinary, METH_VARARGS,
-     "Load provided SPV into ZE driver"},
-    {"get_device_properties", getDeviceProperties, METH_VARARGS,
-     "Get the properties for a given device"},
-    {"init_context", initContext, METH_VARARGS,
-     "Initialize the ZE GPU context"},
-    {"init_devices", initDevices, METH_VARARGS,
-     "Initialize the ZE GPU devices and return device count"},
-    {"wait_on_sycl_queue", waitOnSYCLQueue, METH_VARARGS,
-     "call wait on a specific sycl::queue"},
-    {NULL, NULL, 0, NULL} // sentinel
-};
-
-static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "spirv_utils",
-                                       NULL, // documentation
-                                       -1,   // size
-                                       ModuleMethods};
-
-PyMODINIT_FUNC PyInit_spirv_utils(void) {
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if (m == NULL) {
-    return NULL;
-  }
-  PyModule_AddFunctions(m, ModuleMethods);
-  return m;
 }

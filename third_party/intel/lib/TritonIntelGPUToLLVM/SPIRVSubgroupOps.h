@@ -21,56 +21,50 @@ using namespace mlir;
 
 namespace mlir::triton::intel {
 
-template <typename OpTy> struct SPIRVArithmeticGroupOp {};
+template <typename OpTy> struct SPIRVGroupOp {};
 
-template <> struct SPIRVArithmeticGroupOp<arith::AddFOp> {
+template <> struct SPIRVGroupOp<arith::AddFOp> {
   using type = spirv::GroupNonUniformFAddOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::AddIOp> {
+template <> struct SPIRVGroupOp<arith::AddIOp> {
   using type = spirv::GroupNonUniformIAddOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MulFOp> {
+template <> struct SPIRVGroupOp<arith::MulFOp> {
   using type = spirv::GroupNonUniformFMulOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MulIOp> {
+template <> struct SPIRVGroupOp<arith::MulIOp> {
   using type = spirv::GroupNonUniformIMulOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MaxSIOp> {
+template <> struct SPIRVGroupOp<arith::MaxSIOp> {
   using type = spirv::GroupNonUniformSMaxOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MaxUIOp> {
+template <> struct SPIRVGroupOp<arith::MaxUIOp> {
   using type = spirv::GroupNonUniformUMaxOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MinSIOp> {
+template <> struct SPIRVGroupOp<arith::MinSIOp> {
   using type = spirv::GroupNonUniformSMinOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MinUIOp> {
+template <> struct SPIRVGroupOp<arith::MinUIOp> {
   using type = spirv::GroupNonUniformUMinOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MaxNumFOp> {
+template <> struct SPIRVGroupOp<arith::MaxNumFOp> {
   using type = spirv::GroupNonUniformFMaxOp;
 };
-template <> struct SPIRVArithmeticGroupOp<arith::MinNumFOp> {
+template <> struct SPIRVGroupOp<arith::MinNumFOp> {
   using type = spirv::GroupNonUniformFMinOp;
 };
-
-template <typename OpTy>
-using SPIRVArithmeticGroupOpTy = typename SPIRVArithmeticGroupOp<OpTy>::type;
-
-template <typename OpTy> struct SPIRVBitwiseGroupOp {};
-
-template <> struct SPIRVBitwiseGroupOp<arith::AndIOp> {
+template <> struct SPIRVGroupOp<arith::AndIOp> {
   using type = spirv::GroupNonUniformBitwiseAndOp;
 };
-template <> struct SPIRVBitwiseGroupOp<arith::OrIOp> {
+template <> struct SPIRVGroupOp<arith::OrIOp> {
   using type = spirv::GroupNonUniformBitwiseOrOp;
 };
-template <> struct SPIRVBitwiseGroupOp<arith::XOrIOp> {
+template <> struct SPIRVGroupOp<arith::XOrIOp> {
   using type = spirv::GroupNonUniformBitwiseXorOp;
 };
 
 template <typename OpTy>
-using SPIRVBitwiseGroupOpTy = typename SPIRVBitwiseGroupOp<OpTy>::type;
+using SPIRVGroupOpTy = typename SPIRVGroupOp<OpTy>::type;
 
 template <typename OpTy> struct SPIRVLogicalGroupOp {};
 
@@ -82,6 +76,24 @@ template <> struct SPIRVLogicalGroupOp<arith::OrIOp> {
 };
 template <> struct SPIRVLogicalGroupOp<arith::XOrIOp> {
   using type = spirv::GroupNonUniformLogicalXorOp;
+};
+template <> struct SPIRVLogicalGroupOp<arith::AddIOp> {
+  using type = spirv::GroupNonUniformLogicalOrOp;
+};
+template <> struct SPIRVLogicalGroupOp<arith::MulIOp> {
+  using type = spirv::GroupNonUniformLogicalAndOp;
+};
+template <> struct SPIRVLogicalGroupOp<arith::MaxUIOp> {
+  using type = spirv::GroupNonUniformLogicalOrOp;
+};
+template <> struct SPIRVLogicalGroupOp<arith::MaxSIOp> {
+  using type = spirv::GroupNonUniformLogicalOrOp;
+};
+template <> struct SPIRVLogicalGroupOp<arith::MinUIOp> {
+  using type = spirv::GroupNonUniformLogicalAndOp;
+};
+template <> struct SPIRVLogicalGroupOp<arith::MinSIOp> {
+  using type = spirv::GroupNonUniformLogicalAndOp;
 };
 
 template <typename OpTy>

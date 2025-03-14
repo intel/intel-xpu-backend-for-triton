@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -237,11 +238,12 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
 
     // We want to transpose matrices of N*threads_per_warpxthreads_per_warp
     // shape.
+    unsigned threadsPerWarp = product<unsigned>(encoding.getThreadsPerWarp());
     if ( // X axis condition
-        encoding.getExecutionSize() != encoding.getSubGroupSize() ||
+        encoding.getExecutionSize() != threadsPerWarp ||
         // Y axis conditions
         (encoding.getRepeatCount() * encoding.getRepCluster()[0]) %
-                encoding.getSubGroupSize() !=
+                threadsPerWarp !=
             0)
       return failure();
 
@@ -477,7 +479,7 @@ private:
     auto parentEncoding = rewriter.getAttr<BlockedEncodingAttr>(
         sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
 
-    type.setEncoding(parentEncoding.squeeze(0));
+    type.setEncoding(SliceEncodingAttr::get(getContext(), 0, parentEncoding));
 
     return rewriter.create<ReshapeOp>(op.getLoc(),
                                       static_cast<RankedTensorType>(type), val,
@@ -502,8 +504,7 @@ struct TritonIntelGPUOptimizeReductionLocality final
     MLIRContext *ctx = op->getContext();
     RewritePatternSet patterns(ctx);
     patterns.add<DpasOperandPattern>(ctx);
-    if (failed(
-            applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
 };

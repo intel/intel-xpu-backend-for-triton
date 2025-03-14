@@ -119,3 +119,58 @@ tt.func @gather_op() {
   %0 = tt.gather %cst[%cst_0] {axis = 0 : i32} : (tensor<128x4xf32>, tensor<256x4xi32>) -> tensor<256x4xf32>
   tt.return
 }
+
+// -----
+
+// CHECK: [[SLICE_PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 2], order = [1, 0]}>
+
+// CHECK: @gather4_layout
+tt.func @gather4_layout(%arg0: !tt.tensordesc<tensor<1x128xf32>>, %arg1: i32, %arg2: !tt.ptr<f32>) {
+  %cst = arith.constant dense<1> : tensor<32xi32>
+  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
+  %0 = tt.experimental_descriptor_gather %arg0[%cst, %arg1] : (!tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32>, i32) -> tensor<32x128xf32>
+  %1 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<32x128x!tt.ptr<f32>>
+  tt.store %1, %0 : tensor<32x128x!tt.ptr<f32>>
+  tt.return
+}
+
+// CHECK: @scatter4_layout
+tt.func @scatter4_layout(%arg0: !tt.tensordesc<tensor<1x128xf32>>, %arg1: i32, %arg2: !tt.ptr<f32>) {
+  %cst = arith.constant dense<1> : tensor<32xi32>
+  %0 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<32x128x!tt.ptr<f32>>
+  %1 = tt.load %0 : tensor<32x128x!tt.ptr<f32>>
+  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
+  tt.experimental_descriptor_scatter %arg0[%cst, %arg1], %1 : !tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32>, i32, tensor<32x128xf32>
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @ub_poison
+tt.func @ub_poison() {
+  // CHECK-NEXT: ub.poison : tensor<128x64xf16, #blocked>
+  %0 = ub.poison : tensor<128x64xf16>
+  tt.return
+}
+
+// -----
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @partition_axis_info
+tt.func @partition_axis_info(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg2: !tt.ptr<i32>) num_warps(2) {
+    %splatted = tt.splat %arg2 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #blocked2>
+    %input = tt.load %splatted : tensor<256x!tt.ptr<i32>, #blocked2>
+    ttg.warp_return
+  } : (!tt.ptr<i32>) -> ()
+  tt.return
+}
+
+}

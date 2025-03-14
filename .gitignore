@@ -32,6 +32,9 @@ python/triton/backends/
 # Language extras
 python/triton/language/extra
 
+# Tools extras
+python/triton/tools/extra
+
 # Proton
 python/triton/profiler
 
@@ -63,6 +66,7 @@ cmake-build-*
 cuobjdump
 nvdisasm
 ptxas
+ptxas-blackwell
 
 # Third-party include
 third_party/nvidia/backend/include

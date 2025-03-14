@@ -1,9 +1,10 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=arch=gfx1100 | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], hasLeadingOffset = false}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
 #mma2 = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2]}>
+#mma2_transposed = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2], isTranspose = true}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   //  CHECK-LABEL: wmma1_dot_operand
@@ -100,6 +101,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-LABEL: wmma2_transposed_dot
+  tt.func @wmma2_transposed_dot(%arg0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2_transposed, kWidth = 8}>>, %arg1: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2_transposed, kWidth = 8}>>, %arg2: tensor<16x16xf16, #mma2_transposed>) {
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.f16.16x16x16.f16.v8f16.v8f16"{{.*}} : (vector<8xf16>, vector<8xf16>, vector<8xf16>, i1) -> vector<8xf16>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma2_transposed, kWidth = 8}>> * tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma2_transposed, kWidth = 8}>> -> tensor<16x16xf16, #mma2_transposed>
+    tt.return
+  }
+
   //  CHECK-LABEL: blocked_to_wmma1
   tt.func @blocked_to_wmma1(%arg0: tensor<128x16xi32, #blocked>) {
     // CHECK-COUNT-16: llvm.extractvalue {{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
@@ -167,7 +175,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-#shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0], hasLeadingOffset = false}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
 #mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 1, 4]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {

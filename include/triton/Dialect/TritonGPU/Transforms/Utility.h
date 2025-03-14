@@ -17,7 +17,7 @@ class LoadOp;
 class StoreOp;
 class FuncOp;
 namespace gpu {
-class SharedEncodingAttr;
+class SwizzledSharedEncodingAttr;
 }
 } // namespace triton
 
@@ -48,6 +48,9 @@ unsigned getElementBitWidth(RankedTensorType type);
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
+
+// Returns whether the op is a "view op", i.e. doesn't move any data
+bool isView(Operation *op);
 
 /* Dump Triton IR in graphviz dot format.
  *
@@ -161,9 +164,11 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 // Get backward slice of tensor values starting from the root node along with
 // encoding propagation.
 LogicalResult getConvertBackwardSlice(
-    Value root, SetVector<Value> &slice, Attribute rootEncoding,
+    OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr);
+    std::function<bool(Operation *)> stopPropagation = nullptr,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion =
+        nullptr);
 
 // Populate pattern to remove dead cycles in ForOp.
 void populateForOpDeadArgumentElimination(RewritePatternSet &patterns);
@@ -192,21 +197,22 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
-std::optional<mlir::triton::gpu::SharedEncodingAttr>
+// Read the amd target from the module attributes
+StringRef getAMDArch(Operation *module);
+
+std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
-enum class MMALoadType {
-  SharedV3,
-  Registers,     // may be v2 or v3
-  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip
-                 // pipelining
-};
-MMALoadType getMMALoadType(Operation *loadOp);
+// Convert \param op operands and results to layout \param encoding.
+void convertOpEncoding(Attribute encoding, Operation *op);
 
-// Returns composed LinearLayout for register to shared copy
-std::optional<triton::LinearLayout>
-getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
+// Returns the original memory allocation for a memdesc value
+triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
+
+// Returns MMAs inside a for loop that are multi-buffered for pipeline analysis
+SmallVector<Operation *>
+getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
+                                  SmallVector<Operation *> &mmaOps);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

@@ -21,7 +21,7 @@ struct PrintOpConversion
                              PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::PrintOp>(typeConverter,
                                                          benefit),
-        targetInfo(targetInfo) {}
+        targetInfo(static_cast<const intel::TargetInfo &>(targetInfo)) {}
   using ConvertTritonGPUOpToLLVMPattern<
       triton::PrintOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -43,7 +43,7 @@ struct PrintOpConversion
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")"
          << op.getPrefix();
-      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, rewriter);
+      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, {}, rewriter);
       rewriter.eraseOp(op);
       return success();
     }
@@ -65,8 +65,8 @@ struct PrintOpConversion
       SmallVector<SmallVector<Value>> indices;
       if (auto rankedTy =
               dyn_cast<RankedTensorType>(op.getOperand(i).getType())) {
-        indices = ::intel::emitIndices(loc, rewriter, targetInfo,
-                                       rankedTy.getEncoding(), rankedTy, true);
+        indices = emitIndices(loc, rewriter, targetInfo, rankedTy.getEncoding(),
+                              rankedTy, true);
         for (int64_t dim : rankedTy.getShape()) {
           if (dim > 0) {
             dimWidths.push_back(static_cast<int>(std::ceil(std::log10(dim))));
@@ -166,12 +166,14 @@ struct PrintOpConversion
       // construct the format string at the same time as we populate
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
+      auto isSignedOperands =
+          llvm::SmallVector<bool>(printfOperands.size(), isSigned);
       if (i == 0) {
-        formatStrValue =
-            llPrintf(formatStr, printfOperands, rewriter, &formatStrByteCount);
+        formatStrValue = llPrintf(formatStr, printfOperands, isSignedOperands,
+                                  rewriter, &formatStrByteCount);
       } else {
         targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
-                          printfOperands);
+                          printfOperands, isSignedOperands);
       }
     }
   }
@@ -216,24 +218,25 @@ struct PrintOpConversion
 
   // Returns a Value for the format string, which you can reuse. Writes the byte
   // count for the string to |formatStrByteCount| if not null.
-  Value llPrintf(StringRef msg, ValueRange args,
+  Value llPrintf(StringRef msg, ValueRange args, ArrayRef<bool> isSigned,
                  ConversionPatternRewriter &rewriter,
                  int *formatStrByteCount = nullptr) const {
     assert(!msg.empty() && "printf with empty string not supported");
     llvm::SmallString<64> msgNewline(msg);
     msgNewline.push_back('\n');
     msgNewline.push_back('\0');
-    Value msgValue = LLVM::intel::addStringToModule(
-        UnknownLoc::get(rewriter.getContext()), rewriter, "printfFormat_",
-        msgNewline, TritonGEN::TritonGENMemorySpace::kUniformConstant);
-    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+    Value msgValue = targetInfo.getGlobalStringStart(
+        rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
+        /*addressSpace=*/TritonGEN::kUniformConstant);
+    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args,
+                      isSigned);
     if (formatStrByteCount)
       *formatStrByteCount = msgNewline.size_in_bytes();
     return msgValue;
   }
 
 protected:
-  const TargetInfoBase &targetInfo;
+  const intel::TargetInfo &targetInfo;
 };
 
 } // namespace

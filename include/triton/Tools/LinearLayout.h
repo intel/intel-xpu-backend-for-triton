@@ -343,9 +343,12 @@ public:
                                  StringAttr outDim);
 
   // Creates a 1D -> 1D layout that maps every input value to 0, i.e. L(x) = 0
-  // for x in [0, size).
-  static LinearLayout zeros1D(int32_t size, StringAttr inDim,
-                              StringAttr outDim);
+  // for x in [0, size). By default this creates a surjective layout where
+  // `outDim` has size 1 (the only element is 0). If `outDimSize` is specified
+  // to be greater than 1, then this creates a non-surjective layout with a
+  // specific size for `outDim`.
+  static LinearLayout zeros1D(int32_t size, StringAttr inDim, StringAttr outDim,
+                              int32_t outDimSize = 1);
 
   // Creates a LinearLayout from a list of bases.  These are interpreted
   // according to the rules written for the member variable `bases`.
@@ -534,9 +537,26 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
-  // Creates a new layout which, roughly speaking, is equivalent to one where
-  // every element of the `outer` layout is replaced by a full instance of the
-  // `inner` layout.
+  // Concatenates two layouts by their input dimensions. The layouts must have
+  // the same output dimensions and sizes and different input dimensions. The
+  // input dimensions of this layout are placed before those of 'other'. This
+  // can be thought of as the opposite of `sublayout`, which slices a layout
+  // from a larger one.
+  [[nodiscard]] LinearLayout concatIns(const LinearLayout &other) const;
+  // Concatenates two layouts by their output dimensions. The layouts must have
+  // the same input dimensions and sizes and different output dimensions. The
+  // output dimensions of this layout are placed before those of 'other'. This
+  // can be thought of as the opposite of `sublayout`, which slices a layout
+  // from a larger one.
+  [[nodiscard]] LinearLayout concatOuts(const LinearLayout &other) const;
+
+  // Computes the direct sum of two layouts.
+  // https://en.wikipedia.org/wiki/Direct_sum#Direct_sum_of_matrices
+  //
+  // Roughly speaking, the first layout acts on the first part of the input
+  // dimensions, and the second layout acts on the second part.
+  // In other words, it's the generalisation of concatenation of the inputs
+  // to linear maps.
   //
   // Examples:
   //
@@ -556,19 +576,27 @@ public:
   //
   //    - identity1D(4, "i", "o") * identity1D(2, "i", "o") ==
   //      identity1D(8, "i", "o")
+  //      The output matrix is [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
   //
   //    - identity1D(4, "i", "o") * zeros1D(2, "i", "o") => L(x) = x % 4
   //      for x in [0,8).
+  //      The output matrix is [[1, 0, 0], [0, 1, 0], [0, 0, 0]]
   //
   //    - zeros1D(2, "i", "o") * identity1D(4, "i", "o") => L(x) = x / 2
   //      for x in [0,8).
-  //
+  //      The output matrix is [[0, 0, 0], [0, 1, 0], [0, 0, 1]]
+
   //    - identity1D(4, "i", "o1") * identity1D(8, "i", "o2") =>
   //      L(x) = (x % 4, x / 4) for x in [0,32).
+  //      The output dims are ("o1", "o2") in that order.
   //
-  // Notice that this operation is not commutative.  It's also not associative.
-  // TODO(jlebar): Can I modify the definition to make it associative?  Pretty
-  // confusing if not.  If I can't, add an example.
+  // If the input (or output) dims of the layouts are not the same, we take
+  // the supremum of the two ordered lists with the inclusion, respecting the
+  // order. If multiple suprema exist, we bias towards the first list.
+  // e.g. sup([a, b], [a, c]) = [a, b, c], sup([a, b], [b, c]) = [a, b, c]
+  //      sup([a, b], [b, a]) = error! Supremum does not exist.
+  //
+  // Notice that this operation is not commutative, but it is associative.
   //
   // Requires: Any in/out dimensions which are in both outer and inner appear in
   // the same relative order.
@@ -610,11 +638,6 @@ public:
   // Is the sublayout restricted to inDimNames + outDimNames all zeros?
   bool sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
                        ArrayRef<StringAttr> outDimNames) const;
-
-  // Is the sublayout defined from dimNames to dimNames the identity?
-  // In particular, is the input and  output size in these dimensions
-  // the same, and are the bases the identity?
-  bool squareSublayoutIsIdentity(ArrayRef<StringAttr> dimNames) const;
 
   // Computes and returns L(x, y, z).
   //
@@ -672,13 +695,16 @@ public:
   //     Otherwise, R could map some tensor index that is not stored in S.
   //
   // One requirement we *don't* have is that S is injective; we allow two shmem
-  // offsets to hold the same 2D index.  If S is not injective, there's
-  // ambiguity in which offset we choose for a given (lane, warp).  For now we
-  // don't place any guarantees on the choices made by this function.
+  // offsets to hold the same 2D index.  If S is not injective,
+  // the algorithm chooses the smallest offset for a given (lane, warp).
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
 
   // Get the layout that is the inverse of this layout.
   [[nodiscard]] LinearLayout invert() const;
+  // Compute and return a psueodinverse of this layout. This is a layout such
+  // that `B = A.psuedoinvert()` implies that `A(B(x)) = I`. If `A` is
+  // invertible, then this returns `A^-1`.
+  [[nodiscard]] LinearLayout pseudoinvert() const;
 
   // For each in-dim, returns a bitmask of the "free variables" in the layout
   // function.
@@ -688,12 +714,11 @@ public:
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
 
-  // Increase an input dimension without affecting the output dimension.  The
-  // added free variables are mapped to 0, ensuring that the new input
-  // dimensions correspond directly to the existing output space.  The function
-  // errors out if `newInDimSize` is less than the current size or the new size
-  // is not a power of 2.
-  LinearLayout resize(StringAttr inDim, int32_t newInDimSize) const;
+  // Take the current linear layout and remove all zero bases for the provided
+  // dimension and return the resulting layout. This is useful for deriving a
+  // layout that returns just the unique output values when varying a given
+  // input dimension that has broadcasting.
+  [[nodiscard]] LinearLayout removeZeroBasesAlongDim(StringAttr stripDim) const;
 
   std::string toString() const;
 
@@ -733,4 +758,4 @@ inline std::ostream &operator<<(std::ostream &os, const LinearLayout &layout) {
 
 } // namespace mlir::triton
 
-#endif
+#endif // TRITON_TOOLS_LINEARLAYOUT_H

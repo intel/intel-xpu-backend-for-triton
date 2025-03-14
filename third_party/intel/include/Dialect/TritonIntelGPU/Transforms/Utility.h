@@ -45,9 +45,11 @@ getDotEncoding(RankedTensorType tensorType);
 // Get backward slice of tensor values starting from the root node along with
 // encoding propagation.
 LogicalResult getConvertBackwardSlice(
-    Value root, SetVector<Value> &slice, Attribute rootEncoding,
+    OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr);
+    std::function<bool(Operation *)> stopPropagation = nullptr,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion =
+        nullptr);
 
 LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
                                        ArrayRef<Type> paramTypes,
@@ -56,14 +58,6 @@ LLVM::LLVMFuncOp lookupOrCreateSPIRVFn(Operation *symbolTable, StringRef name,
 LLVM::CallOp createSPIRVBuiltinCall(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     LLVM::LLVMFuncOp func, ValueRange args);
-
-// This function folds the `op` operation and returns the constant value if it
-// has successfully folded to a constant. Otherwise, it returns `std::nullopt`.
-std::optional<int64_t> getFoldedConstantValue(Operation *op);
-
-// Return true if the `val` value is a constant containing a value equal to
-// expected.
-bool isConstant(Value val, const unsigned expected);
 
 } // namespace mlir::triton::gpu::intel
 

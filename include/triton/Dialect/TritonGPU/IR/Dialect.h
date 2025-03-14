@@ -11,22 +11,84 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+#include <unordered_map>
+
+// LinearLayoutCache Utils
+using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
+
+namespace llvm {
+template <typename T> size_t hash_value(const std::vector<T> &vec) {
+  return hash_combine_range(vec.begin(), vec.end());
+}
+} // namespace llvm
+
+namespace std {
+template <> struct hash<CacheKey> {
+  size_t operator()(const CacheKey &key) const noexcept {
+    using llvm::hash_value;
+    size_t seed = 0;
+    std::apply(
+        [&seed](const auto &...elems) {
+          ((seed = llvm::hash_combine(seed, hash_value(elems))), ...);
+        },
+        key);
+    return seed;
+  }
+};
+} // namespace std
+
+namespace mlir::triton::gpu {
+
+constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
+constexpr static char AttrTargetName[] = "ttg.target";
+constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+
+// Find the contextual number of warps on which this operation is executed.
+int lookupNumWarps(Operation *op);
+// Try to find the contextual number of warps on which this operation is
+// executed. Returns nullopt if a warp size cannot be find. This is used for
+// verifiers.
+std::optional<int> maybeLookupNumWarps(Operation *op);
+
+class LinearLayoutCache {
+public:
+  std::optional<LinearLayout> get(const CacheKey &key) {
+    std::shared_lock lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second;
+    }
+    return std::nullopt;
+  }
+
+  void set(CacheKey key, LinearLayout result) {
+    std::scoped_lock lock(mutex);
+    cache.emplace(std::move(key), std::move(result));
+  }
+
+private:
+  std::unordered_map<CacheKey, LinearLayout> cache;
+  llvm::sys::SmartRWMutex<true> mutex;
+};
+} // namespace mlir::triton::gpu
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
-namespace mlir {
-namespace triton {
-namespace gpu {
-
+namespace mlir::triton::gpu {
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() final { return "<SharedMemory>"; }
 };
 
+// Convert a distributed layout to a linear encoding
+LinearEncodingAttr toLinearEncoding(RankedTensorType type);
+LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
+
 unsigned getTotalElemsPerThread(Type type);
 
-unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
-                                Type eltTy);
+unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
@@ -41,22 +103,13 @@ unsigned getWarpSize(Attribute layout);
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
-SmallVector<unsigned> getSizePerThread(Attribute layout);
-
-// Returns the number of contiguous elements that each thread
-// has access to, on each dimension of the tensor. E.g.
-// for a blocked layout with sizePerThread = [1, 4], returns [1, 4],
-// regardless of the shape of the tensor.
-SmallVector<unsigned> getContigPerThread(Attribute layout);
-
-// Returns the number of non-replicated contiguous elements that each thread
-// has access to, on each dimension of the tensor. For a blocked layout
+// Returns the number of contiguous elements of the logical tensor that each
+// thread has access to, on each dimension of the tensor. For a blocked layout
 // with sizePerThread = [1, 4] and tensor shape = [128, 1], the elements
 // for thread 0 would be [A_{0, 0}, A_{0, 0}, A_{0, 0}, A_{0, 0}], returns [1,
 // 1]. Whereas for a tensor shape [128, 128], the elements for thread 0 would be
 // [A_{0, 0}, A_{0, 1}, A_{0, 2}, A_{0, 3}], returns [1, 4].
-SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
-                                               ArrayRef<int64_t> tensorShape);
+SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType);
 
 // Returns the number of threads per warp that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
@@ -80,7 +133,19 @@ getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 // the order of the elements within a thread.
 // For shared Layout, the order refers to which dimension of the original tensor
 // is contiguous in shared memory.
-SmallVector<unsigned> getOrder(Attribute layout);
+SmallVector<unsigned> getOrder(DistributedEncodingTrait layout,
+                               ArrayRef<int64_t> shape);
+SmallVector<unsigned> getOrder(RankedTensorType type);
+
+SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
+                               ArrayRef<int64_t> shape);
+SmallVector<unsigned> getOrder(MemDescType type);
+SmallVector<unsigned> getOrder(TensorOrMemDesc type);
+
+// Order of the elements in the shared memory as defined at layout creation
+// If this layout is associated with a MemDesc with a different shape
+// it may return a different order than the actual order of the elements
+SmallVector<unsigned> getDefaultOrder(SharedEncodingTrait layout);
 
 // Returns the dimensions along which warpId's are distributed.
 // warpsPerCTA only tells the warp layout in the CTA, e.g. warpsPerCTA = [2, 4]
@@ -89,17 +154,16 @@ SmallVector<unsigned> getOrder(Attribute layout);
 // E.g. warpOrder = [0, 1] means the warp IDs are distributed as follows
 // [warp0  warp2  warp4 warp6]
 // [warp1  warp3  warp5 warp7]
-// Note that in most cases, getWarpOrder and getOrder return the same results.
-// But this is not guaranteed.
-SmallVector<unsigned> getWarpOrder(Attribute layout);
+SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
+                                   ArrayRef<int64_t> shape);
+SmallVector<unsigned> getWarpOrder(RankedTensorType type);
 
 // Returns the dimensions along which threadId's are distributed.
 // Similar to warpOrder, threadOrder is necessary to tell the specific thread
 // distribution in the warp.
-// Note that, in most cases, getThreadOrder and getOrder return the same
-// results. But this is not guaranteed. One exception is mfma.transposed layout,
-// in which getOrder returns [1, 0] but getThreadOrder returns [0, 1].
-SmallVector<unsigned> getThreadOrder(Attribute layout);
+SmallVector<unsigned> getThreadOrder(DistributedEncodingTrait layout,
+                                     ArrayRef<int64_t> shape);
+SmallVector<unsigned> getThreadOrder(RankedTensorType type);
 
 CTALayoutAttr getCTALayout(Attribute layout);
 
@@ -116,12 +180,21 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  * (3) In the implementation of emitIndices, ShapePerCTATile will
  *     be replicated or wrapped to fit ShapePerCTA.
  */
-SmallVector<unsigned> getShapePerCTATile(Attribute layout);
+// [FIXME LL] Kill this function
+SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
 
+// Returns the "logical" shape per CTA
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
+
+// Returns the shape per CTA, which is "physically" allocated
+// Such shapes may be bigger than the logical one due to, for example, padding
+// in shared memory.
+SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
+                                              ArrayRef<int64_t> shape);
+SmallVector<int64_t> getAllocationShapePerCTA(Type type);
 
 unsigned getNumWarpsPerCTA(Attribute layout);
 
@@ -132,11 +205,11 @@ unsigned getNumCTAs(Attribute layout);
 // len(shape) == rank.
 SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 
-// Return the order that represents that the dot operand is in kMajor
+// Return the order that represents that the dot operand is in kContig
 // (contiguous in the inner dimension) or it's contiguous on the outer
 // dimension.
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
-                                            bool kMajor);
+                                            bool kContig);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 
@@ -149,80 +222,6 @@ triton::gpu::BlockedEncodingAttr
 getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
                           int numWarps, int threadsPerWarp, int numCTAs);
 
-// For each output dimension d, ensure that the layout's output size (i.e., its
-// codomain) does not exceed shape[d]. Do this without changing the size of the
-// layout's inputs (i.e., leave its domain unchanged).
-//
-// This function is invariant to the order of the layout's input and output
-// dimensions.
-//
-// We achieve this by setting the largest value in each output dimension d to 0
-// because bases that map to a location larger than shape[d]
-// effectively duplicate along that dimension.  For example, consider a layout
-// with an output dimension size of 32, and we call ensureLayoutNotLargerThan to
-// shrink the output dimension size to 8:
-//
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 16
-//
-// In the first step, we shrink the output dimension size to 16 by setting
-// L(lane=2) to 0:
-//
-//   L(register=1) = 8
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0
-//
-// This means that lane=2 has the same data as lane=0.
-//
-// Now the output dimension of this layout has a size of 16, which is still
-// larger than 8.  We find the current largest value in the output dimension,
-// which is L(register=1) = 8, and we set L(register=1) to 0:
-//
-//   L(register=1) = 0
-//   L(register=2) = 4
-//   L(register=4) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0
-//
-// Now the output dimension of this layout has a size of 8, which is the desired
-// size.  Note that this method works only because the bases are powers of two,
-// which is the case for DistributedLayouts If broadcastRegisters is false, we
-// remove any register that's larger than the desired shape. In the example
-// above we would have
-//   L(register=1) = 4
-//   L(register=2) = 1
-//   L(lane=1) = 2
-//   L(lane=2) = 0
-LinearLayout
-ensureLayoutNotLargerThan(const LinearLayout &layout,
-                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          bool broadcastRegisters = true);
-
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// smaller than shape[d].  Do this by increasing the size of the layout's inputs
-// along its most-minor dimension ("register" for register layouts, "offset" for
-// shared layouts).
-//
-// This function is invariant to the order of the layout's input dimensions, but
-// it cares about the order of the output dims, which should be minor-to-major.
-LinearLayout ensureLayoutNotSmallerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
-
-// Return a vector of the standard out dimension names for tensor layouts. These
-// are "dim0", "dim1", etc.
-SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
-// Return an identity mapping from `inDimName` to the standard out dimensions,
-// with the dimensions sized according to the shape. The bases are sorted
-// according to `order`, with the most minor dimension first.
-LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
-                                ArrayRef<unsigned> order);
-
 // Dump information about which threads/registers contain each of the tensor
 // elements.
 void dumpLayout(RankedTensorType tensorType);
@@ -234,8 +233,11 @@ void dumpHWLayout(RankedTensorType tensorType);
 // Return a string representation of the layout of the tensor.
 std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
 
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+template <typename T>
+llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
+
+llvm::SmallVector<unsigned>
+expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
+} // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

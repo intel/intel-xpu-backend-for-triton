@@ -1,5 +1,6 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -270,6 +271,28 @@ public:
           /*knownConstantValue=*/{value});
     }
     return AxisInfo();
+  }
+};
+
+class PoisonOpAxisInfoVisitor final : public AxisInfoVisitorImpl<ub::PoisonOp> {
+public:
+  using AxisInfoVisitorImpl::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(ub::PoisonOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    constexpr int64_t largePowerOf2 = int64_t(1) << 32;
+    // Poison values are never accessed, thus assume optimistic values.
+    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
+      unsigned rank = shape.getRank();
+      return AxisInfo(
+          /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),
+          /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
+          /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
+    }
+
+    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{largePowerOf2},
+                    /*constancy=*/{1});
   }
 };
 
@@ -946,7 +969,7 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    return std::max<int64_t>(1, lhsDivisibility / (1 << shift));
+    return std::max<int64_t>(1, lhsDivisibility / (int64_t(1) << shift));
   }
 
   int64_t getConstancy(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
@@ -1092,6 +1115,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   // TODO: Remove rules for LLVM::ConstantOp, LLVM::AddOp
   // when scf.for supports integer induction variables
   visitors.append<MakeRangeOpAxisInfoVisitor>();
+  visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
                   ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
@@ -1180,46 +1204,51 @@ void AxisInfoAnalysis::visitForOpInductionVar(
 
 } // anonymous namespace
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+  auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
-  auto layout = tensorTy.getEncoding();
+  // FIXME: This is not as good as it could be, as we don't need to restrict
+  // the analysis to one dimension. We should determine contiguity on the
+  // flattenOuts() layout
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto order = linAttr.getOrder();
+  unsigned align = getAlignment(value);
 
-  // Here order should be ordered by contiguous first, so the first element
-  // should have the largest contiguous.
-  auto order = triton::gpu::getOrder(layout);
-  unsigned align = getPtrAlignment(ptr);
-
-  auto uniqueContigPerThread =
-      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
+  auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
-  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
+  LDBG("getContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+  auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
-  auto *axisInfo = getAxisInfo(ptr);
+  auto *axisInfo = getAxisInfo(value);
   if (!axisInfo)
     return 1;
-  auto layout = tensorTy.getEncoding();
-  auto order = triton::gpu::getOrder(layout);
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto order = linAttr.getOrder();
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
-  unsigned elemNumBits = isTensorPointerType(ptr.getType())
-                             ? tensorTy.getElementType().getIntOrFloatBitWidth()
-                             : triton::getPointeeBitWidth(tensorTy);
+
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  auto elemNumBits = elemTy.getIntOrFloatBitWidth();
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getPtrAlignment order[0] "
+  LDBG("getAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
        << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
@@ -1239,7 +1268,9 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto maskOrder = linAttr.getOrder();
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);

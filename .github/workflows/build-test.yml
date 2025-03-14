@@ -80,9 +80,14 @@ jobs:
 
       - name: Run pre-commit checks
         run: |
-          set -x
           pip install --upgrade pre-commit
           python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
+
+      - name: Run unit tests for scripts
+        run: |
+          pip install pytest pytest-xdist defusedxml
+          cd scripts
+          pytest -n 4 test_*.py
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
