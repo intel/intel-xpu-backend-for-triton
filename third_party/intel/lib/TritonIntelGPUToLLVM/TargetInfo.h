@@ -75,6 +75,13 @@ public:
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
 
+protected:
+  virtual bool isSupportedWarpReduceOp(Operation *op, unsigned numLanesToReduce,
+                                       unsigned warpSize) const = 0;
+  virtual Value genWarpReduce(RewriterBase &rewriter, Location loc, Value acc,
+                              Operation *reduceOp, unsigned numLanesToReduce,
+                              unsigned warpSize) const = 0;
+
 private:
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
                                  StringRef name, StringRef value,
@@ -83,5 +90,7 @@ private:
   mutable llvm::DenseMap<std::pair<unsigned, StringAttr>, LLVM::GlobalOp>
       globals;
 };
+
+std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod);
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
