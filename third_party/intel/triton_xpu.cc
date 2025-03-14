@@ -47,6 +47,10 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
+#define ADD_PASS_WRAPPER_OPT_3(name, builder, ty0, ty1, ty2)                   \
+  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
+    pm.addPass(builder({val0, val1, val2}));                                   \
+  })
 #define ADD_PASS_WRAPPER_OPT_6(name, builder, ty0, ty1, ty2, ty3, ty4, ty5)    \
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
                  ty3 val3, ty4 val4, ty5 val5) {                               \
@@ -85,8 +89,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createIntelDecomposeUnsupportedConversions);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
                      gpu::intel::createIntelAllocateSharedMemory);
-  ADD_PASS_WRAPPER_OPT_2("add_pipeline",
-                         gpu::intel::createTritonIntelGPUPipeline, int, bool);
+  ADD_PASS_WRAPPER_OPT_3(
+      "add_pipeline", gpu::intel::createTritonIntelGPUPipeline, int, bool, int);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);

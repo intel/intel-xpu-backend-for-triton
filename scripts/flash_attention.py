@@ -27,6 +27,8 @@ def get_options():
     config.add_argument('-BLOCK-N', action='extend', nargs='+', type=int, help='Sizes of N')
     config.add_argument('-stages', action='extend', nargs='+', type=int, help='Numbers of stages')
     config.add_argument('-warps', action='extend', nargs='+', type=int, help='Numbers of warps')
+    config.add_argument('-split-barriers-scope', action='store', type=str,
+                        help='Split barrier scope. Should be either Subgroup or Workgroup.')
     return parser.parse_args()
 
 
@@ -36,9 +38,13 @@ def get_configs(options):
     bn_values = options.BLOCK_N if options.BLOCK_N else [32, 64]
     stages_values = options.stages if options.stages else [3, 4]
     warps_values = options.warps if options.warps else [8, 16, 32]
+    split_barriers_scope = options.split_barriers_scope if options.split_barriers_scope else 'None'
     return [
-        triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True},
-                      num_stages=s, num_warps=w)
+        triton.Config(
+            {
+                'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True,
+                'split_barriers_scope': split_barriers_scope
+            }, num_stages=s, num_warps=w)
         for BM in bm_values
         for BN in bn_values
         for s in stages_values

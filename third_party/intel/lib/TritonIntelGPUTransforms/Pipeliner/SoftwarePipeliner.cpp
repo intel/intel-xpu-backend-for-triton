@@ -40,8 +40,9 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void pipelineLoop(scf::ForOp forOp, int numStages,
-                         bool supportRegularPtr) {
+static void
+pipelineLoop(scf::ForOp forOp, int numStages, bool supportRegularPtr,
+             std::optional<spirv::Scope> barrierScope = std::nullopt) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
@@ -56,19 +57,20 @@ static void pipelineLoop(scf::ForOp forOp, int numStages,
   FailureOr<scf::ForOp> newForOp =
       mlir::scf::pipelineForLoop(rewriter, forOp, options);
 
-  bool injectSplitBarriers = true;
-  if (injectSplitBarriers) {
-    scf::ForOp loop = (*newForOp);
+  scf::ForOp loop = (*newForOp);
+  if (!isa<scf::ForOp>(loop->getBlock()->getParentOp()) && (barrierScope)) {
+    assert((*barrierScope == spirv::Scope::Subgroup) ||
+           (*barrierScope == spirv::Scope::Workgroup) &&
+               "The barrier scope must be SubGroup or Workgroup");
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
-    auto scope = spirv::Scope::Subgroup;
-    b.create<spirv::INTELControlBarrierArriveOp>(loc, scope, scope,
-                                                 spirv::MemorySemantics::None);
+    b.create<spirv::INTELControlBarrierArriveOp>(
+        loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
-    b.create<spirv::INTELControlBarrierWaitOp>(loc, scope, scope,
-                                               spirv::MemorySemantics::None);
+    b.create<spirv::INTELControlBarrierWaitOp>(
+        loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
   }
 }
 
@@ -89,11 +91,17 @@ struct IntelGPUPipelinePass
     if (numStages <= 1)
       return;
 
+    std::optional<spirv::Scope> barrierScope;
+    if (splitBarrierScope == 1)
+      barrierScope = spirv::Scope::Workgroup;
+    else if (splitBarrierScope == 2)
+      barrierScope = spirv::Scope::Subgroup;
+
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (scf::ForOp forOp : loops) {
-      pipelineLoop(forOp, numStages, supportRegularPtr);
+      pipelineLoop(forOp, numStages, supportRegularPtr, barrierScope);
     }
   }
 };
