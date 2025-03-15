@@ -280,7 +280,8 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, True)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
