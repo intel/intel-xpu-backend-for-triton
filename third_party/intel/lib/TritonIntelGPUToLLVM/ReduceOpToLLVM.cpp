@@ -1,16 +1,12 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
 #include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DistributedEncodingTrait;
-using ::mlir::triton::gpu::getOrder;
-using ::mlir::triton::gpu::getThreadOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {

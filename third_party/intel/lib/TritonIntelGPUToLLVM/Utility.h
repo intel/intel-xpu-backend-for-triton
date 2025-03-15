@@ -15,7 +15,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "llvm/Support/ErrorHandling.h"
 
 namespace mlir::LLVM::intel {
 

@@ -8,11 +8,8 @@
 
 #include "TargetInfo.h"
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
-#include "SPIRVSubgroupOps.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
-#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 
