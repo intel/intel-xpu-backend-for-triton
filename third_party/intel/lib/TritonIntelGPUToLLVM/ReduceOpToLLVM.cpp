@@ -1,6 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "ReduceScanCommon.h"
 #include "Utility.h"
+#include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <vector>
@@ -16,12 +16,12 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
 struct ReduceOpConversion
-    : public ConvertTritonIntelGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(LLVMTypeConverter &typeConverter,
                      const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertTritonIntelGPUReduceScanToLLVMPattern<triton::ReduceOp>(
-            typeConverter, benefit),
+      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
+                                                                  benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
