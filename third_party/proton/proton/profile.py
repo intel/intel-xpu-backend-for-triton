@@ -17,6 +17,8 @@ def _select_backend() -> str:
         return "cupti"
     elif backend == "hip":
         return "roctracer"
+    elif backend == "xpu":
+        return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")
 
@@ -89,7 +91,7 @@ def start(
 
     if backend is None:
         backend = _select_backend()
-
+    print(f"{backend=}")
     _check_env(backend)
 
     backend_path = _get_backend_default_path(backend)
