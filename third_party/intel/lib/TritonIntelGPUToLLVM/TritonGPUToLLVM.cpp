@@ -32,7 +32,18 @@ FailureOr<LLVM::LLVMFuncOp>
 convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
                           ConversionPatternRewriter &rewriter,
                           const LLVMTypeConverter &converter);
+
+namespace triton::intel {
+void FuncOpConversion::addToOpenCLKernels(Operation *funcOp,
+                                          ConversionPatternRewriter &rewriter) {
+  // We need to attach this attribute to the function itself as attaching it to
+  // the module would result in referencing an undefined function when
+  // translating to LLVM IR.
+  funcOp->setAttr(TritonGEN::TritonGENDialect::getOpenCLKernelsAttrName(),
+                  rewriter.getUnitAttr());
 }
+} // namespace triton::intel
+} // namespace mlir
 
 using namespace mlir;
 
