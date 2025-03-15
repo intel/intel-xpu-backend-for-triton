@@ -131,10 +131,10 @@ Initialize Intel® Deep Learning Essentials, for example:
 Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
 ```
 
-Set `ZE_PATH` to the location of Level Zero SDK, for example:
+Set `LEVEL_ZERO_V1_SDK_PATH` to the location of Level Zero SDK, for example:
 
 ```
-$env:ZE_PATH = "C:\level_zero"
+$env:LEVEL_ZERO_V1_SDK_PATH = "C:\level_zero"
 ```
 
 Build and install PyTorch:
@@ -182,7 +182,7 @@ Initialize environment variables:
 ```
 .venv\Scripts\activate.ps1
 Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-$env:ZE_PATH = "C:\level_zero"
+$env:LEVEL_ZERO_V1_SDK_PATH = "C:\level_zero"
 ```
 
 Check that PyTorch and Triton are available:
