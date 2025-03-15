@@ -85,11 +85,6 @@ void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         const TargetInfoBase &targetInfo,
                                         PatternBenefit benefit);
 
-void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                      const TargetInfoBase &targetInfo,
-                                      RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
-
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
