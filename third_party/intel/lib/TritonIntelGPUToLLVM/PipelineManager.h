@@ -276,8 +276,8 @@ public:
                                                    patterns, benefit);
       mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                        targetInfo, benefit);
-      intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
-                                              patterns, benefit);
+      mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, benefit);
       intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
     }
 
