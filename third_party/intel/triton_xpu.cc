@@ -83,8 +83,6 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
   ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
                      gpu::intel::createIntelDecomposeUnsupportedConversions);
-  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
-                     gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_OPT_2("add_pipeline",
                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",

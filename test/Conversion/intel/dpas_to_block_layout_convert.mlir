@@ -1,12 +1,12 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s
 
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 2], order = [1, 0]}>
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.shared = 67584 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @convert_dpas(
-// CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>,
-// CHECK-SAME:                                          %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
+// CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>)
+// CHECK-SAME:                                          attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
@@ -97,8 +97,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
 #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [2, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.shared = 67584 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @convert_dpas(
-// CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>,
-// CHECK-SAME:                                          %[[SCRATCH_SLM:.*]]: !llvm.ptr<3>) attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
+// CHECK-SAME:                                          %[[VAL_0:.*]]: !llvm.ptr<1>)
+// CHECK-SAME:                                          attributes {intel_reqd_sub_group_size = 16 : i32, noinline = false, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @convert_dpas(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
