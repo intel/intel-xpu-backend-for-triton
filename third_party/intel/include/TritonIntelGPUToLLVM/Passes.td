@@ -8,12 +8,6 @@ def IntelDecomposeUnsupportedConversions
   let summary = "Decompose conversions that are not supported by TritonGPU -> LLVM";
 }
 
-def IntelAllocateSharedMemory
-    : Pass<"intel-allocate-shared-memory", "mlir::ModuleOp"> {
-  let summary = "Add metadata for shared memory allocation";
-  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
-}
-
 def ConvertTritonIntelGPUToLLVM
     : Pass<"convert-triton-intel-gpu-to-llvm", "mlir::ModuleOp"> {
   let summary = "Convert TritonIntelGPU to LLVM";

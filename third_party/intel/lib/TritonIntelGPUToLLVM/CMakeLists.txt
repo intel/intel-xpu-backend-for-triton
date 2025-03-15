@@ -1,5 +1,4 @@
 add_triton_library(TritonIntelGPUToLLVM
-    AllocateSharedMemory.cpp
     ArithOpsToLLVM.cpp
     BF16Casts.cpp
     ConvertLayoutOpToLLVM.cpp
