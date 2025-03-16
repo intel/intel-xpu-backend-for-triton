@@ -181,13 +181,40 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
   }
 }
 
+// declare __spirv_ocl_printf(i8*, ...) as external function
+static LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName("_Z18__spirv_ocl_printf");
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+  MLIRContext *context = rewriter.getContext();
+  auto ptrTy = LLVM::LLVMPointerType::get(
+      context, TritonGEN::TritonGENMemorySpace::kUniformConstant);
+  SmallVector<Type> argsType{ptrTy};
+  auto retType = i32_ty;
+  auto funcType =
+      LLVM::LLVMFunctionType::get(retType, argsType, /*isVarArg*/ true);
+
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+  auto printFunc = rewriter.create<LLVM::LLVMFuncOp>(
+      UnknownLoc::get(context), funcName, funcType, LLVM::Linkage::External,
+      /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC, /*comdat=*/SymbolRefAttr{});
+  printFunc->setAttr("nounwind", rewriter.getUnitAttr());
+
+  return printFunc;
+}
+
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                         int /*formatStrByteCount*/, ValueRange args,
                         ArrayRef<bool> isSigned) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto funcOp = LLVM::intel::getSpirvPrintfDeclaration(rewriter);
+  auto funcOp = getSpirvPrintfDeclaration(rewriter);
   auto loc = UnknownLoc::get(ctx);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
