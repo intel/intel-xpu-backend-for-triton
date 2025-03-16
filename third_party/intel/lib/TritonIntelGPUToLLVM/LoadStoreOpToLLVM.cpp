@@ -933,14 +933,17 @@ struct LoadOpConversion
         // operand per inst.
         // Note: the tileHeight and numOperandsPer2DLoadM are the column size
         // now.
-        llvm::errs() << "transpose layout multiple: " << ((threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1) << "\n";
+        llvm::errs() << "transpose layout multiple: "
+                     << ((threadsPerWarp <= tileHeight) ? repCluster[dimOuter]
+                                                        : 1)
+                     << "\n";
 #if 1
         tileLayout *= LinearLayout::identity1D(1, kIteration, dimOuterStr);
 #else
         tileLayout *= LinearLayout::identity1D(
             (threadsPerWarp <= tileHeight) ? repCluster[dimOuter] : 1,
             kIteration, dimOuterStr);
-#endif 
+#endif
       }
     }
 
@@ -987,7 +990,7 @@ struct LoadOpConversion
     unsigned numRepOuter = numReps[bool(opIdx) ? 2 : 1];
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
 
-    // also could look at elemSizeInBits / originalElemSizeInBits 
+    // also could look at elemSizeInBits / originalElemSizeInBits
     const unsigned packedElementsPerSlot =
         isTransposeRequired ? tileHeight / elemsPerDPASInst[dimInner] : 1;
     LLVM_DEBUG(llvm::dbgs() << "Packed elements per slot: "
@@ -997,13 +1000,13 @@ struct LoadOpConversion
       tileLayout *= LinearLayout::identity1D(numRepOuter * repCluster[dimOuter],
                                              kLoad, dimOuterStr);
     } else {
-      tileLayout *= LinearLayout::identity1D(
-          (numRepOuter * vBlocks) /
-              numIterationsOuterDimPerLoad,
-          kLoad, dimOuterStr);
+      tileLayout *= LinearLayout::identity1D((numRepOuter * vBlocks) /
+                                                 numIterationsOuterDimPerLoad,
+                                             kLoad, dimOuterStr);
     }
     tileLayout *= LinearLayout::identity1D(
-      (numRepInner * packedElementsPerSlot) / numIterationsInnerDimPerLoad, kLoad, dimInnerStr);
+        (numRepInner * packedElementsPerSlot) / numIterationsInnerDimPerLoad,
+        kLoad, dimInnerStr);
 
     if (isTransposeRequired) {
       std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
@@ -1205,8 +1208,11 @@ struct LoadOpConversion
                          << "\n";
           });
 #if 1
-          const auto loadOffsetX = offset[dimOuter].second * repCluster[0] * repCluster[1] * packedElementsPerSlot / (vBlocks * packedElementsPerSlot);
-          const auto loadOffsetY = offset[dimInner].second * packedElementsPerSlot;
+          const auto loadOffsetX = offset[dimOuter].second * repCluster[0] *
+                                   repCluster[1] * packedElementsPerSlot /
+                                   (vBlocks * packedElementsPerSlot);
+          const auto loadOffsetY =
+              offset[dimInner].second * packedElementsPerSlot;
 #else
           const auto loadOffsetX =
               isOperandA ? offset[1].second
@@ -1284,26 +1290,6 @@ struct LoadOpConversion
           }
           LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
 
-#if 0
-          const auto loadRowStride = (isTransposeRequired && !isOperandA)
-                                         ? 0
-                                         : packedElemsPerLanePerDPASInst;
-
-          unsigned loadColStride;
-          if (isTransposeRequired && !isOperandA) {
-            loadColStride = (ll.getOutDimSize(dimOuterStr) >= tileHeight)
-                                ? tileHeight / elemsPerDPASInst[dimOuter] - 1
-                                : tileHeight;
-          } else {
-            loadColStride = isOperandA ? tileHeight : tileWidth;
-          }
-
-          LLVM_DEBUG({
-            llvm::dbgs() << "row stride: " << loadRowStride << "\n";
-            llvm::dbgs() << "col stride: " << loadColStride << "\n";
-          });
-#endif 
-
           auto itrOffsetCoord_ = tileLayout.apply(
               {{kLoad, loadIdx}, {kOffset, 0}, {kIteration, 0}, {kRep, 0}});
           assert(itrOffsetCoord_.size() == 2);
@@ -1344,10 +1330,15 @@ struct LoadOpConversion
 
             // for operand B we need extra iterations for each vblock. probably
             // true for operand A also!
-            const auto vBlockIterations = isTransposeRequired ? numIterationsOuterDimPerLoad : (isOperandA ? 1 : vBlocks);
+            const auto vBlockIterations = isTransposeRequired
+                                              ? numIterationsOuterDimPerLoad
+                                              : (isOperandA ? 1 : vBlocks);
             llvm::errs() << "vBlock Iterations: " << vBlockIterations << "\n";
-            llvm::errs() << "numIterationsOuterDimPerLoad: " << numIterationsOuterDimPerLoad << "\n";
-            const auto jStride = isTransposeRequired ? 1 : packedElemsPerLanePerDPASInst * tileWidth;
+            llvm::errs() << "numIterationsOuterDimPerLoad: "
+                         << numIterationsOuterDimPerLoad << "\n";
+            const auto jStride =
+                isTransposeRequired ? 1
+                                    : packedElemsPerLanePerDPASInst * tileWidth;
             const auto jOffset = isTransposeRequired ? 1 : 0;
             for (size_t j = 0; j < vBlockIterations; j++) {
               llvm::errs() << " j = " << j << "\n";
@@ -1362,11 +1353,11 @@ struct LoadOpConversion
                    elemIdx++) {
 #if 1
                 const int offsetIdx =
-                    elemIdx * tileWidth * packedElementsPerSlot +
-                    j * jStride;
+                    elemIdx * tileWidth * packedElementsPerSlot + j * jStride;
                 llvm::errs() << "\toffset = " << offsetIdx << "\n";
 
-                // TODO: still consider subtracting off load 0 offsets, having issues with # loads > 2
+                // TODO: still consider subtracting off load 0 offsets, having
+                // issues with # loads > 2
                 auto shuffleVectorOffset =
                     tileLayout.apply({{kOffset, offsetIdx},
                                       {kIteration, i},
@@ -1389,10 +1380,10 @@ struct LoadOpConversion
                        "\n";
 
 #if 1
-                indices[elemIdx] = regVal + (j*jOffset);
+                indices[elemIdx] = regVal + (j * jOffset);
                 LLVM_DEBUG({
                   llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
-                              << indices[elemIdx] << "\n";
+                               << indices[elemIdx] << "\n";
                 });
 #else
                 for (size_t s = 0; s < packedElementsPerSlot; s++) {
@@ -1402,7 +1393,7 @@ struct LoadOpConversion
                                  << indices[elemIdx + s] << "\n";
                   });
                 }
-#endif 
+#endif
 #else
                 for (size_t s = 0; s < packedElementsPerSlot; s++) {
                   const auto x_offset =
@@ -1431,7 +1422,7 @@ struct LoadOpConversion
               Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
                   loc, packedDPASOperandType, load2dOp, load2dOp, attr);
 
-              // TODO: this indexing is just wrong for the B transpose case 
+              // TODO: this indexing is just wrong for the B transpose case
               auto tensorCoord = tileLayout.apply(
                   {{kLoad, loadIdx},
                    {kOffset, 0 + j * tileWidth * packedElemsPerLanePerDPASInst},
@@ -1442,7 +1433,8 @@ struct LoadOpConversion
                          << "tensorCoord: " << tensorCoord[0].second << ", "
                          << tensorCoord[1].second << "\n");
 
-              llvm::errs() << "dividing row by " << packedElemsPerLanePerDPASInst << "\n";
+              llvm::errs() << "dividing row by "
+                           << packedElemsPerLanePerDPASInst << "\n";
               auto tensorRowCoord =
                   (tensorCoord[0].second) / packedElemsPerLanePerDPASInst;
               auto tensorColCoord =
@@ -1450,7 +1442,9 @@ struct LoadOpConversion
                       ? (tensorCoord[1].second / tileWidth)
                       : (tensorCoord[1].second /
                          (elemsPerDPASInst[1] / packedElementsPerSlot));
-              llvm::errs() << "dividing col by " << (elemsPerDPASInst[1] / packedElementsPerSlot) << "\n";
+              llvm::errs() << "dividing col by "
+                           << (elemsPerDPASInst[1] / packedElementsPerSlot)
+                           << "\n";
 
               if (isOperandA || isTransposeRequired) {
                 LLVM_DEBUG(llvm::dbgs()
