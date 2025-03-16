@@ -1109,17 +1109,6 @@ struct LoadOpConversion
     llvm::errs() << "num rep outer, inner: " << numRepOuter << ", "
                  << numRepInner << "\n";
 
-    // TODO: maybe instead of isTransposeRequired this should be someting about
-    // vblocks...
-    const auto repMultiple =
-        isTransposeRequired
-            ? repCluster[dimOuter] * repCluster[dimInner]
-            : (repCluster[dimOuter] / numRepOuter) * repCluster[dimInner];
-    llvm::errs() << "rep multiple: " << repMultiple << "\n";
-    StringAttr kRep = StringAttr::get(ctx, "rep");
-    tileLayout *= LinearLayout::identity1D(repMultiple, kRep, dimOuterStr);
-    llvm::errs() << "tile layout after adding rep: " << tileLayout << "\n";
-
     LLVM_DEBUG({
       llvm::dbgs() << "tileWidth: " << tileWidth << "\n";
       llvm::dbgs() << "tileHeight: " << tileHeight << "\n";
@@ -1197,7 +1186,7 @@ struct LoadOpConversion
 
           Value offsetX, offsetY;
           auto offset = tileLayout.apply(
-              {{kOffset, 0}, {kIteration, 0}, {kLoad, loadIdx}, {kRep, 0}});
+              {{kOffset, 0}, {kIteration, 0}, {kLoad, loadIdx}});
           assert(offset.size() == 2);
           // adjust the load offset to compensate for strides related to the
           // DPAS layout
@@ -1291,7 +1280,7 @@ struct LoadOpConversion
           LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
 
           auto itrOffsetCoord_ = tileLayout.apply(
-              {{kLoad, loadIdx}, {kOffset, 0}, {kIteration, 0}, {kRep, 0}});
+              {{kLoad, loadIdx}, {kOffset, 0}, {kIteration, 0}});
           assert(itrOffsetCoord_.size() == 2);
           LLVM_DEBUG(llvm::dbgs()
                      << "itrOffsetCoord_: " << itrOffsetCoord_[0].second << ", "
@@ -1312,10 +1301,8 @@ struct LoadOpConversion
             for (size_t o = 0; o < tileLayout.getInDimSize(kOffset); o += 16) {
               const auto offset = o;
               const auto iteration = i;
-              auto offsetToTensor = tileLayout.apply({{kOffset, offset},
-                                                      {kIteration, iteration},
-                                                      {kLoad, 0},
-                                                      {kRep, 0}});
+              auto offsetToTensor = tileLayout.apply(
+                  {{kOffset, offset}, {kIteration, iteration}, {kLoad, 0}});
               assert(offsetToTensor.size() == 2);
               llvm::errs() << iteration << ", " << offset << " = "
                            << offsetToTensor[0].second << ", "
@@ -1361,8 +1348,8 @@ struct LoadOpConversion
                 auto shuffleVectorOffset =
                     tileLayout.apply({{kOffset, offsetIdx},
                                       {kIteration, i},
-                                      {kLoad, loadIdx},
-                                      {kRep, 0}});
+                                      { kLoad,
+                                        loadIdx }});
                 LLVM_DEBUG(llvm::dbgs()
                            << "\tshuffle vector offset 2: "
                            << shuffleVectorOffset[0].second << ", "
@@ -1426,8 +1413,7 @@ struct LoadOpConversion
               auto tensorCoord = tileLayout.apply(
                   {{kLoad, loadIdx},
                    {kOffset, 0 + j * tileWidth * packedElemsPerLanePerDPASInst},
-                   {kIteration, i},
-                   {kRep, 0}});
+                   {kIteration, i}});
               assert(tensorCoord.size() == 2);
               LLVM_DEBUG(llvm::dbgs()
                          << "tensorCoord: " << tensorCoord[0].second << ", "
