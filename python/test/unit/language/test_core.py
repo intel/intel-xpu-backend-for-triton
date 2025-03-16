@@ -305,8 +305,6 @@ def warps_per_cta(layout, shape):
 def is_layout_applicable(layout) -> bool:
     if isinstance(layout, (BlockedLayout, SharedLayout, LinearLayout)):
         return True
-    elif isinstance(layout, BlockedLayout) or isinstance(layout, SharedLayout):
-        return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
     elif is_cuda():
@@ -5252,7 +5250,8 @@ def test_unary_math(func_str, device):
     y = torch.zeros(shape, dtype=torch.float32, device=device)
 
     kernel[(1, )](x, y, BLOCK=shape[0])
-    torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
+    # compare
+    torch.testing.assert_close(getattr(torch, func_str)(x), y, rtol=1e-3, atol=1e-5)
 
 
 # -----------------------

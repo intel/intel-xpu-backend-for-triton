@@ -1,5 +1,4 @@
 add_triton_library(TritonIntelGPUToLLVM
-    AllocateSharedMemory.cpp
     ArithOpsToLLVM.cpp
     BF16Casts.cpp
     ConvertLayoutOpToLLVM.cpp
@@ -8,19 +7,19 @@ add_triton_library(TritonIntelGPUToLLVM
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
+    Fp4ToFpOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    MakeRangeOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     TritonGPUToLLVM.cpp
     SPMDOpToLLVM.cpp
+    SPIRVTargetInfo.cpp
     TargetInfo.cpp
     TensorPtrOpsToLLVM.cpp
     TritonGPUToLLVM.cpp
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
-    UpcastMXFPToLLVM.cpp
     Utility.cpp
 
     DEPENDS

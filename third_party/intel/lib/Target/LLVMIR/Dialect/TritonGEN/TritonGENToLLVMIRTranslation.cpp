@@ -13,7 +13,6 @@
 #include "Target/LLVMIR/Dialect/TritonGEN/TritonGENToLLVMIRTranslation.h"
 
 #include "Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LogicalResult.h"
