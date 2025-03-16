@@ -1,5 +1,4 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "Utility.h"
 
 namespace {
 
