@@ -61,6 +61,10 @@ public:
       return !triton::gpu::intel::hasSpirvTargetArch(op) ||
              spirv::lookupTargetEnv(op) != nullptr;
     });
+    addDynamicallyLegalOp<LLVM::CallOp>([](LLVM::CallOp op) {
+      return !triton::gpu::intel::hasSpirvTargetArch(op) ||
+             op.getCConv() == LLVM::cconv::CConv::SPIR_FUNC;
+    });
   }
 };
 
