@@ -5,7 +5,7 @@
 namespace mlir::triton::gpu::intel {
 
 LLVM::CallOp createDeviceFunctionCall(
-    ConversionPatternRewriter &rewriter, StringRef funcName, Type retType,
+    RewriterBase &rewriter, StringRef funcName, Type retType,
     ArrayRef<Type> argTypes, ArrayRef<Value> args,
     mlir::ArrayRef<std::pair<unsigned, mlir::StringRef>> paramAttrs,
     const LLVMFuncAttributeOptions &funcAttributeOptions,

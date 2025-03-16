@@ -1,5 +1,4 @@
 #include "../TritonGPUToLLVMBase.h"
-#include "../Utility.h"
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 

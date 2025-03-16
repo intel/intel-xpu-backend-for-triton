@@ -1,16 +1,11 @@
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
-#include <optional>
 
 #include "LLVMSPIRVLib.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)

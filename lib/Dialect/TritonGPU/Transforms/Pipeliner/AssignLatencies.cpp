@@ -46,7 +46,7 @@ bool isSmallLoad(tt::LoadOp loadOp,
   assert(!isLoadFromTensorPtr(loadOp) &&
          "Block ptr should have been lowered before this pass.");
   auto ptr = loadOp.getPtr();
-  unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+  unsigned vec = axisInfoAnalysis.getContiguity(ptr);
   if (auto mask = loadOp.getMask())
     vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
@@ -163,16 +163,6 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           Operation *defOp = v.getDefiningOp();
           if (defOp && defOp->getBlock() == op->getBlock()) {
             dfs(defOp, finalUser, distance);
-          }
-        }
-        if (auto tmemAlloc = dyn_cast<nvidia_gpu::TMEMAllocOp>(op)) {
-          if (!tmemAlloc.getSrc()) {
-            for (auto user : tmemAlloc.getResult().getUsers()) {
-              if (auto tmemCopy = dyn_cast<nvidia_gpu::TMEMCopyOp>(user)) {
-                dfs(tmemCopy.getSrc().getDefiningOp(), finalUser, distance);
-                break;
-              }
-            }
           }
         }
       };

@@ -11,6 +11,7 @@ on:
         description: Space separated lists of test suites or "all"
         type: string
         default: >-
+          inductor/test_kernel_benchmark.py
           inductor/test_codegen_triton.py
           inductor/test_triton_extension_backend.py
           inductor/test_triton_heuristics.py

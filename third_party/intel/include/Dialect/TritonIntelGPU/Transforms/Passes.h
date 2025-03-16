@@ -11,8 +11,6 @@
 
 #include "mlir/Pass/Pass.h"
 
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-
 namespace mlir::triton::gpu::intel {
 
 // Used by Triton runtime

@@ -31,13 +31,14 @@ constexpr LLVMFuncAttributeOptions noUnwindWillReturnAttrs = {
 constexpr LLVMFuncAttributeOptions convergentNoUnwindWillReturnAttrs = {
     true, true, true, {}};
 
-LLVM::CallOp createDeviceFunctionCall(
-    ConversionPatternRewriter &rewriter, StringRef funcName, Type retType,
-    mlir::ArrayRef<mlir::Type> argTypes, ArrayRef<Value> args,
-    ArrayRef<std::pair<unsigned, StringRef>> paramAttrs,
-    const LLVMFuncAttributeOptions &funcAttributeOptions,
-    const AttributeList &passthroughAttrs = {},
-    LLVM::cconv::CConv cc = LLVM::cconv::CConv::SPIR_FUNC);
+LLVM::CallOp
+createDeviceFunctionCall(RewriterBase &rewriter, StringRef funcName,
+                         Type retType, mlir::ArrayRef<mlir::Type> argTypes,
+                         ArrayRef<Value> args,
+                         ArrayRef<std::pair<unsigned, StringRef>> paramAttrs,
+                         const LLVMFuncAttributeOptions &funcAttributeOptions,
+                         const AttributeList &passthroughAttrs = {},
+                         LLVM::cconv::CConv cc = LLVM::cconv::CConv::SPIR_FUNC);
 
 } // namespace mlir::triton::gpu::intel
 
