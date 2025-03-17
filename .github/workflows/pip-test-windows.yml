@@ -34,7 +34,7 @@ permissions: read-all
 env:
   PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
-  LEVEL_ZERO_V1_SDK_PATH: C:\LevelZeroSDK\1.21.2\
+  LEVEL_ZERO_V1_SDK_PATH: C:\level_zero
   PYTEST_MAX_PROCESSES: 8
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
@@ -67,10 +67,6 @@ jobs:
       - name: Copy workspace
         run: |
           Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
-
-      - name: Emulate L0 installation
-        run: |
-          tar -xf ${{ env.NEW_WORKSPACE }}\LevelZeroSDK.tar -C C:\
 
       - name: Create venv
         run:
