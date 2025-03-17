@@ -224,6 +224,8 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_combine(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         if raise_block_ptr_flags['enabled']:
             ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False

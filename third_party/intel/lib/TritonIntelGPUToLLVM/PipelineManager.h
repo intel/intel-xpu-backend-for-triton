@@ -26,10 +26,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
 
@@ -276,10 +274,9 @@ public:
                                                    patterns, benefit);
       mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                        targetInfo, benefit);
-      intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
-                                              patterns, benefit);
-      intel::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
-                                              targetInfo, benefit);
+      mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, benefit);
+      intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,

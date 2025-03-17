@@ -11,7 +11,6 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #if defined(_WIN32)
