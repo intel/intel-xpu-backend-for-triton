@@ -57,6 +57,12 @@ inline bool hasSpirvTargetArch(Operation *op) {
       triton::gpu::intel::TritonIntelGPUDialect::getTargetArchAttrName());
   return !arch || arch.str().substr(0, 4) == "spir";
 }
+
+inline LLVM::cconv::CConv getRequiredCConv(Operation *op) {
+  if (hasSpirvTargetArch(op))
+    return LLVM::cconv::CConv::SPIR_FUNC;
+  llvm_unreachable("Unexpected target architecture");
+}
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_UTILS_H

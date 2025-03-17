@@ -10,8 +10,7 @@ struct FixCallCConv : public ConvertOpToLLVMPattern<LLVM::CallOp> {
   matchAndRewrite(LLVM::CallOp op, LLVM::CallOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.startOpModification(op);
-    if (triton::gpu::intel::hasSpirvTargetArch(op))
-      op.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    op.setCConv(triton::gpu::intel::getRequiredCConv(op));
     rewriter.finalizeOpModification(op);
     return success();
   }

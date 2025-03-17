@@ -222,7 +222,7 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
         rewriter, arg, isSigned.empty() ? true : isSigned[i]));
   }
   auto callOp = b.call(funcOp, operands);
-  callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+  callOp.setCConv(triton::gpu::intel::getRequiredCConv(callOp));
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
