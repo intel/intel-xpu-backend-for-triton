@@ -328,8 +328,9 @@ class XPUBackend(BaseBackend):
         # solutions for SLM allocation, so this will crash on some operations
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
-            intel.passes.ttgpuir.add_allocate_shared_memory(pm)
+            passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
+        intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)

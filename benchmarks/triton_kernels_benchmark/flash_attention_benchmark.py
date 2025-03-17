@@ -140,9 +140,6 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
-        # barrier makes it easier for compielr to schedule the
-        # two loops independently
-        tl.debug_barrier()
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #

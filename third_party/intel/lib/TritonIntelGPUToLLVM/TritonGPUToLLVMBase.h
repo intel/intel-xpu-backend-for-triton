@@ -12,8 +12,6 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include <set>
-#include <type_traits>
 
 #define DEBUG_TYPE "ttgpu_to_llvm"
 

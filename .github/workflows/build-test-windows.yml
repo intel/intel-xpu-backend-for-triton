@@ -23,7 +23,6 @@ env:
   PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   ZE_PATH: C:\level_zero
-  PYTEST_MAX_PROCESSES: 8
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --ignore-errors
 
@@ -66,8 +65,6 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          # FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/3522
-          $env:INCLUDE += ";C:\Program Files (x86)\Intel\oneAPI\dnnl\latest\include\oneapi\dnnl"
           # Required to build on Windows
           $env:CMAKE_SHARED_LINKER_FLAGS = "/FORCE:MULTIPLE"
           $env:CMAKE_MODULE_LINKER_FLAGS = "/FORCE:MULTIPLE"

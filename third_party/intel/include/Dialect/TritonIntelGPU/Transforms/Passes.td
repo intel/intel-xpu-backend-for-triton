@@ -362,4 +362,19 @@ tt.func @test(%arg0: tensor<16x32xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim 
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPURewriteStackPtr
+    : Pass<"tritonintelgpu-rewrite-stack-ptr", "mlir::ModuleOp"> {
+  let summary = "rewrite the getStackPointer for Intel by addressofOp replacement";
+
+  let description = [{
+    This pass searches for the global_smem symbol and replaces the addressOfOp with a newly inserted
+    SLM parameter or a PoisonOp to rewrite the getStackPointer for Intel.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect", "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
 #endif // TRITON_INTEL_GPU_PASSES

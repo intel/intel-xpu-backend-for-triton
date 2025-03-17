@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // Basic 16x16 transpose test
 
@@ -7,11 +7,11 @@
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f16(
-  // CHECK-SAME:                                      , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_f16(%arg0: tensor<16x16xf16, #blocked>) -> tensor<16x16xf16, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f16 to i16
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -35,11 +35,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_bf16(
-  // CHECK-SAME:                                     , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_bf16(%arg0: tensor<16x16xbf16, #blocked>) -> tensor<16x16xbf16, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : bf16 to i16
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -63,11 +63,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f32(
-  // CHECK-SAME:                                    , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_f32(%arg0: tensor<16x16xf32, #blocked>) -> tensor<16x16xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -91,10 +91,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_i8(
-  // CHECK-SAME:                                   , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_i8(%arg0: tensor<16x16xi8, #blocked>) -> tensor<16x16xi8, #blocked1> {
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -117,10 +117,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_i64(
-  // CHECK-SAME:                                    , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_i64(%arg0: tensor<16x16xi64, #blocked>) -> tensor<16x16xi64, #blocked1> {
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -143,11 +143,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_ptr(
-  // CHECK-SAME:                                    , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_ptr(%arg0: tensor<16x16x!tt.ptr<f32>, #blocked>) -> tensor<16x16x!tt.ptr<f32>, #blocked1> {
     // CHECK-COUNT-16:  llvm.ptrtoint %{{.*}} : !llvm.ptr<1> to i64
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -171,11 +171,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_i1(
-  // CHECK-SAME:                                   , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test_i1(%arg0: tensor<16x16xi1, #blocked>) -> tensor<16x16xi1, #blocked1> {
     // CHECK-COUNT-16:  llvm.zext %{{.*}} : i1 to i8
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -208,11 +208,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<32x16xf32, #blocked>) -> tensor<32x16xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -245,11 +245,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<16x32xf32, #blocked>) -> tensor<16x32xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -282,11 +282,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x64xf32, #blocked>) -> tensor<64x64xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -319,11 +319,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x64x1xf32, #blocked>) -> tensor<64x64x1xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -355,11 +355,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x64xf32, #ttg.slice<{dim = 2, parent = #blocked}>>) -> tensor<64x64xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -392,11 +392,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<16x16x1xf32, #ttg.slice<{dim = 2, parent = #ttg.slice<{dim = 4, parent = #blocked}>}>>) -> tensor<16x16x1xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -429,11 +429,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>
   tt.func @test(%arg0: tensor<64x16x4xf32, #ttg.slice<{dim = 2, parent = #ttg.slice<{dim = 4, parent = #blocked}>}>>) -> tensor<64x16x4xf32, #blocked1> {
     // CHECK-COUNT-16:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -466,11 +466,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, "ttg.th
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test(%arg0: tensor<32x16xf32, #blocked>) -> tensor<32x16xf32, #blocked1> {
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -504,11 +504,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test(%arg0: tensor<16x32xf32, #blocked>) -> tensor<16x32xf32, #blocked1> {
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -542,11 +542,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-  // CHECK-SAME:                                , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test(%arg0: tensor<32x64xf32, #blocked>) -> tensor<32x64xf32, #blocked1> {
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -597,11 +597,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_32(
-  // CHECK-SAME:                                   , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test_32(%arg0: tensor<64x64xf32, #blocked>) -> tensor<64x64xf32, #blocked1> {
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32
@@ -639,11 +639,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_2_cont(
-  // CHECK-SAME:                                   , %[[VAL_1:.*]]: !llvm.ptr<3>)
   tt.func @test_2_cont(%arg0: tensor<64x64xf32, #blocked>) -> tensor<64x64xf32, #blocked1> {
     // CHECK-COUNT-32:  llvm.bitcast %{{.*}} : f32 to i32
     // CHECK:           %[[VAL_34:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[VAL_1]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:           %[[SMEM_0:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:           %[[VAL_35:.*]] = llvm.getelementptr %[[SMEM_0]]{{\[}}%[[VAL_34]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK:           %[[VAL_36:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
     // CHECK:           %[[VAL_37:.*]] = llvm.zext %[[VAL_36]] : i32 to i64
     // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {no_unwind, will_return} : () -> i32

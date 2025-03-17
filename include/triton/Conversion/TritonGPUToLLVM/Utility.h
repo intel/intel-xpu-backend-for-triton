@@ -387,7 +387,7 @@ public:
     auto allocShape = memDesc.getAllocShape();
     auto allocShapePerCTA = triton::gpu::getAllocationShapePerCTA(
         memDesc.getEncoding(), allocShape);
-    auto layoutOrder = triton::gpu::getOrder(memDesc.getEncoding());
+    auto layoutOrder = triton::gpu::getOrder(memDesc);
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShapePerCTA, layoutOrder, loc, rewriter);
     return SmallVector<Value>(allocStrides.end() - offsets.size(),
@@ -583,7 +583,7 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value offVal = b.i32_val(offset);
   Value base =
-      b.gep(ptrTy, i8_ty, target.getStackPointer(rewriter, func), offVal);
+      b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
 
@@ -815,6 +815,37 @@ isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
          /*swizzling but same shape*/ shape == allocShape ||
          /*swizzling and rank-reduced and rank >= 2*/
          (shape == allocShape.take_back(rank) && rank >= 2);
+}
+
+inline llvm::MapVector<StringAttr, int32_t>
+getAllFreeVarMasks(MLIRContext *ctx) {
+  // Mask where all elements are redundant
+  auto kReg = str_attr("reg");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  int32_t fullMask = -1;
+  llvm::MapVector<StringAttr, int32_t> ret;
+  for (auto dimName : {kReg, kLane, kWarp, kBlock}) {
+    ret[dimName] = fullMask;
+  }
+  return ret;
+}
+
+inline llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
+  auto ctx = type.getContext();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
+  if (!tensorTy) {
+    return getAllFreeVarMasks(ctx);
+  }
+  auto ll =
+      triton::gpu::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+  return ll.getFreeVariableMasks();
+}
+
+inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return (index & freeVarMask) == 0;
 }
 
 } // namespace mlir
