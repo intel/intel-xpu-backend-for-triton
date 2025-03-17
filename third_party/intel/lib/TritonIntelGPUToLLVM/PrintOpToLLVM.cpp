@@ -241,8 +241,7 @@ protected:
 } // namespace
 
 void mlir::triton::intel::populatePrintOpToLLVMPattern(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, const TargetInfoBase &targetInfo,
-    PatternBenefit benefit) {
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
   patterns.add<PrintOpConversion>(typeConverter, targetInfo, benefit);
 }
