@@ -3,9 +3,6 @@
 
 namespace {
 
-using namespace mlir;
-using namespace mlir::triton;
-
 struct FixCallCConv : public ConvertOpToLLVMPattern<LLVM::CallOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
