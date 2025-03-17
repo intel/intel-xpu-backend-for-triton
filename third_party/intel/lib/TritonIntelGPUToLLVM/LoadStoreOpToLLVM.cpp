@@ -996,14 +996,17 @@ struct LoadOpConversion
     LLVM_DEBUG(llvm::dbgs() << "Packed elements per slot: "
                             << packedElementsPerSlot << "\n");
 
+    // TODO: the dim outer / dim inner stuff here might not be right. need to
+    // prove that this load multiplication logic is correct.
     if (isTransposeRequired && oneMatrixPerLoadForBT) {
       tileLayout *= LinearLayout::identity1D(numRepOuter * repCluster[dimOuter],
                                              kLoad, dimOuterStr);
     } else {
-      tileLayout *= LinearLayout::identity1D((numRepOuter * vBlocks) /
-                                                 numIterationsOuterDimPerLoad,
-                                             kLoad, dimOuterStr);
+      tileLayout *= LinearLayout::identity1D(
+          (numRepOuter) / numIterationsOuterDimPerLoad, kLoad, dimOuterStr);
     }
+    // Note: better performance with this first, but is that b/c of the
+    // warpsPerCTA layout?
     tileLayout *= LinearLayout::identity1D(
         (numRepInner * packedElementsPerSlot) / numIterationsInnerDimPerLoad,
         kLoad, dimInnerStr);
@@ -1197,11 +1200,15 @@ struct LoadOpConversion
                          << "\n";
           });
 #if 1
-          const auto loadOffsetX = offset[dimOuter].second * repCluster[0] *
-                                   repCluster[1] * packedElementsPerSlot /
-                                   (vBlocks * packedElementsPerSlot);
-          const auto loadOffsetY =
-              offset[dimInner].second * packedElementsPerSlot;
+          auto loadOffsetX = offset[0].second;
+          auto loadOffsetY = offset[1].second;
+          if (!(isOperandA || isTransposeRequired)) {
+            llvm::errs() << "swapping x and y offsets\n";
+            std::swap(loadOffsetX, loadOffsetY);
+          }
+          loadOffsetX *= repCluster[0] * repCluster[1] * packedElementsPerSlot /
+                         (vBlocks * packedElementsPerSlot);
+          loadOffsetY *= packedElementsPerSlot;
 #else
           const auto loadOffsetX =
               isOperandA ? offset[1].second
@@ -1315,14 +1322,30 @@ struct LoadOpConversion
             LLVM_DEBUG(llvm::dbgs() << "Emitting shuffle vector for iteration "
                                     << i << ", load: " << loadIdx << "\n");
 
-            // for operand B we need extra iterations for each vblock. probably
-            // true for operand A also!
-            const auto vBlockIterations = isTransposeRequired
-                                              ? numIterationsOuterDimPerLoad
-                                              : (isOperandA ? 1 : vBlocks);
+            // for cases where we pack multiple values in a single slot we need
+            // to iterate each iteration multiple times
+            llvm::errs() << "packedElementsPerSlot = " << packedElementsPerSlot
+                         << "\n";
+#if 1
+            const auto vBlockIterations =
+                elemsPerLanePerDPASInst / packedElemsPerLanePerDPASInst;
+#else
+            const auto vBlockIterations =
+                isTransposeRequired
+                    ? numIterationsOuterDimPerLoad
+                    : (isOperandA ? 1 : numOperandsInnerDimPerLoad);
+#endif
             llvm::errs() << "vBlock Iterations: " << vBlockIterations << "\n";
             llvm::errs() << "numIterationsOuterDimPerLoad: "
                          << numIterationsOuterDimPerLoad << "\n";
+            llvm::errs() << "vBlocks = " << vBlocks << "\n";
+            llvm::errs() << "numOperandsInnerDimPerLoad = "
+                         << numOperandsInnerDimPerLoad << "\n";
+            llvm::errs() << "elems / packedElems ratio = "
+                         << elemsPerLanePerDPASInst /
+                                packedElemsPerLanePerDPASInst
+                         << "\n";
+
             const auto jStride =
                 isTransposeRequired ? 1
                                     : packedElemsPerLanePerDPASInst * tileWidth;
@@ -1339,32 +1362,38 @@ struct LoadOpConversion
               for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                    elemIdx++) {
 #if 1
-                const int offsetIdx =
+                int offsetIdx =
                     elemIdx * tileWidth * packedElementsPerSlot + j * jStride;
+#if 0
+                if (!isOperandA) { // and maybe ! transpose?
+                  offsetIdx += i * packedElemsPerLanePerDPASInst * tileWidth;
+                }
+#endif
                 llvm::errs() << "\toffset = " << offsetIdx << "\n";
 
-                // TODO: still consider subtracting off load 0 offsets, having
-                // issues with # loads > 2
                 auto shuffleVectorOffset =
                     tileLayout.apply({{kOffset, offsetIdx},
                                       {kIteration, i},
                                       { kLoad,
                                         loadIdx }});
                 LLVM_DEBUG(llvm::dbgs()
-                           << "\tshuffle vector offset 2: "
+                           << "\tshuffle vector offset: "
                            << shuffleVectorOffset[0].second << ", "
                            << shuffleVectorOffset[1].second << "\n");
                 shuffleVectorOffset[0].second -= itrOffsetCoord_[0].second;
                 shuffleVectorOffset[1].second -= itrOffsetCoord_[1].second;
+                LLVM_DEBUG(llvm::dbgs()
+                           << "\tshuffle vector offset after handling load: "
+                           << shuffleVectorOffset[0].second << ", "
+                           << shuffleVectorOffset[1].second << "\n");
                 auto dpasLayoutVals = dpasInverse.apply(shuffleVectorOffset);
                 assert(dpasLayoutVals.size() == 4);
                 const auto regVal = dpasLayoutVals[0].second;
-                llvm::errs()
-                    << dpasLayoutVals[0].first << " val from dpas: " << regVal
-                    << " (" << dpasLayoutVals[1].first << " = "
-                    << dpasLayoutVals[1].second
-                    << ")"
-                       "\n";
+                llvm::errs() << "\t" << dpasLayoutVals[0].first << " = "
+                             << regVal << " (" << dpasLayoutVals[1].first
+                             << " = " << dpasLayoutVals[1].second
+                             << ")"
+                                "\n";
 
 #if 1
                 indices[elemIdx] = regVal + (j * jOffset);
@@ -1409,7 +1438,6 @@ struct LoadOpConversion
               Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
                   loc, packedDPASOperandType, load2dOp, load2dOp, attr);
 
-              // TODO: this indexing is just wrong for the B transpose case
               auto tensorCoord = tileLayout.apply(
                   {{kLoad, loadIdx},
                    {kOffset, 0 + j * tileWidth * packedElemsPerLanePerDPASInst},
