@@ -21,6 +21,7 @@ if [ ${#FAILED_BENCHMARKS[@]} -ne 0 ]; then
     for failed_bench in "${FAILED_BENCHMARKS[@]}"; do
         echo "$failed_bench"
     done
+    exit 1
 else
     echo "All benchmarks completed successfully."
 fi
