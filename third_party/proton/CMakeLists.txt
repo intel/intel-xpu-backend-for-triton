@@ -9,6 +9,9 @@ endif()
 if(NOT ROCTRACER_INCLUDE_DIR)
   message(FATAL_ERROR "ROCTRACER include directory not defined")
 endif()
+if (NOT XPUPTI_INCLUDE_DIR)
+  message(FATAL_ERROR "XPUPTI include directory not defined")
+endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
@@ -36,8 +39,8 @@ function(add_proton_library name)
     PRIVATE
       "${CUPTI_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
+      "${XPUPTI_INCLUDE_DIR}"
       "${PROTON_SRC_DIR}/include"
-      /opt/intel/oneapi/pti/latest/include
       /opt/intel/oneapi/compiler/latest/include
       /opt/intel/oneapi/compiler/latest/include/sycl
   )
