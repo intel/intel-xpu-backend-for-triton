@@ -1085,34 +1085,6 @@ struct FpToFpOpConversion
   }
 };
 
-struct ExternElementwiseOpConversion
-    : public ElementwiseOpConversionBase<ExternElementwiseOp,
-                                         ExternElementwiseOpConversion> {
-  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
-                                           ExternElementwiseOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-  typedef typename Base::OpAdaptor OpAdaptor;
-
-  SmallVector<Value> createDestOps(ExternElementwiseOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    StringRef funcName = op.getSymbol();
-    if (funcName.empty())
-      llvm::errs() << "ExternElementwiseOpConversion";
-
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
-        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
-
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
-    return {callOp.getResult()};
-  }
-};
-
 template <typename SourceOp, typename DestOp>
 struct ElementwiseOpConversion
     : ElementwiseOpConversionBase<SourceOp,
@@ -1292,38 +1264,6 @@ struct AbsFOpConversion
   }
 };
 
-struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        targetInfo(targetInfo) {}
-  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-
-    std::string funcName = targetInfo.getMulhiFuncName(resultElementTy);
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    return {callOp.getResult()};
-  }
-
-protected:
-  const TargetInfoBase &targetInfo;
-};
-
 struct PreciseSqrtOpConversion
     : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
   using Base =
@@ -1401,10 +1341,6 @@ void populateElementwiseOpToLLVMPatterns(
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
-  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
-                                              benefit);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
