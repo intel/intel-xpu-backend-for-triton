@@ -986,7 +986,7 @@ struct TritonIntelGPUInferLayoutInterface
   inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
                          Attribute &outEnc, bool fwdInference,
                          std::optional<Location> loc) const override {
-    // Not required to support Fp4ToFpOp on DPAS layout.
+    // TODO
     return failure();
   }
 };

@@ -1,5 +1,4 @@
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
-#include "Dialect/TritonIntelGPU/Transforms/DecomposeScaledBlocked.h"
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
@@ -670,17 +669,7 @@ public:
     transposeDots(m);
 
     RewritePatternSet patterns(context);
-    // TODO: This ENV variable will be removed in the Fp4ToFp lowering PR
-    // Keep it here to maintain old implementation functionality.
-    if (!mlir::triton::tools::getBoolEnv(
-            "TRITON_INTEL_DECOMPOSE_SCALED_BLOCKED"))
-      patterns.add<BlockedToDPAS, DecomposeScaledBlocked>(context,
-                                                          dpasAnalysis);
-    else {
-      constexpr int benefitDefault = 1;
-      patterns.add<BlockedToDPAS>(context, dpasAnalysis);
-      ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
-    }
+    patterns.add<BlockedToDPAS, DecomposeScaledBlocked>(context, dpasAnalysis);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
 

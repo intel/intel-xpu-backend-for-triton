@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -89,13 +90,41 @@ SmallVector<Value> convertMxfp4x2ToFp16x2(RewriterBase &rewriter, Location loc,
   return results;
 }
 
+static LLVM::RoundingMode
+convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
+  LLVM::RoundingMode roundingMode;
+  switch (rounding) {
+  case triton::RoundingMode::RTNE:
+    return LLVM::RoundingMode::NearestTiesToEven;
+  case triton::RoundingMode::RTZ:
+    return LLVM::RoundingMode::TowardZero;
+  default:
+    llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
+                    "conversion: "
+                 << stringifyRoundingMode(rounding) << "\n";
+    llvm_unreachable("");
+  }
+}
+
+static Value convertFp32ToFp16(Location loc,
+                               ConversionPatternRewriter &rewriter,
+                               const Value &v,
+                               const triton::RoundingMode rounding) {
+  MLIRContext *ctx = rewriter.getContext();
+  return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+      loc, f16_ty, v,
+      LLVM::RoundingModeAttr::get(ctx,
+                                  convertTritonRoundingModeToLLVM(rounding)),
+      arith::getLLVMDefaultFPExceptionBehavior(*ctx));
+}
+
 Value mxfpScaleFp16(ConversionPatternRewriter &rewriter, Location loc, Value v,
                     Value scale, bool fastMath) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value scaleF32 =
       b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-  Value scaleF16 = LLVM::intel::convertFp32ToFp16(loc, rewriter, scaleF32,
-                                                  RoundingMode::RTNE);
+  Value scaleF16 =
+      convertFp32ToFp16(loc, rewriter, scaleF32, RoundingMode::RTNE);
   Value mulF16 = b.fmul(v, scaleF16);
   if (fastMath)
     return mulF16;
