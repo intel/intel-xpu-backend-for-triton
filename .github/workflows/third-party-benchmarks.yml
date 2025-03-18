@@ -98,7 +98,7 @@ jobs:
           git clone https://github.com/linkedin/Liger-Kernel
           pip install -e Liger-Kernel
 
-          # To remember return code, but still copy results 
+          # To remember return code, but still copy results
           RET_CODE=0
           bash ./run_benchmarks.sh || RET_CODE=$?
 
