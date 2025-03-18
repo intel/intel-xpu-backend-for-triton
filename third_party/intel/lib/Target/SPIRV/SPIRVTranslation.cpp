@@ -107,7 +107,7 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
-static SPIRV::TranslatorOpts getAllowedExtensions() {
+static SPIRV::TranslatorOpts getSPIRVOopts() {
   SPIRV::TranslatorOpts SPIRVOpts;
   std::vector<SPIRV::ExtensionID> AllowedExtensions{
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
@@ -119,14 +119,10 @@ static SPIRV::TranslatorOpts getAllowedExtensions() {
       SPIRV::ExtensionID::SPV_KHR_linkonce_odr,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
       SPIRV::ExtensionID::SPV_INTEL_media_block_io,
-      SPIRV::ExtensionID::SPV_INTEL_device_side_avc_motion_estimation,
-      SPIRV::ExtensionID::SPV_INTEL_fpga_loop_controls,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
-      SPIRV::ExtensionID::SPV_INTEL_fpga_reg,
       SPIRV::ExtensionID::SPV_INTEL_blocking_pipes,
       SPIRV::ExtensionID::SPV_INTEL_function_pointers,
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
-      SPIRV::ExtensionID::SPV_INTEL_io_pipes,
       SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
       SPIRV::ExtensionID::SPV_INTEL_float_controls2,
@@ -140,15 +136,10 @@ static SPIRV::TranslatorOpts getAllowedExtensions() {
       SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
       SPIRV::ExtensionID::SPV_INTEL_global_variable_decorations,
       SPIRV::ExtensionID::SPV_INTEL_cache_controls,
-      SPIRV::ExtensionID::SPV_INTEL_fpga_buffer_location,
-      SPIRV::ExtensionID::SPV_INTEL_fpga_argument_interfaces,
-      SPIRV::ExtensionID::SPV_INTEL_fpga_invocation_pipelining_attributes,
-      SPIRV::ExtensionID::SPV_INTEL_fpga_latency_control,
       SPIRV::ExtensionID::SPV_KHR_shader_clock,
       SPIRV::ExtensionID::SPV_INTEL_bindless_images,
       SPIRV::ExtensionID::SPV_INTEL_task_sequence,
       SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
-      SPIRV::ExtensionID::SPV_INTEL_joint_matrix,
       SPIRV::ExtensionID::SPV_INTEL_hw_thread_queries,
       SPIRV::ExtensionID::SPV_KHR_uniform_group_instructions,
       SPIRV::ExtensionID::SPV_INTEL_masked_gather_scatter,
@@ -163,9 +154,6 @@ static SPIRV::TranslatorOpts getAllowedExtensions() {
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
   SPIRVOpts.setPreserveAuxData(false);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
-  //SPIRVOpts.enableAllExtensions();
-  //SPIRVOpts.setAllowedToUseExtension(
-  //SPIRV::ExtensionID::SPV_KHR_untyped_pointers, false);
 
   for (auto &Ext : AllowedExtensions)
       SPIRVOpts.setAllowedToUseExtension(Ext, true);
@@ -192,7 +180,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getAllowedExtensions();
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOopts();
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;
