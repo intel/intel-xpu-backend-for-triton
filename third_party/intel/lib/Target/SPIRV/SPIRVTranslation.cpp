@@ -106,16 +106,73 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
-std::string translateLLVMIRToSPIRV(llvm::Module &module) {
-  // initLLVM();
+static SPIRV::TranslatorOpts getAllowedExtensions() {
+  SPIRV::TranslatorOpts SPIRVOpts;
+  std::vector<SPIRV::ExtensionID> AllowedExtensions{
+      SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
+      SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_min_max,
+      SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration,
+      SPIRV::ExtensionID::SPV_KHR_float_controls,
+      SPIRV::ExtensionID::SPV_KHR_expect_assume,
+      SPIRV::ExtensionID::SPV_KHR_linkonce_odr,
+      SPIRV::ExtensionID::SPV_INTEL_subgroups,
+      SPIRV::ExtensionID::SPV_INTEL_media_block_io,
+      SPIRV::ExtensionID::SPV_INTEL_device_side_avc_motion_estimation,
+      SPIRV::ExtensionID::SPV_INTEL_fpga_loop_controls,
+      SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
+      SPIRV::ExtensionID::SPV_INTEL_fpga_reg,
+      SPIRV::ExtensionID::SPV_INTEL_blocking_pipes,
+      SPIRV::ExtensionID::SPV_INTEL_function_pointers,
+      SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
+      SPIRV::ExtensionID::SPV_INTEL_io_pipes,
+      SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
+      SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
+      SPIRV::ExtensionID::SPV_INTEL_float_controls2,
+      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
+      SPIRV::ExtensionID::SPV_INTEL_fast_composite,
+      SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_fixed_point,
+      SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_floating_point,
+      SPIRV::ExtensionID::SPV_INTEL_variable_length_array,
+      SPIRV::ExtensionID::SPV_INTEL_fp_fast_math_mode,
+      SPIRV::ExtensionID::SPV_INTEL_long_composites,
+      SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
+      SPIRV::ExtensionID::SPV_INTEL_global_variable_decorations,
+      SPIRV::ExtensionID::SPV_INTEL_cache_controls,
+      SPIRV::ExtensionID::SPV_INTEL_fpga_buffer_location,
+      SPIRV::ExtensionID::SPV_INTEL_fpga_argument_interfaces,
+      SPIRV::ExtensionID::SPV_INTEL_fpga_invocation_pipelining_attributes,
+      SPIRV::ExtensionID::SPV_INTEL_fpga_latency_control,
+      SPIRV::ExtensionID::SPV_KHR_shader_clock,
+      SPIRV::ExtensionID::SPV_INTEL_bindless_images,
+      SPIRV::ExtensionID::SPV_INTEL_task_sequence,
+      SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
+      SPIRV::ExtensionID::SPV_INTEL_joint_matrix,
+      SPIRV::ExtensionID::SPV_INTEL_hw_thread_queries,
+      SPIRV::ExtensionID::SPV_KHR_uniform_group_instructions,
+      SPIRV::ExtensionID::SPV_INTEL_masked_gather_scatter,
+      SPIRV::ExtensionID::SPV_INTEL_tensor_float32_rounding,
+      SPIRV::ExtensionID::SPV_INTEL_optnone,
+      SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
+      SPIRV::ExtensionID::SPV_KHR_cooperative_matrix,
+      SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
+      SPIRV::ExtensionID::SPV_INTEL_fp_max_error};
 
+  SPIRVOpts.setMemToRegEnabled(true);
+  SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
+  SPIRVOpts.setPreserveAuxData(false);
+  SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
+  for (auto &Ext : AllowedExtensions)
+      SPIRVOpts.setAllowedToUseExtension(Ext, true);
+  return SPIRVOpts;
+}
+
+std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
   pm.run(module);
-  // module->print(llvm::outs(), nullptr);
 
   if (module.materializeAll()) {
     llvm::errs() << "SPIRVTranslation: failed to read the LLVM module IR!";
@@ -129,14 +186,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts;
-  SPIRVOpts.enableAllExtensions();
-  SPIRVOpts.setAllowedToUseExtension(
-      SPIRV::ExtensionID::SPV_KHR_untyped_pointers, false);
-  SPIRVOpts.setMemToRegEnabled(true);
-  SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
-  SPIRVOpts.setPreserveAuxData(false);
-  SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
+  SPIRV::TranslatorOpts SPIRVOpts = getAllowedExtensions();
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;
