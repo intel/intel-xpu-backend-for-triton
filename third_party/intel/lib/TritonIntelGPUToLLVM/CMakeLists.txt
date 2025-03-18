@@ -8,7 +8,6 @@ add_triton_library(TritonIntelGPUToLLVM
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
-    Fp4ToFpOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     PrintOpToLLVM.cpp
@@ -21,6 +20,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGPUToLLVM.cpp
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
+    UpcastMXFPToLLVM.cpp
     Utility.cpp
 
     DEPENDS

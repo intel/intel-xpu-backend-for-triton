@@ -186,8 +186,8 @@ bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
   // TODO: we should estimate the cost of the not propagating layout for
-  // AtomicCAS for further performance consideration.
-  if (isa<DotOp, AtomicCASOp>(op))
+  // AtomicCAS and UpcastMXFP ops for further performance consideration.
+  if (isa<DotOp, AtomicCASOp, ttgi::UpcastMXFPOp>(op))
     return true;
   if (isa<AtomicRMWOp>(op))
     if (auto tensorType =
@@ -1234,10 +1234,12 @@ void LayoutRematerialization::hoistConvertDotOperand(
 
   // We hoist over any operation that can be done without data movement between
   // threads We do views and elementwise pure ops for now
+  // UpcastMXFPOp is here temporarily until
+  // https://github.com/triton-lang/triton/pull/5475 lands
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, Fp4ToFpOp,
-               ConvertLayoutOp>(op);
+           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp,
+               ttgi::UpcastMXFPOp, ConvertLayoutOp>(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
   // data movement between threads

@@ -276,7 +276,8 @@ public:
                                                 targetInfo, benefit);
       mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                      patterns, benefit);
-      intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
+      intel::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
+                                              targetInfo, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
