@@ -60,6 +60,17 @@ public:
       if (rank == 1)
         return;
 
+      // We will compensate the offset of non-64 bytes aligned base to the
+      // OffsetX and BaseWidth. The OffsetX and BaseWidth has extra restriction
+      // that it has to be 4 bytes aligned.
+      auto base = makeTensorPtrOp.getBase();
+      if (!ttgi::isDivisible(base, 4))
+        return;
+
+      // TODO: Check the BaseWidth as well.
+      // TODO: Check the OffsetX from the tl.make_block_pointer and tl.advance
+      // as well.
+
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
       int fastChangeDim = -1;
       for (size_t i = 0; i < strides.size(); ++i) {
