@@ -103,7 +103,7 @@ jobs:
           bash ./run_benchmarks.sh || RET_CODE=$?
 
           cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
-          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv
+          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
 
           # Return the captured return code at the end
           exit "$RET_CODE"
