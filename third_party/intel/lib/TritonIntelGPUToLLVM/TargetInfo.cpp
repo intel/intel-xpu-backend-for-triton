@@ -221,7 +221,8 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
     operands.push_back(printfPromoteValue(
         rewriter, arg, isSigned.empty() ? true : isSigned[i]));
   }
-  b.call(funcOp, operands);
+  auto callOp = b.call(funcOp, operands);
+  callOp.setCConv(triton::gpu::intel::getRequiredCConv(callOp));
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,

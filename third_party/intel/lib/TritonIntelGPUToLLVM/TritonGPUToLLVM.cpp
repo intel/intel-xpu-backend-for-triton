@@ -57,6 +57,9 @@ public:
     addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+    addDynamicallyLegalOp<LLVM::CallOp>([](LLVM::CallOp op) {
+      return op.getCConv() == triton::gpu::intel::getRequiredCConv(op);
+    });
   }
 };
 

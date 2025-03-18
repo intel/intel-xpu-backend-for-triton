@@ -197,8 +197,8 @@ public:
     if (isAdvancedPathEnabled) {
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
-      mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                       targetInfo, benefit);
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
@@ -229,8 +229,8 @@ public:
                                     benefit);
       mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
-      mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                       targetInfo, benefit);
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
       mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                      patterns, benefit);
       intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
