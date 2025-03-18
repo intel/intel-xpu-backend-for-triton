@@ -1,6 +1,7 @@
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 
 #include "LLVMSPIRVLib.h"
+#include "LLVMSPIRVOpts.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -109,6 +110,7 @@ public:
 static SPIRV::TranslatorOpts getAllowedExtensions() {
   SPIRV::TranslatorOpts SPIRVOpts;
   std::vector<SPIRV::ExtensionID> AllowedExtensions{
+      SPIRV::ExtensionID::SPV_KHR_bit_instructions,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_min_max,
       SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration,
@@ -161,6 +163,10 @@ static SPIRV::TranslatorOpts getAllowedExtensions() {
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
   SPIRVOpts.setPreserveAuxData(false);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
+  //SPIRVOpts.enableAllExtensions();
+  //SPIRVOpts.setAllowedToUseExtension(
+  //SPIRV::ExtensionID::SPV_KHR_untyped_pointers, false);
+
   for (auto &Ext : AllowedExtensions)
       SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
