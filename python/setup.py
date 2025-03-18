@@ -432,6 +432,10 @@ class CMakeBuild(build_ext):
         if roctracer_include_dir == "":
             roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
         cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]
+        xpupti_include_dir = get_env_with_keys(["TRITON_XPUPTI_INCLUDE_PATH"])
+        if xpupti_include_dir == "":
+            xpupti_include_dir = os.path.join(get_base_dir(), "third_party", "intel", "backend", "proton", "include")
+        cmake_args += ["-DXPUPTI_INCLUDE_DIR=" + xpupti_include_dir]
         return cmake_args
 
     def build_extension(self, ext):

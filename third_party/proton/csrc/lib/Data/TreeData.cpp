@@ -3,6 +3,7 @@
 #include "Data/Metric.h"
 #include "Driver/Device.h"
 #include "nlohmann/json.hpp"
+#include <iostream>
 
 #include <limits>
 #include <map>
@@ -135,17 +136,28 @@ size_t TreeData::addOp(size_t scopeId, const std::string &name) {
 }
 
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
+  std::cout << "\taddMetric\n";
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
   // The profile data is deactivated, ignore the metric
-  if (scopeIdIt == scopeIdToContextId.end())
+  if (scopeIdIt == scopeIdToContextId.end()) {
+    std::cout << "MARK111\n" << std::flush;
     return;
+  }
   auto contextId = scopeIdIt->second;
+  std::cout << "\taddMetric::contextId: " << contextId << "\n";
   auto &node = tree->getNode(contextId);
-  if (node.metrics.find(metric->getKind()) == node.metrics.end())
+  if (node.metrics.find(metric->getKind()) == node.metrics.end()) {
+    std::cout << "MARK112\n" << std::flush;
+    std::cout << "duration: "
+              << std::get<uint64_t>(metric->getValue(KernelMetric::Duration))
+              << "\n"
+              << std::flush;
     node.metrics.emplace(metric->getKind(), metric);
-  else
+  } else {
+    std::cout << "MARK113\n" << std::flush;
     node.metrics[metric->getKind()]->updateMetric(*metric);
+  }
 }
 
 void TreeData::addMetrics(
@@ -183,23 +195,32 @@ void TreeData::dumpHatchet(std::ostream &os) const {
       [&](Tree::TreeNode &treeNode) {
         const auto contextName = treeNode.name;
         auto contextId = treeNode.id;
+        std::cout << "\t dumpHatchet::contextId: " << contextId << "\n";
         json *jsonNode = jsonNodes[contextId];
         (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
         (*jsonNode)["metrics"] = json::object();
         for (auto [metricKind, metric] : treeNode.metrics) {
+          std::cout << "MARK: dumpHatchet\n";
           if (metricKind == MetricKind::Kernel) {
+            std::cout << "metricKind == MetricKind::Kernel\n";
             std::shared_ptr<KernelMetric> kernelMetric =
                 std::dynamic_pointer_cast<KernelMetric>(metric);
             uint64_t duration = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Duration));
+            std::cout << "\t dumpHatchet::duration: " << duration << "\n";
             uint64_t invocations = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::Invocations));
+            std::cout << "\t dumpHatchet::invocations: " << invocations << "\n";
             uint64_t deviceId = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::DeviceId));
+            std::cout << "\t dumpHatchet::deviceId: " << deviceId << "\n";
             uint64_t deviceType = std::get<uint64_t>(
                 kernelMetric->getValue(KernelMetric::DeviceType));
+            std::cout << "\t dumpHatchet::deviceType: " << deviceType << "\n";
             std::string deviceTypeName =
                 getDeviceTypeString(static_cast<DeviceType>(deviceType));
+            std::cout << "\t dumpHatchet::deviceTypeName: " << deviceTypeName
+                      << "\n";
             (*jsonNode)["metrics"]
                        [kernelMetric->getValueName(KernelMetric::Duration)] =
                            duration;

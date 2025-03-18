@@ -9,6 +9,9 @@ endif()
 if(NOT ROCTRACER_INCLUDE_DIR)
   message(FATAL_ERROR "ROCTRACER include directory not defined")
 endif()
+if (NOT XPUPTI_INCLUDE_DIR)
+  message(FATAL_ERROR "XPUPTI include directory not defined")
+endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
@@ -36,6 +39,8 @@ function(add_proton_library name)
     PRIVATE
       "${CUPTI_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
+      "${XPUPTI_INCLUDE_DIR}"
+      "${XPUPTI_INCLUDE_DIR}/sycl"
       "${PROTON_SRC_DIR}/include"
   )
 
@@ -71,7 +76,14 @@ endforeach()
 
 add_library(proton SHARED ${_proton_obj_sources})
 
+set_target_properties(proton PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
+# set_target_properties(proton PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 target_link_libraries(proton PRIVATE Python3::Module)
+target_link_libraries(proton PRIVATE /opt/intel/oneapi/compiler/latest/lib/libsycl.so)
+target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_intel_gpu.so.1)
+target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_tracing_layer.so.1)
+target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_loader.so.1)
+target_link_libraries(proton PRIVATE /opt/intel/oneapi/pti/latest/lib/libpti_view.so)
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})

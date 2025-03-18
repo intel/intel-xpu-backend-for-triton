@@ -6,6 +6,7 @@
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
 #include "Utility/Set.h"
+#include <iostream>
 
 #include <atomic>
 #include <deque>
@@ -70,6 +71,7 @@ protected:
       if (profiler.isOpInProgress())
         return;
       scopeId = Scope::getNewScopeId();
+      std::cout << "\tenterOp:: pushExternId: " << scopeId << "\n";
       profiler.enterOp(Scope(scopeId));
       profiler.correlation.apiExternIds.insert(scopeId);
     }
