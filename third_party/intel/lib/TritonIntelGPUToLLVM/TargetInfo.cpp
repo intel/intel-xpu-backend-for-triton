@@ -7,10 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
-#include "SPIRVSubgroupOps.h"
+#include "Dialect/TritonIntelGPU/IR/Utils.h"
+#include "SPIRVTargetInfo.h"
 #include "Utility.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
-#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 
@@ -113,51 +112,6 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
-namespace {
-
-template <typename GroupOp>
-Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
-                         Value acc, unsigned numLanesToReduce,
-                         unsigned warpSize) {
-  auto spvGroupOp = spirv::GroupOperation::Reduce;
-  Value clusterSize;
-  if (numLanesToReduce != warpSize) {
-    spvGroupOp = spirv::GroupOperation::ClusteredReduce;
-    clusterSize = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getI32Type(),
-        rewriter.getI32IntegerAttr(numLanesToReduce));
-  }
-
-  Value result = rewriter.create<GroupOp>(loc, resultTy, spirv::Scope::Subgroup,
-                                          spvGroupOp, acc, clusterSize);
-  return result;
-}
-
-Value warpReduceHelper(RewriterBase &rewriter, Location loc, Value acc,
-                       Operation *reduceOp, unsigned numLanesToReduce,
-                       unsigned warpSize) {
-  auto resultType = reduceOp->getResult(0).getType();
-  // Use bit-equivalent logical operation for Boolean values.
-  if (resultType.isInteger(1))
-    return TypeSwitch<mlir::Operation *, Value>(reduceOp)
-        .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
-              arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
-              arith::XOrIOp>([&](auto groupOp) {
-          return createSPIRVGroupOp<SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
-              rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-        });
-  return TypeSwitch<mlir::Operation *, Value>(reduceOp)
-      .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
-            arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
-            arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
-            arith::XOrIOp>([&](auto groupOp) {
-        return createSPIRVGroupOp<SPIRVGroupOpTy<decltype(groupOp)>>(
-            rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
-      });
-}
-
-} // namespace
-
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
@@ -185,21 +139,15 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       reduceOp->getOperand(1) != block.getArgument(1))
     return false;
 
-  auto supportedOp =
-      isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
-          arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
-          arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
-          arith::XOrIOp>(reduceOp);
-
-  if (!supportedOp)
-    return false;
-
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
+  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+    return false;
+
   for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = warpReduceHelper(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
-                              warpSize);
+    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+                           warpSize);
   }
 
   return true;
@@ -230,13 +178,40 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
   }
 }
 
+// declare __spirv_ocl_printf(i8*, ...) as external function
+static LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter) {
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  StringRef funcName("_Z18__spirv_ocl_printf");
+  Operation *funcOp = moduleOp.lookupSymbol(funcName);
+  if (funcOp)
+    return cast<LLVM::LLVMFuncOp>(*funcOp);
+
+  MLIRContext *context = rewriter.getContext();
+  auto ptrTy = LLVM::LLVMPointerType::get(
+      context, TritonGEN::TritonGENMemorySpace::kUniformConstant);
+  SmallVector<Type> argsType{ptrTy};
+  auto retType = i32_ty;
+  auto funcType =
+      LLVM::LLVMFunctionType::get(retType, argsType, /*isVarArg*/ true);
+
+  ConversionPatternRewriter::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(moduleOp.getBody());
+
+  auto printFunc = rewriter.create<LLVM::LLVMFuncOp>(
+      UnknownLoc::get(context), funcName, funcType, LLVM::Linkage::External,
+      /*dsoLocal*/ false, LLVM::CConv::SPIR_FUNC, /*comdat=*/SymbolRefAttr{});
+  printFunc->setAttr("nounwind", rewriter.getUnitAttr());
+
+  return printFunc;
+}
+
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                         int /*formatStrByteCount*/, ValueRange args,
                         ArrayRef<bool> isSigned) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  auto funcOp = LLVM::intel::getSpirvPrintfDeclaration(rewriter);
+  auto funcOp = getSpirvPrintfDeclaration(rewriter);
   auto loc = UnknownLoc::get(ctx);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -246,7 +221,8 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
     operands.push_back(printfPromoteValue(
         rewriter, arg, isSigned.empty() ? true : isSigned[i]));
   }
-  b.call(funcOp, operands);
+  auto callOp = b.call(funcOp, operands);
+  callOp.setCConv(triton::gpu::intel::getRequiredCConv(callOp));
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
@@ -386,6 +362,12 @@ LLVM::GlobalOp TargetInfo::getGlobalString(Location loc, RewriterBase &rewriter,
   globals.try_emplace(cacheKey, global);
 
   return global;
+}
+
+std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod) {
+  if (triton::gpu::intel::hasSpirvTargetArch(mod))
+    return std::unique_ptr<TargetInfo>(new SPIRVTargetInfo());
+  llvm_unreachable("createTargetInfo: unsupported target arch");
 }
 
 } // namespace mlir::triton::intel

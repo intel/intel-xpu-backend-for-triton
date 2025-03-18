@@ -9,7 +9,6 @@
 #ifndef TRITON_CONVERSION_GPUTOTRITONGENPASS_H
 #define TRITON_CONVERSION_GPUTOTRITONGENPASS_H
 
-#include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include <memory>
 
 namespace mlir {

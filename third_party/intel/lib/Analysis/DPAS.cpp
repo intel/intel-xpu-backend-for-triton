@@ -2,8 +2,6 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "llvm/Support/Casting.h"
-#include <iostream>
 #include <type_traits>
 
 namespace mlir::triton::gpu::intel {

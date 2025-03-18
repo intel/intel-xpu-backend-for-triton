@@ -11,90 +11,81 @@ namespace mlir::triton::intel {
 
 constexpr int patternBenefitAddSPIRVEnv = 30;
 
-// Custom Arith Dialect patterns.
+/* Advanced path custom patterns start */
+
 void populateArithOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
+
+void populateBF16CastsLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
 
 void populateTritonOpsToLLVMPatterns(
     TritonIntelGPUToLLVMTypeConverter &typeConverter,
     RewritePatternSet &patterns, PatternBenefit benefit);
 
-void populateBarrierOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit);
+/* Advanced path custom patterns end */
 
-void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                           const TargetInfo &targetInfo,
-                                           RewritePatternSet &patterns,
-                                           PatternBenefit benefit);
-
-void populateDotOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit);
+/* Specialized common patterns start */
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit);
 
-void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                      RewritePatternSet &patterns,
-                                      const TargetInfo &targetInfo,
-                                      PatternBenefit benefit);
-
-void populateBF16CastsLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
-
 void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        const TargetInfoBase &targetInfo,
                                        PatternBenefit benefit);
-
-void populateLoadStoreOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    const TargetInfo &targetInfo, RewritePatternSet &patterns,
-    const ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit,
-    bool oneMatrixPerLoadForBT);
 
 void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     const TargetInfoBase &targetInfo,
                                     PatternBenefit benefit);
 
-void populateTensorPtrOpsToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit);
-
-void populateTritonGPUToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, PatternBenefit benefit);
-
-void populatePrintOpToLLVMPattern(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    RewritePatternSet &patterns, const TargetInfoBase &targetInfo,
-    PatternBenefit benefit);
-
-void populateMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                   const TargetInfoBase &targetInfo,
-                                   RewritePatternSet &patterns,
-                                   PatternBenefit benefit);
+void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfo &targetInfo,
+                                           RewritePatternSet &patterns,
+                                           PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         const TargetInfoBase &targetInfo,
                                         PatternBenefit benefit);
 
-void populateMakeRangeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                      const TargetInfoBase &targetInfo,
-                                      RewritePatternSet &patterns,
-                                      PatternBenefit benefit);
-
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit);
+
+void populatePrintOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                  RewritePatternSet &patterns,
+                                  const TargetInfoBase &targetInfo,
+                                  PatternBenefit benefit);
+
+/* Specialized common patterns end */
+
+/* Third party patterns start */
+
+void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns,
+                                 PatternBenefit benefit);
+
+void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
+
+void populateLoadStoreOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, const ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit, bool oneMatrixPerLoadForBT);
+
+void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                        RewritePatternSet &patterns,
+                                        PatternBenefit benefit);
+
+/* Third party patterns end */
 
 } // namespace mlir::triton::intel
 

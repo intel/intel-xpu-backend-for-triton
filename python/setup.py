@@ -177,6 +177,14 @@ def get_json_package_info():
     return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
 
+def is_linux_os(id):
+    if os.path.exists("/etc/os-release"):
+        with open("/etc/os-release", "r") as f:
+            os_release_content = f.read()
+            return f'ID="{id}"' in os_release_content
+    return False
+
+
 # llvm
 def get_llvm_package_info():
     system = platform.system()
@@ -187,7 +195,9 @@ def get_llvm_package_info():
     if system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
-        if arch == 'arm64':
+        if arch == 'arm64' and is_linux_os('almalinux'):
+            system_suffix = 'almalinux-arm64'
+        elif arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
         elif arch == 'x64':
             vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
@@ -746,7 +756,7 @@ def get_git_version_suffix():
 
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.2.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",

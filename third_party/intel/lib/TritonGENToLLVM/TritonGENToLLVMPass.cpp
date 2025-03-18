@@ -31,12 +31,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/identity.h"
-#include "llvm/IR/Attributes.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/ModRef.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
