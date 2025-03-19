@@ -18,7 +18,7 @@ We will start with the A matrix load, which is identical for both the `B` and `B
 tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>, kWidth = 1}>>
 ```
 
-Note that the tensor type describes the expected data layout feeding into the `tt.dot` / DPAS instructions. While this type is attached to the load instruction, the data loaded may not match the layout described above. The lowering of the `LoadOp` to 2D blocked load includes an implicit conversion to make the loaded data match the desired tensor type . This conversion is instantiated using shuffle vectors. 
+Note that the tensor type describes the expected data layout feeding into the `tt.dot` / DPAS instructions. While this type is attached to the load instruction, the data loaded may not match the layout described above. The lowering of the `LoadOp` to 2D blocked load includes an implicit conversion to make the loaded data match the desired tensor type. This conversion is instantiated using shuffle vectors. 
 
 We can use the `triton-tensor-layout` utility to print the DPAS layout with a hardware centric view (i.e. register/lane/warp mapping to tensor coordinates) using the following command:
 ```
@@ -135,7 +135,7 @@ The indices for the first SIMD lane / work-item (every 16th offset) are printed 
 112 : 7, 0
 ```
 
-During lowering of the `tt.dot` operation to DPAS multiple DPAS instructions will be generated according to the TTGIR DPAS layout. We need to enlarge the 2D block load tile we created above to load as much data as possible for the DPAS instructions in the subgroup. We do this by adding additional parameters, starting with `iteration`. Each `iteration` corresponds to a DPAS instruction. Each DPAS instruction operates on a DPAS tile. Specifically, for each iteration we will generate a shuffle vector per work-item which will output the registers in the correct order for DPAS. The number of iterations is determined primarily by the repetitions attribute of the DPAS layout, subject to hardware restrictions. For the GEMM kernel `A` matrix we have `4` iterations across the outer dimension and `2` iteations across the inner dimension. After adding iterations our load has increased in size from the DPAS tile size (`8x16`) to (`32x32`). 
+During lowering of the `tt.dot` operation to DPAS multiple DPAS instructions will be generated according to the TTGIR DPAS layout. We need to enlarge the 2D block load tile we created above to load as much data as possible for the DPAS instructions in the subgroup. We do this by adding additional parameters, starting with `iteration`. Each `iteration` corresponds to a DPAS instruction. Each DPAS instruction operates on a DPAS tile. Specifically, for each iteration we will generate a shuffle vector per work-item which will output the registers in the correct order for DPAS. The number of iterations is determined primarily by the repetitions attribute of the DPAS layout, subject to hardware restrictions. For the GEMM kernel `A` matrix we have `4` iterations across the outer dimension and `2` iterations across the inner dimension. After adding iterations our load has increased in size from the DPAS tile size (`8x16`) to (`32x32`). 
 
 ```
 Block load tile layout after adding iterations: 
@@ -363,7 +363,7 @@ Block load tile layout:
 where out dims are: [dim0 (size 16), dim1 (size 16)]
 ```
 
-Note that the load layout does not encode the vnni transform. The 16th element (`offset = 16`) is index `(1, 0)` even though we know this index is packed into the same slot as index `(0,0)`. We do this because we want the block load layout to repesent global offsets into the data.
+Note that the load layout does not encode the vnni transform. The 16th element (`offset = 16`) is index `(1, 0)` even though we know this index is packed into the same slot as index `(0,0)`. We do this because we want the block load layout to represent global offsets into the data.
 
 ```
 0 : 0, 0
@@ -451,15 +451,15 @@ where out dims are: [dim0 (size 32), dim1 (size 64)]
 1, 3, 255 : 31, 63
 ```
 
-We want our linear layout functions to be `surjective`; that is, all output values should be covered by some input value. This allows us to invert and compose the layouts and makes modifying the layout using intermediate layouts easier. Therefore we omit the replication stride from the second load; i.e. the second load indices start after the first load. We keep track of the stride and apply it after evaluating the layout fuction if we want a global coordinate. 
+We want our linear layout functions to be `surjective`; that is, all output values should be covered by some input value. This allows us to invert and compose the layouts and makes modifying the layout using intermediate layouts easier. Therefore we omit the replication stride from the second load; i.e. the second load indices start after the first load. We keep track of the stride and apply it after evaluating the layout function if we want a global coordinate. 
 
 ### `AxBT` 
 
-Now we will consider the `AxBT` GEMM kernel. We keep the A matrix size fixed and transpose the B matrix. The `B` matrix input becomes `[4096 x 5120]` and the matrix is transposed during execution of the kernel. Because the DPAS instruction does not have a tranpose variant, we use the same layouts for the `A` and `B` matrices as before. We are relying on the 2D block load to compute the transpose and the shuffle vectors to put the post-transposed data into the right registers for DPAS. In the future we may modify the pass pipeline to adjust the overall layout for a dot operation with a transposed A or B matrix, but for this example it is acceptable to leave the layouts fixed so we can examine the loads. 
+Now we will consider the `AxBT` GEMM kernel. We keep the A matrix size fixed and transpose the B matrix. The `B` matrix input becomes `[4096 x 5120]` and the matrix is transposed during execution of the kernel. Because the DPAS instruction does not have a transpose variant, we use the same layouts for the `A` and `B` matrices as before. We are relying on the 2D block load to compute the transpose and the shuffle vectors to put the post-transposed data into the right registers for DPAS. In the future we may modify the pass pipeline to adjust the overall layout for a dot operation with a transposed A or B matrix, but for this example it is acceptable to leave the layouts fixed so we can examine the loads. 
 
 The `A` matrix is not transposed and the DPAS layout is the same as the non-transposed case, therefore the loads are the same. 
 
-For the `BT` matrix, the transpose is computed during the load. This requires a different layout for the load. Like the non-transpose case, we start from the DPAS tile size. However, tranpose only supports 32 bit matrix elements. Our bf16 elements are 16 bits, so we account for this in the load by reducing the inner dimension by a factor of two:
+For the `BT` matrix, the transpose is computed during the load. This requires a different layout for the load. Like the non-transpose case, we start from the DPAS tile size. However, transpose only supports 32 bit matrix elements. Our bf16 elements are 16 bits, so we account for this in the load by reducing the inner dimension by a factor of two:
 
 ```
 Block load tile layout: 
@@ -487,7 +487,7 @@ Block load tile layout after adding iterations:
 where out dims are: [dim0 (size 32), dim1 (size 8)]
 ```
 
-Finally, we compute the loads. Since we are limited in the amount of data we can load compared to the non-tranpose case, we need more loads. 
+Finally, we compute the loads. Since we are limited in the amount of data we can load compared to the non-transpose case, we need more loads. 
 
 ```
 Block load tile layout after adding loads: 
@@ -504,6 +504,6 @@ Block load tile layout after adding loads:
 where out dims are: [dim0 (size 64), dim1 (size 16)]
 ```
 
-The block tile layout after adding loads for `B` (non-tranpsose) had output size `32, 64`. The tranpose layout has output size `64, 16`. This is essentially the non-transposed layout, transposed, and reducing the inner dim by a factor of two. Because the data type has been increased from 16 bits per element to 32 bits per element, we are still loading the same amount of data. And because two contiguous values will be loaded then transposed, the vnni transform is automatically computed. So, the end result is we emit two additional loads to load the same amount of data with the same layout. 
+The block tile layout after adding loads for `B` (non-tranpsose) had output size `32, 64`. The transpose layout has output size `64, 16`. This is essentially the non-transposed layout, transposed, and reducing the inner dim by a factor of two. Because the data type has been increased from 16 bits per element to 32 bits per element, we are still loading the same amount of data. And because two contiguous values will be loaded then transposed, the vnni transform is automatically computed. So, we emit two additional loads to load the same amount of data with the same layout. 
 
 Note that unlike the non-transposed case, the transpose layout does implicitly encode the vnni transform. This is because we need to handle the vnni transform when computing shuffle vectors to convert the transposed, loaded data into register formats that DPAS is expecting. 
