@@ -54,8 +54,7 @@ def matmul_kernel(
         stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
-        ACTIVATION: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -80,8 +79,6 @@ def matmul_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
-    if ACTIVATION == 'leaky_relu':
-        accumulator = leaky_relu(accumulator)
     c = accumulator.to(tl.float32)
 
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -133,8 +130,7 @@ def matmul_kernel_batched(
         stride_bz: tl.constexpr, stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
         stride_cz: tl.constexpr, stride_cm: tl.constexpr, stride_cn: tl.constexpr,
         # Meta-parameters
-        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
-        ACTIVATION: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
     bid = tl.program_id(axis=1)
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -161,8 +157,6 @@ def matmul_kernel_batched(
         accumulator = tl.dot(a, b, accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    if ACTIVATION == 'leaky_relu':
-        accumulator = leaky_relu(accumulator)
     c = accumulator.to(tl.float32)
 
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -174,15 +168,9 @@ def matmul_kernel_batched(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-# We can fuse `leaky_relu` by providing it as an `ACTIVATION` meta-parameter in `matmul_kernel`.
-@triton.jit
-def leaky_relu(x):
-    return tl.where(x >= 0, x, 0.01 * x)
-
-
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) launches the above kernel.
-def matmul(a, b, c, transpose_a=False, transpose_b=False, activation=''):
+def matmul(a, b, c, transpose_a=False, transpose_b=False):
     a_major, a_minor = -2, -1
     if transpose_a:
         a_major, a_minor = a_minor, a_major
@@ -209,8 +197,7 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False, activation=''):
             B, M, N, K,  #
             a.stride(0), a.stride(a_major), a.stride(a_minor),  #
             b.stride(0), b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1), c.stride(2),  #
-            ACTIVATION=activation)
+            c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
         matmul_kernel[grid](
@@ -218,8 +205,7 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False, activation=''):
             M, N, K,  #
             a.stride(a_major), a.stride(a_minor),  #
             b.stride(b_minor), b.stride(b_major),  #
-            c.stride(0), c.stride(1),  #
-            ACTIVATION=activation)
+            c.stride(0), c.stride(1))
     else:
         assert False, 'Input matrixs dimensions mismatch'
     return c
