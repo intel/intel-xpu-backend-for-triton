@@ -108,6 +108,7 @@ public:
 static SPIRV::TranslatorOpts getSPIRVOopts() {
   SPIRV::TranslatorOpts SPIRVOpts;
   std::vector<SPIRV::ExtensionID> AllowedExtensions{
+      SPIRV::ExtensionID::SPV_INTEL_cache_controls,
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
