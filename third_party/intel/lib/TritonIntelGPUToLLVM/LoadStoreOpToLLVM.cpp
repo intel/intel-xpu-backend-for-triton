@@ -548,7 +548,7 @@ struct LoadOpToBlockIOConversion
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1038,7 +1038,7 @@ struct LoadOpConversion
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder =
         triton::gpu::getWarpOrder(tensorType);
-    int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1670,7 +1670,7 @@ struct StoreOpConversion
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
     SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,

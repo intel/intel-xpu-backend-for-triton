@@ -67,6 +67,8 @@ struct DotOpMFMAConversionHelper {
   Location loc;
   MLIRContext *ctx{};
 
+  virtual ~DotOpMFMAConversionHelper() = default;
+
   explicit DotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
                                      ConversionPatternRewriter &rewriter,
                                      const LLVMTypeConverter *typeConverter,
@@ -313,7 +315,7 @@ struct DotOpMFMAConversionHelper {
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-    unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
+    unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     // compute number of output elements that each thread holds for one MFMA
     // instruction.
     const int subBlocks =
@@ -483,6 +485,7 @@ struct DotOpMFMAConversionHelper {
 };
 
 struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
+  virtual ~ScaledDotOpMFMAConversionHelper() = default;
 
   ScaledDotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
                                   ConversionPatternRewriter &rewriter,
@@ -640,7 +643,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-    unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
+    unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     // compute number of output elements that each thread holds for one MFMA
     // instruction. subBlocks
     const int subBlocks =

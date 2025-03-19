@@ -30,8 +30,8 @@ bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
 }
 
 // Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Type typeLike,
-                         Value currentMask, Value pred) {
+Value mlir::triton::getPredMask(RewriterBase &rewriter, Type typeLike,
+                                Value currentMask, Value pred) {
   Type maskType = tt::getI1SameShape(typeLike);
   Location loc = pred.getLoc();
   Value mask = pred;
@@ -120,6 +120,16 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
       mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
     }
     waitBarrier.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto arriveBarrier = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    rewriter.setInsertionPoint(arriveBarrier);
+    Value mask = pred;
+    Value currentPred = arriveBarrier.getPred();
+    if (currentPred) {
+      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
+    }
+    arriveBarrier.getPredMutable().assign(mask);
     return op;
   }
   if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {

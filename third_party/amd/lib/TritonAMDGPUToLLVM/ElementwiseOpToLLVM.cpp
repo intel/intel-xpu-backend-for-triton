@@ -298,14 +298,16 @@ static SmallVector<Value> Fp8E4M3FN_to_Fp32(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  return cvtScaleFp8ToFp32<ROCDL::CvtScalePkF32Fp8>(loc, rewriter, v[0], v[1]);
+  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Fp8>(loc, rewriter, v[0],
+                                                      v[1]);
 }
 
 static SmallVector<Value> Fp8E5M2_to_Fp32(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  return cvtScaleFp8ToFp32<ROCDL::CvtScalePkF32Bf8>(loc, rewriter, v[0], v[1]);
+  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Bf8>(loc, rewriter, v[0],
+                                                      v[1]);
 }
 
 template <typename convertOp>
@@ -1080,16 +1082,16 @@ struct FpToFpOpConversion
     // fp16->ocp bf8, bf16->ocp bf8, fp32->ocp bf8(RTNE) on non-CDNA4
     // fp32->ocp bf8(RTZ)
     size_t numElements = 2;
-    if (llvm::isa<Float8E5M2Type>(srcElementType) &&
-            !llvm::isa<Float32Type>(dstElementType) ||
-        llvm::isa<Float8E5M2Type>(srcElementType) &&
-            isaFamily != AMD::ISAFamily::CDNA4 ||
-        !llvm::isa<Float32Type>(srcElementType) &&
-            llvm::isa<Float8E5M2Type>(dstElementType) ||
-        llvm::isa<Float32Type>(srcElementType) &&
-            llvm::isa<Float8E5M2Type>(dstElementType) &&
-            (roundingMode != RoundingMode::RTNE ||
-             isaFamily != AMD::ISAFamily::CDNA4)) {
+    if ((llvm::isa<Float8E5M2Type>(srcElementType) &&
+         !llvm::isa<Float32Type>(dstElementType)) ||
+        (llvm::isa<Float8E5M2Type>(srcElementType) &&
+         isaFamily != AMD::ISAFamily::CDNA4) ||
+        (!llvm::isa<Float32Type>(srcElementType) &&
+         llvm::isa<Float8E5M2Type>(dstElementType)) ||
+        (llvm::isa<Float32Type>(srcElementType) &&
+         llvm::isa<Float8E5M2Type>(dstElementType) &&
+         (roundingMode != RoundingMode::RTNE ||
+          isaFamily != AMD::ISAFamily::CDNA4))) {
       numElements = 4;
     }
 
