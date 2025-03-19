@@ -1298,7 +1298,7 @@ struct LoadOpConversion
       llvm::dbgs() << "Block load tile layout: " << tileLayout << "\n";
       for (size_t i = 0; i < tileLayout.getOutDimSize(dimOuterStr) *
                                  tileLayout.getOutDimSize(dimInnerStr);
-           i += tileLayout.getOutDimSize(dimOuterStr)) {
+           i += tileLayout.getOutDimSize(dimInnerStr)) {
         auto tensorVals = tileLayout.apply({{kOffset, i}});
         assert(tensorVals.size() == 2);
         llvm::dbgs() << i << " : " << tensorVals[0].second << ", "
