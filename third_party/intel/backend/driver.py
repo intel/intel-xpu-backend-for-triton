@@ -100,7 +100,9 @@ class CompilationHelper:
 
     @cached_property
     def _compute_compilation_options_lazy(self):
-        ze_root = os.getenv("ZE_PATH", default="/usr/local")
+        ze_root = os.getenv("LEVEL_ZERO_V1_SDK_PATH")
+        if ze_root is None:
+            ze_root = os.getenv("ZE_PATH", default="/usr/local")
         include_dir = [os.path.join(ze_root, "include")]
 
         library_dir = []
