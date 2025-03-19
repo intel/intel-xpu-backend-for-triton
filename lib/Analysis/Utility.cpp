@@ -104,7 +104,7 @@ unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
 }
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
-  return getThreadsPerWarpWithUniqueData(srcEncoding, srcShape)[axis];
+  return getThreadsPerWarp(srcEncoding, srcShape)[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
@@ -180,7 +180,7 @@ unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   unsigned axis = getAxis();
   return ceil<unsigned>(
@@ -190,7 +190,7 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
   auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   auto rank = contigPerThread.size();
   unsigned axis = getAxis();
@@ -527,7 +527,7 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   auto order = getOrder();
   unsigned stride = 1;
   auto contigPerThread = getEncoding().getContigPerThread();
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
+  auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   for (unsigned dim : order) {
     if (dim == getAxis())
