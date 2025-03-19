@@ -105,8 +105,10 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
 
   // Determine a warp-local gather layout that minimizes the number of emitted
   // warp shuffles.
-  unsigned numThreadsPerWarp = lookupThreadsPerWarp(b);
-  unsigned numWarps = lookupNumWarps(op);
+  unsigned numThreadsPerWarp =
+      product<unsigned>(triton::gpu::getThreadsPerWarp(srcType.getEncoding()));
+  unsigned numWarps =
+      product<unsigned>(triton::gpu::getWarpsPerCTA(srcType.getEncoding()));
 
   // If in a gather column, each thread owns `srcSizePerThread[axis]` elements
   // in the source tensor and `idxSizePerThread[axis]` elements in the index
