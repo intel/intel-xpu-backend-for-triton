@@ -345,7 +345,8 @@ class XPUBackend(BaseBackend):
             passes.ttgpuir.add_allocate_shared_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
-        intel.set_fast_math(mod)
+        if os.getenv("TRITON_INTEL_FAST_MATH", "0") == "1":
+            intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
