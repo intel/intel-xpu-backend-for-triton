@@ -1,3 +1,4 @@
+
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 
 #include "LLVMSPIRVLib.h"
@@ -109,45 +110,8 @@ public:
 
 static SPIRV::TranslatorOpts getSPIRVOopts() {
   SPIRV::TranslatorOpts SPIRVOpts;
-  std::vector<SPIRV::ExtensionID> AllowedExtensions{
-      SPIRV::ExtensionID::SPV_KHR_bit_instructions,
-      SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
-      SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_min_max,
-      SPIRV::ExtensionID::SPV_KHR_no_integer_wrap_decoration,
-      SPIRV::ExtensionID::SPV_KHR_float_controls,
-      SPIRV::ExtensionID::SPV_KHR_expect_assume,
-      SPIRV::ExtensionID::SPV_KHR_linkonce_odr,
-      SPIRV::ExtensionID::SPV_INTEL_subgroups,
-      SPIRV::ExtensionID::SPV_INTEL_media_block_io,
-      SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
-      SPIRV::ExtensionID::SPV_INTEL_blocking_pipes,
-      SPIRV::ExtensionID::SPV_INTEL_function_pointers,
-      SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
-      SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
-      SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
-      SPIRV::ExtensionID::SPV_INTEL_float_controls2,
-      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
-      SPIRV::ExtensionID::SPV_INTEL_fast_composite,
-      SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_fixed_point,
-      SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_floating_point,
-      SPIRV::ExtensionID::SPV_INTEL_fp_fast_math_mode,
-      SPIRV::ExtensionID::SPV_INTEL_long_composites,
-      SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
-      SPIRV::ExtensionID::SPV_INTEL_global_variable_decorations,
-      SPIRV::ExtensionID::SPV_INTEL_cache_controls,
-      SPIRV::ExtensionID::SPV_KHR_shader_clock,
-      SPIRV::ExtensionID::SPV_INTEL_bindless_images,
-      SPIRV::ExtensionID::SPV_INTEL_task_sequence,
-      SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
-      SPIRV::ExtensionID::SPV_INTEL_hw_thread_queries,
-      SPIRV::ExtensionID::SPV_KHR_uniform_group_instructions,
-      SPIRV::ExtensionID::SPV_INTEL_masked_gather_scatter,
-      SPIRV::ExtensionID::SPV_INTEL_tensor_float32_rounding,
-      SPIRV::ExtensionID::SPV_INTEL_optnone,
-      SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
-      SPIRV::ExtensionID::SPV_KHR_cooperative_matrix,
-      SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
-      SPIRV::ExtensionID::SPV_INTEL_fp_max_error};
+  std::vector<SPIRV::ExtensionID> AllowedExtensions{ SPIRV::ExtensionID::SPV_KHR_bit_instructions,SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,SPIRV::ExtensionID::SPV_INTEL_vector_compute,SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
+ SPIRV::ExtensionID::SPV_INTEL_subgroups };
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
@@ -156,6 +120,9 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
 
   for (auto &Ext : AllowedExtensions)
       SPIRVOpts.setAllowedToUseExtension(Ext, true);
+  //SPIRVOpts.enableAllExtensions();
+  //SPIRVOpts.setAllowedToUseExtension(
+  //SPIRV::ExtensionID::SPV_KHR_untyped_pointers, false);
   return SPIRVOpts;
 }
 
