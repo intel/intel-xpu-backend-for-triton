@@ -905,7 +905,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     if is_xpu():
         pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
 
-    if not is_hip() and BLOCK_N == 256 and BLOCK_K == 256:
+    if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
 
     torch.manual_seed(42)
