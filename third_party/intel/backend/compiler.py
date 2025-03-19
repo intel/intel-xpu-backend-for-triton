@@ -266,6 +266,18 @@ class XPUBackend(BaseBackend):
         # Overwrite the threads_per_warp option with the module annotation.
         opt.threads_per_warp = intel.get_threads_per_warp(mod)
 
+        # Check threads_per_warp and num_threads are within limits.
+        if opt.threads_per_warp not in properties['sub_group_sizes']:
+            raise ValueError(
+                f"threads_per_warp={opt.threads_per_warp} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
+            )
+        if opt.num_warps > properties['max_num_sub_groups']:
+            raise ValueError(
+                f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
+            )
+        if opt.threads_per_warp * opt.num_warps > properties['max_work_group_size']:
+            raise ValueError(f"Kernel threads number exceeds the limit ({properties['max_work_group_size']})")
+
         # Run the TTIR -> TTGIR pass pipeline.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
