@@ -3042,7 +3042,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
     warps = warps_per_cta(src_layout, [M, N])
-    num_warps = int(np.prod(warps))
+    num_warps = np.prod(warps)
     blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
@@ -6614,6 +6614,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     else:
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] == 9:
+        # Hopper-specific workaround lower precision accumulator.
         assert h.asm["ptx"].count("add.f32") == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 
