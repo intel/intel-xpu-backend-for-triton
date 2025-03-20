@@ -188,7 +188,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 
 // -----
 
-// COM: Test that dependency between AdvanceOp and none-tensor load are not triggering a pipeline schedule order errror.
+// COM: Test that dependency between AdvanceOp and none-tensor load are not triggering a pipeline schedule order error.
 // CHECK-NOT:     error: operation scheduled before its operands
 // CHECK: #[[$BLOCK:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
 // CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
