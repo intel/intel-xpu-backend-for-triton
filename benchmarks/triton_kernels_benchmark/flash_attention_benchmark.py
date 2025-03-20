@@ -533,7 +533,8 @@ def check_close(f_val, f_ref, atol, rtol):
     x = x.cpu().detach().numpy()
     y = y.cpu().detach().numpy()
     close = np.isclose(x, y, atol=atol, rtol=1e-3)
-    num_not_close = np.count_nonzero(close == False)
+    num_close = np.count_nonzero(close)
+    num_not_close = close.size - num_close
     if num_not_close != 0:
         print("Warning: {nnc}, out of {size} elements do not match ({perc:.2f}%) in XeTLA impl".format(
             nnc=num_not_close, size=close.size, perc=num_not_close / close.size * 100))
