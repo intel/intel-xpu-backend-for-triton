@@ -108,19 +108,24 @@ public:
 static SPIRV::TranslatorOpts getSPIRVOopts() {
   SPIRV::TranslatorOpts SPIRVOpts;
   std::vector<SPIRV::ExtensionID> AllowedExtensions{
-      SPIRV::ExtensionID::SPV_INTEL_cache_controls,
-      SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
-      SPIRV::ExtensionID::SPV_KHR_bit_instructions,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
-      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
+      SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
       SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
-      SPIRV::ExtensionID::SPV_INTEL_subgroups};
+      SPIRV::ExtensionID::SPV_INTEL_cache_controls,
+      SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
+      SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
+      SPIRV::ExtensionID::SPV_INTEL_subgroups,
+      SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
+      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
+      SPIRV::ExtensionID::SPV_KHR_bit_instructions,
+      SPIRV::ExtensionID::SPV_KHR_non_semantic_info};
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
-  SPIRVOpts.setPreserveAuxData(false);
+  SPIRVOpts.setPreserveAuxData(true);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
+  SPIRV::TranslatorOpts TransOpt{SPIRV::VersionNumber::SPIRV_1_5};
 
   for (auto &Ext : AllowedExtensions)
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
