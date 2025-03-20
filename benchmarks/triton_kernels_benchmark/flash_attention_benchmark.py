@@ -526,18 +526,17 @@ class _attention(torch.autograd.Function):
 
 attention = _attention.apply
 
+
 def check_close(f_val, f_ref, atol, rtol):
     x = f_val()
     y = f_ref()
     x = x.cpu().detach().numpy()
     y = y.cpu().detach().numpy()
-    close = np.isclose(x, y, atol = atol, rtol = 1e-3)
+    close = np.isclose(x, y, atol=atol, rtol=1e-3)
     num_not_close = np.count_nonzero(close == False)
     if num_not_close != 0:
-        print("Warning: {nnc}, out of {size} elements do not match ({perc:.2f}%) in XeTLA impl".
-              format(nnc = num_not_close,
-                     size = close.size,
-                     perc = num_not_close / close.size * 100))
+        print("Warning: {nnc}, out of {size} elements do not match ({perc:.2f}%) in XeTLA impl".format(
+            nnc=num_not_close, size=close.size, perc=num_not_close / close.size * 100))
 
 
 @benchmark_suit.perf_report(
@@ -614,9 +613,11 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             size_ml = Z * H * N_CTX
             m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
             l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
+
             def xetla_fn():
                 func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
                 return out
+
             atol = 1e-1 if N_CTX == 16384 else 1e-2
             if os.getenv("XETLA_ASSERT_RESULT", "0") == "1":
                 benchmark_suit.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
@@ -642,11 +643,13 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             bias_strideN = -1
             bias_strideF = -1
             attn_mask_padding = 0
+
             def xetla_fn():
-                func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha,
-                                    dropout_prob, grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX,
-                                    N_CTX, bias_strideB, bias_strideN, bias_strideF, attn_mask_padding)
+                func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha, dropout_prob,
+                     grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX, N_CTX, bias_strideB,
+                     bias_strideN, bias_strideF, attn_mask_padding)
                 return out
+
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:
