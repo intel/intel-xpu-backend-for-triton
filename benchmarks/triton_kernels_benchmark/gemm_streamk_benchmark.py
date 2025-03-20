@@ -48,7 +48,7 @@ def linear_tile(tile_id,
 @triton.jit
 def mac_loop(
         # Pointers to matrices
-        a_ptr, b_ptr, c_ptr,
+        a_ptr, b_ptr, c_ptr, locks,
         # Matrix dimensions
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
         stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
@@ -84,12 +84,16 @@ def mac_loop(
         a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
         b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
 
-    if remain_iters == 0 and end_iter % iters_per_tile == 0:
+    if end_iter % iters_per_tile == 0:
         c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                         offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
                                         block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
         tl.store(c_block_ptr, acc, boundary_check=(0, 1))
+        if start_iter % iters_per_tile != 0:  # only if tile has been partially processed
+            tl.atomic_xchg(locks + tile_id, 1)
     else:
+        while tl.atomic_cas(locks + tile_id, 1, 1) != 1:
+            pass
         rm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
         c_ptr_ = c_ptr + rm[:, None] * stride_cm + rn[None, :] * stride_cn
@@ -108,7 +112,7 @@ def mac_loop(
 @triton.jit
 def first_wave(
         # Pointers to matrices
-        a_ptr, b_ptr, c_ptr,
+        a_ptr, b_ptr, c_ptr, locks,
         # Matrix dimensions
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
         stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
@@ -127,7 +131,7 @@ def first_wave(
     while start_iter < last_iter:
         end_iter = start_iter + (iters_per_tile - start_iter % iters_per_tile)
         end_iter = tl.minimum(end_iter, last_iter)
-        mac_loop(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+        mac_loop(a_ptr, b_ptr, c_ptr, locks, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
                  iters_per_tile, start_iter, end_iter, BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M)
 
         start_iter = end_iter
@@ -215,7 +219,8 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
 
     # Two-tile SK + DP
     streamk_tiles = total_tiles % streamk_programs
-    if total_tiles - streamk_tiles > streamk_programs:  # (total_tiles // total_programs > 1)
+    # (total_tiles // total_programs > 1)
+    if total_tiles - streamk_tiles > streamk_programs:
         streamk_tiles += streamk_programs
 
     blocking_tiles = total_tiles - streamk_tiles
@@ -224,9 +229,11 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
     streamk_full_tiles = streamk_iters // streamk_programs
     streamk_partial_tiles = streamk_iters % streamk_programs
 
+    locks = torch.zeros((streamk_tiles, ), device='xpu', dtype=torch.int32)
+
     first_wave[(streamk_programs, )](
         a, b, c,  #
-        M, N, K,  #
+        locks, M, N, K,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
@@ -273,8 +280,13 @@ def benchmark(M, N, K, provider):
                                                                  quantiles=quantiles)
     elif provider == 'triton':
         c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
-        triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+
+        def triton_fn():
+            return matmul(a, b, c)
+
+        def torch_fn():
+            return torch.matmul(a, b).to(torch.float32)
+
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
@@ -285,8 +297,12 @@ def benchmark(M, N, K, provider):
 
         name = f'gemm_streamk_shape_{M}_{K}_{N}'
         func = getattr(xetla_kernel, name)
-        xetla_fn = lambda: func(a, b, c, acc, cnt)
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+
+        def xetla_fn():
+            return func(a, b, c, acc, cnt)
+
+        def torch_fn():
+            return torch.matmul(a, b).to(torch.float32)
 
         # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
@@ -294,8 +310,11 @@ def benchmark(M, N, K, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    tflops = lambda mean: 2 * M * N * K * (1e-12) / (mean * 1e-3)
-    gbps = lambda mean: 2 * (M * K + K * N) + 4.0 * (M * N) * (1e-9) / (mean * 1e-3)
+    def tflops(mean):
+        return 2 * M * N * K * (1e-12) / (mean * 1e-3)
+
+    def gbps(mean):        return 2 * (M * K + K * N) + \
+4.0 * (M * N) * (1e-9) / (mean * 1e-3)
 
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
