@@ -9,7 +9,7 @@ tt.func @cast() {
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1
   %cst_tensor = arith.constant dense<1> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1
-  %1 = tt.bitcast %cst_tensor : tensor<128xi32> -> tensor<128xi64>
+  %1 = tt.bitcast %cst_tensor : tensor<128xi32> -> tensor<128xf32>
   tt.return
 }
 
