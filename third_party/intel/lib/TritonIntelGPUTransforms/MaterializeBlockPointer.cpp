@@ -2,6 +2,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
 #include "llvm/Support/Debug.h"
@@ -58,6 +59,24 @@ public:
       unsigned rank = shape.size();
       LDBG("Rank: " << rank);
       if (rank == 1)
+        return;
+
+      // We will compensate the offset of non-64 bytes aligned base to the
+      // OffsetX and BaseWidth. The OffsetX and BaseWidth has extra restriction
+      // that it has to be 4 bytes aligned.
+      auto base = makeTensorPtrOp.getBase();
+      if (!ttgi::isDivisible(base, 4))
+        return;
+
+      // Check the BaseWidth.
+      Value BaseWidth = shape[0];
+      if (!ttgi::isDivisible(BaseWidth, 4))
+        return;
+
+      // Check the OffsetX
+      Operation::operand_range offsets = makeTensorPtrOp.getOffsets();
+      Value OffsetX = offsets[0];
+      if (!ttgi::isDivisible(OffsetX, 4))
         return;
 
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
