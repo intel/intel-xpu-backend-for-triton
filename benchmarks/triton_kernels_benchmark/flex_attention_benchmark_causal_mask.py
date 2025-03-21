@@ -61,8 +61,10 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
 
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'triton':
+        kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
         block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX, N_CTX, device=q.device)
-        triton_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale)
+        triton_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, kernel_options=kernel_options
+                                           )
         if MODE == 'bwd':
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
