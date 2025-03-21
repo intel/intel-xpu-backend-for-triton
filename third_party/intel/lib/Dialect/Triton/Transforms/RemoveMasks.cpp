@@ -398,6 +398,12 @@ public:
     OpBuilder elseB = ifOp.getElseBodyBuilder();
     Operation *elseForLoop = elseB.clone(*forOp.getOperation());
 
+    // Create the yield operations for the two if branches.
+    if (!thenForLoop->getResults().empty()) {
+      thenB.create<scf::YieldOp>(loc, thenForLoop->getResults());
+      elseB.create<scf::YieldOp>(loc, elseForLoop->getResults());
+    }
+
     // Drop the mask from candidate masked operations in the "then" region's
     // cloned loop.
     for (Operation *maskedOp : collector.getMaskedOps()) {
