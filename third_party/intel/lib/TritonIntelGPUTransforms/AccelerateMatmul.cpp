@@ -129,7 +129,7 @@ public:
         dpasCap.executionSize, opsPerChan, warpsPerTile, repCluster,
         threadsPerWarp);
 
-    if (dpasCap.isPVC() || dpasCap.isFalconShore()) {
+    if ((dpasCap.isPVC() || dpasCap.isFalconShore())) {
       unsigned dpasElemBitWidths =
           oldAType.getElementType().getIntOrFloatBitWidth();
 

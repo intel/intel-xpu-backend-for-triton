@@ -38,6 +38,8 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
+#include "GenIntrinsicHelper.h"
+
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGENTOLLVM
 #include "intel/include/TritonGENToLLVM/Passes.h.inc"
@@ -369,26 +371,41 @@ struct TritonMatrixDPASLowering
     if (cOrigTy != cTy)
       c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
 
-    std::string fnName =
-        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
-        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-        std::to_string(8 /*systolic depth*/ *
-                       getNumOperandsPerDword(precisionA));
+    auto builder = TritonLLVMOpBuilder(loc, rewriter);
+    mlir::triton::gpu::intel::GenISA_Dpas dpasOp(rewriter, cTy, cTy, aTy, bTy);
 
-    SmallVector<Type> argTypes{aTy, bTy, cTy};
-    fnName = intel::mangle(fnName, argTypes);
+    // refer the call signature in GenISA
+    Value result =
+        dpasOp(rewriter, loc, c, a, b,
+               builder.i32_val(
+                   static_cast<unsigned>(precisionA)), /*src0's precision*/
+               builder.i32_val(
+                   static_cast<unsigned>(op.getPb())), /*src1's precision*/
+               builder.i32_val(8),                     /*systolic depth*/
+               builder.i32_val(8),                     /*repeate count*/
+               builder.int_val(1, 0) /*is double = false*/)
+            ->getResult(0);
 
-    SmallVector<Value> args{a, b, c};
-    auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/LLVM::ModRefInfo::NoModRef,
-        /*argMem=*/LLVM::ModRefInfo::NoModRef,
-        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
-    funcAttrs.memEffectsAttr = memAttr;
+    // std::string fnName =
+    //     "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
+    //     stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
+    //     std::to_string(8 /*systolic depth*/ *
+    //                    getNumOperandsPerDword(precisionA));
 
-    Value result = intel::createDeviceFunctionCall(
-                       rewriter, fnName, cTy, argTypes, args, {}, funcAttrs)
-                       ->getResult(0);
+    // SmallVector<Type> argTypes{aTy, bTy, cTy};
+    // fnName = intel::mangle(fnName, argTypes);
+
+    // SmallVector<Value> args{a, b, c};
+    // auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+    //     /*other=*/LLVM::ModRefInfo::NoModRef,
+    //     /*argMem=*/LLVM::ModRefInfo::NoModRef,
+    //     /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+    // auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
+    // funcAttrs.memEffectsAttr = memAttr;
+
+    // Value result = intel::createDeviceFunctionCall(
+    //                    rewriter, fnName, cTy, argTypes, args, {}, funcAttrs)
+    //                    ->getResult(0);
     if (cOrigTy != cTy)
       result = rewriter.create<LLVM::BitcastOp>(loc, cOrigTy, result);
 
