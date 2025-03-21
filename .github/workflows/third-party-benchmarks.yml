@@ -1,5 +1,4 @@
 name: Third party benchmarks
-run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -12,10 +11,6 @@ on:
         description: Tag for benchmark results
         type: string
         default: "test"
-      run_name:
-        description: Run name
-        type: string
-        default: "Triton benchmarks"
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -23,12 +18,6 @@ on:
   schedule:
     # About midnight PST (UTC-8)
     - cron: "5 10 * * *"
-
-
-# Cancels in-progress PR runs when the PR is updated.  Manual runs are never cancelled.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 permissions: read-all
 
@@ -92,7 +81,7 @@ jobs:
       - name: Install benchmark dependencies
         id: install
         run: |
-          pip install transformers pandas
+          pip install transformers pandas pytest
 
       - name: Create reports dir
         run: |
@@ -109,10 +98,15 @@ jobs:
           git clone https://github.com/linkedin/Liger-Kernel
           pip install -e Liger-Kernel
 
-          bash ./run_benchmarks.sh
+          # To remember return code, but still copy results
+          RET_CODE=0
+          bash ./run_benchmarks.sh || RET_CODE=$?
 
           cp Liger-Kernel/benchmark/data/all_benchmark_data.csv $REPORTS/liger-raw.csv
-          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv
+          python transform.py $REPORTS/liger-raw.csv $REPORTS/liger-report.csv --tag $TAG
+
+          # Return the captured return code at the end
+          exit "$RET_CODE"
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

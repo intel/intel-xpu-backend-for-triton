@@ -61,7 +61,7 @@ def _kernel(A, B, C,  #
         rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
         C = C + (rm[:, None] * stride_cm + rn[None, :] * stride_cn)
         mask = (rm < M)[:, None] & (rn < N)[None, :]
-        tl.atomic_add(C, acc, mask=mask)
+        tl.atomic_add(C, acc, mask=mask, sem='relaxed')
 
 
 class _matmul(torch.autograd.Function):

@@ -83,6 +83,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUBlockPingpongPass);
   ADD_PASS_WRAPPER_3("add_stream_pipeline",
                      mlir::createTritonAMDGPUStreamPipelinePass, int, int, int);
+  m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUInThreadTransposePass());
+  });
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
@@ -122,8 +126,9 @@ void init_triton_amd(py::module &&m) {
     context.loadAllAvailableDialects();
   });
 
-  m.def("attach_target_triple",
-        [](llvm::Module *module) { module->setTargetTriple(amdTargetTriple); });
+  m.def("attach_target_triple", [](llvm::Module *module) {
+    module->setTargetTriple(llvm::Triple(amdTargetTriple));
+  });
 
   // Set target architecture ISA version
   m.def("set_isa_version", [](llvm::Module *module, const std::string &arch) {

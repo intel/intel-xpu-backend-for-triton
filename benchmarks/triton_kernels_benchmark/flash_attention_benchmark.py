@@ -157,7 +157,7 @@ configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
     for BM in [128, 256] \
     for BN in [32, 64] \
-    for s in [3, 4] \
+    for s in [2, 3, 4] \
     for w in [8, 16, 32] \
     ]
 

@@ -1,4 +1,3 @@
-
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -51,6 +50,7 @@ bool isConstant(Value val, int64_t expected) {
 }
 
 Value getFinalValue(Value value) {
+  assert(value && "Expecting a valid value");
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
     // look init values outside the loop

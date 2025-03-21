@@ -24,6 +24,7 @@ def parse_args():
     parser.add_argument("--tflops_col", help="Column name with tflops.", required=True)
     parser.add_argument("--hbm_col", help="Column name with HBM results.", required=False, default=None)
     parser.add_argument("--tag", help="How to tag results", required=False, default="")
+    parser.add_argument("--mask", help="Mask identifiers among the params", required=False, action="store_true")
     return parser.parse_args()
 
 
@@ -33,7 +34,7 @@ def check_cols(target_cols, all_cols):
         raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
-def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
+def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, mask):
     check_cols(param_cols, df.columns)
     check_cols([tflops_col] + [] if hbm_col is None else [hbm_col], df.columns)
     # Build json with parameters
@@ -42,7 +43,14 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag):
     # int values.
     # Changing it without changing dashboards and database will
     # break comparison of old and new results
-    df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
+    if mask:
+        df_results["MASK"] = df[param_cols[-1]]
+        param_cols = param_cols[:-1]
+        for p in param_cols:
+            df[p] = df[p].astype(int)
+            df_results["params"] = [json.dumps(j) for j in df[[*param_cols, "MASK"]].to_dict("records")]
+    else:
+        df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
     df_results["tflops"] = df[tflops_col]
     if hbm_col is not None:
         df_results["hbm_gbs"] = df[hbm_col]
@@ -77,15 +85,8 @@ def main():
     args = parse_args()
     param_cols = args.param_cols.split(",")
     df = pd.read_csv(args.source)
-    result_df = transform_df(
-        df,
-        param_cols=param_cols,
-        tflops_col=args.tflops_col,
-        hbm_col=args.hbm_col,
-        benchmark=args.benchmark,
-        compiler=args.compiler,
-        tag=args.tag,
-    )
+    result_df = transform_df(df, param_cols=param_cols, tflops_col=args.tflops_col, hbm_col=args.hbm_col,
+                             benchmark=args.benchmark, compiler=args.compiler, tag=args.tag, mask=args.mask)
     result_df.to_csv(args.target, index=False)
 
 

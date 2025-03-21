@@ -9,15 +9,14 @@
 #ifndef TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 #define TRITON_CONVERSION_TRITONINTELGPU_TO_LLVM_UTILITY_H
 
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
-#include "llvm/Support/ErrorHandling.h"
 
 namespace mlir::LLVM::intel {
+
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
 
 /// Create a predicated block, using \p cond as the condition and \p ops for the
 /// values supplied by the conditional branch to the exit block. The \p
@@ -72,22 +71,6 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
                              ThenOpsFn &&thenOpsFn) {
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
-
-Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
-Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
-Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i);
-Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i);
-
-LLVM::LLVMFuncOp getSpirvPrintfDeclaration(RewriterBase &rewriter);
-
-static Value getModuleWarpSize(RewriterBase &rewriter, Location loc) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  return b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-}
-
-Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
-                        const Value &v, triton::RoundingMode rounding);
 
 } // namespace mlir::LLVM::intel
 

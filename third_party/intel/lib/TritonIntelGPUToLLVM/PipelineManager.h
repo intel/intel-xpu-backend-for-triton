@@ -20,16 +20,13 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
-#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
 
@@ -163,43 +160,6 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
-
-  using mlir::OpRewritePattern<ModuleOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ModuleOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!gpu::intel::hasSpirvTargetArch(op) || spirv::lookupTargetEnv(op)) {
-      return failure();
-    }
-
-    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
-
-    auto resourceLimit = spirv::getDefaultResourceLimits(rewriter.getContext());
-    auto newResourceLimit = rewriter.getAttr<spirv::ResourceLimitsAttr>(
-        resourceLimit.getMaxComputeSharedMemorySize(),
-        resourceLimit.getMaxComputeWorkgroupInvocations(),
-        resourceLimit.getMaxComputeWorkgroupSize(), subgroupSize,
-        resourceLimit.getMinSubgroupSize(), resourceLimit.getMaxSubgroupSize(),
-        resourceLimit.getCooperativeMatrixPropertiesKhr(),
-        resourceLimit.getCooperativeMatrixPropertiesNv());
-    auto triple = spirv::VerCapExtAttr::get(
-        spirv::Version::V_1_2,
-        {spirv::Capability::GroupNonUniform, spirv::Capability::Addresses,
-         spirv::Capability::Float16Buffer, spirv::Capability::Int64,
-         spirv::Capability::Int16, spirv::Capability::Int8,
-         spirv::Capability::Kernel, spirv::Capability::Linkage,
-         spirv::Capability::Vector16, spirv::Capability::GenericPointer,
-         spirv::Capability::Groups, spirv::Capability::Float64},
-        {}, rewriter.getContext());
-    auto newTargetEnv = spirv::TargetEnvAttr::get(triple, newResourceLimit);
-    rewriter.modifyOpInPlace(op, [op, newTargetEnv] {
-      op->setAttr(spirv::getTargetEnvAttrName(), newTargetEnv);
-    });
-    return success();
-  }
-};
-
 /// Manages TritonIntelGPU --> LLVM the conversion pipeline.
 /// Currently the conversion pipeline depends on whether the kernel contains
 /// block pointers or not.
@@ -234,16 +194,11 @@ public:
     using namespace mlir;
     using namespace mlir::triton;
 
-    // should run before other patterns that need the SPIRV-ENV attr
-    // (e.g. patterns that output triton_gen.sub_group_reduce)
-    patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(),
-                                     patternBenefitAddSPIRVEnv);
-
     if (isAdvancedPathEnabled) {
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
-      mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                       targetInfo, benefit);
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
@@ -274,10 +229,10 @@ public:
                                     benefit);
       mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
-      mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                       targetInfo, benefit);
-      intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
-                                              patterns, benefit);
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
+      mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, benefit);
       intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
     }
 

@@ -25,7 +25,6 @@ using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-
 namespace {
 
 // Return a predicate that is true only if the current thread holds unique data,
@@ -827,7 +826,7 @@ struct BufferAtomicRMWOpConversion
     //
     // The following properties are used to emit proper synchronization
     // primitives between sequential buffer atomics See: Memory Model GFX942
-    // (MI300 series)
+    // (CDNA3 series)
     // https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942:
     //
     // buffer/global/flat_load/store/atomic instructions to global memory are
@@ -864,7 +863,7 @@ struct BufferAtomicRMWOpConversion
     //    We don't need to invalidate L1 between these ops on GFX942, just after
     //    (i.e., we can skip `buffer_wbinvl1_vol`)
     // 3. We don't have to explicitly write to the l2 cache because
-    //    `s_waitcnt vmcnt(0)` already does this as-per the MI300/CDNA3 ISA
+    //    `s_waitcnt vmcnt(0)` already does this as-per the CDNA3 ISA
     //    docs: "Decremented for reads when the data has been written back to
     //    the VGPRs, and for writes when the data has been written to the L2
     //    cache. Ordering: Memory reads and writes return in the order they were
@@ -1537,7 +1536,7 @@ struct AtomicRMWOpConversion
         Value offset = genPrefixSum(rewriter, maskI32);
         offset = b.mul(offset, maskI32);
         auto layout = tensorTy.getEncoding();
-        Value waveSize = b.i32_val(triton::gpu::getWarpSize(layout));
+        Value waveSize = b.i32_val(lookupThreadsPerWarp(rewriter));
         offset = b.select(b.icmp_eq(offset, b.i32_val(0)), waveSize, offset);
         Value idx = b.sub(offset, b.i32_val(1));
         idx = b.mul(idx, b.i32_val(4));

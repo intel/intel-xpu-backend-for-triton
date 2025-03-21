@@ -419,7 +419,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   StringAttr kWarp = S("warp");
 
   const SmallVector<unsigned> warpsPerCTA = dpas.getWarpsPerCTA();
-  int threadsPerWarp = triton::gpu::getWarpSize(dpas);
+  int threadsPerWarp = product<unsigned>(dpas.getThreadsPerWarp());
   unsigned opsPerChannel = dpas.getOpsPerChannel();
   auto repCluster = dpas.getRepCluster();
   auto tileLayout = LinearLayout::empty();

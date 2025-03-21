@@ -1,7 +1,7 @@
 add_triton_library(TritonIntelGPUToLLVM
-    AllocateSharedMemory.cpp
     ArithOpsToLLVM.cpp
     BF16Casts.cpp
+    ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
     DotOpToLLVM/DPAS.cpp
@@ -11,7 +11,6 @@ add_triton_library(TritonIntelGPUToLLVM
     Fp4ToFpOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
-    MakeRangeOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     TritonGPUToLLVM.cpp

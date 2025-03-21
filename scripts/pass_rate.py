@@ -80,8 +80,14 @@ def get_deselected(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> int
     if not skiplist_path.exists():
         return 0
     with skiplist_path.open('r') as f:
-        # skip empty lines and comments
-        return len([line for line in f.readlines() if line and not line.startswith('#')])
+        count = 0
+        for line in f.readlines():
+            # `strip` allows to skip lines with only '\n' character
+            line = line.strip()
+            # skip empty lines and comments
+            if line and not line.startswith('#'):
+                count += 1
+        return count
 
 
 def get_warnings(reports_path: pathlib.Path, suite: str) -> List[TestWarning]:

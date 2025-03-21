@@ -916,6 +916,34 @@ struct FpToFpOpConversion
     return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
+  static LLVM::RoundingMode
+  convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
+    LLVM::RoundingMode roundingMode;
+    switch (rounding) {
+    case triton::RoundingMode::RTNE:
+      return LLVM::RoundingMode::NearestTiesToEven;
+    case triton::RoundingMode::RTZ:
+      return LLVM::RoundingMode::TowardZero;
+    default:
+      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
+                      "conversion: "
+                   << stringifyRoundingMode(rounding) << "\n";
+      llvm_unreachable("");
+    }
+  }
+
+  static Value convertFp32ToFp16(Location loc,
+                                 ConversionPatternRewriter &rewriter,
+                                 const Value &v,
+                                 const triton::RoundingMode rounding) {
+    MLIRContext *ctx = rewriter.getContext();
+    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+        loc, f16_ty, v,
+        LLVM::RoundingModeAttr::get(ctx,
+                                    convertTritonRoundingModeToLLVM(rounding)),
+        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
+  }
+
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
@@ -1014,8 +1042,8 @@ struct FpToFpOpConversion
              "rounding mode must be specified for fp32->fp16 conversion");
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
-        outVals.push_back(LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
-                                                         roundingMode.value()));
+        outVals.push_back(
+            convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
       }
       return outVals;
     }
@@ -1044,8 +1072,7 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = LLVM::intel::convertFp32ToFp16(loc, rewriter, v,
-                                           roundingMode.value());
+        v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
     inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
@@ -1055,34 +1082,6 @@ struct FpToFpOpConversion
         v = convertFp16ToFp32(loc, rewriter, v);
     // Pack values
     return outVals;
-  }
-};
-
-struct ExternElementwiseOpConversion
-    : public ElementwiseOpConversionBase<ExternElementwiseOp,
-                                         ExternElementwiseOpConversion> {
-  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
-                                           ExternElementwiseOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-  typedef typename Base::OpAdaptor OpAdaptor;
-
-  SmallVector<Value> createDestOps(ExternElementwiseOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    StringRef funcName = op.getSymbol();
-    if (funcName.empty())
-      llvm::errs() << "ExternElementwiseOpConversion";
-
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
-        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
-
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-
-    return {callOp.getResult()};
   }
 };
 
@@ -1265,38 +1264,6 @@ struct AbsFOpConversion
   }
 };
 
-struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        targetInfo(targetInfo) {}
-  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-
-    std::string funcName = targetInfo.getMulhiFuncName(resultElementTy);
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
-    return {callOp.getResult()};
-  }
-
-protected:
-  const TargetInfoBase &targetInfo;
-};
-
 struct PreciseSqrtOpConversion
     : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
   using Base =
@@ -1374,10 +1341,6 @@ void populateElementwiseOpToLLVMPatterns(
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
-  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
-                                              benefit);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(

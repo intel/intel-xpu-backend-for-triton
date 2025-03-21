@@ -94,7 +94,7 @@ def mac_loop(
         rn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
         c_ptr_ = c_ptr + rm[:, None] * stride_cm + rn[None, :] * stride_cn
         mask = (rm < M)[:, None] & (rn < N)[None, :]
-        tl.atomic_add(c_ptr_, acc, mask=mask)
+        tl.atomic_add(c_ptr_, acc, mask=mask, sem='relaxed')
 
 
 @triton.autotune(

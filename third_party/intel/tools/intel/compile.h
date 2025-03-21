@@ -5,7 +5,6 @@
 #include <inttypes.h>
 #include <level_zero/ze_api.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <sycl/sycl.hpp>
 
 #endif

@@ -13,8 +13,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-#include <string>
-
 namespace mlir::triton::gpu::intel {
 
 struct LLVMFuncAttributeOptions {

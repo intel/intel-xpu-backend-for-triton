@@ -4,9 +4,6 @@
 #include <inttypes.h>
 #include <string.h>
 #include <sstream>
-#include <tuple>
-#include <vector>
-#include <utility>
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 

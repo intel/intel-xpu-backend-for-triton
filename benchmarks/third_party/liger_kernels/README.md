@@ -6,5 +6,5 @@ https://github.com/linkedin/Liger-Kernel/tree/main
 
 We run benchmarks for Liger Kernels in CI, the process is
 1. Run individual benchmarks.
-2. Convert results from Liger-Lernels format into our format.
+2. Convert results from Liger-Kernels format into our format.
 3. Upload file with results as an artefact for further processing.
