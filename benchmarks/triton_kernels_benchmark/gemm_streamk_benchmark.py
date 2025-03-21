@@ -285,10 +285,14 @@ def benchmark(M, N, K, provider):
 
         name = f'gemm_streamk_shape_{M}_{K}_{N}'
         func = getattr(xetla_kernel, name)
-        xetla_fn = lambda: func(a, b, c, acc, cnt)
+
+        def xetla_fn():
+            func(a, b, c, acc, cnt)
+            return c
+
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
-        # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
+        benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
     else:
