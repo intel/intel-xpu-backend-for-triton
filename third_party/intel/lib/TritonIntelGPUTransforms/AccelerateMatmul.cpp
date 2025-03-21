@@ -17,6 +17,8 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include <optional>
 
+#include <iostream>
+
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
 #define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
 
@@ -39,14 +41,22 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
     return op->getParentRegion() == dotOp->getParentRegion();
   };
 
+  size_t rank = shape.size();
+  SmallVector<unsigned> ret(rank, 1);
+  int rowDim = rank - 2, colDim = rank - 1;
   SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
   // TODO: revisit this in flash attention.
   for (Operation *op : slices)
-    if (isa<tt::DotOp>(op) && (op != dotOp))
-      return {numWarps, 1};
-
-  size_t rank = shape.size();
-  SmallVector<unsigned> ret(rank, 1);
+    if (isa<tt::DotOp>(op) && (op != dotOp)) {
+      ret[rowDim] = 4;
+      ret[colDim] = 1;
+      while ((shape[rowDim] / ret[rowDim] > 16) &&
+             (ret[rowDim] * ret[colDim] < numWarps)) {
+        ret[rowDim] *= 2;
+      }
+      ret[colDim] = numWarps / ret[rowDim];
+      return ret; //{numWarps, 1};
+    }
 
   if (rank == 3) {
     int batchWarp = numWarps;
@@ -66,7 +76,6 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
 
-  int rowDim = rank - 2, colDim = rank - 1;
   do {
     if (ret[rowDim] * ret[colDim] >= numWarps)
       break;
@@ -146,6 +155,8 @@ public:
       unsigned repClusterDimM =
           std::min(maxRepClusterM, static_cast<unsigned>(repA[1]));
 
+      std::cout << "maxRepClusterM = " << maxRepClusterM << std::endl;
+
       unsigned maxRepClusterN =
           PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS /
           ((dpasElemBitWidths / 8) * dpasCap.executionSize);
@@ -155,6 +166,8 @@ public:
           std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
       repCluster[rank - 2] = repClusterDimM;
       repCluster[rank - 1] = repClusterDimN;
+
+      std::cout << "maxRepClusterN = " << maxRepClusterN << std::endl;
 
       dpasEnc = ttgi::DpasEncodingAttr::get(
           oldRetType.getContext(), dpasCap.repeatCount, dpasCap.systolicDepth,
