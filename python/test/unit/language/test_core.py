@@ -137,6 +137,15 @@ def check_type_supported(dtype, device):
             pytest.xfail("float64 not supported on current xpu hardware")
 
 
+def check_threads_supported(num_warps, threads_per_warp):
+    device = triton.runtime.driver.active.get_current_device()
+    props = triton.runtime.driver.active.utils.get_device_properties(device)
+    if threads_per_warp not in props['sub_group_sizes']:
+        pytest.xfail('unsupported warp size')
+    if threads_per_warp * num_warps > props['max_work_group_size']:
+        pytest.xfail('unsupported workgroup size')
+
+
 class MfmaLayout:
 
     def __init__(self, version, warps_per_cta, instr_shape, is_transposed):
@@ -2357,6 +2366,7 @@ def get_reduced_dtype(dtype_str, op):
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+    check_threads_supported(num_warps, threads_per_warp)
 
     # triton kernel
     @triton.jit
@@ -2465,6 +2475,7 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+    check_threads_supported(num_warps, threads_per_warp)
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
