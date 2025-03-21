@@ -123,7 +123,7 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
-  SPIRVOpts.setPreserveAuxData(true);
+  SPIRVOpts.setPreserveAuxData(false);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
   SPIRV::TranslatorOpts TransOpt{SPIRV::VersionNumber::SPIRV_1_4};
 
