@@ -125,7 +125,7 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
   SPIRVOpts.setPreserveAuxData(true);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
-  SPIRV::TranslatorOpts TransOpt{SPIRV::VersionNumber::SPIRV_1_5};
+  SPIRV::TranslatorOpts TransOpt{SPIRV::VersionNumber::SPIRV_1_4};
 
   for (auto &Ext : AllowedExtensions)
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
