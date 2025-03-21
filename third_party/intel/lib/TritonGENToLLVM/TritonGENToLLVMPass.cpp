@@ -413,16 +413,17 @@ struct TritonMatrixDPASLowering
     if (cOrigTy != cTy)
       c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
 
-    std::string fnName =
-        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
-        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-        std::to_string(8 /*systolic depth*/ *
-                       getNumOperandsPerDword(precisionA));
-
-    SmallVector<Type> argTypes{aTy, bTy, cTy};
+    std::string fnName = "__spirv_SubgroupMatrixMultiplyAccumulateINTEL";
+    SmallVector<Type> argTypes{int32Ty, aTy, bTy, cTy, int32Ty};
     fnName = intel::mangle(fnName, argTypes);
 
-    SmallVector<Value> args{a, b, c};
+    TritonLLVMOpBuilder builder(loc, rewriter);
+    Value kDim = builder.i32_val(8 /*systolic depth*/ *
+                                 getNumOperandsPerDword(precisionA));
+    SmallVector<Value> args{
+        kDim, a, b, c,
+        builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
+            cOrigTy.getElementType(), precisionA))};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
@@ -451,6 +452,30 @@ private:
     case TritonGEN::PrecisionType::U8:
     case TritonGEN::PrecisionType::S8:
       return 4;
+    default:
+      llvm_unreachable("unsupported TritonGEN::PrecisionType");
+    }
+  }
+
+  // Values are defined in
+  // https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate.html.
+  static unsigned
+  getMatrixMultiplyAccumulateOperandsVal(Type cTy,
+                                         TritonGEN::PrecisionType pTy) {
+    unsigned res = 0;
+    if (cTy.isBF16())
+      res |= 0x4 | 0x8;
+    switch (pTy) {
+    case TritonGEN::PrecisionType::TF32:
+      return res | 0x100 | 0x200;
+    case TritonGEN::PrecisionType::BF16:
+      return res | 0x1000 | 0x2000;
+    case TritonGEN::PrecisionType::FP16:
+      return res | 0x400 | 0x800;
+    case TritonGEN::PrecisionType::U8:
+      return res | 0x10 | 0x20;
+    case TritonGEN::PrecisionType::S8:
+      return res | 0x1 | 0x2 | 0x10 | 0x20;
     default:
       llvm_unreachable("unsupported TritonGEN::PrecisionType");
     }
