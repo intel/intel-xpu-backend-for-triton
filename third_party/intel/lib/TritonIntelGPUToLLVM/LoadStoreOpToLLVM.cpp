@@ -1603,11 +1603,14 @@ struct LoadOpConversion
                (numRepInner / numOperandsInnerDimPerLoad));
           if (isTransposeRequired)
             outerDimBStride /= dpasTileToPackedIndicesRatio;
-          // TODO: not working for int8 example
+#if 1
+          const unsigned innerDimBStride =
+              isTransposeRequired ? dpasTileToPackedIndicesRatio : 1;
+#else
           const unsigned innerDimBStride =
               repKStride /
               (packedElemsPerLanePerDPASInst * numOperandsInnerDimPerLoad);
-
+#endif
           layoutOffsetX *= (isOperandA ? numRepOuter : outerDimBStride);
           layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
 
