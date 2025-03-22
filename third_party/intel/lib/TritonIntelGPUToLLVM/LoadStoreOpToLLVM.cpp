@@ -1301,10 +1301,15 @@ struct LoadOpConversion
         kOffsetDims.push_back(kOffset);
 
         assert(llvm::isPowerOf2_32(tileShape[dim]));
-        // reduce the offset dimension size by the number of elements packed in a single slot for the row wise dimension 
+        // reduce the offset dimension size by the number of elements packed in
+        // a single slot for the row wise dimension
 #if 1
-        const unsigned offsetDimSize = (!isTransposeRequired && dim == 0) ? tileShape[dim] / dpasTileToPackedIndicesRatio : tileShape[dim]; 
-        llvm::errs() << dim << " offsetDimSize: " << offsetDimSize << " vs tileShape: " << tileShape[dim] << "\n";
+        const unsigned offsetDimSize =
+            (!isTransposeRequired && dim == 0)
+                ? tileShape[dim] / dpasTileToPackedIndicesRatio
+                : tileShape[dim];
+        llvm::errs() << dim << " offsetDimSize: " << offsetDimSize
+                     << " vs tileShape: " << tileShape[dim] << "\n";
 #else
         const unsigned offsetDimSize = tileShape[dim];
 #endif
@@ -1476,19 +1481,21 @@ struct LoadOpConversion
     });
 
     if (isTransposeRequired) {
-      tileLayout *=
-          LinearLayout::identity1D(numRepInner / vBlocks, kLoad, dimOuterStr);
+      tileLayout *= LinearLayout::identity1D(
+          numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
       tileLayout *= LinearLayout::identity1D(
           numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
     } else {
       if (isOperandA) {
-        tileLayout *=
-        LinearLayout::identity1D(numRepInner / numOperandsInnerDimPerLoad, kLoad, dimInnerStr);
-        tileLayout *= LinearLayout::identity1D(numRepOuter * numLoadPerOutRepCluster, kLoad, dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(
+            numRepInner / numOperandsInnerDimPerLoad, kLoad, dimInnerStr);
+        tileLayout *= LinearLayout::identity1D(
+            numRepOuter * numLoadPerOutRepCluster, kLoad, dimOuterStr);
       } else {
-        tileLayout *=
-        LinearLayout::identity1D(numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
-        tileLayout *= LinearLayout::identity1D(numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(
+            numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
+        tileLayout *= LinearLayout::identity1D(
+            numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
       }
     }
 
@@ -1586,13 +1593,17 @@ struct LoadOpConversion
                          << "\n";
           });
 
-          // TODO: try to match better below - incorporate numLoadPerOutRepCluster into layout calculation, and the existing indices into the layout. also swap the order for A vs B like we do below. 
           auto layoutOffsetX = offset[dimInner].second;
           auto layoutOffsetY = offset[dimOuter].second;
-          // if (isTransposeRequired)
-          //   std::swap(layoutOffsetX, layoutOffsetY);
 
-          const unsigned outerDimBStride = (repOuterStride * repStride) / (product<unsigned>(elemsPerDPASInst) * vBlocks);
+          // TODO: can this be simplified?
+          unsigned outerDimBStride =
+              (repOuterStride * numOperandsOuterDimPerLoad) /
+              (elemsPerDPASInst[dimInner] * vBlocks *
+               (numRepInner / numOperandsInnerDimPerLoad));
+          if (isTransposeRequired)
+            outerDimBStride /= dpasTileToPackedIndicesRatio;
+          // TODO: not working for int8 example
           const unsigned innerDimBStride =
               repKStride /
               (packedElemsPerLanePerDPASInst * numOperandsInnerDimPerLoad);
