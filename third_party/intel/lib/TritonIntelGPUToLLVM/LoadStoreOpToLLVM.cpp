@@ -1265,6 +1265,13 @@ struct LoadOpConversion
     LLVM_DEBUG(llvm::dbgs() << "dimOuterStr: " << dimOuterStr << "\n");
     LLVM_DEBUG(llvm::dbgs() << "dimInnerStr: " << dimInnerStr << "\n");
 
+    const unsigned dpasTileToPackedIndicesRatio =
+        elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst;
+    llvm::errs() << "ratio of dpas elems to packed elems per lane: "
+                 << dpasTileToPackedIndicesRatio << "\n";
+    llvm::errs() << "usePackedType = " << usePackedType << "\n";
+    llvm::errs() << "opsPerChannel = " << opsPerChannel << "\n";
+
     // Create the linear layout for the load.
     // First, we create a tile layout corresponding to a single invocation of
     // the DPAS instruction across all threads/work-items in a sub-group. The
@@ -1282,8 +1289,8 @@ struct LoadOpConversion
       assert(tileShape.size() == 2); // only support 2D layouts for now
 
       if (isTransposeRequired && opIdx == DpasEncodingAttr::OpIdx::OperandB) {
-        const auto widthDim = threadOrder[rank - 2];
-        const auto origTileWidth = tileShape[widthDim];
+        const unsigned widthDim = threadOrder[rank - 2];
+        const unsigned origTileWidth = tileShape[widthDim];
         tileShape[widthDim] = origTileWidth / (32 / elemSizeInBits);
       }
 
@@ -1294,9 +1301,16 @@ struct LoadOpConversion
         kOffsetDims.push_back(kOffset);
 
         assert(llvm::isPowerOf2_32(tileShape[dim]));
+        // reduce the offset dimension size by the number of elements packed in a single slot for the row wise dimension 
+#if 1
+        const unsigned offsetDimSize = (!isTransposeRequired && dim == 0) ? tileShape[dim] / dpasTileToPackedIndicesRatio : tileShape[dim]; 
+        llvm::errs() << dim << " offsetDimSize: " << offsetDimSize << " vs tileShape: " << tileShape[dim] << "\n";
+#else
+        const unsigned offsetDimSize = tileShape[dim];
+#endif
         layout *=
-            LinearLayout::identity1D(tileShape[dim], kOffset, outDimNames[dim]);
-        totalOffsets *= tileShape[dim];
+            LinearLayout::identity1D(offsetDimSize, kOffset, outDimNames[dim]);
+        totalOffsets *= offsetDimSize;
       }
       SmallVector<StringAttr> newDims;
       newDims.append(kOffsetDims.begin(), kOffsetDims.end());
@@ -1467,9 +1481,15 @@ struct LoadOpConversion
       tileLayout *= LinearLayout::identity1D(
           numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
     } else {
-      tileLayout *= LinearLayout::identity1D(numRepOuter, kLoad, dimOuterStr);
-      tileLayout *=
-          LinearLayout::identity1D(numRepInner / vBlocks, kLoad, dimInnerStr);
+      if (isOperandA) {
+        tileLayout *=
+        LinearLayout::identity1D(numRepInner / numOperandsInnerDimPerLoad, kLoad, dimInnerStr);
+        tileLayout *= LinearLayout::identity1D(numRepOuter * numLoadPerOutRepCluster, kLoad, dimOuterStr);
+      } else {
+        tileLayout *=
+        LinearLayout::identity1D(numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
+        tileLayout *= LinearLayout::identity1D(numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
+      }
     }
 
     LLVM_DEBUG({
@@ -1566,17 +1586,18 @@ struct LoadOpConversion
                          << "\n";
           });
 
-          auto layoutOffsetX = offset[1].second;
-          auto layoutOffsetY = offset[0].second;
-          if (isTransposeRequired)
-            std::swap(layoutOffsetX, layoutOffsetY);
+          // TODO: try to match better below - incorporate numLoadPerOutRepCluster into layout calculation, and the existing indices into the layout. also swap the order for A vs B like we do below. 
+          auto layoutOffsetX = offset[dimInner].second;
+          auto layoutOffsetY = offset[dimOuter].second;
+          // if (isTransposeRequired)
+          //   std::swap(layoutOffsetX, layoutOffsetY);
 
-          const auto innerDimOffset =
+          const unsigned innerDimBStride =
               repKStride /
               (packedElemsPerLanePerDPASInst * numOperandsInnerDimPerLoad);
 
-          layoutOffsetX *= (isOperandA ? numRepOuter : outerDimWarpNum);
-          layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimOffset);
+          layoutOffsetX *= (isOperandA ? numRepOuter : outerDimWarpNum * numOperandsInnerDimPerLoad);
+          layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
 
           LLVM_DEBUG({
             llvm::dbgs() << "x offset ll: " << layoutOffsetX << "\n";
