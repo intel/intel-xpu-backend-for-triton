@@ -1580,11 +1580,12 @@ struct LoadOpConversion
           // if (isTransposeRequired)
           //   std::swap(layoutOffsetX, layoutOffsetY);
 
+          const unsigned outerDimBStride = (repOuterStride * repStride) / (product<unsigned>(elemsPerDPASInst) * vBlocks);
           const unsigned innerDimBStride =
               repKStride /
               (packedElemsPerLanePerDPASInst * numOperandsInnerDimPerLoad);
 
-          layoutOffsetX *= (isOperandA ? numRepOuter : outerDimWarpNum * numOperandsInnerDimPerLoad);
+          layoutOffsetX *= (isOperandA ? numRepOuter : outerDimBStride);
           layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
 
           LLVM_DEBUG({
