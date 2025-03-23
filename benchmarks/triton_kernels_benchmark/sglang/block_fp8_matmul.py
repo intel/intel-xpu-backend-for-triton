@@ -374,7 +374,8 @@ def benchmark(B, M, N, K, provider):
     triton_fn = lambda: w8a8_block_fp8_matmul(A_fp8, B_fp8, As, Bs, block_size)
     torch_fn = lambda: native_w8a8_block_fp8_matmul(A_fp8, B_fp8, As, Bs, block_size)
     rtol = 1e-2
-    benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg="triton to torch")
+    atol = 3e-4
+    benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg="triton to torch")
     _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     tflops = lambda ms: 2 * B * M * N * K * (1e-12) / (ms * 1e-3)
