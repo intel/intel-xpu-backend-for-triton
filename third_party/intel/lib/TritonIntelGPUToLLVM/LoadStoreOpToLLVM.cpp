@@ -1255,10 +1255,6 @@ struct LoadOpConversion
 
     const unsigned dpasTileToPackedIndicesRatio =
         elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst;
-    llvm::errs() << "ratio of dpas elems to packed elems per lane: "
-                 << dpasTileToPackedIndicesRatio << "\n";
-    llvm::errs() << "usePackedType = " << usePackedType << "\n";
-    llvm::errs() << "opsPerChannel = " << opsPerChannel << "\n";
 
     // Create the linear layout for the load.
     // First, we create a tile layout corresponding to a single invocation of
@@ -1296,8 +1292,6 @@ struct LoadOpConversion
             (!isTransposeRequired && dim == 0)
                 ? tileShape[dim] / dpasTileToPackedIndicesRatio
                 : tileShape[dim];
-        llvm::errs() << dim << " offsetDimSize: " << offsetDimSize
-                     << " vs tileShape: " << tileShape[dim] << "\n";
 #else
         const unsigned offsetDimSize = tileShape[dim];
 #endif
@@ -1603,13 +1597,11 @@ struct LoadOpConversion
           if (isTransposeRequired)
             outerDimBStride /= dpasTileToPackedIndicesRatio;
 #endif
-#if 1
+#if 0
           const unsigned innerDimBStride =
               isTransposeRequired ? dpasTileToPackedIndicesRatio : 1;
 #else
-          const unsigned innerDimBStride =
-              repKStride /
-              (packedElemsPerLanePerDPASInst * numOperandsInnerDimPerLoad);
+          const unsigned innerDimBStride = tileHeight / (repKStride * vBlocks);
 #endif
           layoutOffsetX *= (isOperandA ? numRepOuter : outerDimBStride);
           layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
