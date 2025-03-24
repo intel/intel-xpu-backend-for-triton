@@ -45,17 +45,17 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
   SmallVector<unsigned> ret(rank, 1);
   int rowDim = rank - 2, colDim = rank - 1;
   SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
-  // TODO: revisit this in flash attention.
+  unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
   for (Operation *op : slices)
     if (isa<tt::DotOp>(op) && (op != dotOp)) {
       ret[rowDim] = 4;
       ret[colDim] = 1;
-      while ((shape[rowDim] / ret[rowDim] > 16) &&
+      while ((shape[rowDim] / ret[rowDim] > threadsPerWarp) &&
              (ret[rowDim] * ret[colDim] < numWarps)) {
         ret[rowDim] *= 2;
       }
       ret[colDim] = numWarps / ret[rowDim];
-      return ret; //{numWarps, 1};
+      return ret;
     }
 
   if (rank == 3) {
