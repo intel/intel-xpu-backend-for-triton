@@ -1584,13 +1584,25 @@ struct LoadOpConversion
           auto layoutOffsetX = offset[dimInner].second;
           auto layoutOffsetY = offset[dimOuter].second;
 
+#if 1
+          unsigned outerDimBStride =
+              (repOuterStride * numOperandsOuterDimPerLoad) / repStride;
+          if (isTransposeRequired)
+            outerDimBStride /= dpasTileToPackedIndicesRatio;
+#else
           // TODO: can this be simplified?
           unsigned outerDimBStride =
               (repOuterStride * numOperandsOuterDimPerLoad) /
               (elemsPerDPASInst[dimInner] * vBlocks *
                (numRepInner / numOperandsInnerDimPerLoad));
+          llvm::errs() << "outerDimBStride = " << outerDimBStride << " = "
+                       << (repOuterStride * numOperandsOuterDimPerLoad) << " / "
+                       << (elemsPerDPASInst[dimInner] * vBlocks *
+                           (numRepInner / numOperandsInnerDimPerLoad))
+                       << "\n";
           if (isTransposeRequired)
             outerDimBStride /= dpasTileToPackedIndicesRatio;
+#endif
 #if 1
           const unsigned innerDimBStride =
               isTransposeRequired ? dpasTileToPackedIndicesRatio : 1;
