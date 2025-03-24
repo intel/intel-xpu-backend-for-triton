@@ -3,11 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def IntelDecomposeUnsupportedConversions
-    : Pass<"intel-decompose-unsupported-conversions", "mlir::ModuleOp"> {
-  let summary = "Decompose conversions that are not supported by TritonGPU -> LLVM";
-}
-
 def ConvertTritonIntelGPUToLLVM
     : Pass<"convert-triton-intel-gpu-to-llvm", "mlir::ModuleOp"> {
   let summary = "Convert TritonIntelGPU to LLVM";

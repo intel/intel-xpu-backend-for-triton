@@ -332,10 +332,6 @@ class XPUBackend(BaseBackend):
             srcMgr = llvm.source_mgr()
             ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
-        # FIXME: Advanced path drops tensor layouts, so this will crash on some
-        # operations being used, e.g., convert_layout.
-        if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
-            intel.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky

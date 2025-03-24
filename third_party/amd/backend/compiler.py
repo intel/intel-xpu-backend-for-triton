@@ -264,7 +264,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
             use_block_pingpong = is_pingpong_enabled(options.arch)
             if use_block_pingpong and options.num_stages == 2:
-                amd.passes.ttgpuir.add_block_pingpong(pm)
+                amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if HIPBackend.use_buffer_ops():
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
@@ -282,7 +282,6 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        amd.passes.ttgpuir.add_decompose_unsupported_conversions(pm, options.arch)
         # custom_lds_size is an experimental parameter that defines amount of LDS available
         # for one thread block. Measured in bytes.
         #
