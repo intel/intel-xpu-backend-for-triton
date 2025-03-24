@@ -224,6 +224,8 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_combine(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         if raise_block_ptr_flags['enabled']:
             ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False
@@ -263,6 +265,18 @@ class XPUBackend(BaseBackend):
 
         # Overwrite the threads_per_warp option with the module annotation.
         opt.threads_per_warp = intel.get_threads_per_warp(mod)
+
+        # Check threads_per_warp and num_threads are within limits.
+        if opt.threads_per_warp not in properties['sub_group_sizes']:
+            raise ValueError(
+                f"threads_per_warp={opt.threads_per_warp} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
+            )
+        if opt.num_warps > properties['max_num_sub_groups']:
+            raise ValueError(
+                f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
+            )
+        if opt.threads_per_warp * opt.num_warps > properties['max_work_group_size']:
+            raise ValueError(f"Kernel threads number exceeds the limit ({properties['max_work_group_size']})")
 
         # Run the TTIR -> TTGIR pass pipeline.
         pm = ir.pass_manager(mod.context)
@@ -318,10 +332,6 @@ class XPUBackend(BaseBackend):
             srcMgr = llvm.source_mgr()
             ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
-        # FIXME: Advanced path drops tensor layouts, so this will crash on some
-        # operations being used, e.g., convert_layout.
-        if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
-            intel.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky

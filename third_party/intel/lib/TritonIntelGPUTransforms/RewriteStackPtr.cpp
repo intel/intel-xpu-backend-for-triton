@@ -5,12 +5,8 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
-namespace tt = mlir::triton;
-namespace ttg = mlir::triton::gpu;
-namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREWRITESTACKPTR

@@ -1,8 +1,8 @@
 add_triton_library(TritonIntelGPUToLLVM
     ArithOpsToLLVM.cpp
     BF16Casts.cpp
+    ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
-    DecomposeUnsupportedConversions.cpp
     DotOpToLLVM/DPAS.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp

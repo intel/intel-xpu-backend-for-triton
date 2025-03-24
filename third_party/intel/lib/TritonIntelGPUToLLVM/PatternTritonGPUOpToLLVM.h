@@ -9,8 +9,6 @@
 
 namespace mlir::triton::intel {
 
-constexpr int patternBenefitAddSPIRVEnv = 30;
-
 /* Advanced path custom patterns start */
 
 void populateArithOpsToLLVMPatterns(
@@ -48,6 +46,11 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfo &targetInfo,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
+
+void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                        RewritePatternSet &patterns,
+                                        const TargetInfoBase &targetInfo,
+                                        PatternBenefit benefit);
 
 void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,

@@ -32,9 +32,9 @@ from triton._internal_testing import (
     is_hopper,
     is_hip,
     is_hip_cdna,
-    is_hip_mi200,
-    is_hip_mi300,
-    is_hip_mi350,
+    is_hip_cdna2,
+    is_hip_cdna3,
+    is_hip_cdna4,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -135,6 +135,15 @@ def check_type_supported(dtype, device):
     elif device in ['xpu']:
         if dtype in [torch.float64, "float64"] and not xpu_has_fp64():
             pytest.xfail("float64 not supported on current xpu hardware")
+
+
+def check_threads_supported(num_warps, threads_per_warp):
+    device = triton.runtime.driver.active.get_current_device()
+    props = triton.runtime.driver.active.utils.get_device_properties(device)
+    if threads_per_warp not in props['sub_group_sizes']:
+        pytest.xfail('unsupported warp size')
+    if threads_per_warp * num_warps > props['max_work_group_size']:
+        pytest.xfail('unsupported workgroup size')
 
 
 class MfmaLayout:
@@ -2357,6 +2366,7 @@ def get_reduced_dtype(dtype_str, op):
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+    check_threads_supported(num_warps, threads_per_warp)
 
     # triton kernel
     @triton.jit
@@ -2465,6 +2475,7 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
+    check_threads_supported(num_warps, threads_per_warp)
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
@@ -3668,11 +3679,11 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("float8e4nv not supported on sm <= 80")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not is_hip_mi350():
-                pytest.skip(f"{in_dtype} only supported on mi350")
-            if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_mi300():
-                pytest.skip(f"{in_dtype} only supported on mi300")
-            if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_mi300())):
+            if in_dtype in ("float8e5", "float8e4nv") and not is_hip_cdna4():
+                pytest.skip(f"{in_dtype} only supported on CDNA4")
+            if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+                pytest.skip(f"{in_dtype} only supported on CDNA3")
+            if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_cdna3())):
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
                 pytest.skip("kpack too large for K")
@@ -3887,8 +3898,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_mi300() or is_hip_mi350()):
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300 and MI350")
+            if not (is_hip_cdna3() or is_hip_cdna4()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3 and CDNA4")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -4061,10 +4072,10 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             # Clamp to avoid relative error issues
             ret.clamp_(-2**comp_dtype_max_exp, 2**comp_dtype_max_exp - 1)
         else:
-            if is_hip_mi350():
+            if is_hip_cdna4():
                 # On other chips, the A/B operands are upcasted to fp16/bf16
                 # before matmul, which has larger range to avoid overflow.
-                # On MI350, we use the V_MFMA_*_F8F6F4 instructions to
+                # On CDNA4, we use the V_MFMA_*_F8F6F4 instructions to
                 # directly calculate matmul on F8F6F4 data. So we need
                 # to narrow down the range of input to avoid overflow.
                 ret = torch.randint(20, 40, shape, dtype=torch.uint8, device=device)
@@ -4113,12 +4124,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b,
                                   **kernel_kwargs)
     z_ref = dot_scale_ref(x, scale_x, y, scale_y, type_a, type_b)
-    # Bigger tolerance for AMD MI200 devices.
-    # MI200 devices use reduced precision fp16 and bf16 and flush input and output denormal values
+    # Bigger tolerance for AMD CDNA2 devices.
+    # CDNA2 devices use reduced precision fp16 and bf16 and flush input and output denormal values
     # to zero. Detailed info is at:
     # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    atol = 2e-4 if is_hip_mi200() else 1e-5
-    rtol = 2e-2 if is_hip_mi200() else 1e-2
+    atol = 2e-4 if is_hip_cdna2() else 1e-5
+    rtol = 2e-2 if is_hip_cdna2() else 1e-2
     torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
@@ -5049,7 +5060,7 @@ def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
@@ -5065,7 +5076,7 @@ def test_tma_store_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device=device)
@@ -6587,10 +6598,10 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
         num_stages = 2
-        if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_mi300():
-            pytest.skip(f"{in_type_str} only supported on mi300")
-        if in_type_str in ("float8e5", "float8e4nv") and not is_hip_mi350():
-            pytest.skip(f"{in_type_str} only supported on mi350")
+        if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+            pytest.skip(f"{in_type_str} only supported on CDNA3")
+        if in_type_str in ("float8e5", "float8e4nv") and not is_hip_cdna4():
+            pytest.skip(f"{in_type_str} only supported on CDNA4")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
@@ -6614,6 +6625,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
     else:
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] == 9:
+        # Hopper-specific workaround lower precision accumulator.
         assert h.asm["ptx"].count("add.f32") == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 
@@ -6843,8 +6855,6 @@ def test_tl_range_num_stages(device):
 
 
 def test_tl_range_fuse():
-    if is_hip():
-        pytest.skip("loop fusion is not enabled on AMD")
 
     @triton.jit
     def kernel(ub):
@@ -7329,3 +7339,108 @@ def test_aliasing(device):
     buffer = torch.zeros(1, device=device)
     aliasing_kernel[(1, )](buffer, buffer)
     assert buffer[0] == 1
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_strided_load(dtype, device):
+
+    @triton.jit
+    def take_every_second_element(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        strided_offsets = tl.arange(0, BLOCK_SIZE) * 2
+        linear_offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + strided_offsets)
+        tl.store(output_ptr + linear_offsets, x)
+
+    STRIDE = 2
+    SIZE = 512
+    OUT_SIZE = SIZE // STRIDE
+
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    out_tri = torch.empty(OUT_SIZE, device=device)
+    take_every_second_element[(1, 1)](x_tri, out_tri, OUT_SIZE)
+
+    # Test that every second element (starting from [0]) from x is stored in out_tri
+    np.testing.assert_allclose(x[::2], to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_strided_store(dtype, device):
+
+    @triton.jit
+    def store_into_every_second(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        strided_offsets = tl.arange(0, BLOCK_SIZE) * 2
+        linear_offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + linear_offsets)
+        tl.store(output_ptr + strided_offsets, x)
+
+    STRIDE = 2
+    SIZE = 512
+    OUT_SIZE = SIZE * STRIDE
+
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    out_tri = torch.zeros(OUT_SIZE, device=device)
+    store_into_every_second[(1, 1)](x_tri, out_tri, SIZE)
+
+    # Test that every second element (starting from [0]) is the same as in x
+    np.testing.assert_allclose(x, to_numpy(out_tri)[::2])
+    # Test that every second element (starting from [1]) is still zero
+    np.testing.assert_allclose(np.zeros_like(x), to_numpy(out_tri)[1::2])
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_indirect_load(dtype, device):
+
+    @triton.jit
+    def indirect_load(offset_ptr, x_ptr, output_ptr, SIZE: tl.constexpr):
+        linear_offsets = tl.arange(0, SIZE)
+        offsets = tl.load(offset_ptr + linear_offsets)
+        x = tl.load(x_ptr + offsets)
+        tl.store(output_ptr + linear_offsets, x)
+
+    SIZE = 512
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    # Flip the range to load the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
+    out_tri = torch.empty(SIZE, device=device)
+    indirect_load[(1, 1)](ptr, x_tri, out_tri, SIZE)
+
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_indirect_store(dtype, device):
+
+    @triton.jit
+    def indirect_store(offset_ptr, x_ptr, output_ptr, SIZE: tl.constexpr):
+        linear_offsets = tl.arange(0, SIZE)
+        offsets = tl.load(offset_ptr + linear_offsets)
+        x = tl.load(x_ptr + linear_offsets)
+        tl.store(output_ptr + offsets, x)
+
+    SIZE = 512
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    # Flip the range to store the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
+    out_tri = torch.empty(SIZE, device=device)
+    indirect_store[(1, 1)](ptr, x_tri, out_tri, SIZE)
+
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", map(tl.dtype, tl.dtype.SINT_TYPES + tl.dtype.UINT_TYPES + tl.dtype.STANDARD_FP_TYPES))
+def test_dtype_tensor(device, dtype):
+
+    @triton.jit
+    def dtype_tensor_kernel(dtype: tl.constexpr):
+        tensor = tl.zeros((1, ), dtype)
+
+    dtype_tensor_kernel[(1, )](dtype)
