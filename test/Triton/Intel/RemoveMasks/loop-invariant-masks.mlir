@@ -41,9 +41,7 @@ module {
   // CHECK:           [[VAR_10:%.+]] = arith.andi [[VAR_8]], [[VAR_9]] : i1
   // CHECK:           scf.if [[VAR_10]] {
   // CHECK:             scf.for {{.+}} = {{.+}} to {{.+}} step {{.+}} : i32 {
-  // CHECK-NOT:           tt.load {{.*}},{{.*}},{{.*}}
-  // CHECK-DAG:           [[LOAD_A1:%.+]] = tt.load {{.*}} : tensor<1024x!tt.ptr<f32>>
-  // CHECK-DAG:           [[LOAD_B1:%.+]] = tt.load {{.*}} : tensor<512x!tt.ptr<f32>>
+  // CHECK-NOT:           tt.load {{.*}}, {{.*}}, {{.*}}
   // CHECK:             }
   // CHECK:           } else {
   // CHECK:             scf.for {{.+}} = {{.+}} to {{.+}} step {{.+}} : i32 {
@@ -98,9 +96,7 @@ module {
   // CHECK:           [[VAR_10:%.+]] = arith.andi [[VAR_8]], [[VAR_9]] : i1
   // CHECK:           scf.if [[VAR_10]] {
   // CHECK:             scf.for {{.+}} = {{.+}} to {{.+}} step {{.+}} : i32 {
-  // CHECK-NOT:           tt.load {{.*}},{{.*}},{{.*}}
-  // CHECK-DAG:           [[LOAD_A1:%.+]] = tt.load {{.*}} : tensor<1024x!tt.ptr<f32>>
-  // CHECK-DAG:           [[LOAD_B1:%.+]] = tt.load {{.*}} : tensor<512x!tt.ptr<f32>>
+  // CHECK-NOT:           tt.load {{.*}}, {{.*}}, {{.*}}
   // CHECK:             }
   // CHECK:           } else {
   // CHECK:             scf.for {{.+}} = {{.+}} to {{.+}} step {{.+}} : i32 {

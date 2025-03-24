@@ -1,8 +1,6 @@
-
 // RUN: triton-opt %s -triton-intel-remove-masks | FileCheck %s
 
 module {
-  // COM: Derived from tutorial 03-matrix-multiplication.
   tt.func public @test_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}) {
     %c31_i32 = arith.constant 31 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<64x128xf32>
@@ -94,16 +92,16 @@ module {
   // CHECK:           [[CMP2:%.+]] = arith.cmpi sgt, [[PARAM_5_]], [[CST_32_i32]] : i32
   // CHECK:           [[VER_COND:%.+]] = arith.andi [[CMP1]], [[CMP2]] : i1
   // CHECK:           [[LOOP_VER:%.+]] = scf.if [[VER_COND]] -> (tensor<64x128xf32>) {
-  // CHECK:             [[THEN_LOOP_RES:%.+]]:3 = scf.for {{.*}} -> (tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>) : i32 {
-  // CHECK-DAG:           [[LOAD_A1:%.+]] = tt.load {{.*}} : tensor<64x32x!tt.ptr<f16>>
-  // CHECK-DAG:           [[LOAD_B2:%.+]] = tt.load {{.*}} : tensor<32x128x!tt.ptr<f16>>
+  // CHECK:             [[THEN_LOOP_RES:%.+]]:3 = scf.for {{.*}} iter_args([[VAR_arg10:%.+]] = {{.*}}, [[VAR_arg11:%.+]] = {{.*}}, [[VAR_arg12:%.+]] = {{.*}}) -> (tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>) : i32 {
+  // CHECK:               [[LOAD_A1:%.+]] = tt.load [[VAR_arg11]] : tensor<64x32x!tt.ptr<f16>>
+  // CHECK:               [[LOAD_B2:%.+]] = tt.load [[VAR_arg12]] : tensor<32x128x!tt.ptr<f16>>
   // CHECK:               scf.yield {{.*}}, {{.*}}, {{.*}} : tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>
   // CHECK:             }
   // CHECK:             scf.yield [[THEN_LOOP_RES]]#0 : tensor<64x128xf32>
   // CHECK:           } else {
-  // CHECK:             [[ELSE_LOOP_RES:%.+]]:3 = scf.for {{.*}} -> (tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>) : i32 {
-  // CHECK-DAG:           [[LOAD_A2:%.+]] = tt.load {{.*}}, {{.*}}, {{.*}} : tensor<1024x!tt.ptr<f32>>
-  // CHECK-DAG:           [[LOAD_B2:%.+]] = tt.load {{.*}}, {{.*}}, {{.*}} : tensor<512x!tt.ptr<f32>>
+  // CHECK:             [[ELSE_LOOP_RES:%.+]]:3 = scf.for {{.*}} iter_args([[VAR_arg10:%.+]] = {{.*}}, [[VAR_arg11:%.+]] = {{.*}}, [[VAR_arg12:%.+]] = {{.*}}) -> (tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>) : i32 {
+  // CHECK:               [[LOAD_A2:%.+]] = tt.load [[VAR_arg11]], {{.*}}, {{.*}} : tensor<64x32x!tt.ptr<f16>>
+  // CHECK:               [[LOAD_B2:%.+]] = tt.load [[VAR_arg12]], {{.*}}, {{.*}} : tensor<32x128x!tt.ptr<f16>>
   // CHECK:               scf.yield {{.*}}, {{.*}}, {{.*}} : tensor<64x128xf32>, tensor<64x32x!tt.ptr<f16>>, tensor<32x128x!tt.ptr<f16>>
   // CHECK:             }
   // CHECK:             scf.yield [[ELSE_LOOP_RES]]#0 : tensor<64x128xf32>
