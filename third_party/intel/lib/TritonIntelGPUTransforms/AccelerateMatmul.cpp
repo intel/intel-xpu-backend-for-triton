@@ -36,7 +36,8 @@ namespace {
 
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
-                const ArrayRef<int64_t> shape, unsigned numWarps) {
+                const ArrayRef<int64_t> shape, unsigned numWarps,
+                ModuleOp mod) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -128,7 +129,7 @@ public:
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps, mod);
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
