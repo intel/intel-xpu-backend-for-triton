@@ -360,7 +360,7 @@ static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
 LinearLayout
 AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int rank = shape.size();
-  assert(rank == getWarpsPerCTA().size());
+  assert(rank == getRank());
 
   bool hasBatchDim = rank == 3;
   int mIndex = 0 + hasBatchDim;
@@ -706,7 +706,7 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 LinearLayout
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int rank = shape.size();
-  assert(rank == getWarpsPerCTA().size());
+  assert(rank == getRank());
 
   bool hasBatchDim = rank == 3;
   int mIndex = 0 + hasBatchDim;
