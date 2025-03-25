@@ -1609,9 +1609,14 @@ struct LoadOpConversion
           if (isTransposeRequired)
             outerDimBStride /= dpasTileToPackedIndicesRatio;
 #endif
-#if 0
+#if 1
           const unsigned innerDimBStride =
-              isTransposeRequired ? dpasTileToPackedIndicesRatio : 1;
+              isTransposeRequired
+                  ? (elemsPerDPASInst[dimInner] * dpasTileToPackedIndicesRatio *
+                     numOperandsInnerDimPerLoad) /
+                        repKStride
+                  : (elemsPerDPASInst[dimInner] * numOperandsInnerDimPerLoad) /
+                        (repKStride * vBlocks);
 #else
           const unsigned innerDimBStride = tileHeight / (repKStride * vBlocks);
 #endif
