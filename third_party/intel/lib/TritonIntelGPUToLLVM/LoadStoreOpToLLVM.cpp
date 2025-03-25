@@ -1250,11 +1250,15 @@ struct LoadOpConversion
     MLIRContext *ctx = rewriter.getContext();
     auto dimOuterStr = S("dim" + std::to_string(dimOuter));
     auto dimInnerStr = S("dim" + std::to_string(dimInner));
-    LLVM_DEBUG(llvm::dbgs() << "dimOuterStr: " << dimOuterStr << "\n");
-    LLVM_DEBUG(llvm::dbgs() << "dimInnerStr: " << dimInnerStr << "\n");
+    LLVM_DEBUG({
+      llvm::dbgs() << "dimOuterStr: " << dimOuterStr << "\n";
+      llvm::dbgs() << "dimInnerStr: " << dimInnerStr << "\n";
+    });
 
     const unsigned dpasTileToPackedIndicesRatio =
         elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst;
+    LLVM_DEBUG(llvm::dbgs() << "dpasTileToPackedIndicesRatio = "
+                            << dpasTileToPackedIndicesRatio << "\n");
 
     // Create the linear layout for the load.
     // First, we create a tile layout corresponding to a single invocation of
@@ -1598,6 +1602,21 @@ struct LoadOpConversion
             outerDimBStride /= dpasTileToPackedIndicesRatio;
 #endif
 #if 1
+          llvm::errs() << "elemsPerDPASInst[dimInner] = "
+                       << elemsPerDPASInst[dimInner] << "\n";
+          llvm::errs() << "dpasTileToPackedIndicesRatio = "
+                       << dpasTileToPackedIndicesRatio << "\n";
+          llvm::errs() << "numOperandsInnerDimPerLoad = "
+                       << numOperandsInnerDimPerLoad << "\n";
+          llvm::errs() << "repKStride = " << repKStride << "\n";
+          llvm::errs() << "vBlocks = " << vBlocks << "\n";
+          const unsigned innerDimBStride =
+              isTransposeRequired
+                  ? (elemsPerDPASInst[dimInner] * dpasTileToPackedIndicesRatio *
+                     numOperandsInnerDimPerLoad) /
+                        repKStride
+                  : (repKStride * numOperandsInnerDimPerLoad) / warpShape[1];
+#else
           const unsigned innerDimBStride =
               isTransposeRequired
                   ? (elemsPerDPASInst[dimInner] * dpasTileToPackedIndicesRatio *
@@ -1605,8 +1624,6 @@ struct LoadOpConversion
                         repKStride
                   : (elemsPerDPASInst[dimInner] * numOperandsInnerDimPerLoad) /
                         (repKStride * vBlocks);
-#else
-          const unsigned innerDimBStride = tileHeight / (repKStride * vBlocks);
 #endif
           layoutOffsetX *= (isOperandA ? numRepOuter : outerDimBStride);
           layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
