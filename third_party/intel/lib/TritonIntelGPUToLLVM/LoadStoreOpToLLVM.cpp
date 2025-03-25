@@ -2240,7 +2240,8 @@ struct AtomicRMWOpConversion
     auto intPtr = b.ptrtoint(i64_ty, rmwPtr);
     auto lowPtrBits = b.and_(intPtr, b.i64_val(3));
     auto elemIndex = b.trunc(i32_ty, b.lshr(lowPtrBits, b.i64_val(1)));
-    auto alignPtr = b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits));
+    auto alignPtr =
+        b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits).getResult());
     auto firstValInt = b.load(i32_ty, alignPtr, 4, false, false, false, false,
                               LLVM::AtomicOrdering::acquire);
 
