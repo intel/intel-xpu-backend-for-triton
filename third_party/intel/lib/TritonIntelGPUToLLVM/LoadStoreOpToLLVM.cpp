@@ -1582,26 +1582,20 @@ struct LoadOpConversion
           auto layoutOffsetX = offset[dimInner].second;
           auto layoutOffsetY = offset[dimOuter].second;
 
-#if 1
-          unsigned outerDimBStride =
-              (repOuterStride * numOperandsOuterDimPerLoad) / repStride;
-          if (isTransposeRequired)
-            outerDimBStride /= dpasTileToPackedIndicesRatio;
-#else
-          // TODO: can this be simplified?
-          unsigned outerDimBStride =
-              (repOuterStride * numOperandsOuterDimPerLoad) /
-              (elemsPerDPASInst[dimInner] * vBlocks *
-               (numRepInner / numOperandsInnerDimPerLoad));
-          llvm::errs() << "outerDimBStride = " << outerDimBStride << " = "
-                       << (repOuterStride * numOperandsOuterDimPerLoad) << " / "
-                       << (elemsPerDPASInst[dimInner] * vBlocks *
-                           (numRepInner / numOperandsInnerDimPerLoad))
-                       << "\n";
-          if (isTransposeRequired)
-            outerDimBStride /= dpasTileToPackedIndicesRatio;
+#if 0
+          llvm::errs() << "repOuterStride = " << repOuterStride << "\n";
+          llvm::errs() << "numOperandsOuterDimPerLoad = " << numOperandsOuterDimPerLoad << "\n";
+          llvm::errs() << "numLoadPerOutRepCluster = " << numLoadPerOutRepCluster << "\n";
+          llvm::errs() << "tileHeight = " << tileHeight << "\n";
+          llvm::errs() << "tileWidth = " << tileWidth << "\n";
 #endif
-#if 1
+          unsigned outerDimBStride = outerDimWarpNum *
+                                     numOperandsOuterDimPerLoad *
+                                     (repStride / tileHeight);
+          if (isTransposeRequired)
+            outerDimBStride /= dpasTileToPackedIndicesRatio;
+
+#if 0
           llvm::errs() << "elemsPerDPASInst[dimInner] = "
                        << elemsPerDPASInst[dimInner] << "\n";
           llvm::errs() << "dpasTileToPackedIndicesRatio = "
@@ -1610,21 +1604,15 @@ struct LoadOpConversion
                        << numOperandsInnerDimPerLoad << "\n";
           llvm::errs() << "repKStride = " << repKStride << "\n";
           llvm::errs() << "vBlocks = " << vBlocks << "\n";
-          const unsigned innerDimBStride =
-              isTransposeRequired
-                  ? (elemsPerDPASInst[dimInner] * dpasTileToPackedIndicesRatio *
-                     numOperandsInnerDimPerLoad) /
-                        repKStride
-                  : (repKStride * numOperandsInnerDimPerLoad) / warpShape[1];
-#else
-          const unsigned innerDimBStride =
-              isTransposeRequired
-                  ? (elemsPerDPASInst[dimInner] * dpasTileToPackedIndicesRatio *
-                     numOperandsInnerDimPerLoad) /
-                        repKStride
-                  : (elemsPerDPASInst[dimInner] * numOperandsInnerDimPerLoad) /
-                        (repKStride * vBlocks);
+          llvm::errs() << "warp shape: " << warpShape[0] << ", " <<  warpShape[1] << "\n";
 #endif
+          const unsigned innerDimBStride =
+              isTransposeRequired
+                  ? (repKStride * numOperandsInnerDimPerLoad *
+                     dpasTileToPackedIndicesRatio) /
+                        warpShape[0]
+                  : (repKStride * numOperandsInnerDimPerLoad) / warpShape[1];
+
           layoutOffsetX *= (isOperandA ? numRepOuter : outerDimBStride);
           layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
 
