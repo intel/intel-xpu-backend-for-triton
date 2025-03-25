@@ -2,6 +2,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
+#include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
 #include "llvm/Support/Debug.h"
@@ -67,9 +68,16 @@ public:
       if (!ttgi::isDivisible(base, 4))
         return;
 
-      // TODO: Check the BaseWidth as well.
-      // TODO: Check the OffsetX from the tl.make_block_pointer and tl.advance
-      // as well.
+      // Check the BaseWidth.
+      Value BaseWidth = shape[0];
+      if (!ttgi::isDivisible(BaseWidth, 4))
+        return;
+
+      // Check the OffsetX
+      Operation::operand_range offsets = makeTensorPtrOp.getOffsets();
+      Value OffsetX = offsets[0];
+      if (!ttgi::isDivisible(OffsetX, 4))
+        return;
 
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
       int fastChangeDim = -1;
