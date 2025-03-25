@@ -190,20 +190,67 @@ def context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_input_len, is_
     return o
 
 
+def _test_context_attention_once(head_dim, is_causal):
+    # Set up a simple test case
+    num_heads = 4
+    seq_lens = [8, 12]
+    max_seq_len = max(seq_lens)
+
+    # Create random input tensors
+    q = torch.randn(sum(seq_lens), num_heads, head_dim, device='xpu')
+    k = torch.randn(sum(seq_lens), num_heads, head_dim, device='xpu')
+    v = torch.randn(sum(seq_lens), num_heads, head_dim, device='xpu')
+    o = torch.zeros(sum(seq_lens), num_heads, head_dim, device='xpu')
+
+    # Create b_start_loc and b_seq_len tensors
+    b_start_loc = torch.tensor([0, seq_lens[0]], device='xpu')
+    b_seq_len = torch.tensor(seq_lens, device='xpu')
+
+    print(f'SeqLens: {sum(seq_lens)}, HeadDim: {head_dim}, NumHead: {num_heads}, is_causal: {is_causal}')
+    context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_seq_len, is_causal=is_causal)
+
+    cu_seq_lens = [0] * (len(seq_lens) + 1)
+    for i, seq_len in enumerate(seq_lens):
+        cu_seq_lens[i + 1] = cu_seq_lens[i] + seq_len
+
+    for i in range(len(seq_lens)):
+        start, end = cu_seq_lens[i], cu_seq_lens[i + 1]
+        o_torch = torch.nn.functional.scaled_dot_product_attention(
+            q[start:end].permute(1, 0, 2),
+            k[start:end].permute(1, 0, 2),
+            v[start:end].permute(1, 0, 2),
+            is_causal=is_causal,
+        ).permute(1, 0, 2)
+
+        cos_sim = torch.nn.functional.cosine_similarity(o[start:end].flatten(), o_torch.flatten(), dim=0)
+        assert cos_sim.item() > 1 - (1e-5)
+        assert torch.allclose(o[start:end], o_torch, atol=1e-2)
+
+
+def test_context_attention():
+    # head_dim = [128, 96, 80, 13]
+    head_dim = [13]
+
+    for dim in head_dim:
+        for is_causal in [True]:
+            print(f'context attention with head_dim={dim}, is_causal={is_causal}')
+            _test_context_attention_once(dim, is_causal)
+            print('Passed')
+    # _test_context_attention_once(96, True)
+
+
 # pylint: disable=unused-argument
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['BATCH', 'SEQ_LENS', 'Q_HEAD_NUM', 'KV_HEAD_NUM', 'HEAD_DIM', 'CAUSAL', 'MODE', 'VALIDATE'],
         x_vals=[  #
-            [bs, [1024], 32, 8, 128, causal, 'fwd', False] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
+            [bs, [1024], 32, 8, 128, causal, 'fwd', True] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
         ] + [  # noqa
-            [bs, [1024], 32, 32, 96, causal, 'fwd', False] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
+            [bs, [1024], 32, 32, 96, causal, 'fwd', True] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
         ] + [  # noqa
-            [bs, [1024], 28, 4, 128, causal, 'fwd', False]
-            for causal in [True, False]
-            for bs in [1, 16, 32, 64, 128]  # noqa
-        ] + [
+            [bs, [1024], 28, 4, 128, causal, 'fwd', True] for causal in [True, False] for bs in [1, 16, 32, 64, 128]
+        ] + [  # noqa
             # [4, [1024], 48, 48, 64, causal, 'fwd', True] for causal in [True, False]
             # ] + [
             # [bs, [16384 // bs], h, h, dhead, causal, 'fwd', True] for bs in [1, 2, 4, 8, 16, 32] for (h, dhead) in [(16, 128), (32, 64)] for causal in [False, True]
@@ -243,15 +290,21 @@ def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, CAUSAL, MODE, 
 
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'triton':
-        triton_fn = lambda: context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_seq_len, is_causal=CAUSAL)
+
+        def triton_fn():
+            return context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_seq_len, is_causal=CAUSAL)
 
         if VALIDATE:
             # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
             atol = 1e-1 if N_CTX == 16384 else 1e-2
-            torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(
-                q.cpu().permute(1, 0, 2),
-                k.cpu().permute(1, 0, 2),
-                v.cpu().permute(1, 0, 2), is_causal=CAUSAL).permute(1, 0, 2).to(torch.float32)
+
+            def torch_fn():
+                return torch.nn.functional.scaled_dot_product_attention(q.cpu().permute(1, 0, 2),
+                                                                        k.cpu().permute(1, 0, 2),
+                                                                        v.cpu().permute(1, 0, 2),
+                                                                        is_causal=CAUSAL).permute(1, 0,
+                                                                                                  2).to(torch.float32)
+
             benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
 
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
@@ -259,11 +312,15 @@ def benchmark(BATCH, SEQ_LENS, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, CAUSAL, MODE, 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    tflops = lambda ms: 2 * BATCH * (Q_HEAD_NUM + KV_HEAD_NUM) * N_CTX * N_CTX * HEAD_DIM * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: 2 * BATCH * (Q_HEAD_NUM + KV_HEAD_NUM) * N_CTX * HEAD_DIM * 2 * (1e-9) / (ms * 1e-3)
+    def tflops(ms):        return 2 * BATCH * (Q_HEAD_NUM + KV_HEAD_NUM) * \
+N_CTX * N_CTX * HEAD_DIM * (1e-12) / (ms * 1e-3)
+
+    def gbps(ms):        return 2 * BATCH * (Q_HEAD_NUM + KV_HEAD_NUM) * \
+N_CTX * HEAD_DIM * 2 * (1e-9) / (ms * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
 if __name__ == '__main__':
-    benchmark.run(show_plots=False, print_data=True)
+    # benchmark.run(show_plots=False, print_data=True)
+    test_context_attention()
