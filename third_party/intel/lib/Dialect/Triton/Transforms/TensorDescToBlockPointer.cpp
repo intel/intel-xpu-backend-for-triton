@@ -88,7 +88,11 @@ private:
       llvm_unreachable("TODO: Handle other operations with init arguments");
     }
 
-    return cast<tt::MakeTensorDescOp>(defOp);
+    if (auto makeTensorDescOp = dyn_cast<tt::MakeTensorDescOp>(defOp))
+      return makeTensorDescOp;
+
+    llvm_unreachable("TODO: Unhandled defOp kind");
+    return nullptr;
   }
 
   Value findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
@@ -175,7 +179,6 @@ private:
     Value makeTensorPtrOp =
         findOrCreateMakeTensorPtr(loc, makeTensorDescOp.getBase(), shapes,
                                   strides, offsets, sizes, builder);
-    // Replace the DescriptorLoadOp load with a LoadOp.
     auto loadOp = builder.createOrFold<tt::LoadOp>(
         loc, makeTensorPtrOp, descLoadOp.getCache(), descLoadOp.getEvict(),
         /*volatile*/ false);
@@ -220,7 +223,6 @@ private:
 
 private:
   SmallPtrSet<Operation *, 8> cleanUp;
-  IRMapping ptrMap;
 };
 
 } // namespace
