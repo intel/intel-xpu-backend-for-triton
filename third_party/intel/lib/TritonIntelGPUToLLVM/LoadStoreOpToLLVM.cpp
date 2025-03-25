@@ -1494,9 +1494,9 @@ struct LoadOpConversion
             numRepOuter * numLoadPerOutRepCluster, kLoad, dimOuterStr);
       } else {
         tileLayout *= LinearLayout::identity1D(
-            numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
-        tileLayout *= LinearLayout::identity1D(
             numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(
+            numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
       }
     }
 
@@ -1597,7 +1597,7 @@ struct LoadOpConversion
           auto layoutOffsetX = offset[dimInner].second;
           auto layoutOffsetY = offset[dimOuter].second;
 
-#if 1
+#if 0
           llvm::errs() << "repOuterStride = " << repOuterStride << "\n";
           llvm::errs() << "numOperandsOuterDimPerLoad = "
                        << numOperandsOuterDimPerLoad << "\n";
@@ -1612,7 +1612,7 @@ struct LoadOpConversion
           if (isTransposeRequired)
             outerDimBStride /= dpasTileToPackedIndicesRatio;
 
-#if 1
+#if 0
           llvm::errs() << "elemsPerDPASInst[dimInner] = "
                        << elemsPerDPASInst[dimInner] << "\n";
           llvm::errs() << "dpasTileToPackedIndicesRatio = "
