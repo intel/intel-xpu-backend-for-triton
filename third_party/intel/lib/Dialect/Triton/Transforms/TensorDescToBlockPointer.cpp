@@ -2,6 +2,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -56,9 +57,17 @@ public:
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       return TypeSwitch<Operation *, WalkResult>(op)
           .Case<tt::DescriptorLoadOp>([&](auto loadOp) {
-            if (failed(rewriteDescriptorLoadOp(loadOp)))
+            if (failed(rewriteDescriptorLoadOrStoreOp(loadOp)))
               loadOp->emitRemark(
-                  "TritonRaiseToBlockPointer: Failed to rewrite load");
+                  "TritonIntelTensorDescToBlockPointer: Failed to rewrite "
+                  "tensor descriptor load operation ");
+            return WalkResult::advance();
+          })
+          .Case<tt::DescriptorStoreOp>([&](auto storeOp) {
+            if (failed(rewriteDescriptorLoadOrStoreOp(storeOp)))
+              storeOp->emitRemark(
+                  "TritonIntelTensorDescToBlockPointer: Failed to "
+                  "rewrite tensor descriptor store operation");
             return WalkResult::advance();
           })
           .Default([&](auto) { return WalkResult::advance(); });
@@ -141,17 +150,20 @@ private:
     // Create a new block pointer.
   }
 
-  LogicalResult rewriteDescriptorLoadOp(tt::DescriptorLoadOp descLoadOp) {
-    OpBuilder builder(descLoadOp);
-    Location loc = descLoadOp.getLoc();
-    RankedTensorType resType = descLoadOp.getResult().getType();
-
-    tt::MakeTensorDescOp makeTensorDescOp =
-        getMakeTensorDescOp(descLoadOp.getDesc());
+  template <typename OpTy,
+            std::enable_if_t<llvm::is_one_of<OpTy, tt::DescriptorLoadOp,
+                                             tt::DescriptorStoreOp>::value,
+                             bool> = true>
+  LogicalResult rewriteDescriptorLoadOrStoreOp(OpTy op) {
+    OpBuilder builder(op);
+    Location loc = op.getLoc();
+    TypedValue<tt::TensorDescType> tDesc = op.getDesc();
+    tt::TensorDescType tDescType = tDesc.getType();
+    tt::MakeTensorDescOp makeTensorDescOp = getMakeTensorDescOp(tDesc);
     assert(makeTensorDescOp && "Expected a MakeTensorDescOp");
 
     LLVM_DEBUG({
-      llvm::dbgs() << "Rewriting: " << descLoadOp << "\n";
+      llvm::dbgs() << "Rewriting: " << op << "\n";
       llvm::dbgs() << "where tensor desc is: " << makeTensorDescOp << "\n";
     });
 
@@ -160,7 +172,7 @@ private:
     SmallVector<int32_t> sizes;
     for (const auto [shape, stride, offset, size] :
          llvm::zip(makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
-                   descLoadOp.getIndices(), resType.getShape())) {
+                   op.getIndices(), tDescType.getBlockType().getShape())) {
       shapes.push_back(findOrCreateCast(
           loc, shape, builder.getIntegerType(shapeAndStridesBitwidth),
           builder));
@@ -175,19 +187,27 @@ private:
     Value makeTensorPtrOp =
         findOrCreateMakeTensorPtr(loc, makeTensorDescOp.getBase(), shapes,
                                   strides, offsets, sizes, builder);
-    // Replace the DescriptorLoadOp load with a LoadOp.
-    auto loadOp = builder.createOrFold<tt::LoadOp>(
-        loc, makeTensorPtrOp, descLoadOp.getCache(), descLoadOp.getEvict(),
-        /*volatile*/ false);
 
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << makeTensorPtrOp << "\n";
-      llvm::dbgs().indent(2) << loadOp << "\n";
     });
 
-    descLoadOp.replaceAllUsesWith(loadOp);
-    cleanUp.insert(descLoadOp);
+    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
+    if constexpr (isLoad) {
+      auto newOp = builder.createOrFold<tt::LoadOp>(
+          loc, makeTensorPtrOp, op.getCache(), op.getEvict(),
+          /*volatile*/ false);
+      LLVM_DEBUG(llvm::dbgs().indent(2) << newOp << "\n");
+      op.replaceAllUsesWith(newOp);
+    } else {
+      [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
+          loc, makeTensorPtrOp, op.getSrc(), tt::CacheModifier::NONE,
+          tt::EvictionPolicy::NORMAL);
+      LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
+    }
+
+    cleanUp.insert(op);
     cleanUp.insert(makeTensorDescOp);
 
     return success();
