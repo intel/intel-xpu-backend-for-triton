@@ -72,10 +72,11 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
         src.getKWidth());
   }
   if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)) {
-    auto warps = to_vector(warpsPerCTA);
-    warps.insert(warps.begin() + src.getDim(), 1);
+    // TODO: think of a way to construct slice layouts based on warpsPerCTA
+    // argument
+    auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(src.getParent());
     return triton::gpu::SliceEncodingAttr::get(
-        ctx, src.getDim(), createTmpLayout(src.getParent(), warps));
+        ctx, src.getDim(), createTmpLayout(src.getParent(), parentWarpsPerCTA));
   }
   // TODO: support linear layout if needed.
   if (isa<triton::gpu::LinearEncodingAttr>(layout))
