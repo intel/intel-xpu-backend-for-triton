@@ -1260,8 +1260,8 @@ struct LoadOpConversion
     unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
 
     MLIRContext *ctx = rewriter.getContext();
-    auto dimOuterStr = S("dim" + std::to_string(dimOuter));
-    auto dimInnerStr = S("dim" + std::to_string(dimInner));
+    const StringAttr dimOuterStr = S("dim" + std::to_string(dimOuter));
+    const StringAttr dimInnerStr = S("dim" + std::to_string(dimInner));
     LLVM_DEBUG({
       llvm::dbgs() << "dimOuterStr: " << dimOuterStr << "\n";
       llvm::dbgs() << "dimInnerStr: " << dimInnerStr << "\n";
@@ -1280,12 +1280,13 @@ struct LoadOpConversion
     StringAttr kOffset = S("offset");
     StringAttr kIteration = S("iteration");
     StringAttr kLoad = S("load");
-    auto createTileLayout = [&](const SmallVector<unsigned> &threadOrder,
+
+    auto createTileLayout = [&](const SmallVectorImpl<unsigned> &threadOrder,
                                 SmallVector<unsigned> tileShape) {
       auto outDimNames = standardOutDimNames(ctx, tensorShape.size());
       LinearLayout layout = LinearLayout::empty();
       SmallVector<StringAttr> kOffsetDims;
-      auto totalOffsets = 1;
+      unsigned totalOffsets = 1;
       assert(tileShape.size() == 2); // only support 2D layouts for now
 
       if (isTransposeRequired && opIdx == DpasEncodingAttr::OpIdx::OperandB) {
@@ -1303,14 +1304,10 @@ struct LoadOpConversion
         assert(llvm::isPowerOf2_32(tileShape[dim]));
         // reduce the offset dimension size by the number of elements packed in
         // a single slot for the row wise dimension
-#if 1
         const unsigned offsetDimSize =
             (!isTransposeRequired && dim == 0)
                 ? tileShape[dim] / dpasTileToPackedIndicesRatio
                 : tileShape[dim];
-#else
-        const unsigned offsetDimSize = tileShape[dim];
-#endif
         layout *=
             LinearLayout::identity1D(offsetDimSize, kOffset, outDimNames[dim]);
         totalOffsets *= offsetDimSize;
@@ -1408,39 +1405,18 @@ struct LoadOpConversion
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding iterations: "
                    << tileLayout << "\n";
+
       for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
-        {
-          size_t offset = 0;
+        auto printTileLayoutVals = [&](const size_t offset) {
           auto tensorVals =
               tileLayout.apply({{kOffset, offset}, {kIteration, itr}});
           assert(tensorVals.size() == 2);
           llvm::dbgs() << itr << ", " << offset << " : " << tensorVals[0].second
                        << ", " << tensorVals[1].second << "\n";
-        }
-        {
-          size_t offset = 1;
-          auto tensorVals =
-              tileLayout.apply({{kOffset, offset}, {kIteration, itr}});
-          assert(tensorVals.size() == 2);
-          llvm::dbgs() << itr << ", " << offset << " : " << tensorVals[0].second
-                       << ", " << tensorVals[1].second << "\n";
-        }
-        {
-          size_t offset = tileLayout.getInDimSize(kOffset) - 2;
-          auto tensorVals =
-              tileLayout.apply({{kOffset, offset}, {kIteration, itr}});
-          assert(tensorVals.size() == 2);
-          llvm::dbgs() << itr << ", " << offset << " : " << tensorVals[0].second
-                       << ", " << tensorVals[1].second << "\n";
-        }
-        {
-          size_t offset = tileLayout.getInDimSize(kOffset) - 1;
-          auto tensorVals =
-              tileLayout.apply({{kOffset, offset}, {kIteration, itr}});
-          assert(tensorVals.size() == 2);
-          llvm::dbgs() << itr << ", " << offset << " : " << tensorVals[0].second
-                       << ", " << tensorVals[1].second << "\n";
-        }
+        };
+
+        printTileLayoutVals(0);
+        printTileLayoutVals(tileLayout.getInDimSize(kOffset) - 1);
       }
       llvm::dbgs() << "\n";
     });
@@ -1505,42 +1481,17 @@ struct LoadOpConversion
                    << tileLayout << "\n";
       for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
         for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
-          {
-            size_t offset = 0;
+          auto printTileLayoutVals = [&](const size_t offset) {
             auto tensorVals = tileLayout.apply(
                 {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
             assert(tensorVals.size() == 2);
             llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
                          << tensorVals[0].second << ", " << tensorVals[1].second
                          << "\n";
-          }
-          {
-            size_t offset = 1;
-            auto tensorVals = tileLayout.apply(
-                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
-            assert(tensorVals.size() == 2);
-            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
-                         << tensorVals[0].second << ", " << tensorVals[1].second
-                         << "\n";
-          }
-          {
-            size_t offset = tileLayout.getInDimSize(kOffset) - 2;
-            auto tensorVals = tileLayout.apply(
-                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
-            assert(tensorVals.size() == 2);
-            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
-                         << tensorVals[0].second << ", " << tensorVals[1].second
-                         << "\n";
-          }
-          {
-            size_t offset = tileLayout.getInDimSize(kOffset) - 1;
-            auto tensorVals = tileLayout.apply(
-                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
-            assert(tensorVals.size() == 2);
-            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
-                         << tensorVals[0].second << ", " << tensorVals[1].second
-                         << "\n";
-          }
+          };
+
+          printTileLayoutVals(0);
+          printTileLayoutVals(tileLayout.getInDimSize(kOffset) - 1);
         }
         llvm::dbgs() << "\n";
       }
@@ -1597,33 +1548,12 @@ struct LoadOpConversion
           auto layoutOffsetX = offset[dimInner].second;
           auto layoutOffsetY = offset[dimOuter].second;
 
-#if 0
-          llvm::errs() << "repOuterStride = " << repOuterStride << "\n";
-          llvm::errs() << "numOperandsOuterDimPerLoad = "
-                       << numOperandsOuterDimPerLoad << "\n";
-          llvm::errs() << "numLoadPerOutRepCluster = "
-                       << numLoadPerOutRepCluster << "\n";
-          llvm::errs() << "tileHeight = " << tileHeight << "\n";
-          llvm::errs() << "tileWidth = " << tileWidth << "\n";
-#endif
           unsigned outerDimBStride =
               outerDimWarpNum * numOperandsOuterDimPerLoad *
               numLoadPerOutRepCluster * (repStride / tileHeight);
           if (isTransposeRequired)
             outerDimBStride /= dpasTileToPackedIndicesRatio;
 
-#if 0
-          llvm::errs() << "elemsPerDPASInst[dimInner] = "
-                       << elemsPerDPASInst[dimInner] << "\n";
-          llvm::errs() << "dpasTileToPackedIndicesRatio = "
-                       << dpasTileToPackedIndicesRatio << "\n";
-          llvm::errs() << "numOperandsInnerDimPerLoad = "
-                       << numOperandsInnerDimPerLoad << "\n";
-          llvm::errs() << "repKStride = " << repKStride << "\n";
-          llvm::errs() << "vBlocks = " << vBlocks << "\n";
-          llvm::errs() << "warp shape: " << warpShape[0] << ", " << warpShape[1]
-                       << "\n";
-#endif
           const unsigned innerDimBStride =
               isTransposeRequired
                   ? (repKStride * numOperandsInnerDimPerLoad *
