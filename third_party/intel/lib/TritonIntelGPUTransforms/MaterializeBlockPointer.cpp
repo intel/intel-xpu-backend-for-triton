@@ -5,6 +5,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -54,6 +55,8 @@ public:
       LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
       auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
       auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      auto elementWidth = tensorType.getElementTypeBitWidth();
+      LDBG("elementWidth: " << elementWidth);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
       unsigned rank = shape.size();
@@ -65,19 +68,46 @@ public:
       // OffsetX and BaseWidth. The OffsetX and BaseWidth has extra restriction
       // that it has to be 4 bytes aligned.
       auto base = makeTensorPtrOp.getBase();
-      if (!ttgi::isDivisible(base, 4))
+      if (!ttgi::isDivisible(base, 4)) {
+        LDBG("Found Non 4 bytes aligned base: " << base);
         return;
+      }
 
       // Check the BaseWidth.
       Value BaseWidth = shape[0];
-      if (!ttgi::isDivisible(BaseWidth, 4))
+      if (!ttgi::isDivisible(BaseWidth, 32 / elementWidth)) {
+        LDBG("Found Non " << (32 / elementWidth)
+                          << " bytes aligned BaseWidth: " << BaseWidth);
         return;
+      }
 
       // Check the OffsetX
       Operation::operand_range offsets = makeTensorPtrOp.getOffsets();
       Value OffsetX = offsets[0];
-      if (!ttgi::isDivisible(OffsetX, 4))
+      if (!ttgi::isDivisible(OffsetX, 32 / elementWidth)) {
+        LDBG("Found Non " << (32 / elementWidth)
+                          << " bytes aligned offsetX: " << OffsetX);
         return;
+      }
+
+      // Check the OffsetX from advanceOp
+      tt::AdvanceOp advanceOp = nullptr;
+      for (auto user : ptr.getUsers()) {
+        if (auto adv = dyn_cast<tt::AdvanceOp>(user)) {
+          advanceOp = adv;
+          LDBG("Found first user of advanceOp: " << advanceOp);
+          break;
+        }
+      }
+      if (advanceOp) {
+        Value offset = advanceOp.getOffsets()[0];
+        if (!ttgi::isDivisible(offset, 32 / elementWidth)) {
+          LDBG("Found Non  "
+               << (32 / elementWidth)
+               << " bytes aligned offset from advanceOp: " << offset);
+          return;
+        }
+      }
 
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
       int fastChangeDim = -1;
@@ -93,8 +123,7 @@ public:
         return;
       }
 
-      if (fastChangeDim == rank - 2 &&
-          tensorType.getElementTypeBitWidth() == 8) {
+      if (fastChangeDim == rank - 2 && elementWidth == 8) {
         // TODO: column major layout w/ fp8 has performance regression
         return;
       }
@@ -115,8 +144,7 @@ public:
         Value pitch =
             strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
         LDBG("Pitch: " << pitch);
-        if (!ttgi::isDivisible(pitch,
-                               128 / tensorType.getElementTypeBitWidth()))
+        if (!ttgi::isDivisible(pitch, 128 / elementWidth))
           return;
 
         const bool isRowMajor = fastChangeDim == rank - 1;

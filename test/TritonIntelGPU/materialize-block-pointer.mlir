@@ -65,6 +65,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", triton_intel_gp
     %28 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%pitch, %c1_i64], [%c15_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot_b>>
     %29 = tt.load %27 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %30 = tt.load %28 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+
+    // COM: Non-64 divisible offsetX from tt.advance.
+    // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32, triton_intel_gpu.block_io = "row_major"}
+    // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 0>, padding = 1 : i32}
+    // CHECK: tt.advance {{.*}}, [%c0_i32, %c0_i32]
+    // CHECK: tt.advance {{.*}}, [%c15_i32, %c0_i32]
+    %31 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%pitch, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x32xf16, #dot_a>>
+    %32 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%pitch, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot_b>>
+    %33 = tt.load %31 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    %34 = tt.load %32 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    %35 = tt.advance %31, [%c0_i32, %c0_i32] : <tensor<64x32xf16, #dot_a>>
+    %36 = tt.advance %32, [%c15_i32, %c0_i32] : <tensor<32x64xf16, #dot_b>>
     tt.return
   }
 }
