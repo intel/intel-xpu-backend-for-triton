@@ -8,6 +8,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
+import numpy as np
 
 
 # pylint: disable=unused-argument
@@ -526,6 +527,19 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
+def check_close(f_val, f_ref, atol, rtol):
+    x = f_val()
+    y = f_ref()
+    x = x.cpu().detach().numpy()
+    y = y.cpu().detach().numpy()
+    close = np.isclose(x, y, atol=atol, rtol=1e-3)
+    num_close = np.count_nonzero(close)
+    num_not_close = close.size - num_close
+    if num_not_close != 0:
+        print("Warning: {nnc}, out of {size} elements do not match ({perc:.2f}%) in XeTLA impl".format(
+            nnc=num_not_close, size=close.size, perc=num_not_close / close.size * 100))
+
+
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
@@ -561,6 +575,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
     if MODE == 'bwd':
         sm_scale = 1.3
     quantiles = [0.5, 0.0, 1.0]
+    # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
+    torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
+    ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
@@ -573,9 +590,6 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
         if MODE == 'bwd':
             torch_o = torch_fn()
             torch_do = torch.randn_like(torch_o)
@@ -600,7 +614,16 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             size_ml = Z * H * N_CTX
             m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
             l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-            xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
+
+            def xetla_fn():
+                func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
+                return out
+
+            atol = 1e-1 if N_CTX == 16384 else 1e-2
+            if os.getenv("XETLA_ASSERT_RESULT", "0") == "1":
+                benchmark_suit.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
+            elif os.getenv("XETLA_WARN_MISMATCH", "1") == "1":
+                check_close(xetla_fn, torch_fn, atol, 1e-3)
         if MODE == 'bwd':
             module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
             func = getattr(xetla_kernel, module_name)
@@ -622,9 +645,12 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             bias_strideF = -1
             attn_mask_padding = 0
 
-            xetla_fn = lambda: func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha,
-                                    dropout_prob, grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX,
-                                    N_CTX, bias_strideB, bias_strideN, bias_strideF, attn_mask_padding)
+            def xetla_fn():
+                func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha, dropout_prob,
+                     grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX, N_CTX, bias_strideB,
+                     bias_strideN, bias_strideF, attn_mask_padding)
+                return out
+
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:
