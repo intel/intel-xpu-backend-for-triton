@@ -73,42 +73,6 @@ public:
         return;
       }
 
-      // Check the BaseWidth.
-      Value BaseWidth = shape[0];
-      if (!ttgi::isDivisible(BaseWidth, 32 / elementWidth)) {
-        LDBG("Found Non " << (32 / elementWidth)
-                          << " bytes aligned BaseWidth: " << BaseWidth);
-        return;
-      }
-
-      // Check the OffsetX
-      Operation::operand_range offsets = makeTensorPtrOp.getOffsets();
-      Value OffsetX = offsets[0];
-      if (!ttgi::isDivisible(OffsetX, 32 / elementWidth)) {
-        LDBG("Found Non " << (32 / elementWidth)
-                          << " bytes aligned offsetX: " << OffsetX);
-        return;
-      }
-
-      // Check the OffsetX from advanceOp
-      tt::AdvanceOp advanceOp = nullptr;
-      for (auto user : ptr.getUsers()) {
-        if (auto adv = dyn_cast<tt::AdvanceOp>(user)) {
-          advanceOp = adv;
-          LDBG("Found first user of advanceOp: " << advanceOp);
-          break;
-        }
-      }
-      if (advanceOp) {
-        Value offset = advanceOp.getOffsets()[0];
-        if (!ttgi::isDivisible(offset, 32 / elementWidth)) {
-          LDBG("Found Non  "
-               << (32 / elementWidth)
-               << " bytes aligned offset from advanceOp: " << offset);
-          return;
-        }
-      }
-
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
       int fastChangeDim = -1;
       for (size_t i = 0; i < strides.size(); ++i) {
@@ -122,6 +86,23 @@ public:
       if (fastChangeDim < 0) {
         return;
       }
+
+      // Check the BaseWidth.
+      Value BaseWidth = shape[fastChangeDim];
+      if (!ttgi::isDivisible(BaseWidth, std::ceil(32 / elementWidth))) {
+        LDBG("Found Non 4 bytes aligned BaseWidth: " << BaseWidth);
+        return;
+      }
+
+      // Check the OffsetX
+      Operation::operand_range offsets = makeTensorPtrOp.getOffsets();
+      Value OffsetX = offsets[fastChangeDim];
+      if (!ttgi::isDivisible(OffsetX, std::ceil(32 / elementWidth))) {
+        LDBG("Found Non 4 bytes aligned offsetX: " << OffsetX);
+        return;
+      }
+
+      // TODO: Check the OffsetX from tl.advance
 
       if (fastChangeDim == rank - 2 && elementWidth == 8) {
         // TODO: column major layout w/ fp8 has performance regression
