@@ -36,7 +36,7 @@ public:
     Type i16Ty = type::i16Ty(ctx);
     Type s32Ty = IntegerType::get(ctx, 32, IntegerType::Signed);
 
-    unsigned threadsPerWarp = product<unsigned>(layout.getThreadsPerWarp());
+    unsigned threadsPerWarp = layout.getThreadsPerWarp();
     unsigned opsPerChannel = layout.getOpsPerChannel();
     SmallVector<unsigned> shapeC = layout.getDPASInstShapeC();
     unsigned elemNumC = product<unsigned>(shapeC) / threadsPerWarp;
