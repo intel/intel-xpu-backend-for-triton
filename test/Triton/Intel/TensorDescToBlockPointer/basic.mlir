@@ -12,14 +12,15 @@ module {
   }
 
   // CHECK:      tt.func public @test1([[PARAM_0:%.+]]: !tt.ptr<i16>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
-  // CHECK-DAG:     [[CST_1_i64:%.+]] = arith.constant 1 : i64
-  // CHECK-DAG:     [[CST_64_i32:%.+]] = arith.constant 64 : i32
-  // CHECK-DAG:     [[CST_8_i32:%.+]] = arith.constant 8 : i32
-  // CHECK-NOT: separator of consecutive DAGs
-  // CHECK-DAG:     [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
-  // CHECK-DAG:     [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK:         [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] {{.*}} : <tensor<8x32xi16>>
-  // CHECK:         [[LOAD:%.+]] = tt.load [[TENSOR_PTR]] : !tt.ptr<tensor<8x32xi16>>
-  // CHECK:         tt.return
-  // CHECK:       }
+  // CHECK-NOT:    tt.make_tensor_descriptor
+  // CHECK-NOT:    tt.descriptor_load
+  // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
+  // CHECK-DAG:    [[CST_64_i32:%.+]] = arith.constant 64 : i32
+  // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
+  // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
+  // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
+  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_8_i32]], [[CST_64_i32]]] {{.*}} : <tensor<8x32xi16>>
+  // CHECK:        [[LOAD:%.+]] = tt.load [[TENSOR_PTR]] : !tt.ptr<tensor<8x32xi16>>
+  // CHECK:        tt.return
+  // CHECK:      }
 }
