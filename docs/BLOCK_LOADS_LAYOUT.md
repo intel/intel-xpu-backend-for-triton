@@ -1,8 +1,8 @@
 # Using Linear Layout for Intel 2D Block Loads
 
-The Intel Xe2/Xe3 Triton backend relies on the [`Dot Product Accumulate Systolic`](https://github.com/intel/intel-graphics-compiler/blob/master/documentation/visa/instructions/DPAS.md) (DPAS) instruction for cooperative subgroup mma operations. Cooperative load instructions are important for maximizing performance when using DPAS to accelerate mma. A typical GEMM kernel will generate several DPAS instructions for a subgroup. Even with a 2D block load instruction, loading the data for each individual DPAS instruction would be inefficient. Therefore, when lowering to LLVM the Intel backend expands load instructions to create 2D block loads which load data for all contiguous blocks used by DPAS instructions in a subgroup, up to hardware limitations.
+The Intel Xe2/Xe3 Triton backend relies on the [`Dot Product Accumulate Systolic`](https://github.com/intel/intel-graphics-compiler/blob/master/documentation/visa/instructions/DPAS.md) (DPAS) instruction for cooperative subgroup mma operations. Cooperative load instructions are important for maximizing performance when using DPAS to accelerate mma. A typical GEMM kernel will generate several DPAS instructions for a subgroup. Even with a 2D block load instruction, loading the data for each individual DPAS instruction would be inefficient. Therefore, when lowering to LLVM the Intel Triton backend expands load instructions to create 2D block loads, which load data for all contiguous blocks used by DPAS instructions in a subgroup up to hardware limitations.
 
-The lowering of `tt.dot` operations to `DPAS` instructions and tensor loads to 2D block loads starts by identifying and lowering the tensor loads. The lowering occurs during the `Triton GPU to LLVM` conversion pass. For each `TTGIR::LoadOp` operation we emit both a LLVM IR function call to the appropriate 2D block load instruction(s) and a set of shuffle vectors to transform the output of the block load into the required input for the DPAS instruction. This transformation is expected to take place only in registers and is represented using LLVM IR virtual registers.
+The lowering of `tt.dot` operations to `DPAS` instructions and tensor loads to 2D block loads starts by identifying and lowering the tensor loads. This lowering occurs during the `Triton GPU to LLVM` conversion pass. For each `TTGIR::LoadOp` operation we emit both a LLVM IR function call to the appropriate 2D block load instruction(s) and a set of shuffle vectors to transform the output of the block load into the required input for the DPAS instruction. This transformation is expected to take place only in registers and is represented using LLVM IR virtual registers.
 
 The 2D block load size is primarily determined by the Tensor layout attached to the Triton `tt.dot` operation. However, there are numerous special cases and hardware limitations applied to the load. The algorithm works by starting with the DPAS required tile size and expanding the tile size based on the parameters of the DPAS layout, subject to hardware limitations. Below we present example layouts for a simple `AxB` and `AxBT` gemm kernel.
 
@@ -18,7 +18,7 @@ We will start with the A matrix load, which is identical for both the `B` and `B
 tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>, kWidth = 1}>>
 ```
 
-Note that the tensor type describes the expected data layout feeding into the `tt.dot` / DPAS instructions. While this type is attached to the load instruction, the data loaded may not match the layout described above. The lowering of the `LoadOp` to 2D blocked load includes an implicit conversion to make the loaded data match the desired tensor type. This conversion is instantiated using shuffle vectors.
+Note that the tensor type describes the expected data layout going into and out of the `tt.dot` / DPAS instructions. While this type is attached to the load instruction, the data retrieved by the load may not match the layout described above. The lowering of the `LoadOp` to 2D blocked load also implies a conversion to make the loaded data match the desired tensor type. This conversion is instantiated using shuffle vectors.
 
 We can use the `triton-tensor-layout` utility to print the DPAS layout with a hardware centric view (i.e. register/lane/warp mapping to tensor coordinates) using the following command:
 ```
@@ -110,7 +110,7 @@ For a `bf16 x bf16` DPAS (with `fp32` accumulator) the A matrix input to each in
 
 We now have all the information we need to determine both the number of 2D block loads for the `A` matrix and their sizes.
 
-Up to this point the load for the `A` matrix is represented as a single load per block with the `TTGIR` layouts mapping that block to underlying hardware primitives (workgroups and subgroups/warps). We need to translate that load into one or more load instructions per subgroup (warp). We start with the DPAS tile size, which as shown above is `8x16`. We create a linear layout which takes as input a parameter, `offset`, which is a 1D-rowwise index into the tile, and outputs the 2D tensor coordinate corresponding to that index:
+Up to this point the load for the `A` matrix is represented as a single load per block with the `TTGIR` layouts mapping that block to underlying hardware primitives (workgroups and subgroups/warps). We need to translate that load into one or more load instructions per subgroup (warp). We start with the DPAS tile size, which as shown above is `8x16`. We create a linear layout which takes as input a single dimension, `offset`, which is a 1D-rowwise index into the tile, and outputs the 2D tensor coordinate corresponding to that index:
 
 ```
 Block load tile layout:
@@ -135,7 +135,7 @@ The indices for the first SIMD lane / work-item (every 16th offset) are printed 
 112 : 7, 0
 ```
 
-During lowering of the `tt.dot` operation to DPAS multiple DPAS instructions will be generated according to the TTGIR DPAS layout. We need to enlarge the 2D block load tile we created above to load as much data as possible for the DPAS instructions in the subgroup. We do this by adding additional parameters, starting with `iteration`. Each `iteration` corresponds to a DPAS instruction. Each DPAS instruction operates on a DPAS tile. Specifically, for each iteration we will generate a shuffle vector per work-item which will output the registers in the correct order for DPAS. The number of iterations is determined by taking the maximum contiguous tile size for the DPAS instructions in the subgroup, subject to hardware limitations. After computing iterations we know the maximum tile size we can load in a single 2D block load instruction. We can then compute the number of required loads. For the GEMM kernel `A` matrix we have `4` iterations across the outer dimension and `2` iterations across the inner dimension. After adding iterations our load has increased in size from the DPAS tile size (`8x16`) to (`32x32`).
+During lowering of the `tt.dot` operation to DPAS multiple DPAS instructions will be generated according to the TTGIR DPAS layout. We need to enlarge the 2D block load tile we created above to load as much data as possible for the DPAS instructions in the subgroup. We do this by adding additional input dimensions to the layout, starting with `iteration`. Each `iteration` corresponds to a DPAS instruction. Each DPAS instruction operates on a DPAS tile. Specifically, for each iteration we will generate a shuffle vector per work-item which will output the registers in the correct order for DPAS. The number of iterations is determined by taking the maximum contiguous tile size for the DPAS instructions in the subgroup, subject to hardware limitations. After computing iterations we know the maximum tile size we can load in a single 2D block load instruction. We can then compute the number of required loads. For the GEMM kernel `A` matrix we have `4` iterations across the outer dimension and `2` iterations across the inner dimension. After adding iterations our load has increased in size from the DPAS tile size (`8x16`) to (`32x32`).
 
 ```
 Block load tile layout after adding iterations:
@@ -348,7 +348,7 @@ The DPAS tile layout for `B` is also different from `A`. The `B` tile is expecte
 | 12, 0 : 13, 0 | 12, 1 : 13, 1 | 12, 2 : 13, 2 | 12, 3 : 13, 3 | 12, 4 : 13, 4 | 12, 5 : 13, 5 | 12, 6 : 13, 6 | 12, 7 : 13, 7 | 12, 8 : 13, 8 | 12, 9 : 13 , 9 | 12, 10 : 13, 10 | 12, 11 : 13, 11 | 12, 12 : 13, 12 | 12, 13 : 13, 13 | 12, 14 : 13, 14 | 12, 15 : 13, 15 |
 | 14, 0 : 15, 0 | 14, 1 : 15, 1 | 14, 2 : 15, 2 | 14, 3 : 15, 3 | 14, 4 : 15, 4 | 14, 5 : 15, 5 | 14, 6 : 15, 6 | 14, 7 : 15, 7 | 14, 8 : 15, 8 | 14, 9 : 15 , 9 | 14, 10 : 15, 10 | 14, 11 : 15, 11 | 14, 12 : 15, 12 | 14, 13 : 15, 13 | 14, 14 : 15, 14 | 14, 15 : 15, 15 |
 
-As before, we start with the block load layout corresponding to a single `16x16` DPAS tile:
+As before, we start with the block load layout corresponding to a single DPAS tile:
 
 ```
 Block load tile layout:
@@ -359,11 +359,10 @@ Block load tile layout:
    offset=16 -> (1, 0)
    offset=32 -> (2, 0)
    offset=64 -> (4, 0)
-   offset=128 -> (8, 0)
-where out dims are: [dim0 (size 16), dim1 (size 16)]
+where out dims are: [dim0 (size 8), dim1 (size 16)]
 ```
 
-Note that the load layout does not encode the vnni transform. The 17th element (`offset = 16`) is index `(1, 0)` even though we know this index is packed into the same slot as index `(0,0)`. We do this because we want the block load layout to represent global offsets into the data.
+The DPAS tile size is `16x16`, but the load layout tile size is `8x16` due to the vnni transform. However, to maintain surjectivity of the layout, the `offset` dimension is still a linear index into the row-wise loaded data. To convert the output of the layout on a specific offset to a tensor value we multiply by the number of packed values in that dimension. For example, the 17th element (`offset = 16`) is index `(1, 0)` but the corresponding slot actually holds the tensor indices `(2, 0), (3, 0)`. To convert to tensor indices we simply multiply the first value by the number of packed elements, and add 1 for each subsequent packed element.
 
 ```
 0 : 0, 0
@@ -374,17 +373,9 @@ Note that the load layout does not encode the vnni transform. The 17th element (
 80 : 5, 0
 96 : 6, 0
 112 : 7, 0
-128 : 8, 0
-144 : 9, 0
-160 : 10, 0
-176 : 11, 0
-192 : 12, 0
-208 : 13, 0
-224 : 14, 0
-240 : 15, 0
 ```
 
-We compute iterations as before. This layout has two iterations in both the outer and inner dimensions:
+We compute iterations as before. This layout has four iterations in `dim0` and two iterations in `dim1`:
 
 ```
 Block load tile layout after adding iterations:
@@ -395,13 +386,13 @@ Block load tile layout after adding iterations:
    offset=16 -> (1, 0)
    offset=32 -> (2, 0)
    offset=64 -> (4, 0)
-   offset=128 -> (8, 0)
- - iteration=1 -> (0, 16)
+ - iteration=1 -> (8, 0)
    iteration=2 -> (16, 0)
+   iteration=4 -> (0, 16)
 where out dims are: [dim0 (size 32), dim1 (size 32)]
 ```
 
-Finally, as suspected when examining the DPAS layout, there are two contiguous blocks so we will need multiple loads. In this case hardware limitations are not a factor, so we generate two loads:
+Finally, as suspected when examining the DPAS layout, there are two contiguous blocks separated by a stride so we will need multiple loads. In this case hardware limitations are not a factor, so we generate two loads:
 ```
 Block load tile layout after adding loads:
  - offset=1 -> (0, 1)
@@ -411,47 +402,31 @@ Block load tile layout after adding loads:
    offset=16 -> (1, 0)
    offset=32 -> (2, 0)
    offset=64 -> (4, 0)
-   offset=128 -> (8, 0)
- - iteration=1 -> (0, 16)
+ - iteration=1 -> (8, 0)
    iteration=2 -> (16, 0)
- - load=1 -> (0, 32)
-where out dims are: [dim0 (size 32), dim1 (size 64)]
+   iteration=4 -> (0, 16)
+ - load is a size 1 dimension
+where out dims are: [dim0 (size 32), dim1 (size 32)]
 0, 0, 0 : 0, 0
-0, 0, 1 : 0, 1
-0, 0, 254 : 15, 14
-0, 0, 255 : 15, 15
+0, 0, 127 : 7, 15
 0, 1, 0 : 0, 16
-0, 1, 1 : 0, 17
-0, 1, 254 : 15, 30
-0, 1, 255 : 15, 31
-0, 2, 0 : 16, 0
-0, 2, 1 : 16, 1
-0, 2, 254 : 31, 14
-0, 2, 255 : 31, 15
-0, 3, 0 : 16, 16
-0, 3, 1 : 16, 17
-0, 3, 254 : 31, 30
-0, 3, 255 : 31, 31
+0, 1, 127 : 7, 31
+0, 2, 0 : 8, 0
+0, 2, 127 : 15, 15
+0, 3, 0 : 8, 16
+0, 3, 127 : 15, 31
 
-1, 0, 0 : 0, 32
-1, 0, 1 : 0, 33
-1, 0, 254 : 15, 46
-1, 0, 255 : 15, 47
-1, 1, 0 : 0, 48
-1, 1, 1 : 0, 49
-1, 1, 254 : 15, 62
-1, 1, 255 : 15, 63
-1, 2, 0 : 16, 32
-1, 2, 1 : 16, 33
-1, 2, 254 : 31, 46
-1, 2, 255 : 31, 47
-1, 3, 0 : 16, 48
-1, 3, 1 : 16, 49
-1, 3, 254 : 31, 62
-1, 3, 255 : 31, 63
+1, 0, 0 : 16, 0
+1, 0, 127 : 23, 15
+1, 1, 0 : 16, 16
+1, 1, 127 : 23, 31
+1, 2, 0 : 24, 0
+1, 2, 127 : 31, 15
+1, 3, 0 : 24, 16
+1, 3, 127 : 31, 31
 ```
 
-We want our linear layout functions to be `surjective`; that is, all output values should be covered by some input value. This allows us to invert and compose the layouts and makes modifying the layout using intermediate layouts easier. Therefore we omit the replication stride from the second load; i.e. the second load indices start after the first load. We keep track of the stride and apply it after evaluating the layout function if we want a global coordinate.
+We want our linear layout functions to be `surjective`; that is, all output values should be covered by some input value. This allows us to invert and compose the layouts and makes modifying the layout using intermediate layouts easier. Therefore we omit the replication stride from the second load; i.e. the second load indices start after the first load. We keep track of the stride and apply it after evaluating the layout function to convert to the global tensor coordinate space.
 
 ### `AxBT`
 
@@ -472,6 +447,8 @@ Block load tile layout:
    offset=64 -> (8, 0)
 where out dims are: [dim0 (size 16), dim1 (size 8)]
 ```
+
+Note that the output data for the transposed load is not explicitly vnni transformed. However, by increasing the size of the slot to hold two elements we are essentially vnni transforming the data during the load.
 
 For this load we have two iterations in the outer dimension:
 ```
@@ -504,6 +481,4 @@ Block load tile layout after adding loads:
 where out dims are: [dim0 (size 64), dim1 (size 16)]
 ```
 
-The block tile layout after adding loads for `B` (non-transpose) had output size `32, 64`. The transpose layout has output size `64, 16`. This is essentially the non-transposed layout, transposed, and reducing the inner dim by a factor of two. Because the data type has been increased from 16 bits per element to 32 bits per element, we are still loading the same amount of data. And because two contiguous values will be loaded then transposed, the vnni transform is automatically computed. So, we emit two additional loads to load the same amount of data with the same layout.
-
-Note that unlike the non-transposed case, the transpose layout does implicitly encode the vnni transform. This is because we need to handle the vnni transform when computing shuffle vectors to convert the transposed, loaded data into register formats that DPAS is expecting.
+The block tile layout after adding loads for `B` (non-transpose) had output size `32, 32`. The transpose layout has output size `64, 16`. Both layouts have the same number of elements, but the transpose layout has a different shape. The `B` block load layout is describing two `16x32` 2D block loads with vnni transform (`32x32` elements per load). The transpose layout describes four `16x32` 2D block loads (the load is actually dispatched as `8x32` with an element size of 32 bits vs 16 bits for the other loads, matching the `bf16` datatype). Even though the DPAS layouts are identical, the linear layout captures the data layout of the load and, through debug prints, allows developers to introspect the load layouts without decoding thousands of lines of LLVMIR or assembly.
