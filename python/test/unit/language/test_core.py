@@ -6491,7 +6491,7 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
 
     block_io = "\"column_major\"" if transpose else "\"row_major\""
 
-    ty = {"float16": "f16", "float32": "tf32", "int8": "i8"}[dtype_str]
+    ty = {"float16": "f16", "int8": "i8"}[dtype_str]
 
     ir = layouts + f"""
     module attributes {{triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
