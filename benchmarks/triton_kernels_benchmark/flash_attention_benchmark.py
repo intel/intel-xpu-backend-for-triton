@@ -564,7 +564,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
     if provider == 'onednn':
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
             lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
-                                                                     CAUSAL, scale=sm_scale), m_warmup=10, n_repeat=10,
+                                                                     CAUSAL, scale=sm_scale), n_warmup=10, n_repeat=10,
             quantiles=quantiles)
 
     elif provider == 'triton':
