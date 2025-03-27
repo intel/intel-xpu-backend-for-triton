@@ -179,7 +179,6 @@ private:
     }
 
     LLVM_DEBUG(llvm::dbgs() << "which has tdesc: " << makeTensorDescOp << "\n");
-    assert(makeTensorDescOp && "Expected a MakeTensorDescOp");
 
     // Create a new block pointer if a suitable one doesn't already exist.
     SmallVector<Value> shapes, strides, offsets;
