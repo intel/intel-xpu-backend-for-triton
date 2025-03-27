@@ -135,21 +135,6 @@ SmallVector<unsigned> DpasEncodingAttr::getShapeC() const {
   return resShape;
 }
 
-SmallVector<unsigned> DpasEncodingAttr::getDefaultOrder() const {
-  auto rank = getWarpsPerCTA().size();
-  return getMatrixOrder(rank, /*rowMajor*/ true);
-}
-
-SmallVector<unsigned> DpasEncodingAttr::getDefaultThreadOrder() const {
-  auto rank = getWarpsPerCTA().size();
-  return getMatrixOrder(rank, /*rowMajor*/ true);
-}
-
-SmallVector<unsigned> DpasEncodingAttr::getDefaultWarpOrder() const {
-  auto rank = getWarpsPerCTA().size();
-  return getMatrixOrder(rank, /*rowMajor*/ true);
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getRepOrder() const {
   auto rank = getWarpsPerCTA().size();
   return getMatrixOrder(rank, /*rowMajor*/ true);
@@ -457,18 +442,6 @@ SmallVector<unsigned> WarpEncodingAttr::getWarpsPerCTA() const {
 
 LinearLayout WarpEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   llvm::report_fatal_error("NYI. WarpEncodingAttr::toLinearLayout");
-}
-
-SmallVector<unsigned> WarpEncodingAttr::getDefaultOrder() const {
-  llvm::report_fatal_error("NYI. WarpEncodingAttr::getDefaultOrder");
-}
-
-SmallVector<unsigned> WarpEncodingAttr::getDefaultThreadOrder() const {
-  llvm::report_fatal_error("NYI. WarpEncodingAttr::getDefaultThreadOrder");
-}
-
-SmallVector<unsigned> WarpEncodingAttr::getDefaultWarpOrder() const {
-  llvm::report_fatal_error("NYI. WarpEncodingAttr::getDefaultWarpOrder");
 }
 
 SmallVector<unsigned> WarpEncodingAttr::getCTAsPerCGA() const {
