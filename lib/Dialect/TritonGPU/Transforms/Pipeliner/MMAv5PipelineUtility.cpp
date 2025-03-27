@@ -262,11 +262,13 @@ std::optional<ttng::MMAInfo> ttng::getMMAInfo(scf::ForOp forOp,
     return {};
   }
 
-  return ttng::MMAInfo{.accAlloc = accAlloc,
-                       .accLoad = accLoad,
-                       .accDef = accOverridePoint,
-                       .yieldArgNo = yieldArgNo,
-                       .accIsMultiBuffered = canMultiBuffer};
+  ttng::MMAInfo mmaInfo;
+  mmaInfo.accAlloc = accAlloc;
+  mmaInfo.accLoad = accLoad;
+  mmaInfo.accDef = accOverridePoint;
+  mmaInfo.yieldArgNo = yieldArgNo;
+  mmaInfo.accIsMultiBuffered = canMultiBuffer;
+  return mmaInfo;
 }
 
 bool ttng::mmaHasPipelineableOperands(
