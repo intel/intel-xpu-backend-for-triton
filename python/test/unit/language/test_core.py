@@ -6473,18 +6473,17 @@ def test_convert_warp_local(M, N, src_layout, dst_layout, dtype, device, tmp_pat
     torch.testing.assert_close(z, x, rtol=0, atol=0)
 
 
-def test_block_load_dpas_layout(device, tmp_path: pathlib.Path):
+@pytest.mark.parametrize("transpose", [True, False])
+def test_block_load_dpas_layout(transpose, device, tmp_path: pathlib.Path):
 
     M = 256
     N = 32
 
-    layouts = """
-    #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
-    #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-    """
+    block_io = "\"column_major\"" if transpose else "\"row_major\""
 
-    # TODO: how many module attributes can we remove? 
-    ir = layouts + f"""
+    # TODO: how many module attributes can we remove?
+    ir = f"""
+    #mma = #triton_intel_gpu.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}}>
     module attributes {{triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
         tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<f16> {{tt.divisibility = 16: i32}}, %arg3: !tt.ptr<f16> {{tt.divisibility = 16: i32}}) attributes {{noinline = false}} {{
             %0 = tt.get_program_id x : i32
@@ -6501,9 +6500,9 @@ def test_block_load_dpas_layout(device, tmp_path: pathlib.Path):
             tt.store %3, %2 {{boundaryCheck = array<i32: 0, 1>}} : !tt.ptr<tensor<256x32xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
 
             // B matrix
-            %4 = tt.make_tensor_ptr %arg2, [%c5120_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<32x256xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
-            %5 = tt.load %4 {{boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"}} : !tt.ptr<tensor<32x256xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>> 
-            %6 = tt.make_tensor_ptr %arg3, [%c5120_i64, %c4096_i64], [%c4096_i64, %c1_i64], [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<32x256xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
+            %4 = tt.make_tensor_ptr %arg2, [%c5120_i64, %c4096_i64], {"[%c1_i64, %c5120_i64]" if transpose else "[%c4096_i64, %c1_i64]"}, [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<32x256xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
+            %5 = tt.load %4 {{boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = {block_io} }} : !tt.ptr<tensor<32x256xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
+            %6 = tt.make_tensor_ptr %arg3, [%c5120_i64, %c4096_i64], {"[%c1_i64, %c5120_i64]" if transpose else "[%c4096_i64, %c1_i64]"}, [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<32x256xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
             tt.store %6, %5 {{boundaryCheck = array<i32: 0, 1>}} : !tt.ptr<tensor<32x256xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
 
             tt.return
@@ -6515,15 +6514,16 @@ def test_block_load_dpas_layout(device, tmp_path: pathlib.Path):
     a = torch.randn((M, N), dtype=dtype, device=device)
     b = torch.randn((N, M), dtype=dtype, device=device)
     x = torch.empty_like(a)
-    y = torch.empty_like(b)
+    y = torch.empty_like(b.T if transpose else b)
 
     temp_file = tmp_path / "test_block_load_dpas_layout.ttgir"
     temp_file.write_text(ir)
+    #import pdb; pdb.set_trace()
     kernel = triton.compile(str(temp_file))
 
     kernel[(1, 1, 1)](a.data_ptr(), x.data_ptr(), b.data_ptr(), y.data_ptr())
 
-    assert torch.equal(a, x) and torch.equal(b, y)
+    assert torch.equal(a, x) and torch.equal(b.T if transpose else b, y)
 
 
 @pytest.mark.interpreter
