@@ -6476,12 +6476,14 @@ def test_convert_warp_local(M, N, src_layout, dst_layout, dtype, device, tmp_pat
 @pytest.mark.parametrize("M, N", [[256, 32], [64, 64], [32, 32]])
 @pytest.mark.parametrize("transpose", [True, False])
 def test_block_load_dpas_layout(M, N, transpose, device, tmp_path: pathlib.Path):
+    if not is_xpu():
+        pytest.skip("Block load tests are specific to the XPU backend.")
+
     block_io = "\"column_major\"" if transpose else "\"row_major\""
 
-    # TODO: how many module attributes can we remove?
     ir = f"""
     #mma = #triton_intel_gpu.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}}>
-    module attributes {{triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+    module attributes {{triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
         tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<f16> {{tt.divisibility = 16: i32}}, %arg3: !tt.ptr<f16> {{tt.divisibility = 16: i32}}) attributes {{noinline = false}} {{
             %0 = tt.get_program_id x : i32
             %M_i64 = arith.constant {M} : i64
