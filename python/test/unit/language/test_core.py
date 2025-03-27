@@ -6473,7 +6473,7 @@ def test_convert_warp_local(M, N, src_layout, dst_layout, dtype, device, tmp_pat
     torch.testing.assert_close(z, x, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("M, N", [[256, 32], [64, 64], [32, 32], [32, 16], [16, 16]])
+@pytest.mark.parametrize("M, N", [[256, 64], [256, 32], [128, 32], [64, 64], [64, 32], [32, 32]])
 @pytest.mark.parametrize("dtype_str", ["float16", "int8"])
 @pytest.mark.parametrize("transpose", [True, False])
 def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pathlib.Path):
@@ -6485,8 +6485,6 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
         B_width = 4
         layouts = "#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 2], A = [8, 32], B = [32, 32], C = [8, 32]}>"
     else:
-        if N < 32:
-            pytest.xfail("input shape not supported by layout")
         A_width = 1
         B_width = 2
         layouts = "#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>"
@@ -6538,7 +6536,6 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
 
     kernel[(1, 1, 1)](a, x, b, y)
 
-    import pdb; pdb.set_trace()
     assert torch.equal(a, x) and torch.equal(b.T if transpose else b, y)
 
 
