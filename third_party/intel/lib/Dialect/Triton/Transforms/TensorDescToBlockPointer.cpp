@@ -27,6 +27,12 @@ constexpr unsigned shapeAndStridesBitwidth = 64u;
 
 Value findOrCreateCast(Location loc, Value val, Type tgtType,
                        OpBuilder &builder) {
+  assert(isa<IntegerType>(tgtType) && isa<IntegerType>(val.getType()) &&
+         "Expecting integer types");
+  assert(val.getType().getIntOrFloatBitWidth() <=
+             tgtType.getIntOrFloatBitWidth() &&
+         "Expecting smaller type");
+
   if (val.getType() == tgtType)
     return val;
 
@@ -53,7 +59,7 @@ public:
 
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
-    // Version loops containing masked operation in canonical form.
+
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       return TypeSwitch<Operation *, WalkResult>(op)
           .Case<tt::DescriptorLoadOp>([&](auto loadOp) {
@@ -88,7 +94,7 @@ private:
         unsigned numIVs = forOp.getNumInductionVars();
         int initArgIdx = blockArg.getArgNumber() - numIVs;
         if (isModifiedInLoop(forOp, blockArg)) {
-          LLVM_DEBUG(llvm::dbgs() << blockArg << "is not loop invariant");
+          LLVM_DEBUG(llvm::dbgs() << blockArg << "is loop variant");
           return nullptr;
         }
         Operation::operand_range initArgs = forOp.getInitArgs();
