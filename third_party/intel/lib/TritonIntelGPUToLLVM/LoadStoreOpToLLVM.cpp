@@ -220,6 +220,8 @@ struct LoadStoreConversionBase {
           return accumulate;
         };
 
+    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
+                                        boundaryCheck.end());
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -242,18 +244,25 @@ struct LoadStoreConversionBase {
       ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
                           valueElemTy, blockPtr[blockBase], offset);
 
-      if (boundaryCheck.size() > 0) {
+      if (boundaryProtect.size() > 0) {
         // Get the LLVM values for mask
+        unsigned dim = 0;
         maskElems.push_back(linearize(
             indicesInTensor,
             {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
             b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              // mask = mask && (index < shape) && idx >= 0
-              auto is_pos_idx = b.icmp_sge(index, b.int_val(32, 0));
-              return b.and_(
-                  b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
-                  is_pos_idx);
+              if (boundaryProtect.contains(dim++)) {
+                // mask = mask && (index < shape) && idx >= 0
+                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+                return b
+                    .and_(
+                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                        is_pos_idx)
+                    .getResult();
+              }
+
+              return mask;
             }));
       }
     }
@@ -548,7 +557,8 @@ struct LoadOpToBlockIOConversion
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1038,7 +1048,8 @@ struct LoadOpConversion
     const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder =
         triton::gpu::getWarpOrder(tensorType);
-    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1670,7 +1681,8 @@ struct StoreOpConversion
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
     SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,

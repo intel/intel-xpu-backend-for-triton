@@ -20,9 +20,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
   int numBits = llvm::Log2_64(numBins);
   int numBitsLaneId = llvm::Log2_64(numThreadPerWarp);
   unsigned numElementsPerThreads = triton::gpu::getTotalElemsPerThread(srcType);
-  unsigned numThreadWithUniqueData =
-      triton::gpu::getThreadsPerWarpWithUniqueData(srcType.getEncoding(),
-                                                   srcType.getShape())[0];
+  unsigned numThreadWithUniqueData = triton::gpu::getThreadsPerWarp(
+      srcType.getEncoding(), srcType.getShape())[0];
   // The histogram is distributed across threads, each thread owns `numBins /
   // numThreadPerWarp` bins.
   SmallVector<Value> warpLevelHistogram(numBins / numThreadPerWarp, zero);

@@ -39,8 +39,9 @@ SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
   SmallVector<int64_t> sizePerWarp;
   if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     const auto &sizePerThread = blockedLayout.getSizePerThread();
-    const SmallVector<unsigned> &threadsPerWarp =
-        blockedLayout.getThreadsPerWarp();
+    const SmallVector<unsigned> threadsPerWarp{
+        blockedLayout.getThreadsPerWarp().begin(),
+        blockedLayout.getThreadsPerWarp().end()};
     for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp))
       sizePerWarp.push_back(lhs * rhs);
   } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {

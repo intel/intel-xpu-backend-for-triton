@@ -1,5 +1,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
@@ -160,30 +161,6 @@ DpasEncodingAttr::getRepOrderForOperand(OpIdx opIdx) const {
   return getOrderForDotOperand(unsigned(opIdx), rank, /*kMajor*/ true);
 }
 
-SmallVector<unsigned>
-DpasEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  size_t rank = getWarpsPerCTA().size();
-  SmallVector<unsigned> res(rank, 1);
-  assert((opIdx == 0 || opIdx == 1) && "Invalid OpIdx!");
-  unsigned execSize = getExecutionSize();
-  unsigned subgroupSize = getThreadsPerWarp__();
-  unsigned systolicDepth = getSystolicDepth();
-  unsigned opsPerChannel = getOpsPerChannel();
-  if (subgroupSize < execSize) {
-    llvm::report_fatal_error("DpasEncodingAttr sub-group size could not "
-                             "be smaller than the execution size");
-  }
-  if (opIdx == 0) {
-    res[rank - 1] =
-        systolicDepth * opsPerChannel / ceil<unsigned>(opsPerChannel, 2);
-    res[rank - 2] = ceil<unsigned>(subgroupSize, res[rank - 1]);
-  } else {
-    res[rank - 1] = execSize;
-    res[rank - 2] = subgroupSize / execSize;
-  }
-  return res;
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getCTASplitNum() const {
   size_t rank = getWarpsPerCTA().size();
   SmallVector<unsigned> res(rank, 1);
@@ -254,7 +231,7 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
     ArrayRef<int64_t> shape, mlir::Type eltTy, int kWidth, OpIdx opIdx) const {
   SmallVector<int64_t> shapePerCTA = getShapePerCTA(*this, shape);
   SmallVector<int64_t> rep = getDPASRepetitions(shapePerCTA, opIdx);
-  unsigned threadsPerWar = getThreadsPerWarp__();
+  unsigned threadsPerWar = getThreadsPerWarp();
   size_t rank = shape.size();
 
   switch (opIdx) {
@@ -282,26 +259,12 @@ SmallVector<unsigned> DpasEncodingAttr::getWarpsPerCTA() const {
                                getWarpsPerCTA__().end());
 }
 
-SmallVector<unsigned> DpasEncodingAttr::getThreadsPerWarp() const {
-  size_t rank = getWarpsPerCTA().size();
-  SmallVector<unsigned> res(rank, 1);
-  unsigned executionSize = getExecutionSize();
-  unsigned subGroupSize = getThreadsPerWarp__();
-  if (subGroupSize < executionSize) {
-    llvm::report_fatal_error("DpasEncodingAttr sub-group size could not be "
-                             "smaller than the execution size");
-  }
-  res[rank - 2] = subGroupSize / executionSize;
-  res[rank - 1] = executionSize;
-  return res;
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
   size_t rank = getWarpsPerCTA().size();
   assert(rank == 2 || rank == 3);
   SmallVector<unsigned> contigPerThread(rank, 1);
 
-  unsigned threadsPerWarp = getThreadsPerWarp__();
+  unsigned threadsPerWarp = getThreadsPerWarp();
   SmallVector<unsigned> instShapeC = getDPASInstShapeC();
   // The software vectorization vectorized the value as C array: int a[N] ->
   // int a[N][threadsPerWarp]
@@ -437,7 +400,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
           << "systolicDepth = " << getSystolicDepth() << ", "
           << "executionSize = " << getExecutionSize() << ", "
           << "opsPerChan = " << getOpsPerChannel() << ", "
-          << "threadsPerWarp = " << getThreadsPerWarp__() << ", "
+          << "threadsPerWarp = " << getThreadsPerWarp() << ", "
           << "warpsPerCTA = [" << llvm::ArrayRef<unsigned>(warpsPerCTA) << "], "
           << "repCluster = [" << repCluster << "], "
           << "A = [" << rA << "], "

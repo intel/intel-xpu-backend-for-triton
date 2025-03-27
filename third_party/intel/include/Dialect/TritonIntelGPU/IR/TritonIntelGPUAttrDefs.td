@@ -186,7 +186,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     "unsigned":$opsPerChannel,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     ArrayRefParameter<"unsigned">:$repCluster,
-    "unsigned":$threadsPerWarp__
+    "unsigned":$threadsPerWarp
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
@@ -206,7 +206,6 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, OpIdx opIdx) const;
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, OpIdx opIdx) const;
 
     // Forwarder functions for casting unsigned to OpIdx.
@@ -275,6 +274,7 @@ def WarpEncodingAttr : DistributedEncoding<"WarpEncoding", "intel_warp_encoding"
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getSizePerThread() const;
+    SmallVector<unsigned> getThreadsPerWarp() const;
   }];
 
   let hasCustomAssemblyFormat = 1;
