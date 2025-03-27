@@ -6473,6 +6473,51 @@ def test_convert_warp_local(M, N, src_layout, dst_layout, dtype, device, tmp_pat
     torch.testing.assert_close(z, x, rtol=0, atol=0)
 
 
+def test_block_load_dpas_layout(device, tmp_path: pathlib.Path):
+
+    M = 256 
+    K = 32
+
+    layouts = """
+    #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+    #mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+    """
+
+    # TODO: how many module attributes can we remove? 
+    ir = layouts + f"""
+    module attributes {{triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+        tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+            %0 = tt.get_program_id x : i32
+            %c1024_i64 = arith.constant {M} : i64
+            %c5120_i64 = arith.constant {K} : i64
+            %c1_i64 = arith.constant 1 : i64
+            %c0_i32 = arith.constant 0 : i32
+            %10 = tt.make_tensor_ptr %arg0, [%c1024_i64, %c5120_i64], [%c5120_i64, %c1_i64], [%0, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<256x32xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+            
+            %22 = tt.load %10 {{boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"}} : !tt.ptr<tensor<256x32xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+
+            %23 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c5120_i64], [%c5120_i64, %c1_i64], [%0, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<256x32xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+
+            tt.store %23, %22 {{boundaryCheck = array<i32: 0, 1>}} : !tt.ptr<tensor<256x32xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+
+            tt.return
+        }}
+    }}
+    """
+
+    dtype = torch.float16
+    x = torch.randn((M, K), dtype=dtype, device=device)
+    z = torch.empty_like(x)
+
+    temp_file = tmp_path / "test_block_load_dpas_layout.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
+
+    assert torch.equal(z, x)
+
+
 @pytest.mark.interpreter
 def test_load_scalar_with_mask(device):
 
