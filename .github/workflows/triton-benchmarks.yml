@@ -56,6 +56,7 @@ env:
   VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   IGC_PVCSendWARWA: 0
+  IGC_VectorizerAllowFPTRUNC: 0
 
 jobs:
   build:
