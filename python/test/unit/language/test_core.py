@@ -6473,6 +6473,57 @@ def test_convert_warp_local(M, N, src_layout, dst_layout, dtype, device, tmp_pat
     torch.testing.assert_close(z, x, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("M, N", [[256, 32], [64, 64], [32, 32]])
+@pytest.mark.parametrize("transpose", [True, False])
+def test_block_load_dpas_layout(M, N, transpose, device, tmp_path: pathlib.Path):
+    if not is_xpu():
+        pytest.skip("Block load tests are specific to the XPU backend.")
+
+    block_io = "\"column_major\"" if transpose else "\"row_major\""
+
+    ir = f"""
+    #mma = #triton_intel_gpu.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}}>
+    module attributes {{triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+        tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<f16> {{tt.divisibility = 16: i32}}, %arg3: !tt.ptr<f16> {{tt.divisibility = 16: i32}}) attributes {{noinline = false}} {{
+            %0 = tt.get_program_id x : i32
+            %M_i64 = arith.constant {M} : i64
+            %N_i64 = arith.constant {N} : i64
+            %c1_i64 = arith.constant 1 : i64
+            %c0_i32 = arith.constant 0 : i32
+
+            // A matrix
+            %1 = tt.make_tensor_ptr %arg0, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%0, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+            %2 = tt.load %1 {{boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"}} : !tt.ptr<tensor<{M}x{N}xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+            %3 = tt.make_tensor_ptr %arg1, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%0, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+            tt.store %3, %2 {{boundaryCheck = array<i32: 0, 1>}} : !tt.ptr<tensor<{M}x{N}xf16, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>>
+
+            // B matrix
+            %4 = tt.make_tensor_ptr %arg2, [%N_i64, %M_i64], {"[%c1_i64, %N_i64]" if transpose else "[%M_i64, %c1_i64]"}, [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<{N}x{M}xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
+            %5 = tt.load %4 {{boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = {block_io} }} : !tt.ptr<tensor<{N}x{M}xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
+            %6 = tt.make_tensor_ptr %arg3, [%N_i64, %M_i64], {"[%c1_i64, %N_i64]" if transpose else "[%M_i64, %c1_i64]"}, [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<{N}x{M}xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
+            tt.store %6, %5 {{boundaryCheck = array<i32: 0, 1>}} : !tt.ptr<tensor<{N}x{M}xf16, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = 2}}>>>
+
+            tt.return
+        }}
+    }}
+    """
+
+    dtype = torch.float16
+    a = torch.randn((M, N), dtype=dtype, device=device)
+    b = torch.randn((N, M), dtype=dtype, device=device)
+    x = torch.empty_like(a)
+    y = torch.empty_like(b.T if transpose else b)
+
+    temp_file = tmp_path / "test_block_load_dpas_layout.ttgir"
+    temp_file.write_text(ir)
+    #import pdb; pdb.set_trace()
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](a.data_ptr(), x.data_ptr(), b.data_ptr(), y.data_ptr())
+
+    assert torch.equal(a, x) and torch.equal(b.T if transpose else b, y)
+
+
 @pytest.mark.interpreter
 def test_load_scalar_with_mask(device):
 
