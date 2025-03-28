@@ -336,5 +336,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.return %0 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
   }
 }
-
-
