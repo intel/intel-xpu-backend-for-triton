@@ -96,7 +96,8 @@ private:
                "Unexpected 'initArgIdx' value");
         return getMakeTensorDescOp(initArgs[initArgIdx]);
       }
-      LLVM_DEBUG(llvm::dbgs() << "TODO: unhandled defOp: " << *defOp << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "TODO: Unhandled null defop from Value: " << base << "\n");
       return nullptr;
     }
 
