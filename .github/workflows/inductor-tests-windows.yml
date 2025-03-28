@@ -78,6 +78,20 @@ jobs:
         run:
           python -m venv .venv
 
+      - name: Identify PyTorch commit id
+        if: (inputs.pytorch_ref || 'main') != ''
+        id: commit-id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: pytorch/pytorch
+          branch: ${{ inputs.pytorch_ref }}
+
+      - name: Set PyTorch commit id
+        if: (inputs.pytorch_ref || 'main') != ''
+        shell: bash
+        run: |
+          echo ${{ steps.commit-id.outputs.commit_id }} > .github/pins/pytorch.txt
+
       - name: Install PyTorch (source)
         run: |
           .venv\Scripts\activate.ps1
