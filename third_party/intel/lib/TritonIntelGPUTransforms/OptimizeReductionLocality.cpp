@@ -87,7 +87,7 @@ namespace {
   /// - Dimensions 1, 3 and 6 refer to the original dimension 0
   /// - Dimensions 0, 2, 4 and 5 refer to the original dimension 1
   /// - Order is preserved
-  /// - We enforce executionSize * repCluster[0] * warpsPerCTA[0] = oldShape[0]
+  /// - We enforce repeatCount * repCluster[0] * warpsPerCTA[0] = oldShape[0]
   /// ```
   ///                                                                     sizePerThread[5]
   ///                                       <----------------------------------------------------------------------------------
@@ -245,6 +245,15 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
         (encoding.getRepeatCount() * encoding.getRepCluster()[0]) %
                 threadsPerWarp !=
             0)
+      return failure();
+
+    // The X axis must contain enough elements to be fully covered
+    // by the encoding.
+    // i.e., the number of elements per warp allows
+    // the elementwise reshape to happen.
+    if (type.getShape()[1] <
+        (encoding.getExecutionSize() * encoding.getRepCluster()[1] *
+         encoding.getWarpsPerCTA()[1]))
       return failure();
 
     // The encoding should cover the Y axis.

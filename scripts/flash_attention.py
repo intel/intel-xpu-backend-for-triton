@@ -6,6 +6,7 @@ import torch
 import triton
 
 from triton_kernels_benchmark.flash_attention_benchmark import _attention, tune_attn_fwd
+import triton_kernels_benchmark as benchmark_suit
 
 
 def get_options():
@@ -20,6 +21,7 @@ def get_options():
     model.add_argument('-D-HEAD', type=int, required=True, help='Embedding dimension')
     model.add_argument('-causal', action='store_true', help='Run causal attention')
     model.add_argument('-backward', action='store_true', help='Run backward attention')
+    model.add_argument('-validate', action='store_true', help='Validate results')
 
     config = parser.add_argument_group(title='Tuning configuration',
                                        description='Options setting different tuning parameters')
@@ -58,7 +60,20 @@ def run(options):
     tune_attn_fwd.configs = get_configs(options)
 
     attention = _attention.apply
-    triton_o = attention(q, k, v, options.causal, sm_scale)
+    triton_fn = lambda: attention(q, k, v, options.causal, sm_scale)
+    triton_o = triton_fn()
+    if options.validate:
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
+        ), attn_mask=None, dropout_p=0.0, is_causal=options.causal, scale=sm_scale).to(torch.float32)
+
+        #torch.set_printoptions(profile="full")
+        #print("triton_o = ", triton_o) # prints the whole tensor
+        #print("torch_o = ", torch_fn()) # prints the whole tensor
+        #torch.set_printoptions(profile="default") # reset
+
+        atol = 1e-1 if options.N_CTX == 16384 else 1e-2
+        benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+
     if options.backward:
         triton_o.backward(torch.randn_like(triton_o), retain_graph=True)
 

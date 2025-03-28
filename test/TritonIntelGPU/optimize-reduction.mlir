@@ -307,3 +307,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %0 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
   }
 }
+
+// -----
+
+// Test invalid reduction in two warps across the reduction dimension (16x16->16).
+// The number of elements in the reduction dimension is not enough to be covered by the encoding.
+
+// CHECK: #[[$ATTR_31:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 2], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 2], repCluster = [2, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+// CHECK-LABEL:   tt.func @test_invalid_two_warps_red(
+// CHECK-SAME:                                %[[VAL_0:.*]]: tensor<16x16xf32, #[[$ATTR_31]]>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_31]]}>> {
+// CHECK:           %[[VAL_1:.*]] = "tt.reduce"(%[[VAL_0]]) <{axis = 1 : i32}> ({
+// CHECK:           ^bb0(%[[VAL_2:.*]]: f32, %[[VAL_3:.*]]: f32):
+// CHECK:             %[[VAL_4:.*]] = arith.addf %[[VAL_2]], %[[VAL_3]] : f32
+// CHECK:             tt.reduce.return %[[VAL_4]] : f32
+// CHECK:           }) : (tensor<16x16xf32, #[[$ATTR_31]]>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_31]]}>>
+// CHECK:           tt.return %[[VAL_1]] : tensor<16xf32, #ttg.slice<{dim = 1, parent = #[[$ATTR_31]]}>>
+// CHECK:         }
+  tt.func @test_invalid_two_warps_red(%arg0: tensor<16x16xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>> {
+    %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+    ^bb0(%arg1: f32, %arg2: f32):
+      %1 = arith.addf %arg1, %arg2 : f32
+      tt.reduce.return %1 : f32
+    }) : (tensor<16x16xf32, #mma>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
+    tt.return %0 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #mma}>>
+  }
+}
+
+
