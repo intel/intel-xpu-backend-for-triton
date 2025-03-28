@@ -74,20 +74,7 @@ jobs:
           pip install -r .ci/docker/requirements-ci.txt
 
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
-
-          test_cmd="python test/run_test.py --keep-going --include "
-          if [[ "${{ inputs.suite }}" = "all" ]]; then
-            for test in $(ls test/inductor | grep test);
-            do
-              test_cmd="${test_cmd} inductor/$test"
-            done
-          else
-            for test in ${{ inputs.suite }};
-            do
-              test_cmd="${test_cmd} $test"
-            done
-          fi
-          eval $test_cmd
+          bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Report environment details
         if: always()
