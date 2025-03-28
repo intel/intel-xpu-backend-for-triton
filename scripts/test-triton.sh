@@ -208,6 +208,9 @@ run_core_tests() {
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
     pytest -k "not test_disam_cubin" --verbose tools
 
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
+
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
   pytest --device xpu .
