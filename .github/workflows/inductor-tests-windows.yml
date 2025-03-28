@@ -1,4 +1,5 @@
-name: Pytorch inductor tests on Windows
+name: PyTorch inductor tests on Windows
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -27,6 +28,10 @@ on:
         description: Python version
         type: string
         default: "3.9"
+      run_name:
+        description: Custom run name
+        type: string
+        default: "PyTorch inductor tests on Windows"
 
   # temporary run on PR
   pull_request:
@@ -84,7 +89,7 @@ jobs:
         uses: ./.github/actions/get-commit-id
         with:
           repository: pytorch/pytorch
-          branch: ${{ inputs.pytorch_ref }}
+          branch: ${{ inputs.pytorch_ref || 'main' }}
 
       - name: Set PyTorch commit id
         if: (inputs.pytorch_ref || 'main') != ''
