@@ -33,11 +33,6 @@ on:
         type: string
         default: "PyTorch inductor tests on Windows"
 
-  # temporary run on PR
-  pull_request:
-    branches:
-      - main
-
 permissions: read-all
 
 env:
@@ -84,15 +79,15 @@ jobs:
           python -m venv .venv
 
       - name: Identify PyTorch commit id
-        if: (inputs.pytorch_ref || 'main') != ''
+        if: (inputs.pytorch_ref || '') != ''
         id: commit-id
         uses: ./.github/actions/get-commit-id
         with:
           repository: pytorch/pytorch
-          branch: ${{ inputs.pytorch_ref || 'main' }}
+          branch: ${{ inputs.pytorch_ref || '' }}
 
       - name: Set PyTorch commit id
-        if: (inputs.pytorch_ref || 'main') != ''
+        if: (inputs.pytorch_ref || '') != ''
         shell: bash
         run: |
           echo ${{ steps.commit-id.outputs.commit_id }} > .github/pins/pytorch.txt
