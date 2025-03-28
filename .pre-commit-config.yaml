@@ -83,6 +83,7 @@ repos:
           - --disable=too-many-locals
           - --disable=too-many-statements
           - --disable=too-many-arguments
+          - --disable=too-many-positional-arguments
         stages: [pre-commit, pre-push, manual]
 
       - id: pylint
@@ -114,6 +115,7 @@ repos:
           - --disable=too-many-locals
           - --disable=too-many-statements
           - --disable=too-many-arguments
+          - --disable=too-many-positional-arguments
           - --disable=fixme
         stages: [pre-commit, pre-push, manual]
 
