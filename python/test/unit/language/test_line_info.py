@@ -259,7 +259,8 @@ def test_line_info_env(monkeypatch, status: str):
     shape = (128, )
     monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", status)
     kernel_single.device_caches.clear()
-    kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
+    kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ),
+                                       generate_native_code=False)
     if obj_kind == "spvbin":
         file_lines = spv_extract_file_lines(kernel_info.asm["spv"], command)
     else:
