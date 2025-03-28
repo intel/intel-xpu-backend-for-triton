@@ -69,6 +69,17 @@ bool isDivisible(Value value, unsigned divisor) {
   if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
     return isDivisible(extSIOp->getOperand(0), divisor);
 
+  // Case 4: Value is defined by an add ptr operation.
+  if (auto addPtrOp = value.getDefiningOp<tt::AddPtrOp>()) {
+    return isDivisible(addPtrOp.getOperand(0), divisor) &&
+           isDivisible(addPtrOp.getOperand(1), divisor);
+  }
+  // Case 5: Value is defined by a muli operation.
+  if (auto mulIOp = value.getDefiningOp<arith::MulIOp>()) {
+    return isDivisible(mulIOp->getOperand(0), divisor) ||
+           isDivisible(mulIOp->getOperand(1), divisor);
+  }
+
   return false;
 }
 
