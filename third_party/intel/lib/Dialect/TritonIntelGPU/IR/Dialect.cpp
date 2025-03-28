@@ -169,7 +169,7 @@ DpasEncodingAttr::getDPASRepetitions(ArrayRef<int64_t> shape,
                                      OpIdx opIdx) const {
   // Always return a 3D shape repetitions for the ease of value handling, same
   // to mma.
-  SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
+  auto warpsPerCTA = getWarpsPerCTA();
   size_t rank = shape.size();
   SmallVector<int64_t> rep(3, 1);
   switch (opIdx) {
@@ -239,11 +239,6 @@ unsigned DpasEncodingAttr::getTotalElemsPerThreadForOperand(
   llvm_unreachable("unexpected opIdx");
 }
 
-SmallVector<unsigned> DpasEncodingAttr::getWarpsPerCTA() const {
-  return SmallVector<unsigned>(getWarpsPerCTA__().begin(),
-                               getWarpsPerCTA__().end());
-}
-
 SmallVector<unsigned> DpasEncodingAttr::getContigPerThread() const {
   size_t rank = getWarpsPerCTA().size();
   assert(rank == 2 || rank == 3);
@@ -295,7 +290,7 @@ unsigned DpasEncodingAttr::getOpsPerChannel(Type elemType) {
 LogicalResult DpasEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned repeatCount, unsigned systolicDepth, unsigned executionSize,
-    unsigned opsPerChan, ::llvm::ArrayRef<unsigned> warpsPerCTA__,
+    unsigned opsPerChan, ::llvm::ArrayRef<unsigned> warpsPerCTA,
     ::llvm::ArrayRef<unsigned> repCluster, unsigned sugGroupSize) {
   if (repeatCount > 8 || repeatCount < 1) {
     return emitError() << "repeatCount must be in the range [1, 8], but was:"
@@ -378,7 +373,7 @@ void DpasEncodingAttr::print(AsmPrinter &printer) const {
   ArrayRef<unsigned> rB = shapeB;
   SmallVector<unsigned> shapeC = getShapeC();
   ArrayRef<unsigned> rC = shapeC;
-  SmallVector<unsigned> warpsPerCTA = getWarpsPerCTA();
+  auto warpsPerCTA = getWarpsPerCTA();
   ArrayRef<unsigned> repCluster = getRepCluster();
   printer << "<{"
           << "repeatCount = " << getRepeatCount() << ", "
@@ -434,10 +429,6 @@ SmallVector<unsigned> WarpEncodingAttr::getSizePerThread() const {
 
 SmallVector<unsigned> WarpEncodingAttr::getRepOrder() const {
   llvm::report_fatal_error("NYI. WarpEncodingAttr::getRepOrder");
-}
-
-SmallVector<unsigned> WarpEncodingAttr::getWarpsPerCTA() const {
-  llvm::report_fatal_error("NYI. WarpEncodingAttr::getWarpsPerCTA");
 }
 
 LinearLayout WarpEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
