@@ -97,7 +97,7 @@ private:
         return getMakeTensorDescOp(initArgs[initArgIdx]);
       }
       LLVM_DEBUG(llvm::dbgs()
-                 << "TODO: Unhandled null defop from Value: " << base << "\n");
+                 << "TODO: Unhandled non operation: " << base << "\n");
       return nullptr;
     }
 
