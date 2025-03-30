@@ -2,10 +2,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
-#include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -55,23 +53,12 @@ public:
       LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
       auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
       auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      auto elementWidth = tensorType.getElementTypeBitWidth();
-      LDBG("elementWidth: " << elementWidth);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
       unsigned rank = shape.size();
       LDBG("Rank: " << rank);
       if (rank == 1)
         return;
-
-      // We will compensate the offset of non-64 bytes aligned base to the
-      // OffsetX and BaseWidth. The OffsetX and BaseWidth has extra restriction
-      // that it has to be 4 bytes aligned.
-      auto base = makeTensorPtrOp.getBase();
-      if (!ttgi::isDivisible(base, 4)) {
-        LDBG("Found Non 4 bytes aligned base: " << base);
-        return;
-      }
 
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
       int fastChangeDim = -1;
@@ -87,24 +74,8 @@ public:
         return;
       }
 
-      // Check the BaseWidth.
-      Value BaseWidth = shape[fastChangeDim];
-      if (!ttgi::isDivisible(BaseWidth, std::ceil(32 / elementWidth))) {
-        LDBG("Found Non 4 bytes aligned BaseWidth: " << BaseWidth);
-        return;
-      }
-
-      // Check the OffsetX
-      Operation::operand_range offsets = makeTensorPtrOp.getOffsets();
-      Value OffsetX = offsets[fastChangeDim];
-      if (!ttgi::isDivisible(OffsetX, std::ceil(32 / elementWidth))) {
-        LDBG("Found Non 4 bytes aligned offsetX: " << OffsetX);
-        return;
-      }
-
-      // TODO: Check the OffsetX from tl.advance
-
-      if (fastChangeDim == rank - 2 && elementWidth == 8) {
+      if (fastChangeDim == rank - 2 &&
+          tensorType.getElementTypeBitWidth() == 8) {
         // TODO: column major layout w/ fp8 has performance regression
         return;
       }
@@ -125,7 +96,8 @@ public:
         Value pitch =
             strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
         LDBG("Pitch: " << pitch);
-        if (!ttgi::isDivisible(pitch, 128 / elementWidth))
+        if (!ttgi::isDivisible(pitch,
+                               128 / tensorType.getElementTypeBitWidth()))
           return;
 
         const bool isRowMajor = fastChangeDim == rank - 1;
