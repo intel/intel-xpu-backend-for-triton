@@ -555,8 +555,9 @@ struct LoadOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
-    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    SmallVector<unsigned> dpasWarpsOrder =
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
     unsigned threadsPerWarp =
         product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
@@ -1045,9 +1046,9 @@ struct LoadOpConversion
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder =
-        triton::gpu::getWarpOrder(tensorType);
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
     unsigned threadsPerWarp =
         product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
@@ -1677,10 +1678,11 @@ struct StoreOpConversion
     size_t rank = tensorShape.size();
     unsigned numElems = getTotalElemsPerThread(tensorType);
     SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
-    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
+    SmallVector<unsigned> dpasWarpsOrder =
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
     unsigned threadsPerWarp =
         product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
