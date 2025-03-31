@@ -60,11 +60,11 @@ def run(options):
     tune_attn_fwd.configs = get_configs(options)
 
     attention = _attention.apply
-    triton_fn = lambda: attention(q, k, v, options.causal, sm_scale)
-    triton_o = triton_fn()
+    triton_o = attention(q, k, v, options.causal, sm_scale)
     if options.validate:
-        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-        ), attn_mask=None, dropout_p=0.0, is_causal=options.causal, scale=sm_scale).to(torch.float32)
+        torch_o = torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(), attn_mask=None,
+                                                                   dropout_p=0.0, is_causal=options.causal,
+                                                                   scale=sm_scale).to(torch.float32)
 
         #torch.set_printoptions(profile="full")
         #print("triton_o = ", triton_o) # prints the whole tensor
@@ -72,7 +72,7 @@ def run(options):
         #torch.set_printoptions(profile="default") # reset
 
         atol = 1e-1 if options.N_CTX == 16384 else 1e-2
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+        benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=atol, rtol=1e-3, err_msg='triton to torch')
 
     if options.backward:
         triton_o.backward(torch.randn_like(triton_o), retain_graph=True)
