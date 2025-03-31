@@ -55,7 +55,14 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, 
     if hbm_col is not None:
         df_results["hbm_gbs"] = df[hbm_col]
 
-    df_results["run_uuid"] = uuid.uuid4().hex
+    if "run_counter" in df.columns:
+        # We are currently using `run_counter` as a way to separate runs inside of a one benchmark run.
+        max_counter = df["run_counter"].max()
+        mapping = {i: uuid.uuid4().hex for i in range(1, max_counter + 1)}
+        df_results["run_uuid"] = df["run_counter"].map(mapping)
+    else:
+        df_results["run_uuid"] = uuid.uuid4().hex
+
     df_results["datetime"] = datetime.datetime.now()
     df_results["benchmark"] = benchmark
     df_results["compiler"] = compiler
