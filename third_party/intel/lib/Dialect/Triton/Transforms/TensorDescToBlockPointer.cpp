@@ -208,11 +208,11 @@ private:
 
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
-      auto newOp = builder.createOrFold<tt::LoadOp>(
+      auto loadOp = builder.createOrFold<tt::LoadOp>(
           loc, makeTensorPtrOp, op.getCache(), op.getEvict(),
           /*volatile*/ false);
-      LLVM_DEBUG(llvm::dbgs().indent(2) << newOp << "\n");
-      op.replaceAllUsesWith(newOp);
+      LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
+      op.replaceAllUsesWith(loadOp);
     } else {
       [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
           loc, makeTensorPtrOp, op.getSrc(), tt::CacheModifier::NONE,
