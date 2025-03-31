@@ -79,7 +79,11 @@ bool isDivisible(Value value, unsigned divisor) {
     return isDivisible(mulIOp->getOperand(0), divisor) ||
            isDivisible(mulIOp->getOperand(1), divisor);
   }
-
+  // Case 6: Value is defined by a addi operation.
+  if (auto addIOp = value.getDefiningOp<arith::AddIOp>()) {
+    return isDivisible(addIOp->getOperand(0), divisor) &&
+           isDivisible(addIOp->getOperand(1), divisor);
+  }
   return false;
 }
 
