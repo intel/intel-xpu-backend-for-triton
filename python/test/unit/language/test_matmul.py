@@ -323,7 +323,7 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
         elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
                 triton.runtime.driver.active.utils.get_device_properties(
                     triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
-            pytest.skip("Not enough shared memory")
+            pytest.xfail("Not enough shared memory")
 
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
