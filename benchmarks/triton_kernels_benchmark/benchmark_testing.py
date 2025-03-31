@@ -200,8 +200,8 @@ class Mark:
         self.benchmarks = benchmarks
 
     # pylint: disable=too-many-branches
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
-             run_counter = 1, save_precision=6, **kwrags):
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=1,
+             save_precision=6, **kwrags):
         import matplotlib.pyplot as plt
         import pandas as pd
         y_vals = []
@@ -282,12 +282,11 @@ class Mark:
             print(bench.plot_name + ":")
             print(df.to_string())
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f",
-                      index=False)
+            df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, save_path="", return_df=False, **kwargs):
-        args = parse_args(save_path)
+    def run(self, show_plots=False, print_data=False, return_df=False, **kwargs):
+        args = parse_args()
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
@@ -299,7 +298,8 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
-                benchmark_dfs.append(self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs))
+                benchmark_dfs.append(
+                    self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs))
 
             if args.n_runs > 1:
                 for i, df in enumerate(benchmark_dfs):
@@ -316,7 +316,7 @@ class Mark:
         return None
 
 
-def parse_args(save_path: str):
+def parse_args():
     """Parses arguments via CLI, allows save_path overloading to `reports`."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -331,8 +331,4 @@ def parse_args(save_path: str):
         default=1,
         help="number of runs for this benchmark",
     )
-    args = parser.parse_args()
-    # I suggest we remove this functionality and input argument
-    # if save_path:
-    #     args.reports = save_path
-    return args
+    return parser.parse_args()
