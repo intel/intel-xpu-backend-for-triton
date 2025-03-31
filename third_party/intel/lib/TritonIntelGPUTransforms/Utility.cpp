@@ -65,25 +65,22 @@ bool isDivisible(Value value, unsigned divisor) {
     }
   }
 
-  // Case 3: Value is defined by a sign extension operation
-  if (auto extSIOp = value.getDefiningOp<arith::ExtSIOp>())
-    return isDivisible(extSIOp->getOperand(0), divisor);
-
-  // Case 4: Value is defined by an add ptr operation.
-  if (auto addPtrOp = value.getDefiningOp<tt::AddPtrOp>()) {
-    return isDivisible(addPtrOp.getOperand(0), divisor) &&
-           isDivisible(addPtrOp.getOperand(1), divisor);
-  }
-  // Case 5: Value is defined by a muli operation.
+  // Case 3: Value is defined by a muli operation.
   if (auto mulIOp = value.getDefiningOp<arith::MulIOp>()) {
     return isDivisible(mulIOp->getOperand(0), divisor) ||
            isDivisible(mulIOp->getOperand(1), divisor);
   }
-  // Case 6: Value is defined by a addi operation.
-  if (auto addIOp = value.getDefiningOp<arith::AddIOp>()) {
-    return isDivisible(addIOp->getOperand(0), divisor) &&
-           isDivisible(addIOp->getOperand(1), divisor);
+
+  // Case 4: Value is defined by arith::ExtSIOp, tt::AddPtrOp or
+  // arith::AddIOp operation.
+  if (auto *op = value.getDefiningOp()) {
+    if (isa<arith::ExtSIOp, tt::AddPtrOp, arith::AddIOp>(op)) {
+      return llvm::all_of(op->getOperands(), [&](Value operand) {
+        return isDivisible(operand, divisor);
+      });
+    }
   }
+
   return false;
 }
 
