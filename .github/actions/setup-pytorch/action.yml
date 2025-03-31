@@ -128,6 +128,9 @@ runs:
 
         cd pytorch
         pip install wheel
+        # FIXME: Compatibility with versions of CMake older than 3.5 has been removed, this brakes compilation of third_party/protobuf:
+        # CMake Error at third_party/protobuf/cmake/CMakeLists.txt:2 (cmake_minimum_required)
+        pip install 'cmake<4.0.0'
         pip install -r requirements.txt
         USE_XCCL=1 USE_STATIC_MKL=1 CFLAGS="-Wno-error=maybe-uninitialized" python setup.py bdist_wheel 2>&1 | grep -v \
           "Double arithmetic operation is not supported on this platform with FP64 conversion emulation mode (poison FP64 kernels is enabled)." | grep -v '^$'
