@@ -2,8 +2,6 @@ import argparse
 import itertools
 import os
 
-import pandas as pd
-
 from triton.testing import assert_close as triton_assert_close, Benchmark
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
@@ -246,7 +244,7 @@ class Mark:
             rows += row_vals["CV"][0]
             df.loc[len(df)] = list(x) + rows
 
-        filename = f"{bench.plot_name}" + ('' if run_counter == 1 else f"_{run_counter}")
+        filename = f"{bench.plot_name}" + ("" if run_counter == 1 else f"_{run_counter}")
         if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
@@ -302,6 +300,8 @@ class Mark:
                     self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs))
 
             if args.n_runs > 1:
+                import pandas as pd
+
                 for i, df in enumerate(benchmark_dfs):
                     df["run_counter"] = i + 1
                 merged_df = pd.concat(benchmark_dfs, axis=0)
