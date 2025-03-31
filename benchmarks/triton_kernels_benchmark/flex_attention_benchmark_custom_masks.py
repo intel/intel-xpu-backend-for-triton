@@ -103,7 +103,9 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
 
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'triton':
-        kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
+        kernel_options = {
+            'num_stages': 2, 'num_warps': 16 if D_HEAD == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True, 'grf_mode': "large"
+        }
         triton_fn = lambda: flex_attention(q, k, v, score_mod=score_mod, block_mask=block_mask, kernel_options=
                                            kernel_options)
         if MODE == 'bwd':
