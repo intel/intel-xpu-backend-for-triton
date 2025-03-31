@@ -62,18 +62,13 @@ public:
 
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       return TypeSwitch<Operation *, WalkResult>(op)
-          .Case<tt::DescriptorLoadOp>([&](auto loadOp) {
-            if (failed(rewriteDescriptorLoadOrStoreOp(loadOp)))
-              loadOp->emitRemark("TritonIntelTensorDescToBlockPointer: Failed "
-                                 "to rewrite with tt.LoadOp");
-            return WalkResult::advance();
-          })
-          .Case<tt::DescriptorStoreOp>([&](auto storeOp) {
-            if (failed(rewriteDescriptorLoadOrStoreOp(storeOp)))
-              storeOp->emitRemark("TritonIntelTensorDescToBlockPointer: Failed "
-                                  "to rewrite with tt.StoreOp");
-            return WalkResult::advance();
-          })
+          .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
+              [&](auto loadOrStoreOp) {
+                if (failed(rewriteDescriptorLoadOrStoreOp(loadOrStoreOp)))
+                  loadOrStoreOp->emitRemark(
+                      "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
+                return WalkResult::advance();
+              })
           .Default([&](auto) { return WalkResult::advance(); });
     });
 
