@@ -194,6 +194,9 @@ function build_pytorch {
 
   echo "****** Building $PYTORCH_PROJ ******"
   cd "$PYTORCH_PROJ"
+  # FIXME: Compatibility with versions of CMake older than 3.5 has been removed, this breaks compilation of third_party/protobuf:
+  # CMake Error at third_party/protobuf/cmake/CMakeLists.txt:2 (cmake_minimum_required)
+  pip install 'cmake<4.0.0'
   pip install -r requirements.txt
   pip install cmake ninja
   USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
