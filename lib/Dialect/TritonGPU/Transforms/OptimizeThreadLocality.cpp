@@ -57,7 +57,7 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
     }
     ArrayRef<int64_t> shape = tensorType.getShape();
     SmallVector<unsigned> order;
-    for (int i : triton::gpu::getOrder(tensorType.getEncoding())) {
+    for (int i : triton::gpu::getOrder(tensorType)) {
       if (i != *reductionAxis)
         order.push_back(i);
     }
@@ -105,10 +105,8 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
 
   // Determine a warp-local gather layout that minimizes the number of emitted
   // warp shuffles.
-  unsigned numThreadsPerWarp =
-      product<unsigned>(triton::gpu::getThreadsPerWarp(srcType.getEncoding()));
-  unsigned numWarps =
-      product<unsigned>(triton::gpu::getWarpsPerCTA(srcType.getEncoding()));
+  unsigned numThreadsPerWarp = lookupThreadsPerWarp(b);
+  unsigned numWarps = lookupNumWarps(op);
 
   // If in a gather column, each thread owns `srcSizePerThread[axis]` elements
   // in the source tensor and `idxSizePerThread[axis]` elements in the index
@@ -153,8 +151,7 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   // Now spread them along the other dimensions. Do this according to order
   // (arbitrary).
   unsigned threadsToAlloc = numThreadsPerWarp / maxThreadsInAxis;
-  auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
-  for (unsigned dim : distributedItf.getThreadOrder()) {
+  for (unsigned dim : getThreadOrder(srcType)) {
     if (dim == axis)
       continue;
     // The gather axis is now the fastest-changing dimension.
@@ -170,7 +167,7 @@ static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   warpsPerCTA[axis] = 1;
   // Allocate the remaining warps in the same manner.
   unsigned warpsToAlloc = numWarps;
-  for (unsigned dim : distributedItf.getWarpOrder()) {
+  for (unsigned dim : getWarpOrder(srcType)) {
     if (dim == axis)
       continue;
     unsigned warpsCanFit = srcType.getDimSize(dim) / threadsPerWarp[dim];
@@ -544,7 +541,8 @@ private:
     return viewOpTensorShape;
   }
 
-  Attribute getThreadLocalityOptimizedEncoding(triton::ReduceOp reduce) const {
+  BlockedEncodingAttr
+  getThreadLocalityOptimizedEncoding(triton::ReduceOp reduce) const {
     auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
     auto rank = srcType.getShape().size();
     auto srcEncoding = srcType.getEncoding();

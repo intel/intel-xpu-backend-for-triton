@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory  --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory  --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_kernelcc @test_empty_kernel(%arg0: i64, %arg1: !llvm.ptr<1>)
@@ -600,9 +600,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared0 = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: basic_alloc_tensor(%arg0: !llvm.ptr<3>)
+  // CHECK-LABEL: basic_alloc_tensor
   tt.func @basic_alloc_tensor() {
     // CHECK-NEXT: llvm.mlir.constant
+    // CHECK-NEXT: llvm.mlir.addressof @global_smem
     // CHECK-NEXT: llvm.getelementptr
     %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared0, #smem, mutable>
     tt.return
@@ -614,7 +615,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared0 = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: basic_subview(%arg0: !llvm.ptr<3>)
+  // CHECK-LABEL: basic_subview
   tt.func @basic_subview() {
     // CHECK: llvm.extractvalue
     // CHECK-NEXT: llvm.extractvalue
@@ -625,6 +626,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.mlir.undef
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add
@@ -705,7 +707,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-LABEL: convert_layout_blocked_blocked({{.*}}%arg1: !llvm.ptr<3>)
+  // CHECK-LABEL: convert_layout_blocked_blocked
   tt.func @convert_layout_blocked_blocked(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<1xf32>, !llvm.ptr<3>
@@ -752,7 +754,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-LABEL: convert_layout_blocked_blocked_vec({{.*}}%arg1: !llvm.ptr<3>)
+  // CHECK-LABEL: convert_layout_blocked_blocked_vec
   tt.func @convert_layout_blocked_blocked_vec(%arg0: tensor<32x32xf32, #blocked0>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
@@ -775,7 +777,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
-  // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep({{.*}}%arg1: !llvm.ptr<3>)
+  // CHECK-LABEL: convert_layout_blocked_blocked_multi_rep
   tt.func @convert_layout_blocked_blocked_multi_rep(%arg0: tensor<16x16xf32, #blocked0>) {
     // CHECK: llvm.store
     // CHECK-SAME: vector<4xf32>, !llvm.ptr<3>
@@ -1102,7 +1104,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:   llvm.br ^bb2([[CMPXCHG_RES]] : i32)
     // CHECK-NEXT: ^bb2([[RES:%.*]]: i32):
     // CHECK-NEXT:   [[RES_CAST:%.*]] = llvm.bitcast [[RES]] : i32 to f32
-    // CHECK:        [[GEP:%.*]] = llvm.getelementptr %arg3[{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT: llvm.cond_br [[MASK]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
@@ -1127,10 +1131,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[EV1_ARG2:%.*]] = llvm.extractvalue %arg2[1] : !llvm.struct<(f32, f32)>
     // CHECK:      [[EV0_ARG0:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK-NEXT: [[EV1_ARG0:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
+    // CHECK:      llvm.mlir.constant(true) : i1
     // CHECK:      [[CST_TRUE:%.*]] = llvm.mlir.constant(true) : i1
-    // CHECK:      [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xf32>
+    // CHECK:      [[PRED0:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
+    // CHECK-NEXT: [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK:      [[IE1:%.*]] = llvm.insertelement [[EV0_ARG2]], [[UNDEF1]][{{.*}} : i64] : vector<1xf32>
-    // CHECK-NEXT: [[PRED1:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
+    // CHECK-NEXT: [[PRED1:%.*]] = llvm.and [[PRED0]], {{.*}} : i1
     // CHECK-NEXT: [[ZERO1:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK:      llvm.cond_br [[PRED1]], ^bb1, ^bb2([[ZERO1]] : f32)
     // CHECK-NEXT: ^bb1:
@@ -1141,7 +1147,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT:   [[RMW_CAST:%.*]] = llvm.bitcast [[RMW_PHI1]] : f32 to f32
     // CHECK-NEXT:   [[UNDEF2:%.*]] = llvm.mlir.undef : vector<1xf32>
     // CHECK:        [[IE2:%.*]] = llvm.insertelement [[EV1_ARG2]], [[UNDEF2]][{{.*}} : i64] : vector<1xf32>
-    // CHECK-NEXT:   [[PRED2:%.*]] = llvm.and [[CST_TRUE]], {{.*}} : i1
+    // CHECK-NEXT:   [[PRED2:%.*]] = llvm.and [[PRED0]], {{.*}} : i1
     // CHECK-NEXT:   [[ZERO2:%.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
     // CHECK:        [[WGSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK:        [[WGMEMSCOPE:%.*]] = llvm.mlir.constant(2 : i32) : i32
@@ -1210,7 +1216,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK-NEXT:   llvm.br ^bb2([[RMW_RES]] : f32)
     // CHECK-NEXT: ^bb2([[RMW_PHI:%.*]]: f32):
     // CHECK-NEXT:   [[RMW_CAST:%.*]] = llvm.bitcast [[RMW_PHI]] : f32 to f32
-    // CHECK:        [[GEP:%.*]] = llvm.getelementptr %arg3[{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
     // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT:   llvm.cond_br [[PRED]], ^bb3, ^bb4
     // CHECK-NEXT:  ^bb3:
@@ -1287,10 +1295,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK-NEXT: [[ARG1_0:%.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(f32, f32)>
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(f32, f32)>
-    // CHECK:      [[TRUE:%.*]] = llvm.mlir.constant(true) : i1
+    // CHECK:      llvm.mlir.constant(true) : i1
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
-    // CHECK:      llvm.cond_br [[TRUE]], ^bb1, ^bb2
+    // CHECK:      [[TRUE1:%.*]] = llvm.mlir.constant(true) : i1
+    // CHECK:      [[TRUE2:%.*]] = llvm.mlir.constant(true) : i1
+    // CHECK:      [[PRED:%.*]] = llvm.and [[TRUE1]], [[TRUE2]] : i1
+    // CHECK:      llvm.cond_br [[PRED]], ^bb1, ^bb2
     // CHECK-NEXT: ^bb1:
     // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
@@ -1299,7 +1310,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK:        [[VEC:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[IE1:%.*]] = llvm.insertelement {{.*}}, [[VEC]][[[ZERO]] : i32] : vector<1xi32>
-    // CHECK:        llvm.cond_br [[TRUE]], ^bb3, ^bb4
+    // CHECK:        llvm.cond_br [[PRED]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
     // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT:   llvm.store [[IE1]], [[BCAST1]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
@@ -1776,7 +1787,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: reduce_bools({{.*}}, %arg1: !llvm.ptr<3>)
+  // CHECK-LABEL: reduce_bools
   tt.func public @reduce_bools(%arg: tensor<256x2xi1, #blocked>) {
     %24 = "tt.reduce"(%arg) <{axis = 1 : i32}> ({
     ^bb0(%arg4: i1, %arg5: i1):
@@ -1975,8 +1986,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: print_ptr
   tt.func @print_ptr(%arg0 : tensor<256x!tt.ptr<i32>, #blocked0>) {
-    // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32, !llvm.ptr<1>) -> i32
-    // CHECK-NEXT: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32, !llvm.ptr<1>) -> i32
+    // CHECK: llvm.call spir_funccc @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32, !llvm.ptr<1>) -> i32
+    // CHECK-NEXT: llvm.call spir_funccc @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32, !llvm.ptr<1>) -> i32
     tt.print "ptr: " {hex = false, isSigned = array<i32: 0>} : %arg0 : tensor<256x!tt.ptr<i32>, #blocked0>
     tt.return
   }
@@ -1988,7 +1999,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // Test that %u format specifier is used if isSigned is false
   // CHECK: llvm.mlir.global internal constant @printfFormat_("pid (%u, %u, %u) idx ()int32 tensor: %u\0A\00") {addr_space = 2 : i32}
   // CHECK-LABEL: print_int32_tensor_issigned_off
-  // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32) -> i32
+  // CHECK: llvm.call spir_funccc @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32) -> i32
   tt.func @print_int32_tensor_issigned_off(%arg0 : i32) {
     tt.print "int32 tensor: " {hex = false, isSigned = array<i32: 0>} : %arg0 : i32
     tt.return
@@ -2001,7 +2012,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // Test that %i format specifier is used if isSigned is true
   // CHECK: llvm.mlir.global internal constant @printfFormat_("pid (%u, %u, %u) idx ()int32 tensor: %i\0A\00") {addr_space = 2 : i32}
   // CHECK-LABEL: print_int32_tensor_issigned_on
-  // CHECK: llvm.call @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32) -> i32
+  // CHECK: llvm.call spir_funccc @_Z18__spirv_ocl_printf(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) vararg(!llvm.func<i32 (ptr<2>, ...)>) : (!llvm.ptr<2>, i32, i32, i32, i32) -> i32
   tt.func @print_int32_tensor_issigned_on(%arg0 : i32) {
     tt.print "int32 tensor: " {hex = false, isSigned = array<i32: 1>} : %arg0 : i32
     tt.return

@@ -136,7 +136,6 @@ private:
       uniqueOffsets.insert({offsets[i], i});
     }
 
-    unsigned srcElems = getTotalElemsPerThread(operandType);
     auto *combineOp = &op.getCombineOp();
     auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
                                   helper.getSrcLayout(), operandType, true);
@@ -349,7 +348,6 @@ private:
         auto resultIndices = emitIndices(loc, rewriter, targetInfo,
                                          resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
-        auto resultCTATile = getShapePerCTATile(resultLayout);
         assert(resultIndices.size() == resultElems);
 
         SmallVector<Value> resultVals(resultElems);
@@ -359,8 +357,7 @@ private:
           for (size_t resultIdx = 0, resultDim = resultShape.size();
                resultIdx < resultDim; ++resultIdx) {
             auto smemIdx = resultIdx < op.getAxis() ? resultIdx : resultIdx + 1;
-            if (resultCTATile[resultIdx] > smemShape[smemIdx] ||
-                resultShape[resultIdx] > smemShape[smemIdx]) {
+            if (resultShape[resultIdx] > smemShape[smemIdx]) {
               // When srcShape smaller then src sizePerThread, only srcShape
               // elements is accumulated in smem. Modulo smemShape effectively
               // replicates srcShape elements to src sizePerThread.

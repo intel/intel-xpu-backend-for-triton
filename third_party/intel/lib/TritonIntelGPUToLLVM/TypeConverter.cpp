@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 static Type convertTritonPointerType(triton::PointerType type) {
   auto ctx = type.getContext();

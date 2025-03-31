@@ -20,21 +20,13 @@
 #include "intel/include/TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "llvm/ADT/APSInt.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Debug.h"
-#include <numeric>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -346,8 +338,10 @@ public:
           auto src = reduce.getSrcs()[0];
           assert(valueAttrMap.count(src) != 0 &&
                  "reduce source attr should be already figured out");
-          auto sliceAttr =
-              ttg::SliceEncodingAttr::get(ctx, axis, valueAttrMap[src]);
+          auto sliceAttr = ttg::SliceEncodingAttr::get(
+              ctx, axis,
+              cast<mlir::triton::gpu::DistributedEncodingTrait>(
+                  valueAttrMap[src]));
           auto result = reduce.getResults()[0];
           DenseSet<Value> chainedVals;
           chainedVals.insert(result);
@@ -427,7 +421,8 @@ public:
           // use.
           if (auto expand = dyn_cast<tt::ExpandDimsOp>(op)) {
             Attribute sliceLayout = triton::gpu::SliceEncodingAttr::get(
-                blockLayout.getContext(), expand.getAxis(), blockLayout);
+                blockLayout.getContext(), expand.getAxis(),
+                cast<mlir::triton::gpu::DistributedEncodingTrait>(blockLayout));
             DenseSet<Value> chainedVals;
             expandDefChain(expand.getSrc(), chainedVals);
             for (auto cv : chainedVals)

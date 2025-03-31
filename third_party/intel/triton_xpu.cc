@@ -66,6 +66,8 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
+  ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
+                     intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
   ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
                          intel::createTritonRaiseBlockPointer, bool);
@@ -79,10 +81,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                          bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
-  ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
-                     gpu::intel::createIntelDecomposeUnsupportedConversions);
-  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
-                     gpu::intel::createIntelAllocateSharedMemory);
+  ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
+                     gpu::intel::createTritonIntelGPURewriteStackPtr);
   ADD_PASS_WRAPPER_OPT_2("add_pipeline",
                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -272,7 +272,7 @@ void init_triton_intel(py::module &&m) {
     std::string triple = "spir64-unknown-unknown";
     std::string layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
                          "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
-    mod->setTargetTriple(triple);
+    mod->setTargetTriple(llvm::Triple(triple));
     mod->setDataLayout(layout);
   });
 

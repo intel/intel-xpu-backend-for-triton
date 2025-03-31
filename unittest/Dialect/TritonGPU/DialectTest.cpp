@@ -392,8 +392,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       auto linear = LinearEncodingAttr::get(&ctx, toLinearLayout(shape, enc));
       // Test that we can do a round trip from src to dst encoding and back.
       Attribute dstEnc;
-      LogicalResult result =
-          inferLayout->inferJoinOpEncoding(linear, dstEnc, shape, std::nullopt);
+      LogicalResult result = inferLayout->inferDefaultJoinOpEncoding(
+          linear, dstEnc, shape, std::nullopt);
       EXPECT_TRUE(succeeded(result));
       Attribute newSrcEnc;
       auto newShape = shape;
@@ -419,8 +419,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       auto transPerm = llvm::to_vector(llvm::seq<int32_t>(0, rank));
       transPerm.insert(transPerm.begin() + axis + 1, rank);
       Attribute joinedEnc;
-      result =
-          inferLayout->inferJoinOpEncoding(enc, joinedEnc, shape, std::nullopt);
+      result = inferLayout->inferDefaultJoinOpEncoding(enc, joinedEnc, shape,
+                                                       std::nullopt);
       auto joinShape = shape;
       joinShape.push_back(2);
       assert(succeeded(result));
@@ -486,181 +486,6 @@ public:
   }
 };
 
-class AMDWmmaLayoutTest : public AMDLayoutTest {
-public:
-  AMDWmmaLayoutTest() = default;
-
-  triton::gpu::AMDWmmaEncodingAttr
-  createWMMAv1(ArrayRef<unsigned> warpsPerCTA) {
-    return triton::gpu::AMDWmmaEncodingAttr::get(
-        &ctx, /*version=*/1, /*isTransposed=*/false, warpsPerCTA, ctaLayout);
-  }
-
-  triton::gpu::AMDWmmaEncodingAttr
-  createWMMAv2(bool isTransposed, ArrayRef<unsigned> warpsPerCTA) {
-    return triton::gpu::AMDWmmaEncodingAttr::get(
-        &ctx, /*version=*/2, isTransposed, warpsPerCTA, ctaLayout);
-  }
-};
-
-TEST_F(AMDMfmaLayoutTest, mfma32) {
-  auto mfma2d = createMFMA(32, 32, {2, 4});
-  ASSERT_THAT(mfma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(mfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
-
-  auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
-  ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
-  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
-
-  auto mfma3d = createMFMA(32, 32, {2, 4, 1});
-  ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(mfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-
-  auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
-  ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
-  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-}
-
-TEST_F(AMDMfmaLayoutTest, mfma16) {
-  auto mfma2d = createMFMA(16, 16, {2, 4});
-  ASSERT_THAT(mfma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(mfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
-
-  auto tmfma2d = createTransposedMFMA(16, 16, {2, 4});
-  ASSERT_THAT(tmfma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
-  ASSERT_THAT(tmfma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
-
-  auto mfma3d = createMFMA(16, 16, {2, 4, 1});
-  ASSERT_THAT(mfma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(mfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-
-  auto tmfma3d = createTransposedMFMA(16, 16, {2, 4, 1});
-  ASSERT_THAT(tmfma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
-  ASSERT_THAT(tmfma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-}
-
-TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
-  auto mfma2d = createMFMA(32, 32, {2, 4});
-  auto dot2dOp0 = createDotOperand(0, mfma2d, 4);
-  auto dot2dOp1 = createDotOperand(1, mfma2d, 4);
-  ASSERT_THAT(dot2dOp0.getWarpOrder(), mfma2d.getWarpOrder());
-  ASSERT_THAT(dot2dOp1.getWarpOrder(), mfma2d.getWarpOrder());
-  ASSERT_THAT(dot2dOp0.getThreadsPerWarp(), testing::ElementsAre(32u, 2u));
-  ASSERT_THAT(dot2dOp1.getThreadsPerWarp(), testing::ElementsAre(2u, 32u));
-
-  auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
-  auto tdot2dOp0 = createDotOperand(0, tmfma2d, 4);
-  auto tdot2dOp1 = createDotOperand(1, tmfma2d, 4);
-  ASSERT_THAT(tdot2dOp0.getWarpOrder(), tmfma2d.getWarpOrder());
-  ASSERT_THAT(tdot2dOp1.getWarpOrder(), tmfma2d.getWarpOrder());
-
-  auto mfma3d = createMFMA(32, 32, {2, 4, 1});
-  auto dot3dOp0 = createDotOperand(0, mfma3d, 4);
-  auto dot3dOp1 = createDotOperand(1, mfma3d, 4);
-  ASSERT_THAT(dot3dOp0.getWarpOrder(), mfma3d.getWarpOrder());
-  ASSERT_THAT(dot3dOp1.getWarpOrder(), mfma3d.getWarpOrder());
-  ASSERT_THAT(dot3dOp0.getThreadsPerWarp(), testing::ElementsAre(1u, 32u, 2u));
-  ASSERT_THAT(dot3dOp1.getThreadsPerWarp(), testing::ElementsAre(1u, 2u, 32u));
-
-  auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
-  auto tdot3dOp0 = createDotOperand(0, tmfma3d, 4);
-  auto tdot3dOp1 = createDotOperand(1, tmfma3d, 4);
-  ASSERT_THAT(tdot3dOp0.getWarpOrder(), tmfma3d.getWarpOrder());
-  ASSERT_THAT(tdot3dOp1.getWarpOrder(), tmfma3d.getWarpOrder());
-
-  auto mfma16_2d = createMFMA(16, 16, {2, 4});
-  auto dot16_2dOp0 = createDotOperand(0, mfma16_2d, 4);
-  auto dot16_2dOp1 = createDotOperand(1, mfma16_2d, 4);
-  ASSERT_THAT(dot16_2dOp0.getThreadsPerWarp(), testing::ElementsAre(16u, 4u));
-  ASSERT_THAT(dot16_2dOp1.getThreadsPerWarp(), testing::ElementsAre(4u, 16u));
-
-  auto mfma16_3d = createMFMA(16, 16, {2, 4, 1});
-  auto dot16_3dOp0 = createDotOperand(0, mfma16_3d, 4);
-  auto dot16_3dOp1 = createDotOperand(1, mfma16_3d, 4);
-  ASSERT_THAT(dot16_3dOp0.getThreadsPerWarp(),
-              testing::ElementsAre(1u, 16u, 4u));
-  ASSERT_THAT(dot16_3dOp1.getThreadsPerWarp(),
-              testing::ElementsAre(1u, 4u, 16u));
-}
-
-TEST_F(AMDWmmaLayoutTest, wmmaV1) {
-  auto wmma2d = createWMMAv1({2, 4});
-  ASSERT_THAT(wmma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getSizePerThread(), testing::ElementsAre(8u, 1u));
-  ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
-
-  auto wmma3d = createWMMAv1({2, 4, 1});
-  ASSERT_THAT(wmma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getSizePerThread(), testing::ElementsAre(1u, 8u, 1u));
-  ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1, 2u, 16u));
-}
-
-TEST_F(AMDWmmaLayoutTest, wmmaV2) {
-  auto wmma2d = createWMMAv2(false, {2, 4});
-  ASSERT_THAT(wmma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getSizePerThread(), testing::ElementsAre(8u, 1u));
-  ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
-
-  auto wmma3d = createWMMAv2(false, {2, 4, 1});
-  ASSERT_THAT(wmma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getSizePerThread(), testing::ElementsAre(1u, 8u, 1u));
-  ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 2u, 16u));
-
-  auto twmma2d = createWMMAv2(true, {2, 4});
-  ASSERT_THAT(twmma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
-  ASSERT_THAT(twmma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(twmma2d.getSizePerThread(), testing::ElementsAre(1u, 8u));
-  ASSERT_THAT(twmma2d.getThreadsPerWarp(), testing::ElementsAre(16u, 2u));
-
-  auto twmma3d = createWMMAv2(true, {2, 4, 1});
-  ASSERT_THAT(twmma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
-  ASSERT_THAT(twmma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(twmma3d.getSizePerThread(), testing::ElementsAre(1u, 1u, 8u));
-  ASSERT_THAT(twmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 16u, 2u));
-}
-
-TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
-  auto wmma2dVer1 = createWMMAv1({2, 4});
-  auto dot2dVer1Op0 = createDotOperand(0, wmma2dVer1, 16);
-  auto dot2dVer1Op1 = createDotOperand(1, wmma2dVer1, 16);
-  ASSERT_THAT(dot2dVer1Op0.getWarpOrder(), wmma2dVer1.getWarpOrder());
-  ASSERT_THAT(dot2dVer1Op1.getWarpOrder(), wmma2dVer1.getWarpOrder());
-  ASSERT_THAT(dot2dVer1Op0.getThreadsPerWarp(), testing::ElementsAre(16u, 1u));
-  ASSERT_THAT(dot2dVer1Op1.getThreadsPerWarp(), testing::ElementsAre(1u, 16u));
-
-  auto wmma3dVer1 = createWMMAv1({2, 4, 1});
-  auto dot3dVer1Op0 = createDotOperand(0, wmma3dVer1, 16);
-  auto dot3dVer1Op1 = createDotOperand(1, wmma3dVer1, 16);
-  ASSERT_THAT(dot3dVer1Op0.getWarpOrder(), wmma3dVer1.getWarpOrder());
-  ASSERT_THAT(dot3dVer1Op1.getWarpOrder(), wmma3dVer1.getWarpOrder());
-  ASSERT_THAT(dot3dVer1Op0.getThreadsPerWarp(),
-              testing::ElementsAre(1, 16u, 1u));
-  ASSERT_THAT(dot3dVer1Op1.getThreadsPerWarp(),
-              testing::ElementsAre(1, 1u, 16u));
-
-  auto wmma2dVer2 = createWMMAv2(false, {2, 4});
-  auto dot2dVer2Op0 = createDotOperand(0, wmma2dVer2, 16);
-  auto dot2dVer2Op1 = createDotOperand(1, wmma2dVer2, 16);
-  ASSERT_THAT(dot2dVer2Op0.getWarpOrder(), wmma2dVer2.getWarpOrder());
-  ASSERT_THAT(dot2dVer2Op1.getWarpOrder(), wmma2dVer2.getWarpOrder());
-  ASSERT_THAT(dot2dVer2Op0.getThreadsPerWarp(), testing::ElementsAre(16u, 2u));
-  ASSERT_THAT(dot2dVer2Op1.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
-
-  auto wmma3dVer2 = createWMMAv2(false, {2, 4, 1});
-  auto dot3dVer2Op0 = createDotOperand(0, wmma3dVer2, 16);
-  auto dot3dVer2Op1 = createDotOperand(1, wmma3dVer2, 16);
-  ASSERT_THAT(dot3dVer2Op0.getWarpOrder(), wmma3dVer2.getWarpOrder());
-  ASSERT_THAT(dot3dVer2Op1.getWarpOrder(), wmma3dVer2.getWarpOrder());
-  ASSERT_THAT(dot3dVer2Op0.getThreadsPerWarp(),
-              testing::ElementsAre(1, 16u, 2u));
-  ASSERT_THAT(dot3dVer2Op1.getThreadsPerWarp(),
-              testing::ElementsAre(1, 2u, 16u));
-}
-
 class LinearEncodingTest : public ::testing::Test {
 public:
   LinearEncodingTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
@@ -713,9 +538,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       // Test that methods of DistributedEncoding return the same values
       Type eltTy = Float32Type::get(&ctx);
 
-      if (!is_dot_op_with_block_parent(distributedEncoding)) {
-        ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
-      }
       ASSERT_EQ(distributedEncoding.getTotalElemsPerThread(shape),
                 linearEncoding.getTotalElemsPerThread(shape));
       ASSERT_EQ(distributedEncoding.getElemsPerThread(shape),
@@ -723,34 +545,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       if (!is_dot_op_with_block_parent(distributedEncoding)) {
         ASSERT_EQ(distributedEncoding.getRepOrder(),
                   linearEncoding.getRepOrder());
-      }
-      // DotOperandEncodingAttr::getWarpOrder() is not defined
-      if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getWarpOrder(),
-                  linearEncoding.getWarpOrder());
-      }
-      if (!is_dot_op_with_block_parent(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getThreadOrder(),
-                  linearEncoding.getThreadOrder());
-      }
-      // For slice these do not equal the total number of lines / warps
-      // See [Note. Divergence of methods wrt. legacy layouts]
-      if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getWarpsPerCTA(),
-                  linearEncoding.getWarpsPerCTA());
-        if (!is_dot_op_with_block_parent(distributedEncoding)) {
-          ASSERT_EQ(distributedEncoding.getThreadsPerWarp(),
-                    linearEncoding.getThreadsPerWarp());
-        }
-      }
-      // Canonicalisation for opIdx=0 takes just a [2 x 2] subtile as it takes
-      // the second repetition along K as the second tile.
-      if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {
-        // FIXME: This happens to be correct for SliceLayout because of the hack
-        // in SliceEncodingAttr::toLinearLayout(). We should remove the hack
-        // and the skips in the getWarpsPerCTA() and getThreadsPerWarp()
-        ASSERT_EQ(distributedEncoding.getSizePerThread(),
-                  linearEncoding.getSizePerThread());
       }
 
       // block level

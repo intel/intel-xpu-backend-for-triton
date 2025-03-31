@@ -1,30 +1,16 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/Verifier.h"
-#include "mlir/Interfaces/InferTypeOpInterface.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LLVM.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
-#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREDUCEDATADUPLICATION
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
-namespace ttgi = mlir::triton::gpu::intel;
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
@@ -42,30 +28,16 @@ public:
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
       auto dstType = cast<RankedTensorType>(cvtOp.getType());
       auto srcEncoding = srcType.getEncoding();
-      auto srcOrder = triton::gpu::getOrder(srcEncoding);
-      auto rank = srcOrder.size();
       if (isa<triton::gpu::SharedEncodingTrait>(srcEncoding))
         return;
       auto dstDotOp =
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
-      if (auto srcMmaEncoding =
-              dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMmaEncoding.getVersionMajor() != 2 ||
-            (srcMmaEncoding.getWarpsPerCTA()[rank - 1] == 1 &&
-             dstDotOp.getParent() == srcMmaEncoding))
-          return;
-      }
-      if (auto srcMfmaEncoding =
-              dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(srcEncoding)) {
-
-        if (srcMfmaEncoding.getWarpsPerCTA()[rank - 1] == 1 &&
-            srcMfmaEncoding.getIsTransposed() &&
-            dstDotOp.getParent() == srcMfmaEncoding)
-          return;
-      }
+      if (!cvtNeedsSharedMemory(srcType, dstType))
+        return;
+      auto srcOrder = triton::gpu::getOrder(srcType);
+      auto rank = srcOrder.size(); // TODO: maybe we can use upstream code.
       if (auto srcDpasEncoding =
               dyn_cast<triton::gpu::intel::DpasEncodingAttr>(srcEncoding)) {
         auto opIdx =

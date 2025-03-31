@@ -38,10 +38,10 @@ namespace {
 SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
   SmallVector<int64_t> sizePerWarp;
   if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    const SmallVector<unsigned> &sizePerThread =
-        blockedLayout.getSizePerThread();
-    const SmallVector<unsigned> &threadsPerWarp =
-        blockedLayout.getThreadsPerWarp();
+    const auto &sizePerThread = blockedLayout.getSizePerThread();
+    const SmallVector<unsigned> threadsPerWarp{
+        blockedLayout.getThreadsPerWarp().begin(),
+        blockedLayout.getThreadsPerWarp().end()};
     for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp))
       sizePerWarp.push_back(lhs * rhs);
   } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
@@ -80,7 +80,9 @@ Attribute getWarpLayout(Attribute layout) {
         ctx, dotLayout.getOpIdx(), parentLayout, dotLayout.getKWidth());
   } else if (auto sLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
     Attribute parentLayout = getWarpLayout(sLayout.getParent());
-    return ttg::SliceEncodingAttr::get(ctx, sLayout.getDim(), parentLayout);
+    return ttg::SliceEncodingAttr::get(
+        ctx, sLayout.getDim(),
+        cast<mlir::triton::gpu::DistributedEncodingTrait>(parentLayout));
   }
   return layout;
 }
@@ -118,7 +120,7 @@ SmallVector<Value> distributeOffset(const SmallVector<Value> &oldOffsets,
   Attribute layout = tensorType.getEncoding();
   if (auto dotEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(layout))
     layout = dotEncoding.getParent();
-  const SmallVector<unsigned> &warpsPerCTA = ttg::getWarpsPerCTA(layout);
+  auto warpsPerCTA = cast<ttg::BlockedEncodingAttr>(layout).getWarpsPerCTA();
   size_t dims = warpsPerCTA.size();
   assert(dims <= 2 && "no more than 2D shape");
 
@@ -209,7 +211,8 @@ void distributeMakeRangeOp(tt::MakeRangeOp op, Value warpId) {
   auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(tensorTy.getEncoding());
   assert(sliceLayout && "Expected slice layout");
 
-  auto parentWarpsPerCTA = ttg::getWarpsPerCTA(sliceLayout.getParent());
+  auto parentWarpsPerCTA =
+      cast<ttg::BlockedEncodingAttr>(sliceLayout.getParent()).getWarpsPerCTA();
   assert(parentWarpsPerCTA.size() == 2 && "Only slice of 2D layout supported");
   assert(parentWarpsPerCTA.back() == 1 &&
          "Warp distribution on second dimensions unsupported");
@@ -294,7 +297,7 @@ RankedTensorType transformToTypeWithWarpAttr(RankedTensorType type) {
       parentSize[0] = type.getShape()[0];
 
     warpAttr = ttgi::WarpEncodingAttr::get(ctx, parentSize, parentThreads,
-                                           parentAttr.getOrder());
+                                           parentAttr.getOrder_());
   } else if (auto sAttr = dyn_cast<ttg::SliceEncodingAttr>(attr)) {
     unsigned dim = sAttr.getDim();
     auto parentAttr = cast<ttgi::WarpEncodingAttr>(sAttr.getParent());
@@ -303,7 +306,7 @@ RankedTensorType transformToTypeWithWarpAttr(RankedTensorType type) {
     parentSize.erase(parentSize.begin() + dim);
     parentThreads.erase(parentThreads.begin() + dim);
     warpAttr = ttgi::WarpEncodingAttr::get(ctx, parentSize, parentThreads,
-                                           parentAttr.getOrder());
+                                           parentAttr.getOrder_());
   } else if (auto wAttr = dyn_cast<ttgi::WarpEncodingAttr>(attr)) {
     warpAttr = wAttr;
   } else {

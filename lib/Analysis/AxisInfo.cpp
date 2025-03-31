@@ -182,6 +182,8 @@ private:
       unsigned firstIndex) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       visitForOpInductionVar(forOp, argLattices);
+    } else if (auto ws = dyn_cast<gpu::WarpSpecializePartitionsOp>(op)) {
+      visitWarpSpecializeExplicitCaptures(ws, successor, argLattices);
     } else {
       setAllToEntryStates(argLattices.take_front(firstIndex));
       setAllToEntryStates(argLattices.drop_front(
@@ -202,6 +204,9 @@ public:
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+  void visitWarpSpecializeExplicitCaptures(
+      gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+      ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 };
 
 template <typename OpTy>
@@ -277,18 +282,15 @@ public:
   AxisInfo
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    constexpr int64_t largePowerOf2 = int64_t(1) << 32;
-    // Poison values are never accessed, thus assume optimistic values.
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
-      unsigned rank = shape.getRank();
-      return AxisInfo(
-          /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
-          /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
-    }
+    unsigned rank = 1;
+    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType()))
+      rank = shape.getRank();
 
-    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{largePowerOf2},
-                    /*constancy=*/{1});
+    // Poison values are never accessed, thus assume optimistic values.
+    return AxisInfo(
+        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)),
+        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)),
+        AxisInfo::DimVectorT(rank, highestPowOf2Divisor<int64_t>(0)));
   }
 };
 
@@ -1116,6 +1118,20 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   (void)argLattices[0]->join(inductionVar);
 }
 
+void AxisInfoAnalysis::visitWarpSpecializeExplicitCaptures(
+    gpu::WarpSpecializePartitionsOp ws, const RegionSuccessor &successor,
+    ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
+  assert(!successor.isParent());
+  ProgramPoint *point = getProgramPointAfter(ws);
+
+  for (auto [capture, argLattice] :
+       llvm::zip(ws.getParentOp().getExplicitCaptures(), argLattices)) {
+    propagateIfChanged(
+        argLattice,
+        argLattice->join(getLatticeElementFor(point, capture)->getValue()));
+  }
+}
+
 } // anonymous namespace
 
 template <class T>
@@ -1160,8 +1176,9 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
       initPessimisticStateFromFunc(blockArg.getArgNumber(), fun,
                                    &knownContiguity, &knownDivisibility,
                                    &knownConstancy);
-    } else if (isa<RegionBranchOpInterface>(op)) {
-      // scf::ForOp, scf::IfOp, scf::WhileOp
+    } else if (isa<RegionBranchOpInterface, gpu::WarpSpecializePartitionsOp>(
+                   op)) {
+      // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
       // Control flow operations are initialized with "unknown" state:
       // the maximum possible divisibility, contiguity, and constancy.
       knownDivisibility = DimVectorT(rank, highestPowOf2Divisor<int64_t>(0));
@@ -1218,34 +1235,56 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getContiguity(value, elemTy.getIntOrFloatBitWidth());
+}
 
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
+                                               unsigned elementBitWidth) {
   // FIXME: This is not as good as it could be, as we don't need to restrict
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
-  unsigned align = getPtrAlignment(ptr);
+  unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
   auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
-  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
+  LDBG("getContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
-  auto *axisInfo = getAxisInfo(ptr);
+
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getAlignment(value, elemTy.getIntOrFloatBitWidth());
+}
+
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
+                                              unsigned elementBitWidth) {
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
   auto linAttr =
@@ -1253,13 +1292,13 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto order = linAttr.getOrder();
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+
+  auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getPtrAlignment order[0] "
+  LDBG("getAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
-       << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
+       << " maxContig = " << maxContig << " elemNumBits = " << elementBitWidth
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
@@ -1295,12 +1334,15 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
-  WalkResult result = funcOp.walk([&](Operation *op) {
-    if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
-        failed(solver->initializeAndRun(op)))
-      return WalkResult::interrupt();
-    return WalkResult::advance();
-  });
+  // Walk pre-order so analysis results can be propagated into nested isolated
+  // regions.
+  WalkResult result =
+      funcOp.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+        if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+            failed(solver->initializeAndRun(op)))
+          return WalkResult::interrupt();
+        return WalkResult::advance();
+      });
   if (result.wasInterrupted())
     return;
 

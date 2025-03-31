@@ -20,15 +20,13 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
-#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 
@@ -47,8 +45,9 @@ namespace mlir::triton::intel {
 /// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
-                   PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps) {}
+                   const TargetInfoBase &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo),
+        numWarps(numWarps) {}
 
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
@@ -67,30 +66,48 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   }
 
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
-                             ConversionPatternRewriter &rewriter) const {
-    // Push back a variable that indicates the current stack pointer of shared
-    // memory to the function arguments.
+                             ConversionPatternRewriter &rewriter,
+                             const TargetInfoBase &targetInfo) const {
+    // Push back two new arguments that indicate the current pointer to shared
+    // memory and global scratch memory.
     auto loc = funcOp.getLoc();
     auto ctx = funcOp->getContext();
-    auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-    // 1. Modify the function type to add the new argument.
+    auto sharedPtrTy =
+        LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+
+    // 1. Modify the function type to add the new arguments.
     auto funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
-    amendedInputTy.push_back(ptrTy);
-    auto amendedFuncTy = FunctionType::get(funcTy.getContext(), amendedInputTy,
-                                           funcTy.getResults());
+    bool isKernel = LLVM::isKernel(funcOp);
+    if (!isKernel) {
+      amendedInputTy.push_back(sharedPtrTy);
+    }
+    amendedInputTy.push_back(globalPtrTy);
+    auto amendedFuncTy =
+        FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
     SmallVector<NamedAttribute> amendedAttrs;
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
-    auto amendedArgAttrs = llvm::to_vector<4>(funcOp.getAllArgAttrs());
-    amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-    amendedAttrs.push_back(rewriter.getNamedAttr(
-        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
-    // 3. Add a new argument to the region
+    if (auto argAttrs = funcOp.getAllArgAttrs()) {
+      llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                         argAttrs.end());
+      while (amendedArgAttrs.size() < amendedInputTy.size()) {
+        amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+      }
+      amendedAttrs.push_back(
+          rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
+                                rewriter.getArrayAttr(amendedArgAttrs)));
+    }
+
+    // 3. Add the new arguments to the region
     auto amendedFuncOp = rewriter.create<triton::FuncOp>(
         funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
     auto &region = funcOp.getBody();
-    region.addArgument(ptrTy, loc);
+    if (!isKernel) {
+      region.addArgument(sharedPtrTy, loc);
+    }
+    region.addArgument(globalPtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;
@@ -102,12 +119,16 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = funcOp;
     if (!LLVM::isKernel(funcOp))
-      amendedFuncOp = amendFuncOp(funcOp, rewriter);
+      amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
 
-    LLVM::LLVMFuncOp newFuncOp = *mlir::convertFuncOpToLLVMFuncOp(
-        amendedFuncOp, rewriter, *getTypeConverter());
-    if (!newFuncOp)
+    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
+        mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
+                                        *getTypeConverter());
+    if (failed(maybeNewFuncOp)) {
       return failure();
+    }
+
+    LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
 
     MLIRContext *ctx = funcOp->getContext();
     auto mod = funcOp->getParentOfType<ModuleOp>();
@@ -136,43 +157,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
 private:
   int numWarps{0};
-};
-
-struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
-
-  using mlir::OpRewritePattern<ModuleOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ModuleOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!gpu::intel::hasSpirvTargetArch(op) || spirv::lookupTargetEnv(op)) {
-      return failure();
-    }
-
-    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
-
-    auto resourceLimit = spirv::getDefaultResourceLimits(rewriter.getContext());
-    auto newResourceLimit = rewriter.getAttr<spirv::ResourceLimitsAttr>(
-        resourceLimit.getMaxComputeSharedMemorySize(),
-        resourceLimit.getMaxComputeWorkgroupInvocations(),
-        resourceLimit.getMaxComputeWorkgroupSize(), subgroupSize,
-        resourceLimit.getMinSubgroupSize(), resourceLimit.getMaxSubgroupSize(),
-        resourceLimit.getCooperativeMatrixPropertiesKhr(),
-        resourceLimit.getCooperativeMatrixPropertiesNv());
-    auto triple = spirv::VerCapExtAttr::get(
-        spirv::Version::V_1_2,
-        {spirv::Capability::GroupNonUniform, spirv::Capability::Addresses,
-         spirv::Capability::Float16Buffer, spirv::Capability::Int64,
-         spirv::Capability::Int16, spirv::Capability::Int8,
-         spirv::Capability::Kernel, spirv::Capability::Linkage,
-         spirv::Capability::Vector16, spirv::Capability::GenericPointer,
-         spirv::Capability::Groups, spirv::Capability::Float64},
-        {}, rewriter.getContext());
-    auto newTargetEnv = spirv::TargetEnvAttr::get(triple, newResourceLimit);
-    rewriter.modifyOpInPlace(op, [op, newTargetEnv] {
-      op->setAttr(spirv::getTargetEnvAttrName(), newTargetEnv);
-    });
-    return success();
-  }
+  const TargetInfoBase &targetInfo;
 };
 
 /// Manages TritonIntelGPU --> LLVM the conversion pipeline.
@@ -192,8 +177,9 @@ public:
   /// Populate the conversion pipeline for function operations.
   void populateFunctionConversionPatterns(
       RewritePatternSet &funcPatterns,
-      TritonIntelGPUToLLVMTypeConverter &typeConverter, int numWarps) const {
-    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps,
+      TritonIntelGPUToLLVMTypeConverter &typeConverter, int numWarps,
+      const TargetInfoBase &targetInfo) const {
+    funcPatterns.add<FuncOpConversion>(typeConverter, numWarps, targetInfo,
                                        /*benefit=*/1);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           funcPatterns);
@@ -207,11 +193,6 @@ public:
                              TargetInfo &targetInfo, int benefit) const {
     using namespace mlir;
     using namespace mlir::triton;
-
-    // should run before other patterns that need the SPIRV-ENV attr
-    // (e.g. patterns that output triton_gen.sub_group_reduce)
-    patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(),
-                                     patternBenefitAddSPIRVEnv);
 
     if (isAdvancedPathEnabled) {
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
@@ -250,10 +231,9 @@ public:
                                                    patterns, benefit);
       intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                                 targetInfo, benefit);
-      intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
-                                              patterns, benefit);
-      intel::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
-                                              targetInfo, benefit);
+      mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, benefit);
+      intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,

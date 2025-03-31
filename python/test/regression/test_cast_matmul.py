@@ -13,7 +13,7 @@ import torch
 import triton
 import triton.runtime as tr
 import triton.language as tl
-from triton._internal_testing import is_hip_mi300, is_cuda, is_hip
+from triton._internal_testing import is_hip_cdna3, is_cuda
 
 input_dtypes = ["bfloat16", "float16", "float32", "float64"]
 if is_cuda():
@@ -21,11 +21,11 @@ if is_cuda():
     cc = torch.cuda.get_device_capability(0)
     if cc >= (8, 9):
         input_dtypes += ["float8_e4m3fn"]
-elif is_hip_mi300():
+elif is_hip_cdna3():
     input_dtypes += [
         "int8",
         "float8_e5m2",
-        # natively supported on mi300 (see CDNA3 ISA, section 7.2)
+        # natively supported on CDNA3 (see CDNA3 ISA, section 7.2)
         "float8_e4m3fnuz",
     ]
 
@@ -94,8 +94,6 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
     if device == "xpu" and "float64" in (w_dtype,
                                          x_dtype) and not tr.driver.active.get_current_target().arch['has_fp64']:
         pytest.xfail("float64 not supported on current xpu hardware")
-    if is_hip() and BLOCK_M == 64 and w_dtype in ["float8_e5m2", "float8_e4m3fnuz"]:
-        pytest.skip("skip due to bug on HIP path")
     x_dtype: torch.dtype = getattr(torch, x_dtype)
     w_dtype: torch.dtype = getattr(torch, w_dtype)
 

@@ -51,9 +51,13 @@ int lookupNumWarps(Operation *op);
 // verifiers.
 std::optional<int> maybeLookupNumWarps(Operation *op);
 
-class LinearLayoutCache {
+// FIXME: Make this API and that of maybeLookupNumWarps consistent!
+// Utility to find the number of threads per warp
+int lookupThreadsPerWarp(OpBuilder &rewriter);
+
+template <typename Key, typename Value> class Cache {
 public:
-  std::optional<LinearLayout> get(const CacheKey &key) {
+  std::optional<Value> get(const Key &key) {
     std::shared_lock lock(mutex);
     auto it = cache.find(key);
     if (it != cache.end()) {
@@ -62,15 +66,18 @@ public:
     return std::nullopt;
   }
 
-  void set(CacheKey key, LinearLayout result) {
+  void set(Key key, Value result) {
     std::scoped_lock lock(mutex);
     cache.emplace(std::move(key), std::move(result));
   }
 
 private:
-  std::unordered_map<CacheKey, LinearLayout> cache;
+  std::unordered_map<Key, Value> cache;
   llvm::sys::SmartRWMutex<true> mutex;
 };
+
+using LinearLayoutCache = Cache<CacheKey, LinearLayout>;
+using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 } // namespace mlir::triton::gpu
 
 #define GET_OP_CLASSES
@@ -83,6 +90,7 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
 };
 
 // Convert a distributed layout to a linear encoding
+LinearEncodingAttr toLinearEncoding(RankedTensorType type);
 LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
 
 unsigned getTotalElemsPerThread(Type type);
@@ -91,18 +99,16 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
-// Returns the number of threads per warp that may have access to replicated
-// elements. If you want non-replicated threads, use
-// getThreadsPerWarpWithUniqueData.
-SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
-
-unsigned getWarpSize(Attribute layout);
-
-// Returns the number of warps per CTA that may have access to replicated
-// elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
-SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
-
-SmallVector<unsigned> getSizePerThread(Attribute layout);
+// Returns the number of warps per CTA that have access to non-replicated
+// elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
+// 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4] and tensor shape = [2, 2],
+// returns [1, 1], since the first warp has access to the full tensor, whereas
+// the other warps have access to replicated elements.
+SmallVector<unsigned> getWarpsPerCTA(Attribute layout,
+                                     ArrayRef<int64_t> tensorShape);
+inline SmallVector<unsigned> getWarpsPerCTA(RankedTensorType type) {
+  return getWarpsPerCTA(type.getEncoding(), type.getShape());
+}
 
 // Returns the number of contiguous elements of the logical tensor that each
 // thread has access to, on each dimension of the tensor. For a blocked layout
@@ -117,24 +123,57 @@ SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType);
 // 1], threadsPerWarp = [2, 16] and tensor shape = [2, 2], threads 0, 1, 16, 17
 // have access to the full tensor, whereas the other threads have access to
 // replicated elements, so this function returns [2, 2].
-SmallVector<unsigned>
-getThreadsPerWarpWithUniqueData(Attribute layout,
-                                ArrayRef<int64_t> tensorShape);
-
-// Returns the number of warps per CTA that have access to non-replicated
-// elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
-// 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4] and tensor shape = [2, 2],
-// returns [1, 1], since the first warp has access to the full tensor, whereas
-// the other warps have access to replicated elements.
-SmallVector<unsigned>
-getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
+                                        ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getThreadsPerWarp(RankedTensorType type) {
+  return getThreadsPerWarp(type.getEncoding(), type.getShape());
+}
 
 // Returns the dimensions of the tensor from minor (fast-varying) to
 // major (slow-varying). For distributed layouts, this represents
 // the order of the elements within a thread.
 // For shared Layout, the order refers to which dimension of the original tensor
 // is contiguous in shared memory.
-SmallVector<unsigned> getOrder(Attribute layout);
+SmallVector<unsigned> getOrder(DistributedEncodingTrait layout,
+                               ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getOrder(RankedTensorType type) {
+  return getOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
+                  type.getShape());
+}
+
+SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
+                               ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getOrder(MemDescType type) {
+  return getOrder(cast<SharedEncodingTrait>(type.getEncoding()),
+                  type.getShape());
+}
+inline SmallVector<unsigned> getOrder(TensorOrMemDesc type) {
+  if (auto memDesc = dyn_cast<MemDescType>(type)) {
+    return getOrder(memDesc);
+  } else {
+    auto tensorTy = cast<RankedTensorType>(type);
+    return getOrder(tensorTy);
+  }
+}
+
+// To be removed once we implement arbitrary swizzled layouts
+// It chooses heuristically an order for the memory layout in which to save
+// a distributed layout taking into account the order of the elements
+// and the threads.
+SmallVector<unsigned> getOrderForMemory(DistributedEncodingTrait layout,
+                                        ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getOrderForMemory(RankedTensorType type) {
+  return getOrderForMemory(cast<DistributedEncodingTrait>(type.getEncoding()),
+                           type.getShape());
+}
+inline SmallVector<unsigned> getOrderForMemory(TensorOrMemDesc type) {
+  if (auto memDesc = dyn_cast<MemDescType>(type)) {
+    return getOrder(memDesc);
+  } else {
+    auto tensorTy = cast<RankedTensorType>(type);
+    return getOrderForMemory(tensorTy);
+  }
+}
 
 // Returns the dimensions along which warpId's are distributed.
 // warpsPerCTA only tells the warp layout in the CTA, e.g. warpsPerCTA = [2, 4]
@@ -143,17 +182,22 @@ SmallVector<unsigned> getOrder(Attribute layout);
 // E.g. warpOrder = [0, 1] means the warp IDs are distributed as follows
 // [warp0  warp2  warp4 warp6]
 // [warp1  warp3  warp5 warp7]
-// Note that in most cases, getWarpOrder and getOrder return the same results.
-// But this is not guaranteed.
-SmallVector<unsigned> getWarpOrder(Attribute layout);
+SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
+                                   ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getWarpOrder(RankedTensorType type) {
+  return getWarpOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
+                      type.getShape());
+}
 
 // Returns the dimensions along which threadId's are distributed.
 // Similar to warpOrder, threadOrder is necessary to tell the specific thread
 // distribution in the warp.
-// Note that, in most cases, getThreadOrder and getOrder return the same
-// results. But this is not guaranteed. One exception is mfma.transposed layout,
-// in which getOrder returns [1, 0] but getThreadOrder returns [0, 1].
-SmallVector<unsigned> getThreadOrder(Attribute layout);
+SmallVector<unsigned> getThreadOrder(DistributedEncodingTrait layout,
+                                     ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
+  return getThreadOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
+                        type.getShape());
+}
 
 CTALayoutAttr getCTALayout(Attribute layout);
 
@@ -170,7 +214,8 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  * (3) In the implementation of emitIndices, ShapePerCTATile will
  *     be replicated or wrapped to fit ShapePerCTA.
  */
-SmallVector<unsigned> getShapePerCTATile(Attribute layout);
+// [FIXME LL] Kill this function
+SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
 
 // Returns the "logical" shape per CTA
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -184,8 +229,6 @@ SmallVector<int64_t> getShapePerCTA(Type type);
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shape);
 SmallVector<int64_t> getAllocationShapePerCTA(Type type);
-
-unsigned getNumWarpsPerCTA(Attribute layout);
 
 unsigned getNumCTAs(Attribute layout);
 
@@ -227,7 +270,6 @@ llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 
 llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
-
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

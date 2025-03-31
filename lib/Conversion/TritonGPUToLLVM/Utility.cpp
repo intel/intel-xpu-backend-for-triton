@@ -1,6 +1,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -32,13 +33,14 @@ static int __builtin_ctz(unsigned x) {
 namespace {
 
 LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                                  LinearLayout regLayout, Attribute dstEnc,
+                                  LinearLayout regLayout,
+                                  triton::gpu::SharedEncodingTrait dstEnc,
                                   int elemBitWidth) {
   StringAttr kBlock = StringAttr::get(ctx, ("block"));
   int rank = shape.size();
 
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(shape, dstEnc);
-  auto sharedOrder = triton::gpu::getOrder(dstEnc);
+  auto sharedOrder = triton::gpu::getOrder(dstEnc, shape);
 
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
   // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
@@ -193,26 +195,17 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
   return tid;
 }
 
-static int lookupThreadsPerWarp(OpBuilder &rewriter) {
-  assert(rewriter.getInsertionBlock() && "expected an insertion point");
-  Operation *op = rewriter.getInsertionBlock()->getParentOp();
-  while (op && !isa<ModuleOp>(op))
-    op = op->getParentOp();
-  assert(op && "cannot create thread ID outside of module");
-  return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
-}
-
 Value getLaneId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
-  int threadsPerWarp = lookupThreadsPerWarp(rewriter);
+  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   return b.urem(tid, b.i32_val(threadsPerWarp));
 }
 
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
-  int threadsPerWarp = lookupThreadsPerWarp(rewriter);
+  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   Value warpSizeVal = b.i32_val(threadsPerWarp);
 
   Value laneId = b.urem(tid, warpSizeVal);
@@ -361,7 +354,8 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     }
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
-    assert(isa<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc) &&
+    assert((isa<triton::gpu::SwizzledSharedEncodingAttr,
+                triton::gpu::AMDRotatingSharedEncodingAttr>(sharedEnc)) &&
            "NVMMA layout not supported for sliced tensors");
     // We define both tensor offsets and shared memory offsets:
     //
@@ -585,7 +579,6 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
 namespace LLVM {
 using namespace mlir::triton;
 using mlir::triton::gpu::getOrder;
-using mlir::triton::gpu::getSizePerThread;
 
 Value createConstantI1(Location loc, OpBuilder &rewriter, bool v) {
   auto i1ty = rewriter.getIntegerType(1);
@@ -924,6 +917,27 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   auto expandedSmemObj =
       SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(), offsets);
   return expandedSmemObj;
+}
+
+// Isolated a single warp specialize op from above.
+static void
+makeWarpGroupsIsolatedFromAbove(triton::gpu::WarpSpecializeOp wsOp) {
+  SetVector<Value> captures;
+  getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
+  for (Value capture : captures) {
+    wsOp->insertOperands(wsOp.getNumOperands(), capture);
+    for (Region *region : wsOp.getPartitionRegions()) {
+      BlockArgument arg =
+          region->addArgument(capture.getType(), capture.getLoc());
+      replaceAllUsesInRegionWith(capture, arg, *region);
+    }
+  }
+}
+
+void makeAllWarpGroupsIsolatedFromAbove(Operation *op) {
+  op->walk([](triton::gpu::WarpSpecializeOp wsOp) {
+    makeWarpGroupsIsolatedFromAbove(wsOp);
+  });
 }
 
 } // namespace mlir

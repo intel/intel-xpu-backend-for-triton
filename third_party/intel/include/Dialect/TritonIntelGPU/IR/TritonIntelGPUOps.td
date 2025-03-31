@@ -203,35 +203,6 @@ def TTIG_SubGroupTransposeOp
   let hasVerifier = 1;
 }
 
-// The same as ttg.upcast_mxfp, but we want Dot Layout from Dpas layout for input tensor
-def TTIG_UpcastMXFPOp : TTIG_Op<"upcast_mxfp", [Pure]> {
-  let summary = "Convert an mxfp tensor to bf16/fp16";
-
-  let hasVerifier = 1;
-
-  let description = [{
-    Compute the bf16 encoded in the given mxfp number as per
-    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
-  }];
-  let arguments = (
-    ins
-    TT_Tensor:$src,
-    TT_Tensor:$scale,
-    TT_ScaleDotElemTypeAttr:$fp_type,
-    BoolAttr:$fastMath
-  );
-  let results = (outs TT_Tensor:$result);
-
-  let assemblyFormat = [{
-    $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
-  }];
-
-  let extraClassDeclaration = [{
-    static RankedTensorType deduceOutputType(
-        TypedValue<RankedTensorType> inputTensor, ScaleDotElemType inputElemType, Type outputElemType);
-  }];
-}
-
 def TTIG_SIMDReduceOp : TTIG_Op<"simd_reduce", [Pure, SameOperandsAndResultElementType]> {
   let summary = "SIMD reduction.";
   let description = [{

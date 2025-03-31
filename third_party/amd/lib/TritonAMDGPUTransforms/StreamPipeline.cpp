@@ -4,11 +4,14 @@
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Triton/IR/OpInterfaces.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 //===----------------------------------------------------------------------===//
@@ -38,14 +41,14 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
   // too much register pressure with the loop result and the epilogue-dot in
   // regs for the select. Conditionally executing the dot will allow the backend
   // to optimize the select away as redundant.
-  if (auto dotOp = dyn_cast<tt::DotOp>(op)) {
+  if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
     auto loc = dotOp->getLoc();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp.getResult().getType(),
+    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp->getResult(0).getType(),
                                            pred, /*withElseRegion=*/true);
     auto thenB = ifOp.getThenBodyBuilder();
-    auto yield = thenB.create<scf::YieldOp>(loc, dotOp.getResult());
+    auto yield = thenB.create<scf::YieldOp>(loc, dotOp->getResult(0));
     dotOp->moveBefore(yield);
-    ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
+    ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp->getOperand(2));
     return ifOp;
   }
   return tt::predicateOp(rewriter, op, pred);
@@ -114,9 +117,9 @@ class StreamPipeliner {
 
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
-                  int _localPrefetch)
-      : forOp(_forOp), numBuffers(1), numStages(_numStages),
-        schedule(numStages),
+                  int _localPrefetch, bool _useAsyncCopy)
+      : forOp(_forOp), numStages(_numStages), numBuffers(1),
+        useAsyncCopy(_useAsyncCopy), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
     stages[SCHED_GLOBAL_LOAD] = 0;
@@ -145,6 +148,7 @@ private:
 
   Value createAlloc(Operation *loadOp,
                     ttg::SwizzledSharedEncodingAttr sharedEnc);
+  bool createAsyncCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
 
@@ -164,6 +168,9 @@ private:
   // Computed number of buffers
   int numBuffers;
 
+  // Directly store to shared memory with AsyncCopy when pipelining tt.loads
+  bool useAsyncCopy;
+
   // Stage for each SchedType Op
   int stages[SCHED_SIZE];
   // Cluster for each SchedType Op
@@ -181,6 +188,7 @@ private:
     // The distance of this load's stage to its use' stage.
     int distToUse = 0;
     bool usedByDot = false;
+    bool isAsync = false;
   };
 
   // Mapping for each pipelined load to scheduling details.
@@ -226,6 +234,12 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   // TODO: Use the precise number of buffers needed by the particular load.
   numBuffers =
       std::max(1, stages[SCHED_LOCAL_LOAD] - stages[SCHED_LOCAL_STORE]);
+  // If we use AsyncCopy we need one more buffer since we are not using a
+  // register buffer
+  if (useAsyncCopy) {
+    numBuffers += 1;
+  }
+
   LDBG("deduced max shared memory buffer number = " << numBuffers);
 
   // If tt.load and ttg.local_store are in the same stage
@@ -279,6 +293,93 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   return success();
 }
 
+bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
+                                      Value extractIdx) {
+  assert(useAsyncCopy);
+  // If we have a single buffer we would require another barrier after the
+  // local_reads so instead we fall back to pipeline with registers
+  if (numBuffers == 1)
+    return false;
+
+  OpBuilder builder(loadOp);
+  Location loc = loadOp.getLoc();
+
+  Value src = loadOp.getPtr();
+  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(src.getType());
+
+  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
+  auto sharedEncodingAttr =
+      cast<ttg::SwizzledSharedEncodingAttr>(allocTy.getEncoding());
+
+  // Skip swizzled shared encodings because they are not supported by the
+  // lowering to llvm
+  // TODO: remove once swizzle async copies are supported
+  if (sharedEncodingAttr.getMaxPhase() != 1 ||
+      sharedEncodingAttr.getPerPhase() != 1) {
+    return false;
+  }
+
+  // Extract local subview from shared allocation
+  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
+  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
+  loadOffsets[0] = extractIdx;
+  auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(forOp.getContext());
+  auto subviewTy = ttg::MemDescType::get(
+      allocTy.getShape().drop_front(), allocTy.getElementType(),
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+  auto viewLoad =
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+
+  // If the load is used by an existing local allocation we replace it with the
+  // new subview
+  SmallVector<ttg::LocalAllocOp> allocsToErase;
+  for (Operation *user : loadOp->getUsers()) {
+    if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+      tt::replaceUsesAndPropagateType(builder, alloc, viewLoad);
+      allocsToErase.push_back(alloc);
+    }
+  }
+  for (auto alloc : allocsToErase)
+    alloc.erase();
+
+  auto [stage, cluster] = schedule[loadOp];
+
+  auto newLoadOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+      loadOp.getLoc(), src, viewLoad, loadOp.getMask(), loadOp.getOther(),
+      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+  schedule.erase(loadOp);
+  schedule.insert(newLoadOp, stage, cluster);
+
+  // Insert synchronization primitives to create barriers during lowering
+  auto commit =
+      builder.create<ttg::AsyncCommitGroupOp>(loc, newLoadOp->getResult(0));
+  ttg::AsyncWaitOp wait =
+      builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
+
+  // If we have 2 buffers we need to place the prefetches (AsyncCopy)
+  // after the local_reads and therefore also the AsyncWaits to avoid another
+  // barrier. This is done by scheduling it as a local_store.
+  if (numBuffers == 2)
+    scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
+
+  // Create local load which consumes the async token from the AsyncWait
+  auto sharedLoad =
+      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad, wait);
+  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
+    scheduleOp(sharedLoad, SCHED_LOCAL_LOAD);
+
+  loadOp->replaceAllUsesWith(ValueRange{sharedLoad});
+  if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE] &&
+      sharedLoad->hasOneUse()) {
+    if (auto cvt =
+            dyn_cast<ttg::ConvertLayoutOp>(*sharedLoad->getUsers().begin()))
+      scheduleOp(cvt, SCHED_LOCAL_LOAD);
+  }
+
+  loadOp.erase();
+  return true;
+}
+
 void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
                                        Value extractIdx) {
   OpBuilder builder(forOp);
@@ -301,8 +402,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
-  auto sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
+  auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   auto subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
@@ -312,7 +412,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      triton::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
+      tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
       allocsToErase.push_back(alloc);
     }
   }
@@ -337,8 +437,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // expanded `LocalStoreOp` with the same index. This is required for
   // instruction scheduling hints to correctly count the emitted `ds_write`
   // instructions for each GEMM tile.
-  if (auto attr = loadOp->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic())) {
-    storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
+  if (auto attr = loadOp->getAttr(tt::amdgpu::OpIdxAttr::getMnemonic())) {
+    storeOp->setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), attr);
   }
 
   loadOp->replaceAllUsesWith(ValueRange{result});
@@ -351,34 +451,54 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   loadOp.erase();
 }
 
+// Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
+// with which dot operand |inputValue| is fed into if possible.
+static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
+                                               unsigned *opIdx) {
+  if (!llvm::hasSingleElement(inputValue.getUses()))
+    return nullptr;
+
+  Operation *user = *inputValue.getUsers().begin();
+  if (user->getNumResults() != 1 ||
+      user->getBlock() != inputValue.getParentBlock())
+    return nullptr;
+
+  if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
+    OpOperand &use = *inputValue.getUses().begin();
+    *opIdx = use.getOperandNumber();
+    auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
+    return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
+  }
+  return getDotEncoding(user->getResult(0), opIdx);
+}
+
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
 static std::optional<ttg::SwizzledSharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEnc(Value val) {
+getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   ttg::SwizzledSharedEncodingAttr attr;
-  for (Operation *user : val.getUsers()) {
-    ttg::SwizzledSharedEncodingAttr tempAttr;
+  for (Operation *user : loadedValue.getUsers()) {
+    LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
     if (user->getNumResults() != 1)
       return std::nullopt;
-    if (auto memDesc =
-            dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
+
+    ttg::SwizzledSharedEncodingAttr tempAttr;
+    Value userResult = user->getResult(0);
+    Type userResType = userResult.getType();
+    if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
-      if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0)).has_value())
+      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value())
         return std::nullopt;
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
-      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
-          cast<triton::gpu::TensorOrMemDesc>(user->getResult(0).getType())
-              .getEncoding());
-      if (!dotOpEnc)
-        return std::nullopt;
-      auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
-      auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy.getEncoding());
+
+      auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
+      auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -394,9 +514,25 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       } else {
         sharedOrder = order;
       }
-      tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-          val.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder, CTALayout,
-          bitWidth, /*needTrans=*/false);
+
+      auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
+      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
+        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
+            ctaLayout, bitWidth, /*needTrans=*/false);
+      } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
+        // We use linear layout directly for scaled dot fp8 operands. For such
+        // cases, we need to look further down the def-use chain to find the dot
+        // op for the mfma layout to deduce operand index and other information.
+        unsigned opIdx;
+        if (auto dotEnc = getDotEncoding(userResult, &opIdx)) {
+          unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
+          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
+          tempAttr = dotEnc.composeSharedLayoutForOperand(
+              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
+              /*needTrans=*/false);
+        }
+      }
     }
     // Check that the shared encodings needed by the users are compatible.
     if (!tempAttr || (attr != nullptr && attr != tempAttr))
@@ -437,7 +573,7 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
       };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<mlir::triton::DotOpInterface>(op))
+    if (!isa<tt::DotOpInterface>(op))
       continue;
     seen.clear();
     dfs(&op, 0, &op);
@@ -461,18 +597,17 @@ void StreamPipeliner::assignMemoryLayouts() {
       // TODO: We'd need to verify that the distance is the same.
       continue;
 
-    LoadInfo loadInfo;
     auto loadOp = cast<tt::LoadOp>(op);
     assert(!isLoadFromTensorPtr(loadOp) &&
            "Block ptr should have been lowered before this pass.");
     auto ptr = loadOp.getPtr();
-    unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+    unsigned vec = axisInfoAnalysis.getContiguity(ptr);
     if (auto mask = loadOp.getMask())
       vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy) {
-      LDBG("Skip non-tensor load " << *loadOp);
+      LDBG("Skip non-tensor load " << loadOp);
       continue;
     }
 
@@ -483,15 +618,17 @@ void StreamPipeliner::assignMemoryLayouts() {
     // Limit shared memory sharing to width >= 32 elements.
     LDBG("Load " << *loadOp << " has width " << width);
     if (width < 32) {
-      LDBG("Skip width<32 load " << *loadOp);
+      LDBG("Skip width<32 load " << loadOp);
       continue;
     }
 
-    if (isa<mlir::triton::DotOpInterface>(use)) {
+    LDBG("assign memory layouts for load " << loadOp);
+    LoadInfo loadInfo;
+    if (isa<tt::DotOpInterface>(use)) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
       loadInfo.sharedEncoding =
-          getSharedEncIfAllUsersAreDotEnc(op->getResult(0)).value_or(nullptr);
+          getSharedEncIfAllUsersAreDotEnc(loadOp).value_or(nullptr);
     } else if (auto useOp = dyn_cast<tt::LoadOp>(use)) {
       // The use of this loadOp is another loadOp. If the use is not in the
       // loadToInfo already, it means that the use is not valid for pipelining
@@ -697,7 +834,7 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
                                    ttg::SwizzledSharedEncodingAttr sharedEnc) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
+      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), numBuffers);
@@ -714,7 +851,7 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
 void StreamPipeliner::createStreamOps() {
   SmallVector<std::pair<Operation *, Value>> loadToAllocs;
   for (auto &[loadOp, info] : loadToInfo) {
-    if (!info.sharedEncoding)
+    if (!info.sharedEncoding || info.isAsync)
       continue;
 
     Value alloc = createAlloc(loadOp, info.sharedEncoding);
@@ -735,25 +872,25 @@ void StreamPipeliner::createStreamOps() {
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
-  scf::ForOp newForOp =
-      replaceForOpWithNewSignature(builder, forOp, {extractIdx});
-  forOp.erase();
-  forOp = newForOp;
+  (void)addIterArgsToLoop(builder, forOp, {extractIdx});
 
   // Create one counter for the extract indices to avoid creating long
   // live range.
-  extractIdx = newForOp.getBody()->getArgument(newOperandIndex);
+  extractIdx = forOp.getBody()->getArgument(newOperandIndex);
 
-  builder.setInsertionPoint(newForOp.getBody(), newForOp.getBody()->begin());
+  builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
   extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
   Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Create stream copies.
+  // Replace tt.loads with async copies or stream copies
   for (auto &[op, alloc] : loadToAllocs) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      if (useAsyncCopy && createAsyncCopy(loadOp, alloc, extractIdx))
+        continue;
       createStreamCopy(loadOp, alloc, extractIdx);
+    }
   }
   // Patch the yield with the updated counters.
   appendToForOpYield(forOp, {extractIdx});
@@ -837,8 +974,8 @@ static bool checkPrecondition(scf::ForOp forOp) {
     // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
       return WalkResult::interrupt();
-    // Don't pipeline loops with barriers.
-    if (isa<gpu::BarrierOp>(op))
+    // Don't pipeline loops with barriers or asserts/prints.
+    if (isa<gpu::BarrierOp, tt::AssertOp, tt::PrintOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
@@ -871,11 +1008,11 @@ template <typename TargetOpType> Operation *passPrevUnaryOps(Value value) {
 // we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
 void labelLoadOpsForTritonDot(scf::ForOp forOp) {
   mlir::MLIRContext *ctx = forOp->getContext();
-  if (auto dotOp = triton::getSingleDotOpIfExists(forOp)) {
+  if (auto dotOp = tt::getSingleDotOpIfExists(forOp)) {
     for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
-      if (auto loadOp = passPrevUnaryOps<triton::LoadOp>(dotOperand)) {
-        auto opIdxAttr = triton::amdgpu::OpIdxAttr::get(ctx, opIdx);
-        loadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
+      if (auto loadOp = passPrevUnaryOps<tt::LoadOp>(dotOperand)) {
+        auto opIdxAttr = tt::amdgpu::OpIdxAttr::get(ctx, opIdx);
+        loadOp->setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
       }
     }
   }
@@ -884,11 +1021,13 @@ void labelLoadOpsForTritonDot(scf::ForOp forOp) {
 struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
   PipelinePass() = default;
   PipelinePass(int32_t _numStages, int32_t _globalPrefetch,
-               int32_t _localPrefetch) {
+               int32_t _localPrefetch, bool _useAsyncCopy) {
     this->numStages = _numStages;
 
     this->globalPrefetch = _globalPrefetch;
     this->localPrefetch = _localPrefetch;
+
+    this->useAsyncCopy = _useAsyncCopy;
   }
 
   void runOnOperation() override {
@@ -910,34 +1049,24 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) {
       labelLoadOpsForTritonDot(forOp);
       // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
+      if (tt::getNumStagesOrDefault(forOp, numStages) > 1)
         loops.push_back(forOp);
     });
 
     for (scf::ForOp forOp : loops) {
       if (!checkPrecondition(forOp))
         continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), globalPrefetch,
-                         localPrefetch);
+      StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
+                         globalPrefetch, localPrefetch, useAsyncCopy);
       if (failed(sp.pipelineLoop()))
         continue;
     }
   }
-
-private:
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists, otherwise use the
-    // global control.
-    if (auto attr = forOp->getAttrOfType<IntegerAttr>(tt::kNumStagesAttrName))
-      return attr.getInt();
-    return numStages;
-  }
 };
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUStreamPipelinePass(int numStages, int globalPrefetch,
-                                           int localPrefetch) {
+std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(
+    int numStages, int globalPrefetch, int localPrefetch, bool useAsyncCopy) {
   return std::make_unique<PipelinePass>(numStages, globalPrefetch,
-                                        localPrefetch);
+                                        localPrefetch, useAsyncCopy);
 }

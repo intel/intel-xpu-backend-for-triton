@@ -4,9 +4,6 @@
 #include <inttypes.h>
 #include <string.h>
 #include <sstream>
-#include <tuple>
-#include <vector>
-#include <utility>
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
@@ -134,7 +131,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
-  if ({shared}) {{
+  if (static_cast<bool>({shared})) {{
     expected_num_params -= 1;
   }}
   assert(num_params == expected_num_params && "number of kernel param not matched");
@@ -153,7 +150,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         set_argument(cgh, idx, type, params[idx]);
         idx++;
     }}
-    if ({shared}) {{
+    if (static_cast<bool>({shared})) {{
         using share_mem_t = sycl::local_accessor<int8_t, 1>;
         share_mem_t local_buffer = share_mem_t({shared}, cgh);
         cgh.set_arg(num_params, local_buffer);
