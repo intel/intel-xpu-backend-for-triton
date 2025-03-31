@@ -13,7 +13,7 @@ from typing import Optional
 def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 
     @triton.jit
-    def kernel1(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+    def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
         desc = tl.make_tensor_descriptor(
             a_ptr,
             shape=[M, N],
@@ -30,6 +30,7 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
         idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
         tl.store(out_ptr + idx, block)
 
+
     def alloc_fn(size: int, align: int, stream: Optional[int]):
         assert size == 128
         assert align == 128
@@ -40,12 +41,9 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 
     M, N = 32, 128
     inp = to_triton(numpy_random((M, N), dtype_str), device="xpu", dst_type=dtype_str)
-
-    M_BLOCK = 8
-    N_BLOCK = 32
     out = inp.new_empty((M_BLOCK, N_BLOCK))
 
-    kernel1[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK)
+    kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK)
 
     expect = unwrap_tensor(inp)[1 * M_BLOCK:2 * M_BLOCK, 2 * N_BLOCK:3 * N_BLOCK]
     torch.testing.assert_close(expect, unwrap_tensor(out))
@@ -57,7 +55,7 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
 
     @triton.jit
-    def kernel2(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+    def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
         moffset = tl.program_id(0) * M_BLOCK
         noffset = tl.program_id(1) * N_BLOCK
 
@@ -83,9 +81,6 @@ def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
 
     M, N = 32, 128
     inp = to_triton(numpy_random((M, N), dtype_str), device="xpu", dst_type=dtype_str)
-
-    M_BLOCK = 8
-    N_BLOCK = 32
     out = inp.new_empty((M, N))
 
     grid_m = M // M_BLOCK
@@ -99,7 +94,7 @@ def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
 
     triton.set_allocator(alloc_fn)
 
-    kernel2[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK)
+    kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK)
 
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
 
