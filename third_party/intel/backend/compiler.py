@@ -73,8 +73,8 @@ class XPUOptions:
         generate_native_code_env = os.getenv("TRITON_XPU_GEN_NATIVE_CODE")
         if generate_native_code_env is not None:
             self.generate_native_code = generate_native_code_env == "1"
-        else:
-            os.environ["TRITON_XPU_GEN_NATIVE_CODE"] = str(self.generate_native_code)
+        # ensure generate native code setting is communicated to the external compiler library
+        os.environ["TRITON_XPU_GEN_NATIVE_CODE"] = str(self.generate_native_code)
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
