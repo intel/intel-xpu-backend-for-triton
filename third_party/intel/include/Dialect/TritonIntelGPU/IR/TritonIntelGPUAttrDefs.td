@@ -184,7 +184,7 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     "unsigned":$systolicDepth,
     "unsigned":$executionSize,
     "unsigned":$opsPerChannel,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$repCluster,
     "unsigned":$threadsPerWarp
   );
