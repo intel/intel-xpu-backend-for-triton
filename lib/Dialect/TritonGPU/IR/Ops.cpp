@@ -275,7 +275,8 @@ struct CanonicalizeConvertFromConvert
       // memory side-effects between the LocalLoad op and the ConvertLayout op
       rewriter.setInsertionPoint(arg);
       rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op->getResult(0).getType(),
-                                               sharedLoad.getSrc());
+                                               sharedLoad.getSrc(),
+                                               sharedLoad.getToken());
 
       return success();
     }
@@ -702,12 +703,28 @@ LogicalResult WarpSpecializeOp::canonicalize(WarpSpecializeOp op,
     if (result.use_empty())
       unusedResults.set(i);
   }
-  for (auto i : llvm::seq(op.getNumOperands())) {
-    auto noUseInRegion = [&](Region *region) {
+  // Remove duplicate captures.
+  DenseMap<Value, unsigned> uniqueCaptures;
+  for (auto [i, capture] : llvm::enumerate(op.getExplicitCaptures())) {
+    auto noUseInRegion = [i = i](Region *region) {
       return region->getArgument(i).use_empty();
     };
-    if (llvm::all_of(op.getPartitionRegions(), noUseInRegion))
+    if (llvm::all_of(op.getPartitionRegions(), noUseInRegion)) {
       unusedArgs.set(i);
+      continue;
+    }
+
+    auto [it, inserted] = uniqueCaptures.try_emplace(capture, i);
+    if (!inserted) {
+      unsigned duplicateIdx = it->second;
+      b.modifyOpInPlace(op, [&, i = i] {
+        for (Region *region : op.getPartitionRegions()) {
+          b.replaceAllUsesWith(region->getArgument(i),
+                               region->getArgument(duplicateIdx));
+        }
+      });
+      unusedArgs.set(i);
+    }
   }
   if (unusedArgs.none() && unusedResults.none())
     return failure();
