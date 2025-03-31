@@ -318,7 +318,13 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if is_xpu():
-        pytest.skip("FIXME: Fail RuntimeError on XPU")
+        if (BLOCK_M, BLOCK_N, BLOCK_K) in {(128, 128, 64), (128, 64, 128)}:
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
+                triton.runtime.driver.active.utils.get_device_properties(
+                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
+            pytest.xfail("Not enough shared memory")
+
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
