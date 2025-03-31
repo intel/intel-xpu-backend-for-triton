@@ -291,7 +291,7 @@ class LayerNorm(torch.autograd.Function):
         _layer_norm_bwd_dwdb[grid](
             _dw, _db, dw, db, min(GROUP_SIZE_M, M), N,  #
             BLOCK_SIZE_M=32,  #
-            BLOCK_SIZE_N=128, num_ctas=1)
+            BLOCK_SIZE_N=128, num_warps=ctx.num_warps, num_ctas=1)
         return dx, None, dw, db, None
 
 
