@@ -30,7 +30,6 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
         idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
         tl.store(out_ptr + idx, block)
 
-
     def alloc_fn(size: int, align: int, stream: Optional[int]):
         assert size == 128
         assert align == 128
