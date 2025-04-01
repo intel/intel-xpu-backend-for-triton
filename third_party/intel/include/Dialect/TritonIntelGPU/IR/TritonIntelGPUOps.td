@@ -12,6 +12,7 @@
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "intel/include/Dialect/TritonGEN/IR/TritonGENAttrDefs.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUAttrDefs.td"
 include "intel/include/Dialect/TritonIntelGPU/IR/TritonIntelGPUDialect.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -200,6 +201,68 @@ def TTIG_SubGroupTransposeOp
   let results = (outs TT_Tensor:$res);
   let assemblyFormat = "operands attr-dict `:` type($src)";
   let hasVerifier = 1;
+}
+
+def TTIG_SIMDReduceOp : TTIG_Op<"simd_reduce", [Pure, SameOperandsAndResultElementType]> {
+  let summary = "SIMD reduction.";
+  let description = [{
+    The `triton_intel_gpu.simd_reduce` operation performs a SIMD reduction.
+    Contrary to `tt.reduce`, when performing a warp reduction, the result is
+    non-uniform.
+
+    The reduction axis must be in such a way that only a warp reduction is
+    performed, i.e., `sizePerThread[axis]`, `warpsPerCTA[axis]` and
+    `CTAsPerCGA[axis]` must be 1; and `shape[axis]` and `threadsPerWarp[axis]`
+    must be equal to the sub-group size.
+
+    The output type must be compatible with the performed reduction. However,
+    ensuring this is up to the user. As a rule of thumb, the total number of
+    elements in the output tensor must be sub-group size smaller than in the
+    original one. Users should bear in mind a tensor like:
+
+    ```
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    ```
+
+    would be reduced to:
+
+    ```
+    t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15
+    ```
+
+    Example:
+    ```mlir
+    #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+    #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+    triton_intel_gpu.simd_reduce add %0 axis = 0 : tensor<16x16xf32, #blocked> -> tensor<16xf32, #blocked1>
+    // # 3D reduction:
+    #blocked = #ttg.blocked<{sizePerThread = [1, 16, 1], threadsPerWarp = [16, 1, 1], warpsPerCTA = [1, 1, 2], order = [0, 1, 2]}>
+    #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 2], order = [0, 1]}>
+    triton_intel_gpu.simd_reduce add %0 axis = 0 : tensor<16x16x2xf32, #blocked> -> tensor<16x2xf32, #blocked1>
+    ```
+  }];
+  let arguments = (ins TT_Tensor:$src,
+                       TritonGEN_ReduceKindAttr: $op,
+                       I32Attr:$axis);
+  let results = (outs TT_Tensor:$res);
+  let assemblyFormat = [{
+    $op $src `axis` `=` $axis attr-dict `:` type($src) `->` type($res)
+  }];
 }
 
 #endif

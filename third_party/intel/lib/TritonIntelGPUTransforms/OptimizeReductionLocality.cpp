@@ -16,6 +16,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include "llvm/ADT/TypeSwitch.h"
+
 #define DEBUG_TYPE "tritonintelgpu-optimize-reduction-locality"
 
 namespace mlir::triton::gpu::intel {
@@ -184,6 +186,7 @@ namespace {
   /// - Dimensions 1 and 3 refer to the original dimension 0
   /// - Dimensions 0, and 2 refer to the original dimension 1
   /// - Order is preserved
+  ///
   /// And on with step 3, after reducing on dimensions 0 and 1 (2 - 1 as 0 is
   /// squashed), we'd get:
   /// ```
@@ -201,6 +204,81 @@ namespace {
   ///                   | t3 |
   /// ```
   /// And untranspose with a layout conversion to the original layout.
+  ///
+  /// In case the element type is `f32` and the reduction operation is a simple
+  /// add or max operation, we can use an optimized SIMD transposed reduction in
+  /// registers so no SLM transpose is needed. This would replace the two steps
+  /// above, but leading to a result with the same encoding.
+  ///
+  /// In order to do so, the SIMD reduction result is:
+  /// - Shape: [executionSize,
+  ///           repeatCount * repCluster[0] / executionSize,
+  ///           warpsPerCTA[1],
+  ///           warpsPerCTA[0]]
+  /// - Encoding: `#ttg.blocked<{
+  ///                 sizePerThread = [1, repeatCount * repCluster[0] / executionSize, 1, 1],
+  ///                 threadsPerWarp = [executionSize, 1, 1, 1],
+  ///                 warpsPerCTA = [1, 1, warpsPerCTA[1], warpsPerCTA[0]],
+  ///                 order = [0, 1, 2, 3]}>`.
+  /// ```
+  ///                               warpsPerCTA[3]
+  ///                    <------------------------------------>
+  ///                     threadsPerWarp[0]
+  ///                    <------------------>
+  ///                   ^ t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... ^
+  ///                   | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... |
+  ///  sizePerThread[1] | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... | warpsPerCTA[2]
+  ///                   | t0 t1 t2 t3 ... tn tn1 tn2 tn3 ... |
+  /// ```
+  ///
+  /// Note how the SIMD transposition leads to a different order compared to the
+  /// original approach above (and an additional dimension). Before going on to
+  /// the next step, we need to get to the same layout as above via a layout
+  /// conversion:
+  /// - Shape: [executionSize,
+  ///           repeatCount * repCluster[0] / executionSize,
+  ///           warpsPerCTA[1],
+  ///           warpsPerCTA[0]]
+  /// - Encoding: `#ttg.blocked<{
+  ///                 sizePerThread = [repeatCount * repCluster[0] / executionSize, 1, 1, 1],
+  ///                 threadsPerWarp = [executionSize^2 / (repeatCount * repCluster[0]),
+  ///                                   repeatCount * repCluster[0] / executionSize,
+  ///                                   1, 1]
+  ///                 warpsPerCTA = [1, 1, warpsPerCTA[1], warpsPerCTA[0]],
+  ///                 order = [0, 1, 2, 3]}>`.
+  /// ```
+  ///                                 warpsPerCTA[3]
+  ///                      <------------------------------------>
+  ///                       sizePerThread[0]
+  ///                      <------------------>
+  ///                     ^ t0 t0 t0 t0 ... t0 tn1 tn1 tn1 ... tn1 ^
+  ///                     | t1 t1 t1 t1 ... t1 tn2 tn2 tn2 ... tn2 |
+  /// threadsPerWarp[0,1] | t2 t2 t2 t2 ... t2 tn3 tn3 tn3 ... tn3 | warpsPerCTA[2]
+  ///                     | t3 t3 t3 t3 ... t3 tn4 tn4 tn4 ... tn4 |
+  /// ```
+  ///
+  /// Followed by a reshape to get rid of one of the dimensions:
+  ///
+  /// - Shape: [repeatCount * repCluster[0],
+  ///           warpsPerCTA[1],
+  ///           warpsPerCTA[0]]
+  /// - Encoding: `#ttg.blocked<{
+  ///                 sizePerThread = [repeatCount * repCluster[0] / executionSize, 1, 1],
+  ///                 threadsPerWarp = [executionSize, 1, 1]
+  ///                 warpsPerCTA = [1, warpsPerCTA[1], warpsPerCTA[0]],
+  ///                 order = [0, 1, 2]}>`.
+  /// ```
+  ///                                 warpsPerCTA[3]
+  ///                      <------------------------------------>
+  ///                       sizePerThread[0]
+  ///                      <------------------>
+  ///                     ^ t0 t0 t0 t0 ... t0 tn1 tn1 tn1 ... tn1 ^
+  ///                     | t1 t1 t1 t1 ... t1 tn2 tn2 tn2 ... tn2 |
+  ///   threadsPerWarp[0] | t2 t2 t2 t2 ... t2 tn3 tn3 tn3 ... tn3 | warpsPerCTA[2]
+  ///                     | t3 t3 t3 t3 ... t3 tn4 tn4 tn4 ... tn4 |
+  /// ```
+  /// After this, the cross the warp reduction is performed and the same steps
+  /// to go back to the expected tensor type are performed as above.
 // clang-format on
 struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
   using OpRewritePattern<ReduceOp>::OpRewritePattern;
@@ -210,6 +288,7 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
   static constexpr int preferredReductionAxis = 1;
 
   // Intermediate reductions
+  static constexpr int simdReductionAxis = 0;
   static constexpr int finalElementwiseReductionAxis = 0;
   static constexpr int finalWarpsReductionAxis = 1;
   static constexpr int innerElementwiseReductionAxis = 2;
@@ -265,20 +344,39 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
     LLVM_DEBUG(llvm::dbgs() << "Performed initial elementwise reductions: "
                             << operand << "\n");
 
-    operand = convertLayoutForFinalReduction(op, rewriter, operand, encoding);
+    // Some combinations of operation + type can be represented as special SIMD
+    // reductions.
+    if (supportsSIMDReduction(op)) {
+      operand = performSIMDReduction(op, rewriter, operand, encoding);
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "Converted layout for final reduction: " << operand << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "SIMD reduction performed: " << operand << "\n");
 
-    operand = reshapeForFinalReduction(op, rewriter, operand, encoding);
+      operand = convertLayoutPostSIMDReduction(op, rewriter, operand, encoding);
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "Reshaped for final reduction: " << operand << "\n");
+      LLVM_DEBUG(llvm::dbgs() << "Converted layout for final reduction: "
+                              << operand << "\n");
 
-    operand = performFinalElementwiseReduction(op, rewriter, operand);
+      operand = reshapePostSIMDReduction(op, rewriter, operand, encoding);
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "Final elementwise reduction performed: " << operand << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Reshaped for final reduction: " << operand << "\n");
+    } else {
+      operand = convertLayoutForFinalReduction(op, rewriter, operand, encoding);
+
+      LLVM_DEBUG(llvm::dbgs() << "Converted layout for final reduction: "
+                              << operand << "\n");
+
+      operand = reshapeForFinalReduction(op, rewriter, operand, encoding);
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Reshaped for final reduction: " << operand << "\n");
+
+      operand = performFinalElementwiseReduction(op, rewriter, operand);
+
+      LLVM_DEBUG(llvm::dbgs() << "Final elementwise reduction performed: "
+                              << operand << "\n");
+    }
 
     operand = performFinalAcrossWarpsReduction(op, rewriter, operand);
 
@@ -379,6 +477,157 @@ private:
         outerElementwiseReductionAxis);
   }
 
+  static bool supportsSIMDReduction(ReduceOp op) {
+    constexpr unsigned simd16 = 16;
+    auto mod = op->getParentOfType<ModuleOp>();
+    if (triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod) != simd16)
+      return false;
+
+    // TODO: Enable more element types when enabled in the lowering.
+    if (!cast<RankedTensorType>(op.getSrcs().front().getType())
+             .getElementType()
+             .isF32())
+      return false;
+
+    Region &combineOp = op.getCombineOp();
+    if (combineOp.getBlocks().size() > 1)
+      return false;
+    Block &block = *combineOp.begin();
+    Operation *yield = block.getTerminator();
+    Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+    if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+        reduceOp->getNumResults() != 1)
+      return false;
+    if (reduceOp->getOperand(0) != block.getArgument(0) ||
+        reduceOp->getOperand(1) != block.getArgument(1))
+      return false;
+
+    // TODO: Enable more operations when more are enabled in the lowering.
+    return TypeSwitch<mlir::Operation *, bool>(reduceOp)
+        .Case<arith::AddFOp, arith::MaxNumFOp>([](auto) { return true; })
+        .Default(false);
+  }
+
+  static TritonGEN::ReduceKind getSIMDReductionKind(ReduceOp op) {
+    Region &combineOp = op.getCombineOp();
+    assert(combineOp.getBlocks().size() <= 1 && "Unexpected number of blocks");
+    Block &block = *combineOp.begin();
+    Operation *yield = block.getTerminator();
+    Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+    assert(reduceOp && reduceOp->getNumOperands() == 2 &&
+           reduceOp->getNumResults() == 1 &&
+           "Expecting sub-group reduction-like operation");
+    assert(reduceOp->getOperand(0) == block.getArgument(0) &&
+           reduceOp->getOperand(1) == block.getArgument(1) &&
+           "Expecting sub-group reduction-like operation");
+
+    // TODO: Enable more operations when more are enabled in the lowering.
+    return TypeSwitch<mlir::Operation *, TritonGEN::ReduceKind>(reduceOp)
+        .Case([](arith::AddFOp) { return TritonGEN::ReduceKind::ADD; })
+        .Case([](arith::MaxNumFOp) { return TritonGEN::ReduceKind::MAX; });
+  }
+
+  Value performSIMDReduction(ReduceOp op, PatternRewriter &rewriter, Value val,
+                             DpasEncodingAttr dpasEncoding) const {
+    auto oldType = cast<RankedTensorType>(val.getType());
+
+    constexpr size_t rank = 4;
+    std::array<int64_t, rank> shape{
+        dpasEncoding.getExecutionSize(),
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+            dpasEncoding.getExecutionSize(),
+        dpasEncoding.getWarpsPerCTA()[1], dpasEncoding.getWarpsPerCTA()[0]};
+    std::array<unsigned, rank> sizePerThread{
+        1,
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+            dpasEncoding.getExecutionSize(),
+        1, 1};
+    std::array<unsigned, rank> threadsPerWarp{dpasEncoding.getExecutionSize(),
+                                              1, 1, 1};
+    std::array<unsigned, rank> warpsPerCTA{1, 1,
+                                           dpasEncoding.getWarpsPerCTA()[1],
+                                           dpasEncoding.getWarpsPerCTA()[0]};
+    constexpr std::array<unsigned, rank> order{0, 1, 2, 3};
+    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+
+    auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
+        sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+
+    RankedTensorType::Builder type(oldType);
+    type.setShape(shape);
+    type.setEncoding(encoding);
+
+    TritonGEN::ReduceKind redOp = getSIMDReductionKind(op);
+    return rewriter.create<SIMDReduceOp>(op.getLoc(),
+                                         static_cast<RankedTensorType>(type),
+                                         val, redOp, simdReductionAxis);
+  }
+
+  Value convertLayoutPostSIMDReduction(ReduceOp op, PatternRewriter &rewriter,
+                                       Value val,
+                                       DpasEncodingAttr dpasEncoding) const {
+    auto oldType = cast<RankedTensorType>(val.getType());
+
+    constexpr size_t rank = 4;
+    std::array<unsigned, rank> sizePerThread{
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+            dpasEncoding.getExecutionSize(),
+        1, 1, 1};
+    std::array<unsigned, rank> threadsPerWarp{
+        dpasEncoding.getExecutionSize() * dpasEncoding.getExecutionSize() /
+            (dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0]),
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+            dpasEncoding.getExecutionSize(),
+        1, 1};
+    std::array<unsigned, rank> warpsPerCTA{1, 1,
+                                           dpasEncoding.getWarpsPerCTA()[1],
+                                           dpasEncoding.getWarpsPerCTA()[0]};
+    constexpr std::array<unsigned, rank> order{0, 1, 2, 3};
+    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+
+    auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
+        sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+
+    RankedTensorType::Builder type(oldType);
+    type.setEncoding(encoding);
+
+    return rewriter.create<ConvertLayoutOp>(
+        op.getLoc(), static_cast<RankedTensorType>(type), val);
+  }
+
+  Value reshapePostSIMDReduction(ReduceOp op, PatternRewriter &rewriter,
+                                 Value val,
+                                 DpasEncodingAttr dpasEncoding) const {
+    auto oldType = cast<RankedTensorType>(val.getType());
+
+    constexpr size_t rank = 3;
+    std::array<int64_t, rank> shape{
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0],
+        dpasEncoding.getWarpsPerCTA()[1], dpasEncoding.getWarpsPerCTA()[0]};
+    std::array<unsigned, rank> sizePerThread{
+        dpasEncoding.getRepeatCount() * dpasEncoding.getRepCluster()[0] /
+            dpasEncoding.getExecutionSize(),
+        1, 1};
+    std::array<unsigned, rank> threadsPerWarp{dpasEncoding.getExecutionSize(),
+                                              1, 1};
+    std::array<unsigned, rank> warpsPerCTA{1, dpasEncoding.getWarpsPerCTA()[1],
+                                           dpasEncoding.getWarpsPerCTA()[0]};
+    constexpr std::array<unsigned, rank> order{0, 1, 2};
+    CTALayoutAttr ctaLayout = CTALayoutAttr::getDefault(getContext(), rank);
+
+    auto encoding = rewriter.getAttr<BlockedEncodingAttr>(
+        sizePerThread, threadsPerWarp, warpsPerCTA, order, ctaLayout);
+
+    RankedTensorType::Builder type(oldType);
+    type.setShape(shape);
+    type.setEncoding(encoding);
+
+    return rewriter.create<ReshapeOp>(op.getLoc(),
+                                      static_cast<RankedTensorType>(type), val,
+                                      /*allow_reorder=*/true,
+                                      /*efficient_layout=*/true);
+  }
+
   Value convertLayoutForFinalReduction(ReduceOp op, PatternRewriter &rewriter,
                                        Value val,
                                        DpasEncodingAttr dpasEncoding) const {
@@ -413,7 +662,6 @@ private:
                                  Value val,
                                  DpasEncodingAttr dpasEncoding) const {
     auto oldType = cast<RankedTensorType>(val.getType());
-    ArrayRef<int64_t> oldShape = oldType.getShape();
 
     constexpr size_t rank = 4;
     std::array<int64_t, rank> shape{
