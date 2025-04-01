@@ -31,7 +31,6 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import (is_xpu)
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -40,8 +39,12 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
 def supports_tma():
-    return is_xpu or (is_cuda() and torch.cuda.get_device_capability()[0] >= 9)
+    return is_xpu() or (is_cuda() and torch.cuda.get_device_capability()[0] >= 9)
 
 
 def num_sms():
