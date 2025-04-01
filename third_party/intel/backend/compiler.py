@@ -223,6 +223,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
