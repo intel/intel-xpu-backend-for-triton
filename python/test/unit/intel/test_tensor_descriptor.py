@@ -414,7 +414,7 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.interpreter
 @pytest.mark.parametrize("num_stages", [1, 4])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
-def testmake_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
+def test_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
     if (num_stages == 4):
         return pytest.skip("TODO: fix pipeliner")
 
@@ -437,7 +437,7 @@ def testmake_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
 
     triton.set_allocator(alloc_fn)
 
-    kernel = matmul_kernel_make_tensor_desciptor[grid](
+    matmul_kernel_make_tensor_desciptor[grid](
         A,
         B,
         C,
@@ -541,7 +541,7 @@ def test_tensor_descriptor_batched_gemm_3d_tma():
 
     triton.set_allocator(alloc_fn)
 
-    h = batched_gemm_3d_tma_kernel[grid](
+    batched_gemm_3d_tma_kernel[grid](
         a, b, c,  #
         B, M, N, K,  #
         tl.float16,  #
