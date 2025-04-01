@@ -59,12 +59,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// test that the convert does not get combined with the view even if the resulting operation
+// test that the convert does get combined with the view even if the resulting operation
 // is an efficient view.
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
-//       CHECK:   %[[C:.+]] = ttg.convert_layout
-//       CHECK:   %[[V:.+]] = tt.reshape %[[C]] allow_reorder efficient_layout
+//   CHECK-NOT:   ttg.convert_layout
+//       CHECK:   %[[V:.+]] = tt.reshape %[[ARG]] allow_reorder
 //       CHECK:   tt.return %[[V]]
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
