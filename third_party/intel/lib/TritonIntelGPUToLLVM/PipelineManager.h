@@ -74,7 +74,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     MLIRContext *ctx = funcOp->getContext();
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
-    Type globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    Type globalPtrTy =
+        funcOp.getArgument(funcOp.getNumArguments() - 1).getType();
 
     // 1. Modify the function type to add the new arguments.
     FunctionType funcTy = funcOp.getFunctionType();
