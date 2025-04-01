@@ -635,6 +635,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
   }
 }
 """
+    # ensure spv output so we can grep the spirv file
     os.environ["TRITON_XPU_GEN_NATIVE_CODE"] = "0"
     with tempfile.TemporaryDirectory() as tmp_dir:
         kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
