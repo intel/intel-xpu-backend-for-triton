@@ -40,8 +40,9 @@ function(add_proton_library name)
       "${CUPTI_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
       "${XPUPTI_INCLUDE_DIR}"
-      "${XPUPTI_INCLUDE_DIR}/sycl"
       "${PROTON_SRC_DIR}/include"
+      /opt/intel/oneapi/compiler/latest/include
+      /opt/intel/oneapi/compiler/latest/include/sycl
   )
 
   # If HIP is AMD-based

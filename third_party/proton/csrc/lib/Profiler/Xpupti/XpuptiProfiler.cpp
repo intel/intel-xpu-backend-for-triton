@@ -7,9 +7,9 @@
 #include "Utility/Map.h"
 
 #include "pti/pti_view.h"
-#include "sycl/sycl.hpp"
 #include <level_zero/layers/zel_tracing_api.h>
 #include <level_zero/zet_api.h>
+#include <sycl/sycl.hpp>
 
 #include <cstdlib>
 #include <iostream>
