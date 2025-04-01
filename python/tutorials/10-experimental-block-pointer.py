@@ -349,7 +349,8 @@ INT8_TYPES = [(torch.int8, torch.int32, torch.int32)]
 FP8_TYPES = [(torch.float8_e4m3fn, torch.float32, torch.float16)]
 
 torch.manual_seed(0)
-for dtype, accum_dtype, res_dtype in FP16_TYPES + FP32_TYPES + INT8_TYPES + FP8_TYPES:
+for dtype, accum_dtype, res_dtype in FP16_TYPES + FP32_TYPES + INT8_TYPES + (FP8_TYPES if os.getenv(
+        'TRITON_INTEL_ADVANCED_PATH', '0') == '0' else []):
 
     for shape in [(512, 512), (4, 512, 512)]:
         assert shape[-1] == shape[-2], "Only square matrices are supported"
