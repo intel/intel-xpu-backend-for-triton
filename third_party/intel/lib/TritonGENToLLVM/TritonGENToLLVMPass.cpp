@@ -421,8 +421,10 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getElemSizeInBits() == 8 && op.getVBlocks() != 4) {
-      // TODO: add ocl built/spirv intrinsics for 8b 1 vBlock & 2 vBlock reads
+    if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
+        op.getVBlocks() != 4 && !op.getVnniTransform()) {
+      // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
+      // vBlock reads
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
