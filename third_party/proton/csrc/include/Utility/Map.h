@@ -2,7 +2,6 @@
 #define PROTON_UTILITY_MAP_H_
 
 #include <map>
-#include <mutex>
 #include <shared_mutex>
 
 namespace proton {

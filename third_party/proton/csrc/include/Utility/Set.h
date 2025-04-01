@@ -1,7 +1,6 @@
 #ifndef PROTON_UTILITY_SET_H_
 #define PROTON_UTILITY_SET_H_
 
-#include <mutex>
 #include <set>
 #include <shared_mutex>
 

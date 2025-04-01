@@ -92,7 +92,6 @@ endforeach()
 
 add_library(proton SHARED ${_proton_obj_sources})
 
-set_target_properties(proton PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
 target_link_libraries(proton PRIVATE Python3::Module)
 find_library(SYCL_LIB NAMES sycl PATHS /opt/intel/oneapi/compiler/latest/lib)
 find_library(ZE_INTEL_GPU_LIB NAMES ze_intel_gpu PATHS /usr/lib/x86_64-linux-gnu)

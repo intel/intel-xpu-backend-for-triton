@@ -4,9 +4,14 @@
 #include "Data/Data.h"
 #include "Utility/Singleton.h"
 
+#include <atomic>
+#include <cstdint>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <shared_mutex>
+#include <string>
 
 namespace proton {
 

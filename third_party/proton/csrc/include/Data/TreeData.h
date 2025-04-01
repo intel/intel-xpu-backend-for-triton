@@ -3,6 +3,7 @@
 
 #include "Context/Context.h"
 #include "Data.h"
+#include <stdexcept>
 #include <unordered_map>
 
 namespace proton {
