@@ -38,7 +38,7 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 
     triton.set_allocator(alloc_fn)
 
-    M, N = 32, 128
+    M, N = M_BLOCK * 3, N_BLOCK * 4
     inp = to_triton(numpy_random((M, N), dtype_str), device="xpu", dst_type=dtype_str)
     out = inp.new_empty((M_BLOCK, N_BLOCK))
 
@@ -374,10 +374,8 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
                                         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
                                         BLOCK_SIZE_K: tl.constexpr,  #
                                         ):
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    pid_m = pid % num_pid_m
-    pid_n = pid // num_pid_m
+    pid_m = tl.program_id(axis=0)
+    pid_n = tl.program_id(axis=1)
     offs_am = pid_m * BLOCK_SIZE_M
     offs_bn = pid_n * BLOCK_SIZE_N
     offs_k = 0
@@ -412,25 +410,29 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("num_stages", [1, 4])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
+    (128, 128, 16, 1),
+    (256, 64, 32, 1),
+    (64, 512, 32, 1),
+    (128, 128, 16, 1),
+    (64, 128, 32, 1),
+    (32, 32, 32, 1),
+    (256, 128, 32, 1),
+])
 def test_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
-    if (num_stages == 4):
-        return pytest.skip("TODO: fix pipeliner")
-
     device = "xpu"
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
     else:
-        M, N, K = 8192, 8192, 1024
+        M, N, K = 1024, 512, 256
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)
     C = torch.empty((M, N), dtype=torch.float16, device=device)
-    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1, 1)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N), 1)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 3 * 128 * grid[0]
+        assert size == 3 * 128 * grid[0] * grid[1]
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="xpu")
