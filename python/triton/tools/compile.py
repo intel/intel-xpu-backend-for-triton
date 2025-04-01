@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
     parser.add_argument("--grf-mode", "-gm", type=str, default="large", help="Detemine spv build flags")
-    parser.add_argument("--generate-spv", "-gspv", type=bool, default=False, help="Cache SPV or native binary for XPU")
+    parser.add_argument("--generate-spv", "-gspv", type=bool, default=True, help="Cache SPV or native binary for XPU")
     args = parser.parse_args()
 
     out_name = args.out_name if args.out_name else args.kernel_name
