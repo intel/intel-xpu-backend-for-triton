@@ -91,7 +91,6 @@ def start(
 
     if backend is None:
         backend = _select_backend()
-    print(f"{backend=}")
     _check_env(backend)
 
     backend_path = _get_backend_default_path(backend)
