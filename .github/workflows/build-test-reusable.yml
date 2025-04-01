@@ -133,18 +133,18 @@ jobs:
 
       - name: Create test-triton command line
         run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+
           if [[ -n "${{ inputs.skip_list }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
           elif [[ -n "${{ inputs.driver_version }}" ]]; then
             skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
-          else
-            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
           fi
 
           if [ -d "$skiplist" ]; then
             skiplist="--skip-list $skiplist"
           else
-            skiplist=
+            skiplist="--skip-list $GITHUB_WORKSPACE/scripts/skiplist/default"
           fi
 
           {

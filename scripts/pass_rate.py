@@ -8,7 +8,7 @@ import os
 import pathlib
 import platform
 import sys
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from defusedxml.ElementTree import parse
 
@@ -69,7 +69,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
     argument_parser.add_argument(
         '--skip-list',
         type=str,
-        help='an exclude list dir used in pass rate calculation, can be passed via TRITON_TEST_SKIPLIST_DIR as well',
+        help='an exclude list dir used in pass rate calculation',
     )
     return argument_parser
 
@@ -80,8 +80,14 @@ def get_deselected(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> int
     if not skiplist_path.exists():
         return 0
     with skiplist_path.open('r') as f:
-        # skip empty lines and comments
-        return len([line for line in f.readlines() if line and not line.startswith('#')])
+        count = 0
+        for line in f.readlines():
+            # `strip` allows to skip lines with only '\n' character
+            line = line.strip()
+            # skip empty lines and comments
+            if line and not line.startswith('#'):
+                count += 1
+        return count
 
 
 def get_warnings(reports_path: pathlib.Path, suite: str) -> List[TestWarning]:
@@ -118,7 +124,7 @@ def get_all_missing_tests(reports_path: pathlib.Path) -> Dict[str, List[str]]:
     return all_missing_tests
 
 
-def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> ReportStats:
+def parse_report(report_path: pathlib.Path, skiplist_dir: Optional[pathlib.Path]) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
@@ -142,7 +148,7 @@ def parse_report(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> Repor
     test_unskip = os.getenv('TEST_UNSKIP', 'false')
     if test_unskip not in ('true', 'false'):
         raise ValueError('Error: please set TEST_UNSKIP true or false')
-    if test_unskip == 'false':
+    if skiplist_dir and test_unskip == 'false':
         deselected = get_deselected(report_path, skiplist_dir)
         stats.skipped += deselected
         stats.total += deselected
@@ -242,8 +248,10 @@ def main():
     """Main."""
     args = create_argument_parser().parse_args()
     args.report_path = pathlib.Path(args.reports)
-    args.skiplist_dir = pathlib.Path(
-        args.skip_list if args.skip_list else os.getenv('TRITON_TEST_SKIPLIST_DIR', 'scripts/skiplist/default'))
+    if args.skip_list:
+        args.skiplist_dir = pathlib.Path(args.skip_list)
+    else:
+        args.skiplist_dir = None
 
     missing_tests = get_all_missing_tests(args.report_path)
     if missing_tests:

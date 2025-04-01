@@ -38,15 +38,16 @@ static Type getTypeWithSameShape(Type type, Type elementType) {
 struct ExtBF16 : ConvertOpToLLVMPattern<arith::ExtFOp> {
   using ConvertOpToLLVMPattern<arith::ExtFOp>::ConvertOpToLLVMPattern;
 
-  LogicalResult match(arith::ExtFOp op) const final {
-    return success(isBF16OrTensorOf(op.getIn().getType()) &&
-                   isF32OrTensorOf(op.getOut().getType()));
-  }
+  LogicalResult
+  matchAndRewrite(arith::ExtFOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    if (!isBF16OrTensorOf(op.getIn().getType()) ||
+        !isF32OrTensorOf(op.getOut().getType()))
+      return failure();
 
-  void rewrite(arith::ExtFOp op, OpAdaptor adaptor,
-               ConversionPatternRewriter &rewriter) const final {
     rewriter.replaceOp(
         op, intel::convertBf16ToFp32(op.getLoc(), rewriter, adaptor.getIn()));
+    return success();
   }
 };
 
@@ -56,18 +57,19 @@ struct TruncBF16 : ConvertOpToLLVMPattern<arith::TruncFOp> {
   constexpr static arith::RoundingMode validRoundingMode =
       arith::RoundingMode::to_nearest_even;
 
-  LogicalResult match(arith::TruncFOp op) const final {
+  LogicalResult
+  matchAndRewrite(arith::TruncFOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
     std::optional<arith::RoundingMode> roundingMode = op.getRoundingmode();
-    return success((!roundingMode || *roundingMode == validRoundingMode) &&
-                   isF32OrTensorOf(op.getIn().getType()) &&
-                   isBF16OrTensorOf(op.getOut().getType()));
-  }
+    if ((roundingMode && *roundingMode != validRoundingMode) ||
+        !isF32OrTensorOf(op.getIn().getType()) ||
+        !isBF16OrTensorOf(op.getOut().getType()))
+      return failure();
 
-  void rewrite(arith::TruncFOp op, OpAdaptor adaptor,
-               ConversionPatternRewriter &rewriter) const final {
     rewriter.replaceOp(op, intel::convertFp32ToBf16(op.getLoc(), rewriter,
                                                     adaptor.getIn(),
                                                     RoundingMode::RTNE));
+    return success();
   }
 };
 } // namespace

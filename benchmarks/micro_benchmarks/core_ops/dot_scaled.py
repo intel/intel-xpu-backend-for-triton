@@ -2,8 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
-
 
 @triton.jit
 def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
@@ -39,8 +37,8 @@ def dot_scaled(M, N, K, x, y, z, scale_x, scale_y, type_a, type_b, num_warps):
 
 
 # Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
+@triton.testing.perf_report(
+    triton.testing.Benchmark(
         # argument names to use as an x-axis for the plot
         x_names=['M', 'K', 'N', 'col_a', 'col_b', 'rhs_scale', 'mxfp_type', 'normal_type'],
         x_vals=[(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type)
@@ -124,14 +122,9 @@ def benchmark(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, provider
     if provider == 'triton':
         triton_fn = lambda: dot_scaled(M, N, K, x, y, z, scale_x, scale_y, type_a, type_b, num_warps)
 
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(triton_fn, quantiles=quantiles)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
-
-    def tflops(ms):
-        scale_ops = N * K if rhs_scale else M * K
-        return (2 * M * N * K + scale_ops) * (1e-12) / (ms * 1e-3)
 
     def gbps(ms):
 
@@ -148,7 +141,7 @@ def benchmark(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, provider
         scale_size = (M * K // 32) if rhs_scale else (N * K // 32)
         return (tensor_size + scale_size + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
 
-    return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+    return gbps(ms), gbps(max_ms), gbps(min_ms)
 
 
 if __name__ == '__main__':

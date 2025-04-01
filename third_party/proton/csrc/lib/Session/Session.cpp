@@ -73,6 +73,8 @@ void Session::finalize(OutputFormat outputFormat) {
   data->dump(outputFormat);
 }
 
+size_t Session::getContextDepth() { return contextSource->getDepth(); }
+
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
@@ -242,6 +244,12 @@ void SessionManager::setState(std::optional<Context> context) {
       contextSource->setState(context);
     }
   }
+}
+
+size_t SessionManager::getContextDepth(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  return sessions[sessionId]->getContextDepth();
 }
 
 } // namespace proton
