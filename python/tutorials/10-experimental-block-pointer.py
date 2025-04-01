@@ -338,15 +338,18 @@ def matmul(a, b, accum_dtype, res_dtype):
 #
 # Still we can test our matrix multiplication with block pointers against a native torch implementation (i.e., cuBLAS).
 
+FP16_TYPES = [(torch.float16, torch.float16, torch.float16), (torch.float16, torch.float32, torch.float16),
+              (torch.float16, torch.float32, torch.float32), (torch.bfloat16, torch.bfloat16, torch.bfloat16),
+              (torch.bfloat16, torch.float32, torch.float32), (torch.bfloat16, torch.float32, torch.bfloat16)]
+
+FP32_TYPES = [(torch.float32, torch.float32, torch.float32)]
+
+INT8_TYPES = [(torch.int8, torch.int32, torch.int32)]
+
+FP8_TYPES = [(torch.float8_e4m3fn, torch.float32, torch.float16)]
+
 torch.manual_seed(0)
-for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float16),
-                                      (torch.float16, torch.float32, torch.float16),
-                                      (torch.float16, torch.float32, torch.float32),
-                                      (torch.bfloat16, torch.bfloat16, torch.bfloat16),
-                                      (torch.bfloat16, torch.float32, torch.float32),
-                                      (torch.bfloat16, torch.float32, torch.bfloat16),
-                                      (torch.float32, torch.float32, torch.float32),
-                                      (torch.int8, torch.int32, torch.int32)]:
+for dtype, accum_dtype, res_dtype in FP16_TYPES + FP32_TYPES + INT8_TYPES + FP8_TYPES:
 
     for shape in [(512, 512), (4, 512, 512)]:
         assert shape[-1] == shape[-2], "Only square matrices are supported"
@@ -365,10 +368,17 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
                 # duplicate b on batch dimension.
                 if len(shape) == 3:
                     b = b.unsqueeze(0).repeat(shape[0], 1, 1)
+            elif dtype is torch.float8_e4m3fn:
+                a = torch.randn(shape, device='xpu', dtype=torch.float16).to(torch.float8_e4m3fn)
+                b = torch.randn(shape, device='xpu', dtype=torch.float16).to(torch.float8_e4m3fn)
             else:
                 a = torch.randn(shape, device='xpu', dtype=dtype)
                 b = torch.randn(shape, device='xpu', dtype=dtype)
-            torch_output = torch.matmul(a, b).to(dtype=res_dtype)
+
+            if dtype is torch.float8_e4m3fn:
+                torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16)).to(dtype=res_dtype)
+            else:
+                torch_output = torch.matmul(a, b).to(dtype=res_dtype)
         else:
             a = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
             b = torch.randint(low=-127, high=128, size=shape, device='xpu', dtype=dtype)
@@ -400,7 +410,6 @@ for dtype, accum_dtype, res_dtype in [(torch.float16, torch.float16, torch.float
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 # Compare the performance of our kernel against that of the library
-
 ref_lib = 'oneDNN'
 configs = []
 configs.append(
