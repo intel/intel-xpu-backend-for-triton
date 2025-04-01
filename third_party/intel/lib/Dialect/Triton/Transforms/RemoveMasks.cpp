@@ -102,8 +102,8 @@ public:
 
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
-    Value zero =
-        builder.createOrFold<arith::ConstantIntOp>(loc, 0, lhs.getType());
+    Value zero = tt::intel::findOrCreateIntConstant(
+        loc, 0, lhs.getType().getIntOrFloatBitWidth(), builder);
     Value cmp1 = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::eq,
         builder.create<arith::RemSIOp>(loc, lhs, rhs), zero);
@@ -204,18 +204,18 @@ public:
       return builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                  lhsVal, rhsVal);
 
-    // [0..END] < splat(N)
+    // [0..END] < splat(N) -- generate versioning condition 'END-1 < N'.
     if (!rhs && isa<tt::MakeRangeOp>(lhs)) {
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(lhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
-      unsigned end = rangeOp.getEnd();
-      auto cstOp = builder.createOrFold<arith::ConstantIntOp>(loc, end,
-                                                              rhsVal.getType());
+      unsigned end = rangeOp.getEnd() - 1u;
+      auto cstOp = tt::intel::findOrCreateIntConstant(
+          loc, end, rhsVal.getType().getIntOrFloatBitWidth(), builder);
       return builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                  cstOp, rhsVal);
     }
 
-    // splat(N) < [0..END]
+    // splat(N) < [0..END] -- generate versioning condition 'N < END'.
     if (!lhs && isa<tt::MakeRangeOp>(rhs)) {
       [[maybe_unused]] auto rangeOp = cast<tt::MakeRangeOp>(rhs);
       assert(rangeOp.getStart() < rangeOp.getEnd() && "Invalid range");
@@ -397,6 +397,12 @@ public:
     Operation *thenForLoop = thenB.clone(*forOp.getOperation(), map);
     OpBuilder elseB = ifOp.getElseBodyBuilder();
     Operation *elseForLoop = elseB.clone(*forOp.getOperation());
+
+    // Create the yield operations for the two if branches.
+    if (!thenForLoop->getResults().empty()) {
+      thenB.create<scf::YieldOp>(loc, thenForLoop->getResults());
+      elseB.create<scf::YieldOp>(loc, elseForLoop->getResults());
+    }
 
     // Drop the mask from candidate masked operations in the "then" region's
     // cloned loop.

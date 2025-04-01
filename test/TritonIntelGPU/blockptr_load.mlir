@@ -371,3 +371,32 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @boundary_check
+  tt.func public @boundary_check(%arg0: !tt.ptr<f16>, %col_stride: i64) {
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %21 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #blocked>>
+      // CHECK-NOT: llvm.icmp "slt"
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
+      %45 = tt.load %21 : !tt.ptr<tensor<64x16xf16, #blocked>>
+
+      // CHECK-COUNT-16: llvm.icmp "slt"
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
+      %46 = tt.load %21 {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<64x16xf16, #blocked>>
+
+      // CHECK-COUNT-16: llvm.icmp "slt"
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
+      %47 = tt.load %21 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x16xf16, #blocked>>
+
+      // CHECK-COUNT-32: llvm.icmp "slt"
+      // CHECK-COUNT-32: llvm.load {{.*}} -> i16
+      %48 = tt.load %21 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x16xf16, #blocked>>
+      tt.return
+  }
+}

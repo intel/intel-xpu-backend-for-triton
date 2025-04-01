@@ -238,7 +238,7 @@ struct DpasOperandPattern final : OpRewritePattern<ReduceOp> {
 
     // We want to transpose matrices of N*threads_per_warpxthreads_per_warp
     // shape.
-    unsigned threadsPerWarp = product<unsigned>(encoding.getThreadsPerWarp());
+    unsigned threadsPerWarp = encoding.getThreadsPerWarp();
     if ( // X axis condition
         encoding.getExecutionSize() != threadsPerWarp ||
         // Y axis conditions

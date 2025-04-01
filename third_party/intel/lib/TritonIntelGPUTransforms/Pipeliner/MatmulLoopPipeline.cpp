@@ -228,8 +228,15 @@ createSchedule(scf::ForOp forOp, int numStages) {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (isa<ttgi::PrefetchOp>(op))
       prefetchOps.emplace_back(&op);
-    if (isa<tt::LoadOp>(op))
-      loadOps.emplace_back(&op);
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      // Loads that are neither tensors nor pointers to tensor are not
+      // prefetched and could be used by prefetchOp dependencies
+      // (typically `advanceOp`).
+      // As prefetchOp dependencies are assigned to stage 0, this type of loads
+      // must not be explicitely assigned to stage `numStages - 1`.
+      if (mlir::triton::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
+        loadOps.emplace_back(&op);
+    }
   }
 
   DenseSet<Operation *> prefetchAndDeps;

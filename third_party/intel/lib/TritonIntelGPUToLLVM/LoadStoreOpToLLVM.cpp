@@ -220,6 +220,8 @@ struct LoadStoreConversionBase {
           return accumulate;
         };
 
+    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
+                                        boundaryCheck.end());
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -242,18 +244,25 @@ struct LoadStoreConversionBase {
       ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
                           valueElemTy, blockPtr[blockBase], offset);
 
-      if (boundaryCheck.size() > 0) {
+      if (boundaryProtect.size() > 0) {
         // Get the LLVM values for mask
+        unsigned dim = 0;
         maskElems.push_back(linearize(
             indicesInTensor,
             {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
             b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              // mask = mask && (index < shape) && idx >= 0
-              auto is_pos_idx = b.icmp_sge(index, b.int_val(32, 0));
-              return b.and_(
-                  b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
-                  is_pos_idx);
+              if (boundaryProtect.contains(dim++)) {
+                // mask = mask && (index < shape) && idx >= 0
+                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+                return b
+                    .and_(
+                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                        is_pos_idx)
+                    .getResult();
+              }
+
+              return mask;
             }));
       }
     }
@@ -546,9 +555,11 @@ struct LoadOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
-    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    SmallVector<unsigned> dpasWarpsOrder =
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1035,10 +1046,11 @@ struct LoadOpConversion
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder =
-        triton::gpu::getWarpOrder(tensorType);
-    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1666,11 +1678,13 @@ struct StoreOpConversion
     size_t rank = tensorShape.size();
     unsigned numElems = getTotalElemsPerThread(tensorType);
     SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
-    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = product<unsigned>(dpasLayout.getThreadsPerWarp());
+    SmallVector<unsigned> dpasWarpsOrder =
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -2240,7 +2254,8 @@ struct AtomicRMWOpConversion
     auto intPtr = b.ptrtoint(i64_ty, rmwPtr);
     auto lowPtrBits = b.and_(intPtr, b.i64_val(3));
     auto elemIndex = b.trunc(i32_ty, b.lshr(lowPtrBits, b.i64_val(1)));
-    auto alignPtr = b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits));
+    auto alignPtr =
+        b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits).getResult());
     auto firstValInt = b.load(i32_ty, alignPtr, 4, false, false, false, false,
                               LLVM::AtomicOrdering::acquire);
 
