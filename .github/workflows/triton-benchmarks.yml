@@ -168,8 +168,8 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py_abt')) }} && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py_abt') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
-          TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS
-          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv --n_runs $N_RUNS
+          TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
+          mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv
           source ../../scripts/capture-hw-details.sh
 
           python ../../scripts/build_report.py $REPORTS/matmul-performance-bt.csv $REPORTS/gemm-bt-triton-report.csv --benchmark gemm-bt --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
@@ -284,7 +284,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'micro_benchmarks.py')) }} && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'micro_benchmarks') }}
         run: |
           cd benchmarks/micro_benchmarks
-          python run_benchmarks.py --reports $REPORTS --n_runs $N_RUNS
+          python run_benchmarks.py --reports $REPORTS
 
       # Install Pytorch with FlexAttention XPU support enabled
       - name: Setup PyTorch
