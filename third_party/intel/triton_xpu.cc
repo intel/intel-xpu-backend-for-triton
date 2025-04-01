@@ -66,6 +66,8 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
+  ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
+                     intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
   ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
                          intel::createTritonRaiseBlockPointer, bool);

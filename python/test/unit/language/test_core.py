@@ -137,9 +137,10 @@ def check_type_supported(dtype, device):
             pytest.xfail("float64 not supported on current xpu hardware")
 
 
-def check_threads_supported(num_warps, threads_per_warp):
-    device = triton.runtime.driver.active.get_current_device()
-    props = triton.runtime.driver.active.utils.get_device_properties(device)
+def check_threads_supported(num_warps, threads_per_warp, device):
+    if device != "xpu":
+        return
+    props = triton.runtime.driver.active.utils.get_device_properties(triton.runtime.driver.active.get_current_device())
     if threads_per_warp not in props['sub_group_sizes']:
         pytest.xfail('unsupported warp size')
     if threads_per_warp * num_warps > props['max_work_group_size']:
@@ -2366,7 +2367,7 @@ def get_reduced_dtype(dtype_str, op):
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce1d(op, dtype_str, shape, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
-    check_threads_supported(num_warps, threads_per_warp)
+    check_threads_supported(num_warps, threads_per_warp, device)
 
     # triton kernel
     @triton.jit
@@ -2475,7 +2476,7 @@ reduce_bool = [(op, 'bool', shape, axis, False) for op in ['xor_sum'] for shape 
                          [(64, 16), (4, THREADS_PER_WARP)] if is_xpu() else [(4, THREADS_PER_WARP)])
 def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, num_warps, threads_per_warp, device):
     check_type_supported(dtype_str, device)  # bfloat16 on cc < 80 will not be tested
-    check_threads_supported(num_warps, threads_per_warp)
+    check_threads_supported(num_warps, threads_per_warp, device)
 
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, IS_3D: tl.constexpr,
@@ -3053,7 +3054,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
     warps = warps_per_cta(src_layout, [M, N])
-    num_warps = np.prod(warps)
+    num_warps = int(np.prod(warps))
     blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
@@ -3560,6 +3561,11 @@ def get_test_dot_base_cases():
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_softmax():
+    return [(128, 128, 64, 8, False, False, 'softmax', 'ieee', 'float16', 'float32', 1, None)]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_mixed_sizes_cases():
     available_kpack = [1, 2 if is_hip() else 1]
     available_precision = ["tf32" if is_cuda() or is_xpu() else "ieee"]
@@ -3646,7 +3652,8 @@ def get_test_dot_double_rate_cases():
     get_test_dot_mfma_edge_cases() + \
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
-    get_test_dot_small_mn_fma_cases())
+    get_test_dot_small_mn_fma_cases() + \
+    get_test_dot_softmax())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
@@ -3878,6 +3885,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
         if capability[0] == 9:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
+    if is_tcgen5 and epilogue == 'softmax' and M >= 128:
+        # check that there is no shared memory exchange in the softmax
+        pattern = (r'tcgen05\.ld\.sync\.aligned\.16x32bx2\.x64\.b32'
+                   r'(?:(?!st\.shared).)*'
+                   r'cvt\.rn\.f16x2\.f32')
+        assert re.search(pattern, ptx, flags=re.DOTALL)
 
 
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
@@ -5060,7 +5073,7 @@ def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 2])
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
@@ -5068,7 +5081,7 @@ def test_tma_load_block_shape_err(device):
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
-    assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
+    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
 @pytest.mark.interpreter
@@ -5076,15 +5089,15 @@ def test_tma_store_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
-        desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 4])
+        desc.store([0, 0], tl.zeros([8, 4], dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device=device)
     errc = triton.CompilationError if not is_interpreter() else InterpreterError
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
-    assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
+    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
 def test_trans_reshape(device):
@@ -7195,21 +7208,37 @@ def test_gather(src_shape, indices_shape, axis, device):
     torch.testing.assert_close(result, ref, rtol=0, atol=0)
 
 
+def gen_gather_warp_shuffle_cases():
+    if THREADS_PER_WARP == 32:
+        return [
+            ([32, 16], [32, 16], 0,
+             "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+            ([128, 64], [256, 64], 0,
+             "linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+        ]
+    elif THREADS_PER_WARP == 64:
+        return [
+            ([64, 16], [64, 16], 0,
+             "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+            ([128, 64], [256, 64], 0,
+             "linear<{register = [[0, 2], [2, 0], [0, 16], [0, 32]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+             "linear<{register = [[0, 2], [0, 32], [2, 0], [0, 16], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+             ),
+        ]
+    else:
+        return []
+
+
 # These layouts are specially chosen to trigger the warp shuffle codegen.
-@pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", [
-    ([32, 16], [32, 16], 0,
-     "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-     "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-     ),
-    ([128, 64], [256, 64], 0,
-     "linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-     "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-     ),
-])
+@pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", gen_gather_warp_shuffle_cases())
 def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path,
                              device):
-    if is_hip():
-        pytest.skip("warp-local gather has issues on HIP")
 
     def prepare_kernel(src: torch.Tensor, axis: int, indices: torch.Tensor):
         output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
@@ -7233,7 +7262,7 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
 
         pat = r"(%[0-9]+) = tt.gather (%[0-9]+)\[(%[0-9]+)\] {axis = "
         pat += str(axis)
-        pat += r" : i32[, efficient_layout]*} : \(tensor\<"
+        pat += r" : i32, efficient_layout} : \(tensor\<"
         pat += src_spec
         pat += r", (#[a-z]+[0-9]*)\>, tensor\<"
         pat += indices_spec
@@ -7246,7 +7275,7 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     %idx = ttg.convert_layout \3 : tensor<""" + indices_spec + r""", \5> -> tensor<""" + indices_spec + r""", #idx_layout>
     %out = tt.gather %src[%idx] {axis = """ + str(
             axis
-        ) + r""" : i32} : (tensor<""" + src_spec + r""", #src_layout>, tensor<""" + indices_spec + r""", #idx_layout>) -> tensor<""" + output_spec + r""", #idx_layout>
+        ) + r""" : i32, efficient_layout} : (tensor<""" + src_spec + r""", #src_layout>, tensor<""" + indices_spec + r""", #idx_layout>) -> tensor<""" + output_spec + r""", #idx_layout>
     \1 = ttg.convert_layout %out : tensor<""" + output_spec + r""", #idx_layout> -> tensor<""" + output_spec + r""", \6>"""
         return re.sub(pat, repl, ir)
 
@@ -7257,6 +7286,7 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     output, compiled = prepare_kernel(src, axis, indices)
     ir = compiled.asm["ttgir"]
     ir = inject_layout(ir, src, axis, indices, src_layout, indices_layout)
+    assert ir != compiled.asm["ttgir"]
 
     temp_file = tmp_path / "test_warp_gather.ttgir"
     temp_file.write_text(ir)
@@ -7444,3 +7474,13 @@ def test_dtype_tensor(device, dtype):
         tensor = tl.zeros((1, ), dtype)
 
     dtype_tensor_kernel[(1, )](dtype)
+
+
+@pytest.mark.interpreter
+def test_float_tuple():
+
+    @triton.jit
+    def _namedtuple_float_tuple_kernel():
+        x, y = float('-inf'), float('inf')  # noqa: F841
+
+    _namedtuple_float_tuple_kernel[(1, )]()
