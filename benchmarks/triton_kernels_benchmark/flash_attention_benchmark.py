@@ -615,6 +615,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             def xetla_fwd_fn():
                 func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
                 return out
+
             xetla_fn = xetla_fwd_fn
 
             def check_xetla_fwd_result():
@@ -651,6 +652,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
                      grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX, N_CTX, bias_strideB,
                      bias_strideN, bias_strideF, attn_mask_padding)
                 return out
+
             xetla_fn = xetla_bwd_fn
 
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
