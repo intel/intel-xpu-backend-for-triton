@@ -198,7 +198,7 @@ class Mark:
         self.benchmarks = benchmarks
 
     # pylint: disable=too-many-branches
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=1,
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
              save_precision=6, **kwrags):
         import matplotlib.pyplot as plt
         import pandas as pd
@@ -244,7 +244,7 @@ class Mark:
             rows += row_vals["CV"][0]
             df.loc[len(df)] = list(x) + rows
 
-        filename = f"{bench.plot_name}" + ("" if run_counter == 1 else f"_{run_counter}")
+        filename = f"{bench.plot_name}_{run_counter}"
         if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
@@ -283,7 +283,7 @@ class Mark:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, return_df=False, **kwargs):
+    def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, **kwargs):
         args = parse_args()
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
@@ -300,12 +300,15 @@ class Mark:
                     self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs))
 
             if args.n_runs > 1:
-                import pandas as pd
-
                 for i, df in enumerate(benchmark_dfs):
                     df["run_counter"] = i + 1
+
+            if args.reports:
+                import pandas as pd
+
                 merged_df = pd.concat(benchmark_dfs, axis=0)
-                merged_df.to_csv(os.path.join(args.reports, f"{bench.plot_name}.csv"), index=False)
+                merged_df.to_csv(os.path.join(args.reports, f"{bench.plot_name}.csv"),
+                                 float_format=f"%.{save_precision}f", index=False)
             result_dfs.extend(benchmark_dfs)
 
         if return_df:
