@@ -34,19 +34,28 @@ namespace {
 
 SmallVector<unsigned>
 getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
-                const ArrayRef<int64_t> shape, unsigned numWarps) {
+                const ArrayRef<int64_t> shape, unsigned numWarps, ModuleOp mod) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
 
-  SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
-  // TODO: revisit this in flash attention.
-  for (Operation *op : slices)
-    if (isa<tt::DotOp>(op) && (op != dotOp))
-      return {numWarps, 1};
-
   size_t rank = shape.size();
   SmallVector<unsigned> ret(rank, 1);
+
+  int rowDim = rank - 2, colDim = rank - 1;
+  SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
+  unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  for (Operation *op : slices)
+    if (isa<tt::DotOp>(op) && (op != dotOp)) {
+      ret[rowDim] = 4;
+      ret[colDim] = 1;
+      while ((shape[rowDim] / ret[rowDim] > threadsPerWarp) &&
+             (ret[rowDim] * ret[colDim] < numWarps)) {
+        ret[rowDim] *= 2;
+      }
+      ret[colDim] = numWarps / ret[rowDim];
+      return ret;
+    }
 
   if (rank == 3) {
     int batchWarp = numWarps;
@@ -66,7 +75,6 @@ getWarpsPerTile(tt::DotOp dotOp, ttgi::DpasEncodingAttr::DPASCapability dpasCap,
   uint32_t colRowRatio =
       ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
 
-  int rowDim = rank - 2, colDim = rank - 1;
   do {
     if (ret[rowDim] * ret[colDim] >= numWarps)
       break;
@@ -119,7 +127,7 @@ public:
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan = ttgi::DpasEncodingAttr::getOpsPerChannel(elemType);
     SmallVector<unsigned> warpsPerTile =
-        getWarpsPerTile(dotOp, dpasCap, retShape, numWarps);
+      getWarpsPerTile(dotOp, dpasCap, retShape, numWarps, mod);
     size_t rank = retShape.size();
     SmallVector<unsigned> repCluster(rank, 1);
 
