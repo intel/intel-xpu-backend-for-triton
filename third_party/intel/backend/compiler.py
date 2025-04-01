@@ -57,7 +57,7 @@ class XPUOptions:
     debug: bool = False
     backend_name: str = 'intel'
     sanitize_overflow: bool = False
-    generate_native_code: bool = True
+    generate_native_code: bool = False
     advanced_path: bool = False
     one_matrix_per_load_for_bt: bool = False
 
