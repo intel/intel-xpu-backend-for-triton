@@ -329,7 +329,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
   pti_result status;
   xpupti::Pti_Activity *activity = nullptr;
   do {
-    status = ptiViewGetNextRecord(buffer, validSize, &activity);
+    status = xpupti::viewGetNextRecord<true>(buffer, validSize, &activity);
     if (status == pti_result::PTI_SUCCESS) {
       std::cout << "activity->_view_kind: " << activity->_view_kind << "\n"
                 << std::flush;
@@ -389,7 +389,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   status = zelTracerSetEnabled(tracer, true);
   assert(status == ZE_RESULT_SUCCESS);
 
-  ptiViewSetCallbacks(allocBuffer, completeBuffer);
+  xpupti::viewSetCallbacks<true>(allocBuffer, completeBuffer);
   xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
   // xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
   // xpupti::viewEnable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);

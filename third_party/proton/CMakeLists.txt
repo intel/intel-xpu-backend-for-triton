@@ -78,13 +78,11 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 set_target_properties(proton PROPERTIES COMPILE_FLAGS -Wno-deprecated-declarations)
-# set_target_properties(proton PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
 target_link_libraries(proton PRIVATE Python3::Module)
 target_link_libraries(proton PRIVATE /opt/intel/oneapi/compiler/latest/lib/libsycl.so)
 target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_intel_gpu.so.1)
 target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_tracing_layer.so.1)
 target_link_libraries(proton PRIVATE /usr/lib/x86_64-linux-gnu/libze_loader.so.1)
-target_link_libraries(proton PRIVATE /opt/intel/oneapi/pti/latest/lib/libpti_view.so)
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})

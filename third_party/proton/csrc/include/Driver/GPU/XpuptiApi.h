@@ -15,6 +15,14 @@ template <bool CheckSuccess> pti_result viewDisable(pti_view_kind kind);
 
 template <bool CheckSuccess> pti_result viewFlushAll();
 
+template <bool CheckSuccess>
+pti_result viewGetNextRecord(uint8_t *buffer, size_t valid_bytes,
+                             pti_view_record_base **record);
+
+template <bool CheckSuccess>
+pti_result viewSetCallbacks(pti_fptr_buffer_requested fptr_bufferRequested,
+                            pti_fptr_buffer_completed fptr_bufferCompleted);
+
 } // namespace xpupti
 
 } // namespace proton
