@@ -45,9 +45,15 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 // -----
 
+// COM: Not supported yet by SPIRV/OCL intrinsics
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK:      llvm.call spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r16x1cPU3AS1viiiDv2_iPh(%arg0, [[ADD_0]], %arg2, %arg3, {{.*}}, [[DEST:%.*]]) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
-  // CHECK-NEXT: llvm.load [[DEST]] : !llvm.ptr -> vector<8xi8>
+  // CHECK:    %[[ELEM_BITS:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:    %[[TILE_WIDTH:.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK:    %[[TILE_HEIGHT:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:    %[[VBLOCKS:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:    %[[TRANSPOSE:.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:    %[[VNNI:.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:    %[[VAL_68:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v8i8({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[ELEM_BITS]], %[[TILE_WIDTH]], %[[TILE_HEIGHT]], %[[VBLOCKS]], %[[TRANSPOSE]], %[[VNNI]], {{.*}})
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<8xi8>
   llvm.return
 }
@@ -58,6 +64,30 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK:      llvm.call spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r32x1cPU3AS1viiiDv2_iPh(%arg0, [[ADD_0]], %arg2, %arg3, {{.*}}, [[DEST:%.*]]) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
   // CHECK-NEXT: llvm.load [[DEST]] : !llvm.ptr -> vector<16xi8>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi8>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK:      llvm.call spir_funccc @_Z40intel_sub_group_2d_block_read_8b_8r16x4cPU3AS1viiiDv2_iPh(%arg0, [[ADD_0]], %arg2, %arg3, {{.*}}, [[DEST:%.*]]) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
+  // CHECK-NEXT: llvm.load [[DEST]] : !llvm.ptr -> vector<32xi8>
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=4, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<32xi8>
+  llvm.return
+}
+
+// -----
+
+// COM: To be supported by OCL/SPIRV
+llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK:    %[[ELEM_BITS:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:    %[[TILE_WIDTH:.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK:    %[[TILE_HEIGHT:.*]] = llvm.mlir.constant(8 : i32) : i32
+  // CHECK:    %[[VBLOCKS:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK:    %[[TRANSPOSE:.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:    %[[VNNI:.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:    %[[VAL_68:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v16i8({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[ELEM_BITS]], %[[TILE_WIDTH]], %[[TILE_HEIGHT]], %[[VBLOCKS]], %[[TRANSPOSE]], %[[VNNI]], {{.*}})
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi8>
   llvm.return
 }
 
