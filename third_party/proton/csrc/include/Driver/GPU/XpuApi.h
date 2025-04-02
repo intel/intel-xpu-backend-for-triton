@@ -11,10 +11,6 @@ namespace xpu {
 template <bool CheckSuccess> ze_result_t init(ze_init_flags_t flags);
 
 template <bool CheckSuccess>
-ze_result_t ctxSynchronize(ze_command_queue_handle_t hCommandQueue,
-                           uint64_t timeout);
-
-template <bool CheckSuccess>
 ze_result_t driverGet(uint32_t *pCount, ze_driver_handle_t *phDrivers);
 
 template <bool CheckSuccess>

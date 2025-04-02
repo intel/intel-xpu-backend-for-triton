@@ -119,14 +119,13 @@ processActivityKernel(XpuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     return correlationId;
   }
   auto [parentId, numInstances] = corrIdToExternId.at(correlationId);
-  // unsigned long parentId = 123;
-  // unsigned long numInstances = 2;
-  //  Best guess for now: _sycl_queue_id ~ graphId CUDA
-  if (kernel->_sycl_queue_id == 0) {
-    // Non-qu kernels
+  std::cout << "parentId: " << parentId << std::endl;
+  if (true) {
+    // Non-graph kernels
     for (auto *data : dataSet) {
       auto scopeId = parentId;
       if (apiExternIds.contain(scopeId)) {
+        std::cout << "first branch" << std::endl;
         // It's triggered by a CUDA op but not triton op
         scopeId = data->addOp(parentId, kernel->_name);
       }

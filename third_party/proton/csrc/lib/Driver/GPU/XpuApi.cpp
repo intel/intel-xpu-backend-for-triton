@@ -41,10 +41,14 @@ DEFINE_DISPATCH(ExternLibLevelZero, deviceGetMemoryProperties,
 // static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 //    g_sycl_l0_device_list;
 
+// FIXME: rewrite with
+// sycl::device.get_info<sycl::ext::intel::info::device::architecture>; cache
+// the result
 Device getDevice(uint64_t index) {
   // ref: getDeviceProperties
 
   // FIXME: double check that initialization is needed
+  // At the very least, it shouldn't be for every call
   xpu::init<true>(ZE_INIT_FLAG_GPU_ONLY);
 
   // FIXME: For now I use the naive approach that the device index from PTI

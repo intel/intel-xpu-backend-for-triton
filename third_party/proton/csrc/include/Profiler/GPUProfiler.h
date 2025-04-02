@@ -84,6 +84,7 @@ protected:
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
+      std::cout << "\texitOp:: popExternId: " << scopeId << "\n";
       profiler.exitOp(Scope(scopeId));
     }
   };

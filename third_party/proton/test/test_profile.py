@@ -212,8 +212,7 @@ def test_hook(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["frame"]["name"] == "test0"
     assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
     assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
-    # FIXME: why extra "children" layer is needed here?
-    assert data[0]["children"][0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
+    assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -305,7 +304,8 @@ def test_deactivate(tmp_path: pathlib.Path):
 
 def test_multiple_sessions(tmp_path: pathlib.Path):
     if is_xpu():
-        # FIXME: Why?
+        # FIXME: the same correlation id, that's why it's filtered,
+        # should `_kernel_id` be used instead
         pytest.xfail('assert int(data[0]["children"][0]["metrics"]["count"]) == 2')
     temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
     temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
