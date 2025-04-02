@@ -70,19 +70,19 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                              const TargetInfoBase &targetInfo) const {
     // Push back two new arguments that indicate the current pointer to shared
     // memory and global scratch memory.
-    auto loc = funcOp.getLoc();
-    auto ctx = funcOp->getContext();
+    Location loc = funcOp.getLoc();
+    MLIRContext *ctx = funcOp->getContext();
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
-    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    Type globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
     // 1. Modify the function type to add the new arguments.
-    auto funcTy = funcOp.getFunctionType();
+    FunctionType funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
     bool isKernel = LLVM::isKernel(funcOp);
-    if (!isKernel) {
+    if (!isKernel)
       amendedInputTy.push_back(sharedPtrTy);
-    }
+
     amendedInputTy.push_back(globalPtrTy);
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
@@ -90,11 +90,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     SmallVector<NamedAttribute> amendedAttrs;
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     if (auto argAttrs = funcOp.getAllArgAttrs()) {
-      llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
-                                                         argAttrs.end());
-      while (amendedArgAttrs.size() < amendedInputTy.size()) {
+      SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                   argAttrs.end());
+      while (amendedArgAttrs.size() < amendedInputTy.size())
         amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-      }
+
       amendedAttrs.push_back(
           rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
                                 rewriter.getArrayAttr(amendedArgAttrs)));
@@ -103,10 +103,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // 3. Add the new arguments to the region
     auto amendedFuncOp = rewriter.create<triton::FuncOp>(
         funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
-    auto &region = funcOp.getBody();
-    if (!isKernel) {
+    Region &region = funcOp.getBody();
+    if (!isKernel)
       region.addArgument(sharedPtrTy, loc);
-    }
+
     region.addArgument(globalPtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
