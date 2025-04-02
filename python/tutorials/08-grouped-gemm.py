@@ -355,6 +355,8 @@ def group_gemm_tma_fn(group_A, group_B):
         g_sizes += [M, N, K]
         g_lds += [A.stride(0), B.stride(0), C.stride(0)]
     # note these are device tensors
+    # Required to avoid exception, see:
+    # https://discuss.pytorch.org/t/torch-tensor-throws-runtimeerror-overflow-when-unpacking-long-exception/209386
     d_a_ptrs = torch.tensor(A_addrs, device=DEVICE, dtype=torch.uint64)
     d_b_ptrs = torch.tensor(B_addrs, device=DEVICE, dtype=torch.uint64)
     d_c_ptrs = torch.tensor(C_addrs, device=DEVICE, dtype=torch.uint64)
