@@ -68,6 +68,8 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, 
     if "datetime" not in df.columns:
         warnings.warn("No datetime column found in the input file, using current time")
         df_results["datetime"] = datetime.datetime.now()
+    else:
+        df_results["datetime"] = df["datetime"]
     df_results["benchmark"] = benchmark
     df_results["compiler"] = compiler
     df_results["tag"] = tag
