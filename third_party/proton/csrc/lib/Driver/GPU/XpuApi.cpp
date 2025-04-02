@@ -20,31 +20,27 @@ struct ExternLibLevelZero : public ExternLibBase {
 
 void *ExternLibLevelZero::lib = nullptr;
 
-// SPEC:
-// https://spec.oneapi.io/level-zero/1.0.4/core/api.html#zeinit
+// https://oneapi-src.github.io/level-zero-spec/level-zero/latest/core/api.html#zeinit
 DEFINE_DISPATCH(ExternLibLevelZero, init, zeInit, ze_init_flags_t)
-
-// FIXME: probably it's better to change `ctxSynchronize` name;
-// leave it like this for now, so that it would be easier to compare
-// the implementation with other backends
-// SPEC:
-// https://spec.oneapi.io/level-zero/1.9.3/core/api.html#zecommandqueuesynchronize
-DEFINE_DISPATCH(ExternLibLevelZero, ctxSynchronize, zeCommandQueueSynchronize,
-                ze_command_queue_handle_t, uint64_t)
-
-/*
-DEFINE_DISPATCH(ExternLibCuda, ctxGetCurrent, cuCtxGetCurrent, CUcontext *)
-
-DEFINE_DISPATCH(ExternLibCuda, deviceGet, cuDeviceGet, CUdevice *, int)
-
-*/
+// https://oneapi-src.github.io/level-zero-spec/level-zero/latest/core/api.html#zedriverget
+DEFINE_DISPATCH(ExternLibLevelZero, driverGet, zeDriverGet, uint32_t *,
+                ze_driver_handle_t *)
+// https://oneapi-src.github.io/level-zero-spec/level-zero/latest/core/api.html#zedeviceget
+DEFINE_DISPATCH(ExternLibLevelZero, deviceGet, zeDeviceGet, ze_driver_handle_t,
+                uint32_t *, ze_device_handle_t *)
+// https://oneapi-src.github.io/level-zero-spec/level-zero/latest/core/api.html#zedevicegetproperties
+DEFINE_DISPATCH(ExternLibLevelZero, deviceGetProperties, zeDeviceGetProperties,
+                ze_device_handle_t, ze_device_properties_t *)
+// https://oneapi-src.github.io/level-zero-spec/level-zero/latest/core/api.html#zedevicegetmemoryproperties
+DEFINE_DISPATCH(ExternLibLevelZero, deviceGetMemoryProperties,
+                zeDeviceGetMemoryProperties, ze_device_handle_t, uint32_t *,
+                ze_device_memory_properties_t *)
 
 // FIXME: for this initialization is needed
 // ref: initDevices
 // static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 //    g_sycl_l0_device_list;
 
-// FIXME: probably `DEFINE_DISPATCH` should be used in this function
 Device getDevice(uint64_t index) {
   // ref: getDeviceProperties
 
@@ -56,20 +52,17 @@ Device getDevice(uint64_t index) {
 
   uint32_t driverCount = 1;
   ze_driver_handle_t driverHandle;
-  zeDriverGet(&driverCount, &driverHandle);
+  xpu::driverGet<true>(&driverCount, &driverHandle);
   uint32_t deviceCount = 1;
 
   // Get device handle
   ze_device_handle_t phDevice;
-  zeDeviceGet(driverHandle, &deviceCount, &phDevice);
+  xpu::deviceGet<true>(driverHandle, &deviceCount, &phDevice);
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
   device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
-  // FIXME: should it be: `zeDeviceGetComputeProperties` and
-  // `ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES` ref:
-  // https://spec.oneapi.io/level-zero/1.0.4/core/api.html
-  zeDeviceGetProperties(phDevice, &device_properties);
+  xpu::deviceGetProperties<true>(phDevice, &device_properties);
 
   uint32_t clockRate = device_properties.coreClockRate;
   uint32_t numSms =
@@ -77,22 +70,22 @@ Device getDevice(uint64_t index) {
 
   // create a struct to hold device memory properties
   uint32_t memoryCount = 0;
-  zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr);
+  xpu::deviceGetMemoryProperties<true>(phDevice, &memoryCount, nullptr);
   auto pMemoryProperties = new ze_device_memory_properties_t[memoryCount];
   for (uint32_t mem = 0; mem < memoryCount; ++mem) {
     pMemoryProperties[mem].stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
     pMemoryProperties[mem].pNext = nullptr;
   }
-  zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties);
+  xpu::deviceGetMemoryProperties<true>(phDevice, &memoryCount,
+                                       pMemoryProperties);
 
   int memoryClockRate = pMemoryProperties[0].maxClockRate;
   int busWidth = pMemoryProperties[0].maxBusWidth;
 
   delete[] pMemoryProperties;
 
-  // FIXME how this can be defined for XPU?
-  // std::string arch = std::to_string(major * 10 + minor);
-  std::string arch = "unknown";
+  // FIXME: there should be architecture, but not a name
+  std::string arch = device_properties.name;
 
   return Device(DeviceType::XPU, index, clockRate, memoryClockRate, busWidth,
                 numSms, arch);

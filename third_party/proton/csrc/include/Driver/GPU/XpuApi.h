@@ -14,12 +14,21 @@ template <bool CheckSuccess>
 ze_result_t ctxSynchronize(ze_command_queue_handle_t hCommandQueue,
                            uint64_t timeout);
 
-/*
+template <bool CheckSuccess>
+ze_result_t driverGet(uint32_t *pCount, ze_driver_handle_t *phDrivers);
 
-template <bool CheckSuccess> CUresult ctxGetCurrent(CUcontext *pctx);
+template <bool CheckSuccess>
+ze_result_t deviceGet(ze_driver_handle_t hDriver, uint32_t *pCount,
+                      ze_device_handle_t *phDevices);
 
-template <bool CheckSuccess> CUresult deviceGet(CUdevice *device, int ordinal);
-*/
+template <bool CheckSuccess>
+ze_result_t deviceGetProperties(ze_device_handle_t hDevice,
+                                ze_device_properties_t *pDeviceProperties);
+
+template <bool CheckSuccess>
+ze_result_t
+deviceGetMemoryProperties(ze_device_handle_t hDevice, uint32_t *pCount,
+                          ze_device_memory_properties_t *pMemProperties);
 
 Device getDevice(uint64_t index);
 

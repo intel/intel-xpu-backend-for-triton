@@ -180,9 +180,8 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     assert test0_frame["metrics"]["cpu_time (ns)"] > 0
     test1_frame = test0_frame["children"][0]
     assert test1_frame["metrics"]["cpu_time (ns)"] > 0
-    # FIXME: IndexError: list index out of range
-    # kernel_frame = test1_frame["children"][0]
-    # assert kernel_frame["metrics"]["time (ns)"] > 0
+    kernel_frame = test1_frame["children"][0]
+    assert kernel_frame["metrics"]["time (ns)"] > 0
 
 
 def test_hook(tmp_path: pathlib.Path):
