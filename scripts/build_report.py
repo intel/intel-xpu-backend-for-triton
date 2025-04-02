@@ -1,4 +1,5 @@
 import argparse
+import warnings
 import os
 import uuid
 import json
@@ -63,7 +64,10 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, 
     else:
         df_results["run_uuid"] = uuid.uuid4().hex
 
-    df_results["datetime"] = datetime.datetime.now()
+    # All incoming benchmarks should have datetime now
+    if "datetime" not in df.columns:
+        warnings.warn("No datetime column found in the input file, using current time")
+        df_results["datetime"] = datetime.datetime.now()
     df_results["benchmark"] = benchmark
     df_results["compiler"] = compiler
     df_results["tag"] = tag

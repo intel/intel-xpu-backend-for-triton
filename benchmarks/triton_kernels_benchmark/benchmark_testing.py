@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import itertools
 import os
 
@@ -296,12 +297,10 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
-                benchmark_dfs.append(
-                    self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs))
-
-            if args.n_runs > 1:
-                for i, df in enumerate(benchmark_dfs):
-                    df["run_counter"] = i + 1
+                df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
+                df["datetime"] = datetime.datetime.now()
+                df["run_counter"] = run_counter + 1
+                benchmark_dfs.append(df)
 
             if args.reports:
                 import pandas as pd
