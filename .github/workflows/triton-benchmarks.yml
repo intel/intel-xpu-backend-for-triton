@@ -205,7 +205,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-splitk-performance.csv $REPORTS/gemm-splitk-xetla-report.csv --benchmark gemm-splitk --compiler xetla --param_cols "M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PreOp (exp) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_preop_exp_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_preop_exp_benchmark.py') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_preop_exp_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_preop_exp_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_preop_exp_benchmark.py --reports $REPORTS --n_runs $N_RUNS
@@ -213,7 +213,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-preop-exp.csv $REPORTS/gemm-preop-exp-triton-report.csv --benchmark gemm-preop-exp --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PostOp (Gelu) kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !(inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_gelu_benchmark.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_gelu_benchmark.py --reports $REPORTS --n_runs $N_RUNS
@@ -230,7 +230,7 @@ jobs:
           python ../../scripts/build_report.py $REPORTS/matmul-performance-postop-addmatrix-bfloat16.csv $REPORTS/gemm-postop-addmatrix-bfloat16-onednn-report.csv --benchmark gemm-postop-addmatrix --compiler onednn --param_cols "B,M,K,N" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
 
       - name: Run Triton GEMM + PostOp (add matrix) kernel benchmark int8
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_int8.py')) && contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_int8.py') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == 'all' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_int8.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_postop_addmatrix_benchmark_int8.py') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
           INT8_ONLY=1 python gemm_postop_addmatrix_benchmark.py --reports $REPORTS --n_runs $N_RUNS
