@@ -70,7 +70,11 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.generate_native_code = bool(os.getenv("TRITON_XPU_GEN_NATIVE_CODE", self.generate_native_code))
+        generate_native_code_env = os.getenv("TRITON_XPU_GEN_NATIVE_CODE")
+        if generate_native_code_env is not None:
+            self.generate_native_code = generate_native_code_env == "1"
+        # ensure generate native code setting is communicated to the external compiler library
+        os.environ["TRITON_XPU_GEN_NATIVE_CODE"] = "1" if self.generate_native_code else "0"
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -303,14 +307,14 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
-            intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
+        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
+            intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)

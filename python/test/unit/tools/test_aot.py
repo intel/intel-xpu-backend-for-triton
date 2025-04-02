@@ -8,6 +8,8 @@ import sysconfig
 
 import numpy as np
 
+import pytest
+
 import triton
 from triton._internal_testing import is_cuda, is_xpu
 from triton.backends.compiler import GPUTarget
@@ -366,7 +368,8 @@ def write_triton_kernels(dir, src, util_src):
     return kernel_path
 
 
-def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, grid, kernel_path):
+def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, grid, generate_native_code,
+                    kernel_path):
     compiler_path = os.path.join(triton.tools.__path__[0], "compile.py")
 
     subprocess.run(
@@ -385,6 +388,8 @@ def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, 
             str(num_warps),
             "-g",
             grid,
+            "-gspv",
+            str(not generate_native_code),
             kernel_path,
         ],
         check=True,
@@ -393,7 +398,7 @@ def _compile_kernel(dir, signature, kernel_name, out_name, out_path, num_warps, 
 
 
 # Edge case kernel with no specialization
-def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK):
+def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK, generate_native_code):
     # compile all desired configs
     sig = f"*fp32, *{dtype}, *{dtype}, i32, i32, i32, i32, i32, i32, i32, i32, i32, {BM}, {BN}, {BK}"
     name = f"matmul_{dtype}"
@@ -406,11 +411,12 @@ def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK):
         out_path=name,
         num_warps=1,
         grid=grid,
+        generate_native_code=generate_native_code,
         kernel_path=kernel_path,
     )
 
 
-def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
+def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints):
     # compile all desired configs
     for ha in ha_hb_hints:
         for hb in ha_hb_hints:
@@ -425,6 +431,7 @@ def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints):
                 out_path=name,
                 num_warps=1,
                 grid=grid,
+                generate_native_code=generate_native_code,
                 kernel_path=kernel_path,
             )
 
@@ -449,7 +456,8 @@ def generate_matmul_test_data(dir, M, N, K):
 
 
 # Test edge case where the provided kernel signature has no specializations
-def test_compile_link_matmul_no_specialization():
+@pytest.mark.parametrize("generate_native_code", [True, False])
+def test_compile_link_matmul_no_specialization(generate_native_code):
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -458,7 +466,7 @@ def test_compile_link_matmul_no_specialization():
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
+        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code)
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -480,7 +488,8 @@ def test_compile_link_matmul_no_specialization():
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-def test_compile_link_matmul():
+@pytest.mark.parametrize("generate_native_code", [True, False])
+def test_compile_link_matmul(generate_native_code):
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -488,7 +497,7 @@ def test_compile_link_matmul():
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=["", ":16"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=["", ":16"])
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -511,7 +520,8 @@ def test_compile_link_matmul():
         np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
-def test_launcher_has_no_available_kernel():
+@pytest.mark.parametrize("generate_native_code", [True, False])
+def test_launcher_has_no_available_kernel(generate_native_code):
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -519,7 +529,7 @@ def test_launcher_has_no_available_kernel():
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[":1"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[":1"])
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -548,6 +558,9 @@ def test_launcher_has_no_available_kernel():
 
 
 def test_compile_link_autotune_matmul():
+    # this test is pretty slow, so we only run with the native binary
+    generate_native_code = True
+
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -564,7 +577,7 @@ def test_compile_link_autotune_matmul():
 
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
-            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=["", ":16"])
+            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=["", ":16"])
 
         link_aot_kernels(tmp_dir)
 
@@ -622,6 +635,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
   }
 }
 """
+    # ensure spv output so we can grep the spirv file
+    os.environ["TRITON_XPU_GEN_NATIVE_CODE"] = "0"
     with tempfile.TemporaryDirectory() as tmp_dir:
         kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
         with open(kernel_path, "w") as fp:
