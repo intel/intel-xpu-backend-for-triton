@@ -27,4 +27,4 @@ pti_result viewSetCallbacks(pti_fptr_buffer_requested fptr_bufferRequested,
 
 } // namespace proton
 
-#endif // PROTON_EXTERN_DISPATCH_H_
+#endif // PROTON_DRIVER_GPU_XPUPTI_H_

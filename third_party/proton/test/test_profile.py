@@ -25,8 +25,6 @@ def test_torch(context, tmp_path: pathlib.Path):
     proton.enter_scope("test")
     # F841 Local variable `temp` is assigned to but never used
     temp = torch.ones((2, 2), device="xpu")  # noqa: F841
-    # FIXME: provide synchronization in XPUPTI profiler
-    torch.xpu.synchronize()
     proton.exit_scope()
     proton.finalize()
     with temp_file.open() as f:
@@ -63,8 +61,6 @@ def test_triton(tmp_path: pathlib.Path):
             foo[(1, )](x, y)
     with proton.scope("test2"):
         foo[(1, )](x, y)
-    # FIXME: provide synchronization in XPUPTI profiler
-    torch.xpu.synchronize()
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -210,8 +206,6 @@ def test_hook(tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")), hook="triton")
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
-    # FIXME: provide synchronization in XPUPTI profiler
-    torch.xpu.synchronize()
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -300,8 +294,6 @@ def test_deactivate(tmp_path: pathlib.Path):
     torch.randn((10, 10), device="xpu")
     proton.activate(session_id)
     torch.zeros((10, 10), device="xpu")
-    # FIXME: provide synchronization in XPUPTI profiler
-    torch.xpu.synchronize()
     proton.deactivate(session_id)
     proton.finalize()
     with temp_file.open() as f:
@@ -323,8 +315,6 @@ def test_multiple_sessions(tmp_path: pathlib.Path):
     with proton.scope("scope0"):
         torch.randn((10, 10), device="xpu")
         torch.randn((10, 10), device="xpu")
-    # FIXME: provide synchronization in XPUPTI profiler
-    torch.xpu.synchronize()
     proton.deactivate(session_id0)
     proton.finalize(session_id0)
     with proton.scope("scope1"):

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>

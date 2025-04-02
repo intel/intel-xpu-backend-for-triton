@@ -403,8 +403,13 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
-  // FIXME: device synchronization?
   std::cout << "flush\n" << std::flush;
+  XpuptiProfiler &profiler = threadState.profiler;
+  if (profiler.syclQueue != nullptr) {
+    sycl::queue *syclQueue = static_cast<sycl::queue *>(profiler.syclQueue);
+    syclQueue->wait();
+  }
+
   profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepMs=*/10,
       /*flush=*/[]() { xpupti::viewFlushAll<true>(); });

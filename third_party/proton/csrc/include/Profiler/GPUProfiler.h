@@ -47,6 +47,11 @@ public:
     return dynamic_cast<ConcreteProfilerT &>(*this);
   }
 
+  ConcreteProfilerT &setSyclQueue(void *syclQueue) {
+    this->syclQueue = syclQueue;
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
@@ -132,6 +137,7 @@ protected:
 
   static thread_local ThreadState threadState;
   Correlation correlation;
+  void *syclQueue;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid
   // including the cupti header from this header. The cupti header and the

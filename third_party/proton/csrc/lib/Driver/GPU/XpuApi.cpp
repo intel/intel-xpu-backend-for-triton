@@ -20,7 +20,7 @@ struct ExternLibLevelZero : public ExternLibBase {
 
 void *ExternLibLevelZero::lib = nullptr;
 
-// FIXME: DEBUG ref:
+// SPEC:
 // https://spec.oneapi.io/level-zero/1.0.4/core/api.html#zeinit
 DEFINE_DISPATCH(ExternLibLevelZero, init, zeInit, ze_init_flags_t)
 
@@ -49,7 +49,7 @@ Device getDevice(uint64_t index) {
   // ref: getDeviceProperties
 
   // FIXME: double check that initialization is needed
-  zeInit(ZE_INIT_FLAG_GPU_ONLY);
+  xpu::init<true>(ZE_INIT_FLAG_GPU_ONLY);
 
   // FIXME: For now I use the naive approach that the device index from PTI
   // record coincides with the default numbering of all devices
