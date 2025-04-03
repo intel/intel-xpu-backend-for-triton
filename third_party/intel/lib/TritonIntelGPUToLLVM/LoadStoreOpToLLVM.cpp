@@ -1245,10 +1245,18 @@ struct LoadOpConversion
 
     unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
     unsigned dimInner = bool(opIdx) ? rank - 2 : rank - 1;
-    unsigned outerDimRequiredWarpNum =
-        mlir::ceil<unsigned>(tensorShape[dimOuter], warpShape[dimOuter]);
+    llvm::errs() << "dimOuter = " << dimOuter << "\n";
+    llvm::errs() << "dimInner = " << dimInner << "\n";
+    llvm::errs() << "tensorShape[dimOuter] = " << tensorShape[dimOuter]
+                 << " vs warpShape[dimOuter] = " << warpShape[dimOuter] << "\n";
+    unsigned outerDimRequiredWarpNum = mlir::ceil<unsigned>(
+        tensorShape[dimOuter], warpShape[dimOuter]); // ceil of ratio
+    llvm::errs() << "warpsPerCTA[dimOuter] = " << warpsPerCTA[dimOuter]
+                 << " vs outerDimRequiredWarpNum = " << outerDimRequiredWarpNum
+                 << "\n";
     unsigned outerDimWarpNum =
         std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
+    llvm::errs() << "outerDimWarpNum = " << outerDimWarpNum << "\n";
     Value outerDimWarpId =
         b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
 
@@ -1472,28 +1480,40 @@ struct LoadOpConversion
             numRepOuter * numLoadPerOutRepCluster, kLoad, dimOuterStr);
       } else {
 #if 1
+#if 0
         tileLayout *= LinearLayout::identity1D(
             numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
         tileLayout *= LinearLayout::identity1D(
             numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
+#endif
 
         llvm::errs()
             << "tile layout after adding loads, before modifying bases: "
             << tileLayout << "\n";
 
         auto bases = tileLayout.getBases();
-        auto &loadBases = bases[kLoad];
+#if 0
+        const auto &loadBases = bases[kLoad];
         assert(loadBases.size() == 3);
         llvm::errs() << "original bases: \n";
         for (auto &base : loadBases) {
           llvm::errs() << base[0] << ", " << base[1] << "\n";
         }
-
-        loadBases[0][1] = 32;
-        loadBases[1][0] = 16;
-        loadBases[2][0] = 128;
-        llvm::errs() << "modified bases: \n";
-        for (auto &base : loadBases) {
+#endif
+        std::vector<std::vector<int32_t>> newLoadBases;
+        // TODO: for multiple loads do we multiply by i?
+        for (size_t i = 1; i < numRepInner / numOperandsInnerDimPerLoad; i++) {
+          newLoadBases.push_back(
+              {0, static_cast<int>(repKStride * numOperandsInnerDimPerLoad)});
+        }
+        for (size_t i = 1; i < numLoadPerOutRepCluster; i++) {
+          newLoadBases.push_back({static_cast<int>(repStride), 0});
+        }
+        for (size_t i = 1; i < numRepOuter; i++) {
+          newLoadBases.push_back({static_cast<int>(repOuterStride), 0});
+        }
+        llvm::errs() << "created new bases: \n";
+        for (auto &base : newLoadBases) {
           llvm::errs() << base[0] << ", " << base[1] << "\n";
         }
 
@@ -1503,11 +1523,28 @@ struct LoadOpConversion
         for (auto [name, size] : llvm::zip(origOutDimNames, origOutDimSizes)) {
           outDims.push_back(std::make_pair(name, size));
         }
-        outDims[0] = std::make_pair(outDims[0].first, outDims[0].second * 2); // 128 -> 256
-        outDims[1] = std::make_pair(outDims[1].first, outDims[1].second * 2); // 32 -> 64
+        llvm::errs() << "num outer loads: "
+                     << numRepOuter * numLoadPerOutRepCluster << "\n";
+        llvm::errs() << "num inner loads: "
+                     << numRepInner / numOperandsInnerDimPerLoad << "\n";
+        llvm::errs() << "warpsPerCTA = " << warpsPerCTA[0] << ", "
+                     << warpsPerCTA[1] << "\n";
+        outDims[0] = std::make_pair(
+            outDims[0].first,
+            tensorShape
+                [dimOuter] /*outDims[0].second * warpsPerCTA[0] * vBlocks*/);
+        outDims[1] = std::make_pair(
+            outDims[1].first,
+            tensorShape
+                [dimInner] /*outDims[1].second * warpsPerCTA[1] / vBlocks*/);
 
+        for (size_t i = 0; i < outDims.size(); i++) {
+          llvm::errs() << outDims[i].first << " = " << outDims[i].second
+                       << "\n";
+        }
+        bases[kLoad] = newLoadBases;
         tileLayout = LinearLayout(bases, outDims,
-                                                /*requiredSurjective=*/false);
+                                  /*requiredSurjective=*/false);
 #else
         tileLayout *= LinearLayout::identity1D(
             numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
@@ -1636,8 +1673,7 @@ struct LoadOpConversion
             llvm::errs() << "loadIdx is a repOuter load!\n";
 
 #if 1
-          unsigned outerDimBStride =
-              1;
+          unsigned outerDimBStride = 1;
 #else
           unsigned outerDimBStride =
               outerDimWarpNum * numOperandsOuterDimPerLoad *
@@ -1654,11 +1690,10 @@ struct LoadOpConversion
 
 #if 1
           unsigned innerDimBStride =
-              isTransposeRequired
-                  ? (repKStride * numOperandsInnerDimPerLoad *
-                     dpasTileToPackedIndicesRatio) /
-                        warpShape[0]
-                  : 1;
+              isTransposeRequired ? (repKStride * numOperandsInnerDimPerLoad *
+                                     dpasTileToPackedIndicesRatio) /
+                                        warpShape[0]
+                                  : 1;
 #else
           const unsigned innerDimBStride =
               isTransposeRequired
