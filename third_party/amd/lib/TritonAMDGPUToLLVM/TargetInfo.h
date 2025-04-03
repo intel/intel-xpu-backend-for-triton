@@ -91,6 +91,13 @@ public:
                   triton::ReduceOp op, unsigned reduceLaneIdMask,
                   unsigned broadcastLaneIdMask) const override;
 
+  bool warpBatchReduce(RewriterBase &rewriter, Location loc,
+                       SmallVector<SmallVector<Value>> &acc,
+                       triton::ReduceOp op,
+                       unsigned reduceLaneIdMask) const override {
+    return false;
+  };
+
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
               ArrayRef<bool> isSigned = {}) const override;
