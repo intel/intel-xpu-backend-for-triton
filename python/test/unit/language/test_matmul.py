@@ -468,8 +468,12 @@ def block_scale_mxfp_matmul(  #
                     reason="Requires compute capability >= 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device, monkeypatch):
     if is_xpu():
-        pytest.skip("FIXME: Fail RuntimeError on XPU")
-
+        if not torch.xpu.get_device_capability()["has_subgroup_matrix_multiply_accumulate"]:
+            pytest.skip("The device does not support MMA")
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
+                triton.runtime.driver.active.utils.get_device_properties(
+                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
+            pytest.xfail("Not enough shared memory")
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
@@ -494,7 +498,6 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
                                         b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                                         NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD)
     ttgir = out.asm["ttgir"]
-    ptx = out.asm["ptx"]
 
     def flatten_scale(scale):
         num_chunk_m, num_chunk_k, _, _, _ = scale.shape
@@ -519,7 +522,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     if USE_2D_SCALE_LOAD:
         # Due to an issue in the coalescing pass, tmem_copy can not be generated for the 5D load.
         # The issue is fixed using the patch from https://github.com/triton-lang/triton/pull/4914
-        assert "tcgen05.cp" in ptx
+        assert is_xpu() or "tcgen05.cp" in out.asm["ptx"]
     if NUM_STAGES > 1:
         if BLOCK_M == BLOCK_K and BLOCK_N == BLOCK_K:
             load_pipelined = ttgir.count(f"ttg.local_alloc : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_M}x{BLOCK_K}") == 2
@@ -613,8 +616,8 @@ def lhs_in_tmem_kernel_mxfp(  #
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
                     reason="Requires compute capability >= 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
-    if is_xpu():
-        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
+    if is_xpu() and not torch.xpu.get_device_capability()["has_subgroup_matrix_multiply_accumulate"]:
+        pytest.skip("The device does not support MMA")
     _knob_promote_lhs_to_tmem(monkeypatch)
     M, N, K = 128, 64, 32
     torch.manual_seed(42)
