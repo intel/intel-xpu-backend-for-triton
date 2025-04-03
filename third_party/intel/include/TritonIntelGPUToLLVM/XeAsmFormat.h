@@ -315,6 +315,23 @@ struct XeInstrExecution {
   bool onlyAttachMLIRArgs{};
 };
 
+enum XeArch {
+  Xe = 0,
+  Xe2 = 1,
+  Xe3 = 2,
+};
+
+struct XeVISAInstr : public XeInstrBase<XeVISAInstr> {
+  using XeInstrBase<XeVISAInstr>::XeInstrBase;
+
+  static std::optional<std::string> getTypeName(Type scalarTy);
+  static unsigned getGRFSizeInBytes(XeArch arch);
+  static unsigned getExecMaskLaneNum(XeArch arch);
+};
+
+std::string simdReduceAsm(std::string binOp, int warpSize, int accSize,
+                          Type elemTy, XeArch arch);
+
 } // namespace triton
 } // namespace mlir
 
