@@ -203,17 +203,17 @@ run_core_tests() {
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    pytest -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
+    pytest -k "not test_line_info_interpreter" -n ${PYTEST_MAX_PROCESSES:-8} --verbose --device xpu language/test_line_info.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    pytest -k "not test_disam_cubin" --verbose tools
+    pytest -k "not test_disam_cubin" --verbose -n ${PYTEST_MAX_PROCESSES:-8} tools
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
     pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
 
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-  pytest --device xpu .
+  pytest -n ${PYTEST_MAX_PROCESSES:-8} --device xpu .
 }
 
 run_regression_tests() {
@@ -223,7 +223,7 @@ run_regression_tests() {
   cd $TRITON_PROJ/python/test/regression
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-    pytest -vvv -s --device xpu . --ignore=test_performance.py
+    pytest -vvv -s -n ${PYTEST_MAX_PROCESSES:-8} --device xpu . --ignore=test_performance.py
 }
 
 run_interpreter_tests() {
