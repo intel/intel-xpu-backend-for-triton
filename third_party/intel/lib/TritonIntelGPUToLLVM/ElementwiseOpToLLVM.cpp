@@ -6,7 +6,6 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::MultipleOperandsRange;
@@ -568,11 +567,9 @@ Fp16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
   Value normal = b.select(round_up, rounded, nosign);
 
   normal = b.umax(i16_ty, normal, b.i16_val(0x2000));
+  normal = b.umin(i16_ty, normal, b.i16_val(0x5f00));
   normal = b.sub(i16_ty, normal, b.i16_val(0x2000));
   normal = b.shl(i16_ty, normal, b.i16_val(1));
-
-  Value isOverflowOrInf = b.icmp_ugt(nosign, b.i16_val(0x5f7f));
-  normal = b.select(isOverflowOrInf, b.i16_val(0x007e), normal);
 
   // Choose between subnormal and normal values.
   Value res_val = b.select(is_subnormal, subnormal, normal);
