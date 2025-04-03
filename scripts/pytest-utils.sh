@@ -49,8 +49,16 @@ pytest() {
         fi
     fi
 
+    if [[ -v CI && -v TRITON_TEST_SUITE ]]; then
+        echo "::group::Test suite $TRITON_TEST_SUITE"
+    fi
+
     export TEST_UNSKIP
     python -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
+
+    if [[ -v CI && -v TRITON_TEST_SUITE ]]; then
+        echo "::endgroup::"
+    fi
 }
 
 run_tutorial_test() {
