@@ -5,9 +5,9 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <TritonGENToLLVM/GenIntrinsicHelper.h>
 #include <optional>
 
 using namespace mlir;
@@ -334,6 +334,9 @@ private:
         totalElems /
         ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
+    // F32ToTf32
+    if (elemTy.isFloat(32))
+      dotOpTy = vec_ty(f32_ty, numElemsPerOperand);
 
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     int offset = 0;
@@ -347,12 +350,12 @@ private:
               for (int k = 0; k < numElemsPerOperand; ++k) {
                 if (elemTy.isFloat(32)) {
                   auto f32Val = elems[offset++];
-                  GenISA<llvm::GenISAIntrinsic::ID::GenISA_ftotf32> fToTF32(
-                      rewriter, f32_ty, f32_ty);
                   auto t32Val =
-                      fToTF32(rewriter, loc, f32Val, tb.i32_val(0)).getResult();
+                      rewriter.create<TritonGEN::FToTf32Op>(loc, f32_ty, f32Val)
+                          .getResult();
                   matVal =
                       tb.insert_element(dotOpTy, matVal, t32Val, tb.i32_val(k));
+                  llvm::outs() << "\n FToTF32!";
 
                 } else {
                   matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
