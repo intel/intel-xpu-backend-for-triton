@@ -58,6 +58,11 @@ public:
   Value programId(RewriterBase &rewriter, Location loc, ModuleOp moduleOp,
                   ProgramIDDim axis) const override;
 
+  bool warpBatchReduce(RewriterBase &rewriter, Location loc,
+                       SmallVector<SmallVector<Value>> &acc,
+                       triton::ReduceOp op,
+                       unsigned reduceLaneIdMask) const override;
+
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
@@ -99,5 +104,6 @@ private:
 };
 
 std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod);
+
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
