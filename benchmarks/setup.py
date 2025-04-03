@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import logging
+import sysconfig
 
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as _build_ext
@@ -44,6 +45,7 @@ class CMakeBuild():
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
+        python_include_dir = sysconfig.get_path("platinclude")
         cmake_args = [
             "-G",
             "Ninja",  # Ninja is much faster than make
@@ -52,6 +54,7 @@ class CMakeBuild():
             "-DCMAKE_PREFIX_PATH=" + ";".join(self.cmake_prefix_paths),
             "-DCMAKE_INSTALL_PREFIX=" + self.extdir,
             "-DPython3_ROOT_DIR:FILEPATH=" + sys.exec_prefix,
+            "-DPython3_INCLUDE_DIR=" + python_include_dir,
             "-DCMAKE_C_COMPILER=icx",
             "-DCMAKE_CXX_COMPILER=icpx",
             "-DCMAKE_BUILD_TYPE=" + self.build_type,
