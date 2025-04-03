@@ -78,6 +78,13 @@ public:
                   triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
 
+  bool warpBatchReduce(RewriterBase &rewriter, Location loc,
+                       SmallVector<SmallVector<Value>> &acc,
+                       triton::ReduceOp op,
+                       unsigned reduceLaneIdMask) const override {
+    return false;
+  };
+
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,

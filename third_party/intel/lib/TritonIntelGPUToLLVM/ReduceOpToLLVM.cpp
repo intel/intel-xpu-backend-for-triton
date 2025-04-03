@@ -402,15 +402,18 @@ private:
       return {std::move(layout), std::move(accs)};
     }
 
-    unsigned regs = accs.front().size();
-    for (unsigned reg = 0; reg < regs; ++reg) {
-      SmallVector<Value> acc(op.getNumOperands());
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        acc[i] = accs[i][reg];
-      }
-      warpReduce(op, reduceLaneIdMask, acc, rewriter);
-      for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-        accs[i][reg] = acc[i];
+    if (!targetInfo.warpBatchReduce(rewriter, op.getLoc(), accs, op,
+                                    reduceLaneIdMask)) {
+      unsigned regs = accs.front().size();
+      for (unsigned reg = 0; reg < regs; ++reg) {
+        SmallVector<Value> acc(op.getNumOperands());
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          acc[i] = accs[i][reg];
+        }
+        warpReduce(op, reduceLaneIdMask, acc, rewriter);
+        for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+          accs[i][reg] = acc[i];
+        }
       }
     }
 
