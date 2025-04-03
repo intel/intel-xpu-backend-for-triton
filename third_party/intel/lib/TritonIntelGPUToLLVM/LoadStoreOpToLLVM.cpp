@@ -1372,7 +1372,9 @@ struct LoadOpConversion
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
     numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
+    llvm::errs() << "orig tile height: " << tileHeight << "\n";
     tileHeight = tileHeight * numOperandsPer2DLoadM;
+    llvm::errs() << "new tile height: " << tileHeight << "\n";
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
@@ -1548,20 +1550,48 @@ struct LoadOpConversion
           auto layoutOffsetX = offset[dimInner].second;
           auto layoutOffsetY = offset[dimOuter].second;
 
+#if 1
+          unsigned outerDimBStride =
+              repOuterStride / (packedElemsPerLanePerDPASInst *
+                                numOperandsInnerDimPerLoad);
+#else
           unsigned outerDimBStride =
               outerDimWarpNum * numOperandsOuterDimPerLoad *
               numLoadPerOutRepCluster * (repStride / tileHeight);
+          llvm::errs() << "outerDimWarpNum = " << outerDimWarpNum << "\n";
+          llvm::errs() << "numOperandsOuterDimPerLoad = "
+                       << numOperandsOuterDimPerLoad << "\n";
+          llvm::errs() << "numLoadPerOutRepCluster = "
+                       << numLoadPerOutRepCluster << "\n";
+          llvm::errs() << "repStride = " << repStride << "\n";
           if (isTransposeRequired)
             outerDimBStride /= dpasTileToPackedIndicesRatio;
+#endif
 
+#if 1
+          unsigned innerDimBStride =  isTransposeRequired
+          ? (repKStride * numOperandsInnerDimPerLoad *
+             dpasTileToPackedIndicesRatio) /
+                warpShape[0]
+          : (repKStride * numOperandsInnerDimPerLoad) / tileWidth;
+#else
           const unsigned innerDimBStride =
               isTransposeRequired
                   ? (repKStride * numOperandsInnerDimPerLoad *
                      dpasTileToPackedIndicesRatio) /
                         warpShape[0]
                   : (repKStride * numOperandsInnerDimPerLoad) / warpShape[1];
+#endif 
 
-          layoutOffsetX *= (isOperandA ? numRepOuter : outerDimBStride);
+          llvm::errs() << "outerDimBStride = " << outerDimBStride << "\n";
+          llvm::errs() << "innerDimBStride = " << innerDimBStride << "\n";
+
+          layoutOffsetX = isOperandA ? layoutOffsetX * numRepOuter
+                                      : layoutOffsetX * outerDimBStride;
+          llvm::errs() << "x offset before dividing for load per out rep cluster: " << layoutOffsetX << "\n";
+          if (numLoadPerOutRepCluster > 1)
+            layoutOffsetX /= (numLoadPerOutRepCluster * outerDimWarpNum);
+  
           layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
 
           LLVM_DEBUG({
