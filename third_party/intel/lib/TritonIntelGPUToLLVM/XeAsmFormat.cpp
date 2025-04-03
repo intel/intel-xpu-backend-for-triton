@@ -1,8 +1,9 @@
 #include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
+#include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <sstream>
 
 namespace mlir {
@@ -228,6 +229,90 @@ XeInstr &XeInstr::v(int vecWidth, bool predicate) {
 XeInstr &XeInstr::b(int width) {
   o("b" + std::to_string(width));
   return *this;
+}
+
+std::optional<std::string> XeVISAInstr::getTypeName(Type scalarTy) {
+  std::string typeSyntax;
+  TypeSwitch<Type>(scalarTy)
+      .Case<Float32Type>([&](auto) { typeSyntax = "f"; })
+      .Case<Float16Type>([&](auto) { typeSyntax = "hf"; })
+      .Default([&](auto) { typeSyntax = ""; });
+
+  if (!typeSyntax.empty())
+    return typeSyntax;
+  return std::nullopt;
+}
+
+unsigned XeVISAInstr::getGRFSizeInBytes(XeArch arch) {
+  switch (arch) {
+  case Xe:
+    return 8 * 4;
+  case Xe2:
+  case Xe3:
+  default:
+    return 16 * 4;
+  }
+}
+
+std::string simdReduceAsm(std::string binOp, int warpSize, int accSize,
+                          Type elemTy, XeArch arch) {
+
+  // TODO: implement more variants.
+  assert(arch != Xe ||
+         warpSize == 16 && "only suppor warpSize=16 for on Xe arch fow now");
+  assert(accSize == warpSize && "The acc size has to be equal to size for now");
+  unsigned numElem = accSize * warpSize;
+  unsigned tempResultSize = numElem / 2;
+
+  auto typeSyntax = XeVISAInstr::getTypeName(elemTy);
+  if (!typeSyntax)
+    llvm_unreachable("Unsupported scalar type");
+
+  unsigned grfSizeInBytes = XeVISAInstr::getGRFSizeInBytes(arch);
+  unsigned grfElemsPerRow =
+      grfSizeInBytes / (elemTy.getIntOrFloatBitWidth() / 8);
+
+  constexpr StringLiteral reduceBuff = R"({
+  .decl temp_result v_type=G type={0} num_elts={1} align=GRF
+  )";
+
+  std::string simdAsm =
+      llvm::formatv(reduceBuff.data(), *typeSyntax, tempResultSize).str();
+
+  constexpr StringLiteral reduceBinOp =
+      R"({0} (M1_NM, {1}) {2}({3}, {4})<1>  {5}({6}, {7})<{11};{12},1> {8}({9}, {10})<{11};{12},1>
+  )";
+
+  for (unsigned n = numElem, rowStride = warpSize, colNum = warpSize / 2;
+       n > accSize; n >>= 1, rowStride >>= 1, colNum >>= 1) {
+    unsigned elemPerRow = warpSize;
+    unsigned rowNum = n / elemPerRow;
+    unsigned reduceNum = rowNum / 2;
+    for (unsigned r = 0; r < reduceNum; r++) {
+      unsigned dstOffset = r * elemPerRow;
+      unsigned dstOffsetM = dstOffset / grfElemsPerRow;
+      unsigned dstOffsetN = dstOffset % grfElemsPerRow;
+      unsigned srcAOffset = r * 2 * elemPerRow;
+      unsigned srcBOffset = srcAOffset + colNum;
+      ;
+      unsigned srcAOffM = srcAOffset / grfElemsPerRow;
+      unsigned srcAOffN = srcAOffset % grfElemsPerRow;
+      unsigned srcBOffM = srcBOffset / grfElemsPerRow;
+      unsigned srcBOffN = srcBOffset % grfElemsPerRow;
+      std::string simdOps =
+          llvm::formatv(reduceBinOp.data(), binOp, warpSize,
+                        /*dst*/ colNum == 1 ? "$0" : "temp_result", dstOffsetM,
+                        dstOffsetN,
+                        /*srcA*/ colNum == warpSize / 2 ? "$1" : "temp_result",
+                        srcAOffM, srcAOffN,
+                        /*srcB*/ colNum == warpSize / 2 ? "$1" : "temp_result",
+                        srcBOffM, srcBOffN, rowStride, colNum)
+              .str();
+      simdAsm += simdOps;
+    }
+  }
+  simdAsm += "}";
+  return simdAsm;
 }
 
 } // namespace triton
