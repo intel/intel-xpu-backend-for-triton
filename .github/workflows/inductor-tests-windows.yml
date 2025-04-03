@@ -124,7 +124,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake
-          pip install -v --no-build-isolation '.[build,tests,tutorials]'
+          pip install -v '.[build,tests,tutorials]'
 
       - name: Triton version
         run: |

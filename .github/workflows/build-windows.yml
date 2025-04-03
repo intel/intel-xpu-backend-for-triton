@@ -59,7 +59,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           cd python
           pip install -U wheel pybind11 cython cmake
-          pip install -v --no-build-isolation '.[build]'
+          pip install -v '.[build]'
 
       - name: Clean
         if: ${{ always() }}
