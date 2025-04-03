@@ -1471,10 +1471,49 @@ struct LoadOpConversion
         tileLayout *= LinearLayout::identity1D(
             numRepOuter * numLoadPerOutRepCluster, kLoad, dimOuterStr);
       } else {
+#if 1
         tileLayout *= LinearLayout::identity1D(
             numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
         tileLayout *= LinearLayout::identity1D(
             numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
+
+        llvm::errs()
+            << "tile layout after adding loads, before modifying bases: "
+            << tileLayout << "\n";
+
+        auto bases = tileLayout.getBases();
+        auto &loadBases = bases[kLoad];
+        assert(loadBases.size() == 3);
+        llvm::errs() << "original bases: \n";
+        for (auto &base : loadBases) {
+          llvm::errs() << base[0] << ", " << base[1] << "\n";
+        }
+
+        loadBases[0][1] = 32;
+        loadBases[1][0] = 16;
+        loadBases[2][0] = 128;
+        llvm::errs() << "modified bases: \n";
+        for (auto &base : loadBases) {
+          llvm::errs() << base[0] << ", " << base[1] << "\n";
+        }
+
+        auto origOutDimNames = tileLayout.getOutDimNames();
+        auto origOutDimSizes = tileLayout.getOutDimSizes();
+        SmallVector<std::pair<StringAttr, int32_t>> outDims;
+        for (auto [name, size] : llvm::zip(origOutDimNames, origOutDimSizes)) {
+          outDims.push_back(std::make_pair(name, size));
+        }
+        outDims[0] = std::make_pair(outDims[0].first, outDims[0].second * 2); // 128 -> 256
+        outDims[1] = std::make_pair(outDims[1].first, outDims[1].second * 2); // 32 -> 64
+
+        tileLayout = LinearLayout(bases, outDims,
+                                                /*requiredSurjective=*/false);
+#else
+        tileLayout *= LinearLayout::identity1D(
+            numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
+        tileLayout *= LinearLayout::identity1D(
+            numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
+#endif
       }
     }
 
@@ -1498,6 +1537,49 @@ struct LoadOpConversion
         llvm::dbgs() << "\n";
       }
     });
+
+#if 0
+    auto inverseDpasLayout = llEncoding->pseudoinvert();
+    llvm::errs() << "dpas inverse: " << inverseDpasLayout << "\n";
+
+    if (!isOperandA) {
+      auto tmpTileLayout = tileLayout;
+      auto bases = tmpTileLayout.getBases();
+      for (auto& base : bases) {
+        llvm::errs() << base.first << " : " << base.second.size() << "\n";
+      }
+
+      auto& loadBases = bases[kLoad];
+      // llvm::errs() << "num loads = " << numRepOuter * numLoadPerOutRepCluster << "\n";
+      // assert(numRepOuter * numLoadPerOutRepCluster - 1 == loadBases.size());
+
+      // multiply the outer loads by repOuterStride
+      for (size_t i = 0; i < loadBases.size(); i++) {
+        const size_t loadIndex = 1<<i;
+        // need to modify every x value - but only every other numLoadPerOutRepCluster * numRepInner value needs to incrase by repOuter
+        llvm::errs() << "loadIndex = " << loadIndex << "\n";
+        auto& base = loadBases[i];
+        llvm::errs() << base[0] << ", " << base[1] << "\n";
+        base[0] *= outerDimWarpNum;
+
+      }
+
+#if 0
+      for (size_t i = 0; i < loadBases.size(); i++) {
+        const size_t loadIndex = 1<<i;
+
+        llvm::errs() << i << " = " << std::to_string(1<<i) << "\n";
+      }
+#endif
+
+#if 1
+      for (auto& base : loadBases) {
+        llvm::errs() << base[0] << ", " << base[1] << " ";
+        llvm::errs() << "\n";
+      }
+#endif
+    }
+#endif
 
     Value pitch;
     if (memoryRowMajor) {
@@ -1550,10 +1632,12 @@ struct LoadOpConversion
           auto layoutOffsetX = offset[dimInner].second;
           auto layoutOffsetY = offset[dimOuter].second;
 
+          if (loadIdx % numLoadPerOutRepCluster == 0)
+            llvm::errs() << "loadIdx is a repOuter load!\n";
+
 #if 1
           unsigned outerDimBStride =
-              repOuterStride / (packedElemsPerLanePerDPASInst *
-                                numOperandsInnerDimPerLoad);
+              1;
 #else
           unsigned outerDimBStride =
               outerDimWarpNum * numOperandsOuterDimPerLoad *
@@ -1569,11 +1653,12 @@ struct LoadOpConversion
 #endif
 
 #if 1
-          unsigned innerDimBStride =  isTransposeRequired
-          ? (repKStride * numOperandsInnerDimPerLoad *
-             dpasTileToPackedIndicesRatio) /
-                warpShape[0]
-          : (repKStride * numOperandsInnerDimPerLoad) / tileWidth;
+          unsigned innerDimBStride =
+              isTransposeRequired
+                  ? (repKStride * numOperandsInnerDimPerLoad *
+                     dpasTileToPackedIndicesRatio) /
+                        warpShape[0]
+                  : 1;
 #else
           const unsigned innerDimBStride =
               isTransposeRequired
@@ -1581,17 +1666,19 @@ struct LoadOpConversion
                      dpasTileToPackedIndicesRatio) /
                         warpShape[0]
                   : (repKStride * numOperandsInnerDimPerLoad) / warpShape[1];
-#endif 
+#endif
 
           llvm::errs() << "outerDimBStride = " << outerDimBStride << "\n";
           llvm::errs() << "innerDimBStride = " << innerDimBStride << "\n";
 
           layoutOffsetX = isOperandA ? layoutOffsetX * numRepOuter
-                                      : layoutOffsetX * outerDimBStride;
-          llvm::errs() << "x offset before dividing for load per out rep cluster: " << layoutOffsetX << "\n";
-          if (numLoadPerOutRepCluster > 1)
+                                     : layoutOffsetX * outerDimBStride;
+          llvm::errs()
+              << "x offset before dividing for load per out rep cluster: "
+              << layoutOffsetX << "\n";
+          if (isOperandA && numLoadPerOutRepCluster > 1)
             layoutOffsetX /= (numLoadPerOutRepCluster * outerDimWarpNum);
-  
+
           layoutOffsetY *= (isOperandA ? outerDimWarpNum : innerDimBStride);
 
           LLVM_DEBUG({
