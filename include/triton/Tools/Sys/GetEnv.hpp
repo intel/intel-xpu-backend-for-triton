@@ -50,6 +50,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_INTEL_ENABLE_INSTR_SCHED",
     "TRITON_INTEL_FAST_MATH",
     "TRITON_INTEL_REDUCE_TRANSPOSE",
+    "TRITON_INTEL_ENABLE_SIMD_REDUCE",
     // clang-format on
 };
 
