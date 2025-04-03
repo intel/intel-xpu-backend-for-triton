@@ -176,6 +176,18 @@ private:
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
     unsigned threadOffsetOnReductionAxis =
         helper.getThreadOffsetOnReductionAxis();
+
+    bool simdReduce =
+        mlir::triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_SIMD_REDUCE");
+
+    if (simdReduce) {
+      auto ret = targetInfo.warpBatchReduce(rewriter, op.getLoc(), accs, op,
+                                            sizeIntraWarps,
+                                            threadOffsetOnReductionAxis);
+      if (ret)
+        return;
+    }
+
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = accs[key];
