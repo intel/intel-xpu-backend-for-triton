@@ -971,8 +971,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
             auto newType = RankedTensorType::get(
                 oldType.getShape(), oldType.getElementType(), it->second);
             newTypes.push_back(newType);
-          }
-          if (auto ptrType = dyn_cast<PointerType>(resType)) {
+          } else if (auto ptrType = dyn_cast<PointerType>(resType)) {
             auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
             auto newType = triton::PointerType::get(
                 RankedTensorType::get(tensorType.getShape(),
