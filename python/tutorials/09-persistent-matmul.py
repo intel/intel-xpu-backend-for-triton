@@ -30,6 +30,8 @@ from contextlib import contextmanager
 
 from typing import Optional
 
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
@@ -42,8 +44,20 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
 def supports_tma():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+
+
+def num_sms():
+    if is_cuda():
+        return torch.cuda.get_device_properties("cuda").multi_processor_count
+    if is_xpu():
+        return torch.xpu.get_device_properties("xpu").gpu_eu_count
+    return 148
 
 
 def _matmul_launch_metadata(grid, kernel, args):
@@ -62,7 +76,7 @@ def _matmul_launch_metadata(grid, kernel, args):
 
 
 HAS_TMA_DESC = supports_tma() and hasattr(tl, "nv_tma_desc_type")
-HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
+HAS_TENSOR_DESC = (is_xpu() or supports_tma()) and hasattr(tl, "make_tensor_descriptor")
 
 
 # TmaAutoTuneHelper used in htyu's PR #5622
@@ -383,7 +397,8 @@ def matmul_persistent(a, b):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = num_sms()
+
     M, K = a.shape
     K, N = b.shape
     dtype = a.dtype
@@ -491,7 +506,7 @@ def matmul_tma_persistent(a, b):
     desc_helper.init_tma_descriptor("b")
     desc_helper.init_tma_descriptor("c")
 
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = num_sms()
 
     def grid(META):
         nonlocal desc_helper
@@ -633,11 +648,11 @@ def matmul_descriptor_persistent(a, b):
     dtype = a.dtype
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = num_sms()
 
     # TMA descriptors require a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
+        return torch.empty(size, device=DEVICE, dtype=torch.int8)
 
     triton.set_allocator(alloc_fn)
 
@@ -688,16 +703,17 @@ def proton_context():
 def bench_fn(reps, warmup_reps, fn, *args):
     for _ in range(warmup_reps):
         fn(*args)
-    with proton_context():
-        for _ in range(reps):
-            fn(*args)
+    if (is_cuda()):
+        with proton_context():
+            for _ in range(reps):
+                fn(*args)
 
 
 def bench(K, dtype, reps=10000, warmup_reps=10000):
     M = 8192
     N = 8192
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
+    a = torch.randn((M, K), device=DEVICE, dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device=DEVICE, dtype=torch.float16).to(dtype)
 
     b = b.T.contiguous()
 
@@ -709,20 +725,20 @@ def bench(K, dtype, reps=10000, warmup_reps=10000):
     bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
     if HAS_TMA_DESC:
         bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
+        bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
     if HAS_TENSOR_DESC:
         bench_fn(reps, warmup_reps, matmul_descriptor_persistent, a, b)
-        bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
 
 
 def validate(M, N, K, dtype):
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
+    a = torch.randn((M, K), device=DEVICE, dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device=DEVICE, dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
 
     torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
     cublas_result = cublas_matmul(a, b) if cublas is not None else None
     naive_result = matmul(a, b.T)
-    tma_ws_result = matmul_tma_ws(a, b) if HAS_TENSOR_DESC else None
+    tma_ws_result = matmul_tma_ws(a, b) if HAS_TMA_DESC else None
     persistent_result = matmul_persistent(a, b.T)
     tma_persistent_result = matmul_tma_persistent(a, b) if HAS_TMA_DESC else None
     descriptor_persistent_result = matmul_descriptor_persistent(a, b) if HAS_TENSOR_DESC else None
@@ -742,7 +758,7 @@ def validate(M, N, K, dtype):
         naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
                                                         tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
     if descriptor_persistent_result is not None:
-        naive_vs_descriptor_persistent = "✅" if torch.allclose(cublas_result.to(
+        naive_vs_descriptor_persistent = "✅" if torch.allclose(naive_result.to(
             torch.float16), descriptor_persistent_result.to(torch.float16), atol=1.0) else "❌"
     print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
     if tma_ws_result is not None:
@@ -792,9 +808,10 @@ if __name__ == "__main__":
 
         validate(32, 32, 32, dtype)
         validate(8192, 8192, args.K_range[0], dtype)
-
-        proton.start("matmul", hook="triton")
+        if (is_cuda()):
+            proton.start("matmul", hook="triton")
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
             bench(K, dtype)
-        proton.finalize()
-        show_profile(args.prec, "matmul")
+        if (is_cuda()):
+            proton.finalize()
+            show_profile(args.prec, "matmul")
