@@ -354,7 +354,10 @@ private:
       return {std::move(layout), std::move(accs)};
     }
 
-    warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
+    if (!targetInfo.warpBatchReduce(rewriter, op.getLoc(), accs, op,
+                                    reduceLaneIdMask)) {
+      warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
+    }
 
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(),
                                                          kLane);
