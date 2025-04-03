@@ -47,26 +47,6 @@ namespace {
 constexpr unsigned offsetBitwidth = 32u;
 constexpr unsigned shapeAndStridesBitwidth = 64u;
 
-// Lookup for a constant with the given value and bitwidth in the current block
-// (before the builder insertion point). Return it a suitable constant is found,
-// otherwise create a new one.
-Value findOrCreateConstant(Location loc, int val, unsigned bitWidth,
-                           OpBuilder &builder) {
-  Block *block = builder.getInsertionBlock();
-  const Block::iterator insertPoint = builder.getInsertionPoint();
-
-  auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
-    if (auto cstOp = dyn_cast<arith::ConstantIntOp>(op))
-      return cstOp.value() == val &&
-             cstOp.getType().getIntOrFloatBitWidth() == bitWidth;
-    return false;
-  });
-
-  return (it != insertPoint)
-             ? cast<arith::ConstantIntOp>(*it)
-             : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
-}
-
 Value findOrCreateCast(Location loc, Value val, Type tgtType,
                        OpBuilder &builder) {
   Block *block = builder.getInsertionBlock();
@@ -85,25 +65,36 @@ Value findOrCreateCast(Location loc, Value val, Type tgtType,
 
 Value findOrCreateMakeTensorPtr(Location loc, Value source, ValueRange shape,
                                 ValueRange strides, ValueRange offsets,
-                                ArrayRef<int> order, ArrayRef<int> sizes,
-                                OpBuilder &builder) {
+                                ArrayRef<int32_t> order,
+                                ArrayRef<int32_t> sizes, OpBuilder &builder) {
   Block *block = builder.getInsertionBlock();
   const Block::iterator insertPoint = builder.getInsertionPoint();
 
   auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
     if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
+      triton::PointerType resType = makeTensorPtrOp.getResult().getType();
+      auto tensorType = cast<RankedTensorType>(resType.getPointeeType());
+      auto sameShape = [](ArrayRef<int64_t> arr1, ArrayRef<int32_t> arr2) {
+        for (auto [dim1, dim2] : llvm::zip(arr1, arr2)) {
+          if (dim1 != dim2)
+            return false;
+        }
+        return true;
+      };
       return makeTensorPtrOp.getBase() == source &&
              makeTensorPtrOp.getShape() == shape &&
              makeTensorPtrOp.getStrides() == strides &&
              makeTensorPtrOp.getOffsets() == offsets &&
-             makeTensorPtrOp.getOrder() == order;
+             makeTensorPtrOp.getOrder() == order &&
+             sameShape(tensorType.getShape(), sizes);
     }
     return false;
   });
 
   // Note: We are forcing the shape to be unknown to pointer increments that may
   // wrap around (via the tt.advance operation).
-  Value zero = findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder);
+  Value zero = tt::intel::findOrCreateIntConstant(
+      loc, 0, shapeAndStridesBitwidth, builder);
   SmallVector<Value> zeros;
   for (int i = 0; i < shape.size(); ++i)
     zeros.push_back(zero);
@@ -127,8 +118,8 @@ struct PtrState {
   SmallVector<Value> offsets;
   SmallVector<Value> strides;
   SmallVector<Value> shape;
-  SmallVector<int> sizes;
-  SmallVector<int> order;
+  SmallVector<int32_t> sizes;
+  SmallVector<int32_t> order;
   Value source;
   Value scalar;
 
@@ -463,12 +454,7 @@ public:
     if (failed(rewriteOp(moduleOp)))
       moduleOp->emitWarning("TritonRaiseToBlockPointer failed");
 
-    // Cleanup unused operations.
-    for (Operation *op : cleanUp) {
-      if (op->getUsers().empty())
-        op->erase();
-    }
-
+    finalize();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -486,8 +472,6 @@ private:
             if (failed(rewriteAddPtrOp(addptr))) {
               addptr->emitRemark(
                   "TritonRaiseToBlockPointer: Failed to rewrite AddPtrOp");
-              if (isNested)
-                fail = true;
             }
             return WalkResult::advance();
           })
@@ -596,7 +580,7 @@ private:
     // Update the loop body.
     constexpr bool isNested = true;
     if (failed(rewriteOp(newOp, isNested))) {
-      newOp->erase();
+      cleanUp.insert(newOp);
       op->emitRemark("TritonRaiseToBlockPointer: update loop body failed when "
                      "rewriting for op");
       return failure();
@@ -626,7 +610,7 @@ private:
     ResultRange resultsToReplaceWith(newOp.result_begin(),
                                      newOp.result_begin() + op.getNumResults());
     op->replaceAllUsesWith(resultsToReplaceWith);
-    op->erase();
+    cleanUp.insert(op);
 
     LLVM_DEBUG({
       auto modOp =
@@ -695,12 +679,13 @@ private:
     Operation *defOp = value.getDefiningOp();
     if (!defOp) {
       // look init values outside the loop
-      BlockArgument blockArg = dyn_cast<BlockArgument>(value);
+      BlockArgument blockArg = cast<BlockArgument>(value);
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp);
-      return forOp ? hasExpandOpInDefiningPath(
-                         forOp.getInitArgs()[blockArg.getArgNumber() - 1])
-                   : false;
+      return forOp && !forOp.getInitArgs().empty()
+                 ? hasExpandOpInDefiningPath(
+                       forOp.getInitArgs()[blockArg.getArgNumber() - 1])
+                 : false;
     }
 
     if (isa<tt::ExpandDimsOp>(defOp))
@@ -747,9 +732,6 @@ private:
         LLVM_DEBUG({
           llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << advanceOp
                        << "\n";
-          auto modOp =
-              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-          llvm::dbgs() << "Module:\n" << modOp << "\n";
         });
 
         return success();
@@ -784,9 +766,6 @@ private:
         LLVM_DEBUG({
           llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << newAdvanceOp
                        << "\n";
-          auto modOp =
-              builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-          llvm::dbgs() << "Module:\n" << modOp << "\n";
         });
 
         return success();
@@ -822,9 +801,6 @@ private:
 
     LLVM_DEBUG({
       llvm::dbgs() << "Rewrote:\n\t" << op << "\nto:\n\t" << makePtrOp << "\n";
-      auto modOp =
-          builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-      llvm::dbgs() << "Module:\n" << modOp << "\n";
     });
 
     return success();
@@ -863,7 +839,7 @@ private:
     }
     state.strides = makeTPtrOp.getStrides();
     state.shape = makeTPtrOp.getShape();
-    state.order = SmallVector<int>(makeTPtrOp.getOrder());
+    state.order = SmallVector<int32_t>(makeTPtrOp.getOrder());
 
     return success();
   }
@@ -916,12 +892,12 @@ private:
       }
     }
 
+    LLVM_DEBUG(llvm::dbgs() << "Base: " << ptrState << "\n"
+                            << "Offset: " << offsetState << "\n";);
+
     assert(ptrState.source && "ptr field should provide source / base pointer");
     assert(ptrState.getRank() == offsetState.getRank() &&
            "ptr and offset field should have the same rank");
-
-    LLVM_DEBUG(llvm::dbgs() << "Base: " << ptrState << "\n"
-                            << "Offset: " << offsetState << "\n";);
 
     return state.addState(ptrState, offsetState, addptrOp, builder);
   }
@@ -1071,13 +1047,7 @@ private:
       LLVM_DEBUG(llvm::dbgs() << "Created: " << storeOp << "\n";);
     }
 
-    op->erase();
-
-    LLVM_DEBUG({
-      auto modOp =
-          builder.getBlock()->getParentOp()->getParentOfType<ModuleOp>();
-      llvm::dbgs() << "Module:\n" << modOp << "\n";
-    });
+    cleanUp.insert(op);
 
     return success();
   }
@@ -1125,6 +1095,31 @@ private:
             if (maskOpToErase)
               maskOpToErase->erase();
           });
+    }
+  }
+
+  void finalize() {
+    // Cleanup unused operations.
+    bool erasedOperation;
+    do {
+      erasedOperation = false;
+      SmallPtrSet<Operation *, 8> erased;
+      for (Operation *op : cleanUp) {
+        if (!op->getUsers().empty() || !op->getRegions().empty())
+          continue;
+
+        erased.insert(op);
+        op->erase();
+        erasedOperation = true;
+      }
+      cleanUp.remove_if([&](Operation *op) { return erased.contains(op); });
+    } while (erasedOperation);
+
+    // Remove operations that contain a region.
+    for (Operation *op : cleanUp) {
+      if (!op->getUsers().empty())
+        continue;
+      op->erase();
     }
   }
 
@@ -1264,11 +1259,11 @@ TritonRaiseBlockPointer::visitAddPointerOperand(tt::MakeRangeOp rangeOp,
          "Expect make_range op to always return tensor of stride 1");
 
   state.offsets.push_back(
-      findOrCreateConstant(loc, start, offsetBitwidth, builder));
-  state.strides.push_back(
-      findOrCreateConstant(loc, stride, shapeAndStridesBitwidth, builder));
-  state.shape.push_back(
-      findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder));
+      tt::intel::findOrCreateIntConstant(loc, start, offsetBitwidth, builder));
+  state.strides.push_back(tt::intel::findOrCreateIntConstant(
+      loc, stride, shapeAndStridesBitwidth, builder));
+  state.shape.push_back(tt::intel::findOrCreateIntConstant(
+      loc, 0, shapeAndStridesBitwidth, builder));
   state.sizes.push_back(shape[0]);
 
   LLVM_DEBUG(llvm::dbgs().indent(2) << "MakeRange state: " << state << "\n";);
@@ -1292,8 +1287,10 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
     return failure();
   }
 
-  Value c0i32 = findOrCreateConstant(loc, 0, offsetBitwidth, builder);
-  Value c0i64 = findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder);
+  Value c0i32 =
+      tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder);
+  Value c0i64 = tt::intel::findOrCreateIntConstant(
+      loc, 0, shapeAndStridesBitwidth, builder);
 
   for (int64_t s : dstShape) {
     state.offsets.push_back(c0i32);
@@ -1369,14 +1366,15 @@ LogicalResult TritonRaiseBlockPointer::visitAddPointerOperand(
   Value offset = convertScalarToDtype(builder, loc, state.scalar, offsetType,
                                       /*isUnsignedCast=*/true);
   state.offsets.push_back(offset);
-  state.offsets.insert(state.offsets.end(), resultType.getShape().size() - 1,
-                       findOrCreateConstant(loc, 0, offsetBitwidth, builder));
-  state.strides.insert(
-      state.strides.end(), resultType.getShape().size(),
-      findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder));
-  state.shape.insert(
-      state.shape.end(), resultType.getShape().size(),
-      findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder));
+  state.offsets.insert(
+      state.offsets.end(), resultType.getShape().size() - 1,
+      tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder));
+  state.strides.insert(state.strides.end(), resultType.getShape().size(),
+                       tt::intel::findOrCreateIntConstant(
+                           loc, 0, shapeAndStridesBitwidth, builder));
+  state.shape.insert(state.shape.end(), resultType.getShape().size(),
+                     tt::intel::findOrCreateIntConstant(
+                         loc, 0, shapeAndStridesBitwidth, builder));
 
   for (int dim : resultType.getShape())
     state.sizes.push_back(dim);
@@ -1403,8 +1401,10 @@ TritonRaiseBlockPointer::visitAddPointerOperand(tt::ExpandDimsOp expandDimsOp,
          "expect changed dimension to be 1 in expand_dims");
 
   // insert dimension info
-  Value c0i32 = findOrCreateConstant(loc, 0, offsetBitwidth, builder);
-  Value c0i64 = findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder);
+  Value c0i32 =
+      tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder);
+  Value c0i64 = tt::intel::findOrCreateIntConstant(
+      loc, 0, shapeAndStridesBitwidth, builder);
   state.offsets.insert(state.offsets.begin() + axis, c0i32);
   state.sizes.insert(state.sizes.begin() + axis, 1);
   state.strides.insert(state.strides.begin() + axis, c0i64);
@@ -1469,9 +1469,10 @@ TritonRaiseBlockPointer::visitAddPointerOperand(tt::BroadcastOp broadcastOp,
         ++srcAxis;
         continue;
       }
-      Value c0i32 = findOrCreateConstant(loc, 0, offsetBitwidth, builder);
-      Value c0i64 =
-          findOrCreateConstant(loc, 0, shapeAndStridesBitwidth, builder);
+      Value c0i32 =
+          tt::intel::findOrCreateIntConstant(loc, 0, offsetBitwidth, builder);
+      Value c0i64 = tt::intel::findOrCreateIntConstant(
+          loc, 0, shapeAndStridesBitwidth, builder);
       state.offsets.insert(
           state.offsets.begin() + axis,
           findOrCreateCast(loc, state.offsets[0],

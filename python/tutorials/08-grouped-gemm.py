@@ -39,13 +39,19 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
 def supports_tma():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    return is_xpu() or (is_cuda() and torch.cuda.get_device_capability()[0] >= 9)
 
 
 def num_sms():
     if is_cuda():
         return torch.cuda.get_device_properties("cuda").multi_processor_count
+    if is_xpu():
+        return torch.xpu.get_device_properties("xpu").gpu_eu_count
     return 148
 
 
@@ -271,20 +277,20 @@ def grouped_matmul_tma_kernel(
             b_ptr = tl.load(group_b_ptrs + g).to(tl.pointer_type(dtype))
             c_ptr = tl.load(group_c_ptrs + g).to(tl.pointer_type(dtype))
 
-            a_desc = tl._experimental_make_tensor_descriptor(
+            a_desc = tl.make_tensor_descriptor(
                 a_ptr,
                 shape=[gm, gk],
                 strides=[lda, 1],
                 block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
             )
 
-            b_desc = tl._experimental_make_tensor_descriptor(
+            b_desc = tl.make_tensor_descriptor(
                 b_ptr,
                 shape=[gn, gk],
                 strides=[ldb, 1],
                 block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
             )
-            c_desc = tl._experimental_make_tensor_descriptor(
+            c_desc = tl.make_tensor_descriptor(
                 c_ptr,
                 shape=[gm, gn],
                 strides=[ldc, 1],
@@ -349,9 +355,11 @@ def group_gemm_tma_fn(group_A, group_B):
         g_sizes += [M, N, K]
         g_lds += [A.stride(0), B.stride(0), C.stride(0)]
     # note these are device tensors
-    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE)
-    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE)
-    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE)
+    # Required to avoid exception, see:
+    # https://discuss.pytorch.org/t/torch-tensor-throws-runtimeerror-overflow-when-unpacking-long-exception/209386
+    d_a_ptrs = torch.tensor(A_addrs, device=DEVICE, dtype=torch.uint64)
+    d_b_ptrs = torch.tensor(B_addrs, device=DEVICE, dtype=torch.uint64)
+    d_c_ptrs = torch.tensor(C_addrs, device=DEVICE, dtype=torch.uint64)
     d_g_sizes = torch.tensor(g_sizes, dtype=torch.int32, device=DEVICE)
     d_g_lds = torch.tensor(g_lds, dtype=torch.int32, device=DEVICE)
 
@@ -399,7 +407,7 @@ for i in range(group_size):
 if supports_tma():
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
-        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=0)
+        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-3)
 
 
 # only launch the kernel, no tensor preparation here to remove all overhead

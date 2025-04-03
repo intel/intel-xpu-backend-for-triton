@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import itertools
 import os
 
@@ -198,7 +199,7 @@ class Mark:
         self.benchmarks = benchmarks
 
     # pylint: disable=too-many-branches
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
              save_precision=6, **kwrags):
         import matplotlib.pyplot as plt
         import pandas as pd
@@ -244,6 +245,7 @@ class Mark:
             rows += row_vals["CV"][0]
             df.loc[len(df)] = list(x) + rows
 
+        filename = f"{bench.plot_name}_{run_counter}"
         if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
@@ -269,7 +271,7 @@ class Mark:
             if show_plots:
                 plt.show()
             if save_path:
-                plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
+                plt.savefig(os.path.join(save_path, f"{filename}.png"))
         # df = df[x_names + bench.line_names]
         if diff_col and df.shape[1] == 2:
             col0, col1 = df.columns.tolist()
@@ -279,38 +281,45 @@ class Mark:
             print(bench.plot_name + ":")
             print(df.to_string())
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
-                      index=False)
+            df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, save_path="", return_df=False, **kwargs):
-        save_path = save_path_from_args(save_path)
+    def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, **kwargs):
+        args = parse_args()
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
 
-        for bench in benchmarks:
-            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
-
-        if save_path:
+        if args.reports:
             # Create directory if it doesn't exist
-            os.makedirs(save_path, exist_ok=True)
-            with open(os.path.join(save_path, "results.html"), "w", encoding="utf-8") as html:
-                html.write("<html><body>\n")
-                for bench in benchmarks:
-                    html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
-                html.write("</body></html>\n")
+            os.makedirs(args.reports, exist_ok=True)
+
+        for bench in benchmarks:
+            benchmark_dfs = []
+            for run_counter in range(args.n_runs):
+                df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
+                df["datetime"] = datetime.datetime.now()
+                df["run_counter"] = run_counter + 1
+                benchmark_dfs.append(df)
+
+            if args.reports:
+                import pandas as pd
+
+                merged_df = pd.concat(benchmark_dfs, axis=0)
+                merged_df.to_csv(os.path.join(args.reports, f"{bench.plot_name}.csv"),
+                                 float_format=f"%.{save_precision}f", index=False)
+            result_dfs.extend(benchmark_dfs)
 
         if return_df:
-            return result_dfs[0] if has_single_bench else result_dfs
+            if len(result_dfs) == 1:
+                return result_dfs[0]
+            return result_dfs
 
         return None
 
 
-def save_path_from_args(save_path: str):
-    """Returns a save path that is specified as an argument or via --reports comman line option."""
-    if save_path:
-        return save_path
+def parse_args():
+    """Parses arguments via CLI, allows save_path overloading to `reports`."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--reports",
@@ -318,5 +327,10 @@ def save_path_from_args(save_path: str):
         default="",
         help="directory to save reports",
     )
-    args = parser.parse_args()
-    return args.reports
+    parser.add_argument(
+        "--n_runs",
+        type=int,
+        default=1,
+        help="number of runs for this benchmark",
+    )
+    return parser.parse_args()

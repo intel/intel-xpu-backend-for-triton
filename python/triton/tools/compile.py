@@ -53,6 +53,7 @@ if __name__ == "__main__":
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
     parser.add_argument("--grf-mode", "-gm", type=str, default="large", help="Detemine spv build flags")
+    parser.add_argument("--generate-spv", "-gspv", type=bool, default=True, help="Cache SPV or native binary for XPU")
     args = parser.parse_args()
 
     out_name = args.out_name if args.out_name else args.kernel_name
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     if is_xpu():
         opts = {
             "num_warps": args.num_warps, "num_stages": args.num_stages, "threads_per_warp": args.threads_per_warp,
-            "grf_mode": args.grf_mode
+            "grf_mode": args.grf_mode, "generate_native_code": not args.generate_spv
         }
     ccinfo = triton.compile(src, options=opts)
     if is_cuda():
@@ -194,6 +195,7 @@ if __name__ == "__main__":
             "gridX": grid[0],
             "gridY": grid[1],
             "gridZ": grid[2],
+            "is_spv": "true" if args.generate_spv else "false",
             "_placeholder": "",
         }
         for ext in ['h', 'cpp']:

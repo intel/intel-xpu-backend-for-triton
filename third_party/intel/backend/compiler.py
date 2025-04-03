@@ -70,7 +70,11 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.generate_native_code = bool(os.getenv("TRITON_XPU_GEN_NATIVE_CODE", self.generate_native_code))
+        generate_native_code_env = os.getenv("TRITON_XPU_GEN_NATIVE_CODE")
+        if generate_native_code_env is not None:
+            self.generate_native_code = generate_native_code_env == "1"
+        # ensure generate native code setting is communicated to the external compiler library
+        os.environ["TRITON_XPU_GEN_NATIVE_CODE"] = "1" if self.generate_native_code else "0"
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -223,7 +227,10 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_combine(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         if raise_block_ptr_flags['enabled']:
             ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False
@@ -264,6 +271,18 @@ class XPUBackend(BaseBackend):
         # Overwrite the threads_per_warp option with the module annotation.
         opt.threads_per_warp = intel.get_threads_per_warp(mod)
 
+        # Check threads_per_warp and num_threads are within limits.
+        if opt.threads_per_warp not in properties['sub_group_sizes']:
+            raise ValueError(
+                f"threads_per_warp={opt.threads_per_warp} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
+            )
+        if opt.num_warps > properties['max_num_sub_groups']:
+            raise ValueError(
+                f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
+            )
+        if opt.threads_per_warp * opt.num_warps > properties['max_work_group_size']:
+            raise ValueError(f"Kernel threads number exceeds the limit ({properties['max_work_group_size']})")
+
         # Run the TTIR -> TTGIR pass pipeline.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -288,14 +307,14 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
-            intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
+        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
+            intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
@@ -318,10 +337,6 @@ class XPUBackend(BaseBackend):
             srcMgr = llvm.source_mgr()
             ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
-        # FIXME: Advanced path drops tensor layouts, so this will crash on some
-        # operations being used, e.g., convert_layout.
-        if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
-            intel.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky

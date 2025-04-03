@@ -16,6 +16,23 @@ static std::optional<int64_t> getIntAttr(const OpFoldResult ofr) {
 
 namespace mlir::triton::intel {
 
+Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
+                              OpBuilder &builder) {
+  Block *block = builder.getInsertionBlock();
+  const Block::iterator insertPoint = builder.getInsertionPoint();
+
+  auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
+    if (auto cstOp = dyn_cast<arith::ConstantIntOp>(op))
+      return cstOp.value() == val &&
+             cstOp.getType().getIntOrFloatBitWidth() == bitWidth;
+    return false;
+  });
+
+  return (it != insertPoint)
+             ? cast<arith::ConstantIntOp>(*it)
+             : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
+}
+
 std::optional<int64_t> getFoldedConstantValue(Operation *op) {
   SmallVector<OpFoldResult> results;
   if (failed(op->fold(results)))
@@ -50,6 +67,7 @@ bool isConstant(Value val, int64_t expected) {
 }
 
 Value getFinalValue(Value value) {
+  assert(value && "Expecting a valid value");
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
     // look init values outside the loop

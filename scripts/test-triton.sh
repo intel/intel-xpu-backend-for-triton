@@ -208,6 +208,9 @@ run_core_tests() {
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
     pytest -k "not test_disam_cubin" --verbose tools
 
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
+    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
+
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
   pytest --device xpu .
@@ -286,11 +289,8 @@ run_benchmark_gemm() {
   echo "Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
-  echo "Advanced path:"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    IGC_VISAOptions=" -enableBCR -nolocalra" \
-    IGC_DisableLoopUnroll=1 \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
+  echo "GEMM with tensor of pointer:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 }
 
 run_benchmark_attention() {

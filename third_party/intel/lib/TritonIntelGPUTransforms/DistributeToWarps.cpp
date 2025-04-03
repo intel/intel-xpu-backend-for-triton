@@ -39,8 +39,9 @@ SmallVector<int64_t> getSizePerWarp(RankedTensorType type, Attribute layout) {
   SmallVector<int64_t> sizePerWarp;
   if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     const auto &sizePerThread = blockedLayout.getSizePerThread();
-    const SmallVector<unsigned> &threadsPerWarp =
-        blockedLayout.getThreadsPerWarp();
+    const SmallVector<unsigned> threadsPerWarp{
+        blockedLayout.getThreadsPerWarp().begin(),
+        blockedLayout.getThreadsPerWarp().end()};
     for (auto [lhs, rhs] : llvm::zip(sizePerThread, threadsPerWarp))
       sizePerWarp.push_back(lhs * rhs);
   } else if (auto dotLayout = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
@@ -119,7 +120,7 @@ SmallVector<Value> distributeOffset(const SmallVector<Value> &oldOffsets,
   Attribute layout = tensorType.getEncoding();
   if (auto dotEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(layout))
     layout = dotEncoding.getParent();
-  const SmallVector<unsigned> &warpsPerCTA = ttg::getWarpsPerCTA(layout);
+  auto warpsPerCTA = cast<ttg::BlockedEncodingAttr>(layout).getWarpsPerCTA();
   size_t dims = warpsPerCTA.size();
   assert(dims <= 2 && "no more than 2D shape");
 
@@ -210,7 +211,8 @@ void distributeMakeRangeOp(tt::MakeRangeOp op, Value warpId) {
   auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(tensorTy.getEncoding());
   assert(sliceLayout && "Expected slice layout");
 
-  auto parentWarpsPerCTA = ttg::getWarpsPerCTA(sliceLayout.getParent());
+  auto parentWarpsPerCTA =
+      cast<ttg::BlockedEncodingAttr>(sliceLayout.getParent()).getWarpsPerCTA();
   assert(parentWarpsPerCTA.size() == 2 && "Only slice of 2D layout supported");
   assert(parentWarpsPerCTA.back() == 1 &&
          "Warp distribution on second dimensions unsupported");

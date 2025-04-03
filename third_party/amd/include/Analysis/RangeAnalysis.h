@@ -7,6 +7,7 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 namespace mlir::triton::AMD {
+
 /// This struct (analysis) adapt's upstream's IntegerRangeAnalysis (inferring
 /// lower/upperbounds on integer constants) to our needs.
 /// Specifically there are 2 points of extension:
@@ -118,7 +119,13 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
 
 std::optional<SmallVector<ConstantIntRanges>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
+
 bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
+
+bool isEmptyInitializedRange(ConstantIntRanges rv);
+
+void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
+                                    DataFlowSolver *solver);
 
 } // namespace mlir::triton::AMD
 

@@ -1,12 +1,16 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/LogicalResult.h"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
@@ -271,7 +275,8 @@ struct CanonicalizeConvertFromConvert
       // memory side-effects between the LocalLoad op and the ConvertLayout op
       rewriter.setInsertionPoint(arg);
       rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op->getResult(0).getType(),
-                                               sharedLoad.getSrc());
+                                               sharedLoad.getSrc(),
+                                               sharedLoad.getToken());
 
       return success();
     }
@@ -689,6 +694,90 @@ LogicalResult WarpSpecializeOp::verify() {
   return success();
 }
 
+LogicalResult WarpSpecializeOp::canonicalize(WarpSpecializeOp op,
+                                             PatternRewriter &b) {
+  // Propagate unused results and captures by removing them from the op.
+  llvm::BitVector unusedArgs(op.getNumOperands());
+  llvm::BitVector unusedResults(op.getNumResults());
+  for (auto [i, result] : llvm::enumerate(op.getResults())) {
+    if (result.use_empty())
+      unusedResults.set(i);
+  }
+  // Remove duplicate captures.
+  DenseMap<Value, unsigned> uniqueCaptures;
+  for (auto [i, capture] : llvm::enumerate(op.getExplicitCaptures())) {
+    auto noUseInRegion = [i = i](Region *region) {
+      return region->getArgument(i).use_empty();
+    };
+    if (llvm::all_of(op.getPartitionRegions(), noUseInRegion)) {
+      unusedArgs.set(i);
+      continue;
+    }
+
+    auto [it, inserted] = uniqueCaptures.try_emplace(capture, i);
+    if (!inserted) {
+      unsigned duplicateIdx = it->second;
+      b.modifyOpInPlace(op, [&, i = i] {
+        for (Region *region : op.getPartitionRegions()) {
+          b.replaceAllUsesWith(region->getArgument(i),
+                               region->getArgument(duplicateIdx));
+        }
+      });
+      unusedArgs.set(i);
+    }
+  }
+  if (unusedArgs.none() && unusedResults.none())
+    return failure();
+
+  if (unusedArgs.any()) {
+    b.modifyOpInPlace(op, [&] {
+      for (Region *region : op.getPartitionRegions())
+        region->front().eraseArguments(unusedArgs);
+      op->eraseOperands(unusedArgs);
+    });
+  }
+
+  if (unusedResults.any()) {
+    for (Block &block : op.getDefaultRegion()) {
+      if (auto yield = dyn_cast<WarpYieldOp>(block.getTerminator())) {
+        b.modifyOpInPlace(yield, [&] { yield->eraseOperands(unusedResults); });
+      }
+    }
+
+    SmallVector<Type> newTypes;
+    for (auto [i, type] : llvm::enumerate(op.getResultTypes())) {
+      if (!unusedResults.test(i))
+        newTypes.push_back(type);
+    }
+    OperationState state(op.getLoc(), op->getName(), op.getOperands(), newTypes,
+                         op->getAttrs());
+    state.addRegion()->takeBody(op.getDefaultRegion());
+    state.addRegion()->takeBody(op.getPartitionOpHolder());
+    auto newOp = cast<WarpSpecializeOp>(b.create(state));
+    unsigned newResultIdx = 0;
+    for (auto [i, result] : llvm::enumerate(op.getResults())) {
+      if (!unusedResults.test(i))
+        result.replaceAllUsesWith(newOp.getResult(newResultIdx++));
+    }
+    assert(newResultIdx == newOp.getNumResults());
+    b.eraseOp(op);
+  }
+
+  return success();
+}
+
+void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
+                             TypeRange resultTypes,
+                             ArrayRef<int32_t> partitionNumWarps,
+                             unsigned partitionNumRegions) {
+  build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
+        partitionNumWarps, /*warpGroupStartIds=*/{});
+  OpBuilder::InsertionGuard guard(builder);
+  Block *container = builder.createBlock(state.regions.back().get());
+  builder.create<WarpSpecializePartitionsOp>(state.location,
+                                             partitionNumRegions);
+}
+
 ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand> operands;
   SMLoc operandLoc = p.getCurrentLocation();
@@ -778,7 +867,7 @@ LogicalResult WarpYieldOp::verify() {
 static size_t getSharedMemorySize(Type type) {
   if (isa<IntegerType, FloatType>(type))
     return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
-  if (isa<PointerType>(type))
+  if (isa<PointerType, TensorDescType>(type))
     return 8;
   if (auto desc = dyn_cast<MemDescType>(type)) {
     if (!isa<SharedMemorySpaceAttr>(desc.getMemorySpace()))
