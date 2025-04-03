@@ -468,7 +468,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
         elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
                 triton.runtime.driver.active.utils.get_device_properties(
                     triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
-            pytest.skip("Not enough shared memory")
+            pytest.xfail("Not enough shared memory")
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
