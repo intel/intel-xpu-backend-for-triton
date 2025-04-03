@@ -5,9 +5,9 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <TritonGENToLLVM/GenIntrinsicHelper.h>
 #include <optional>
 
 using namespace mlir;
@@ -311,16 +311,21 @@ private:
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
     unsigned repClusterInner = 0u;
+    bool isOperandA = false;
+    bool isOperandB = false;
+    bool isFToTF32Enabled = false;
     switch (opIdx) {
     case DpasEncodingAttr::OpIdx::OperandA:
       // operand A
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = 1;
+      isOperandA = true;
       break;
     case DpasEncodingAttr::OpIdx::OperandB:
       // operand B
       repClusterInner = 1;
       repClusterOuter = repCluster[rank - 1];
+      isOperandB = true;
       break;
     case DpasEncodingAttr::OpIdx::OperandC:
       // operand C
@@ -334,6 +339,11 @@ private:
         totalElems /
         ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
+    // dot3d precision loss
+    isFToTF32Enabled = elemTy.isFloat(32) &&
+                       ((rank == 3) ? isOperandA : (isOperandA || isOperandB));
+    if (isFToTF32Enabled)
+      dotOpTy = vec_ty(f32_ty, numElemsPerOperand);
 
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     int offset = 0;
@@ -345,12 +355,11 @@ private:
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
               Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
               for (int k = 0; k < numElemsPerOperand; ++k) {
-                if (elemTy.isFloat(32)) {
+                if (isFToTF32Enabled) {
                   auto f32Val = elems[offset++];
-                  GenISA<llvm::GenISAIntrinsic::ID::GenISA_ftotf32> fToTF32(
-                      rewriter, f32_ty, f32_ty);
                   auto t32Val =
-                      fToTF32(rewriter, loc, f32Val, tb.i32_val(0)).getResult();
+                      rewriter.create<TritonGEN::FToTf32Op>(loc, f32_ty, f32Val)
+                          .getResult();
                   matVal =
                       tb.insert_element(dotOpTy, matVal, t32Val, tb.i32_val(k));
 

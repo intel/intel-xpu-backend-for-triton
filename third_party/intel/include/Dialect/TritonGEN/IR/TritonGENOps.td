@@ -313,4 +313,19 @@ def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
   }];
 }
 
+def TritonGEN_FToTf32Op : TritonGEN_Op<"f_to_tf32"> {
+  let summary = "Rounding instruction from float to tensor float (TF32) data format";
+
+  let description = [{
+    The op converts value numerically from
+    a 32-bit floating point type to TF32 with rounding to the nearest even.
+     ```
+  }];
+
+  let arguments = (ins F32:$val);
+  let results = (outs F32:$res);
+  let assemblyFormat = [{
+    $val attr-dict `:` type($val)
+  }];
+}
 #endif // TRITONGEN_OPS
