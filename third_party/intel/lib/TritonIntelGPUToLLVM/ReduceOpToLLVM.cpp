@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <triton/Tools/Sys/GetEnv.hpp>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -176,6 +177,18 @@ private:
     unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
     unsigned threadOffsetOnReductionAxis =
         helper.getThreadOffsetOnReductionAxis();
+
+    bool simdReduce =
+        triton::tools::getBoolEnv("TRITON_INTEL_ENABLE_SIMD_REDUCE");
+
+    if (simdReduce) {
+      auto ret = targetInfo.warpBatchReduce(rewriter, op.getLoc(), accs, op,
+                                            sizeIntraWarps,
+                                            threadOffsetOnReductionAxis);
+      if (ret)
+        return;
+    }
+
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = accs[key];
