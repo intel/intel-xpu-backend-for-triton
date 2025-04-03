@@ -78,6 +78,22 @@ TEST_F(XeAsmFormatTest, MultiLineXe) {
   EXPECT_EQ(values[1], v[2]); // $1 -> v[2]
 }
 
+TEST_F(XeAsmFormatTest, XeSIMDReduce) {
+  auto assemble = mlir::triton::simdReduceAsm(
+      "add", 16, 16, Float16Type::get(&ctx), XeArch::Xe);
+  llvm::outs() << "johnlu:" << assemble;
+  assemble = mlir::triton::simdReduceAsm("max", 16, 16, Float32Type::get(&ctx),
+                                         XeArch::Xe);
+  llvm::outs() << "johnlu:" << assemble;
+  assemble = mlir::triton::simdReduceAsm("add", 32, 32, Float32Type::get(&ctx),
+                                         XeArch::Xe2);
+  llvm::outs() << "johnlu:" << assemble;
+  assemble = mlir::triton::simdReduceAsm("max", 32, 32, Float32Type::get(&ctx),
+                                         XeArch::Xe2);
+  llvm::outs() << "johnlu:" << assemble;
+  // mlir::triton::simdReduceAsm("max", 16, 16, IntegerType::get(&ctx, 32));
+}
+
 } // namespace triton
 } // namespace mlir
 
