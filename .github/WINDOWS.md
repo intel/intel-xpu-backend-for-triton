@@ -157,7 +157,7 @@ python -c 'import torch;print(torch.__version__)'
 Install build dependencies:
 
 ```
-pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
+pip install -U wheel pybind11 cython cmake
 ```
 
 Build and install Triton:
