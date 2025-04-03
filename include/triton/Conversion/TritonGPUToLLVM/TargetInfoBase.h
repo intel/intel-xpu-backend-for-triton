@@ -66,6 +66,12 @@ public:
                           unsigned numLaneToReduce,
                           unsigned interleave) const = 0;
 
+  virtual bool
+  warpBatchReduce(RewriterBase &rewriter, Location loc,
+                  std::map<SmallVector<unsigned>, SmallVector<Value>> &acc,
+                  triton::ReduceOp op, unsigned numLaneToReduce,
+                  unsigned interleave) const = 0;
+
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
