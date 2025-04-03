@@ -8,9 +8,7 @@
 
 #include "SPIRVTargetInfo.h"
 #include "SPIRVSubgroupOps.h"
-#include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;

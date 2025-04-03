@@ -562,11 +562,15 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
     if MODE == 'bwd':
         sm_scale = 1.3
     quantiles = [0.5, 0.0, 1.0]
+    # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
+    torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
+    ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
+    if MODE == 'bwd':
+        torch_o = torch_fn()
+        torch_do = torch.randn_like(torch_o)
+        torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
     if provider == 'onednn':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
-            lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=
-                                                                     CAUSAL, scale=sm_scale), m_warmup=10, n_repeat=10,
-            quantiles=quantiles)
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'triton':
         triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
@@ -574,13 +578,6 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
-        if MODE == 'bwd':
-            torch_o = torch_fn()
-            torch_do = torch.randn_like(torch_o)
-            torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
         if MODE == 'fwd':
             atol = 1e-1 if N_CTX == 16384 else 1e-2
             benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')

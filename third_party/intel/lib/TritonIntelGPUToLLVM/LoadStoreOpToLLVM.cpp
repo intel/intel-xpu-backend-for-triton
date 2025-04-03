@@ -220,6 +220,8 @@ struct LoadStoreConversionBase {
           return accumulate;
         };
 
+    SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
+                                        boundaryCheck.end());
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -242,18 +244,25 @@ struct LoadStoreConversionBase {
       ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
                           valueElemTy, blockPtr[blockBase], offset);
 
-      if (boundaryCheck.size() > 0) {
+      if (boundaryProtect.size() > 0) {
         // Get the LLVM values for mask
+        unsigned dim = 0;
         maskElems.push_back(linearize(
             indicesInTensor,
             {blockPtr.begin() + blockShape, blockPtr.begin() + blockStride},
             b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              // mask = mask && (index < shape) && idx >= 0
-              auto is_pos_idx = b.icmp_sge(index, b.int_val(32, 0));
-              return b.and_(
-                  b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
-                  is_pos_idx);
+              if (boundaryProtect.contains(dim++)) {
+                // mask = mask && (index < shape) && idx >= 0
+                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+                return b
+                    .and_(
+                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
+                        is_pos_idx)
+                    .getResult();
+              }
+
+              return mask;
             }));
       }
     }
@@ -295,8 +304,7 @@ struct PrefetchOpConversion
       triton::gpu::intel::PrefetchOp>::ConvertTritonGPUOpToLLVMPattern;
 
   PrefetchOpConversion(
-      TritonGPUToLLVMTypeConverter &converter,
-      const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
@@ -473,8 +481,7 @@ struct LoadOpToBlockIOConversion
   using ValueTable = std::map<std::pair<int, int>, Value>;
 
   LoadOpToBlockIOConversion(
-      TritonIntelGPUToLLVMTypeConverter &converter,
-      const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
@@ -548,9 +555,11 @@ struct LoadOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
-    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    SmallVector<unsigned> dpasWarpsOrder =
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -567,7 +576,7 @@ struct LoadOpToBlockIOConversion
                                               dpasInstShape[1]};
     unsigned elemsPerLanePerDPASInst =
         product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
-    TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    LLVMTypeConverter *typeConverter = getTypeConverter();
     Type unpackedDPASOperandType = LLVM::getFixedVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
@@ -964,8 +973,7 @@ struct LoadOpConversion
   using ValueTable = std::map<std::pair<int, int>, Value>;
 
   LoadOpConversion(
-      TritonIntelGPUToLLVMTypeConverter &converter,
-      const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit, bool oneMatrixPerLoadForBT)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
@@ -1038,10 +1046,11 @@ struct LoadOpConversion
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder =
-        triton::gpu::getWarpOrder(tensorType);
-    int threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1159,7 +1168,7 @@ struct LoadOpConversion
         }
       }
 
-      TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+      LLVMTypeConverter *typeConverter = getTypeConverter();
       Type llvmResultStructTy = typeConverter->convertType(op.getType());
       Value resultStruct = packLLElements(
           loc, typeConverter, unpackedLoadedVals, rewriter, llvmResultStructTy);
@@ -1176,7 +1185,7 @@ struct LoadOpConversion
                                               dpasInstShape[1]};
     unsigned elemsPerLanePerDPASInst =
         product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
-    TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    LLVMTypeConverter *typeConverter = getTypeConverter();
     Type unpackedDPASOperandType = LLVM::getFixedVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
@@ -1640,8 +1649,7 @@ struct StoreOpConversion
       triton::StoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
   StoreOpConversion(
-      TritonIntelGPUToLLVMTypeConverter &converter,
-      const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
@@ -1660,7 +1668,7 @@ struct StoreOpConversion
       return failure();
 
     auto dpasLayout = cast<DpasEncodingAttr>(tensorType.getEncoding());
-    TritonGPUToLLVMTypeConverter *typeConverter = getTypeConverter();
+    LLVMTypeConverter *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
 
     Type eltTy = tensorType.getElementType();
@@ -1670,11 +1678,13 @@ struct StoreOpConversion
     size_t rank = tensorShape.size();
     unsigned numElems = getTotalElemsPerThread(tensorType);
     SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
-    const SmallVector<unsigned> warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
-    SmallVector<unsigned> dpasWarpsOrder = triton::gpu::getOrder(tensorType);
-    unsigned threadsPerWarp = triton::gpu::getWarpSize(dpasLayout);
+    SmallVector<unsigned> dpasWarpsOrder =
+        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+    unsigned threadsPerWarp =
+        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1919,8 +1929,7 @@ struct AtomicCASOpConversion
       triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
 
   AtomicCASOpConversion(
-      TritonIntelGPUToLLVMTypeConverter &converter,
-      const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter,
@@ -2044,8 +2053,7 @@ struct AtomicRMWOpConversion
       triton::AtomicRMWOp>::ConvertTritonGPUOpToLLVMPattern;
 
   AtomicRMWOpConversion(
-      TritonIntelGPUToLLVMTypeConverter &converter,
-      const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
@@ -2246,7 +2254,8 @@ struct AtomicRMWOpConversion
     auto intPtr = b.ptrtoint(i64_ty, rmwPtr);
     auto lowPtrBits = b.and_(intPtr, b.i64_val(3));
     auto elemIndex = b.trunc(i32_ty, b.lshr(lowPtrBits, b.i64_val(1)));
-    auto alignPtr = b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits));
+    auto alignPtr =
+        b.inttoptr(rmwPtr.getType(), b.sub(intPtr, lowPtrBits).getResult());
     auto firstValInt = b.load(i32_ty, alignPtr, 4, false, false, false, false,
                               LLVM::AtomicOrdering::acquire);
 
@@ -2312,8 +2321,8 @@ struct AtomicRMWOpConversion
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
-    TritonIntelGPUToLLVMTypeConverter &typeConverter,
-    const TargetInfo &targetInfo, RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     PatternBenefit benefit, bool oneMatrixPerLoadForBT) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, StoreOpConversion,

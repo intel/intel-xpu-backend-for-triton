@@ -455,7 +455,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 tt.func @scalar_load_in_bwd_slice(%arg0: tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg1: !tt.tensordesc<tensor<128x128xf8E5M2>>, %arg2: !tt.ptr<i32>) -> tensor<128x128xf32, #blocked> {
   %0 = tt.load %arg2 : !tt.ptr<i32>
-  %1 = tt.experimental_descriptor_load %arg1[%0, %0] : !tt.tensordesc<tensor<128x128xf8E5M2>> -> tensor<128x128xf8E5M2, #blocked1>
+  %1 = tt.descriptor_load %arg1[%0, %0] : !tt.tensordesc<tensor<128x128xf8E5M2>> -> tensor<128x128xf8E5M2, #blocked1>
   %2 = ttg.convert_layout %1 : tensor<128x128xf8E5M2, #blocked1> -> tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
   %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
   %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
@@ -505,5 +505,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<128x256xi8, #blocked2>, tensor<128x8xi8, #blocked1> * tensor<256x128xi8, #blocked>, tensor<128x8xi8, #blocked1> -> tensor<128x128xf32, #blocked>
     tt.return %d : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK{LITERALE}: #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
+  // CHECK-LABEL: dot_reduce
+  tt.func public @dot_reduce(%arg0: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked>
+    %0 = tt.dot %arg0, %arg1, %cst, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x64xf32, #blocked>
+    // ttng.tmem_load %{{.*}} : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #linear>
+    %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f32, %arg3: f32):
+      %2 = arith.addf %arg2, %arg3 : f32
+      tt.reduce.return %2 : f32
+    }) : (tensor<128x64xf32, #blocked>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    tt.return %1 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
   }
 }

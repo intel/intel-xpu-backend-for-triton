@@ -247,11 +247,13 @@ class LayerNorm(torch.autograd.Function):
             raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
         # heuristics for number of warps
         num_warps = min(max(BLOCK_SIZE // 256, 1), 8)
+        if is_xpu():
+            num_warps = 32
         # enqueue kernel
         _layer_norm_fwd_fused[(M, )](  #
             x_arg, y, weight, bias, mean, rstd,  #
             x_arg.stride(0), N, eps,  #
-            BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1)
+            BLOCK_SIZE=BLOCK_SIZE, num_warps=num_warps, num_ctas=1, grf_mode='large')
         ctx.save_for_backward(x, weight, bias, mean, rstd)
         ctx.BLOCK_SIZE = BLOCK_SIZE
         ctx.num_warps = num_warps
@@ -267,8 +269,6 @@ class LayerNorm(torch.autograd.Function):
         if N <= 8192: GROUP_SIZE_M = 96
         if N <= 4096: GROUP_SIZE_M = 128
         if N <= 1024: GROUP_SIZE_M = 256
-        if is_xpu():
-            GROUP_SIZE_M = 256
         # allocate output
         locks = torch.zeros(2 * GROUP_SIZE_M, dtype=torch.int32, device=w.device)
         _dw = torch.zeros((GROUP_SIZE_M, N), dtype=x.dtype, device=w.device)
@@ -285,13 +285,13 @@ class LayerNorm(torch.autograd.Function):
             x_arg.stride(0), N,  #
             BLOCK_SIZE_N=ctx.BLOCK_SIZE,  #
             GROUP_SIZE_M=GROUP_SIZE_M,  #
-            num_warps=ctx.num_warps)
-        grid = lambda meta: [triton.cdiv(N, meta['BLOCK_SIZE_N'])]
+            num_warps=ctx.num_warps, grf_mode='large')
+        grid = lambda meta: (triton.cdiv(N, meta['BLOCK_SIZE_N']), )
         # accumulate partial sums in separate kernel
         _layer_norm_bwd_dwdb[grid](
             _dw, _db, dw, db, min(GROUP_SIZE_M, M), N,  #
             BLOCK_SIZE_M=32,  #
-            BLOCK_SIZE_N=128, num_ctas=1)
+            BLOCK_SIZE_N=128, num_warps=ctx.num_warps, num_ctas=1, grf_mode='large')
         return dx, None, dw, db, None
 
 

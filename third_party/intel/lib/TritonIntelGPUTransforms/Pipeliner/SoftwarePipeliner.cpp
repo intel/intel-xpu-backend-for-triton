@@ -1,4 +1,3 @@
-
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
@@ -6,7 +5,6 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 
