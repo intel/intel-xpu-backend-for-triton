@@ -179,8 +179,9 @@ def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constex
 def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device, BLOCK_SIZE=4096):
 
     dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device=device)
+    device_ = device if src_dtype == tl.bfloat16 else None
     downcast_emulated[(src.shape[0] // BLOCK_SIZE,)](
-        triton.reinterpret(src, src_dtype), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias, device_=device)
+        triton.reinterpret(src, tl.float32), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias, device_=device_)
     # 0x80 in float8e4b8 or float8e5b16 represents inf/nan. downcast_emulated kernel will
     # convert -0. in higher precision to 0x80 and thus need to fix the result to 0.
     if dst_dtype == tl.float8e4b8 or dst_dtype == tl.float8e5b16:
@@ -243,7 +244,7 @@ def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, 
     else:
         src = launch_type_convert_triton(src, src_dtype, tl.float32, device=device)
 
-    dst2 = launch_downcast_emulated(src, tl.float32, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
+    dst2 = launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device=device)
 
     dst = launch_upcast_emulated(dst, exponent_bits, mantissa_bits, exponent_bias, device=device)
     dst2 = launch_upcast_emulated(dst2, exponent_bits, mantissa_bits, exponent_bias, device=device)
