@@ -5816,7 +5816,6 @@ def test_num_threads(device):
 def test_globaltimer(device):
     if is_hip():
         pytest.skip("test_globaltimer is not supported in HIP")
-    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out1, Out2):
@@ -5831,13 +5830,12 @@ def test_globaltimer(device):
     out2 = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
     h = kernel[(1, )](out1, out2)
     assert out2[0] > 0
-    assert h.asm["ptx"].count("%globaltimer") == 2
+    assert h.asm["llir"].count("%%tsc") == 2
 
 
 def test_smid(device):
     if is_hip():
         pytest.skip("test_smid is not supported in HIP")
-    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out):
@@ -5846,7 +5844,7 @@ def test_smid(device):
     out = to_triton(np.zeros((1024, ), dtype=np.int32), device=device)
     h = kernel[(out.shape[0], )](out)
     assert out.sort()[0].unique().shape[0] > 0
-    assert h.asm["ptx"].count("%smid") == 1
+    assert h.asm["llir"].count("%%sr0") == 1
 
 
 # -----------------------
