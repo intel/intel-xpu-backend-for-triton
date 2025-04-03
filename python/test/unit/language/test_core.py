@@ -4751,7 +4751,10 @@ def test_assume(device):
     if is_interpreter():
         return
 
-    assert 'llvm.assume' in pgm.asm['llir']
+    assert 'llvm.intr.assume' in pgm.asm['ttgir']
+    # stream pipeliner on AMD folds true cmpi ops to %true (Which llvm itself then dces)
+    if not is_hip():
+        assert 'llvm.assume' in pgm.asm['llir']
 
 
 # ---------------
