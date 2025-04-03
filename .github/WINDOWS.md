@@ -164,7 +164,7 @@ Build and install Triton:
 
 ```
 cd python
-pip install -v --no-build-isolation '.[build,tests,tutorials]'
+pip install -v '.[build,tests,tutorials]'
 cd ..
 ```
 
