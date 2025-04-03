@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
+
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
@@ -110,6 +112,175 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
   Value blockId = rewriter.create<::mlir::gpu::BlockIdOp>(loc, dims[axis]);
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+}
+
+bool TargetInfo::warpBatchReduce(
+    RewriterBase &rewriter, Location loc,
+    std::map<SmallVector<unsigned>, SmallVector<Value>> &acc,
+    triton::ReduceOp op, unsigned numLaneToReduce, unsigned interleave) const {
+  // No horizontal reduce required.
+  if (numLaneToReduce == 1)
+    return false;
+  // Horizontal reduce with interleave stride not supported.
+  if (interleave > 1)
+    return false;
+  // Check if it is a simple reduce operation supported by
+  // TritonGEN::SubGroupReduceOp.
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return false;
+  Region &combineOp = op.getCombineOp();
+  if (combineOp.getBlocks().size() > 1)
+    return false;
+  Block &block = *combineOp.begin();
+  Operation *yield = block.getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return false;
+  if (reduceOp->getOperand(0) != block.getArgument(0) ||
+      reduceOp->getOperand(1) != block.getArgument(1))
+    return false;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+    return false;
+
+  // It is only experimental code supports threads_per_warp=16
+  if (warpSize != 16)
+    return false;
+
+  if (acc.size() == 16 && isa<arith::AddFOp, arith::MaxNumFOp>(reduceOp)) {
+
+    // Group the acc in batch.
+    SmallVector<Value> grouped_accs;
+    for (auto it : acc) {
+      const SmallVector<unsigned> &key = it.first;
+      SmallVector<Value> &val = acc[key];
+      assert(val.size() == 1 && "acc size has to be 1 for ungrouped input");
+      grouped_accs.push_back(val[0]);
+    }
+
+    VectorType reduceTy =
+        vec_ty(grouped_accs[0].getType(), grouped_accs.size());
+    Value batchedReduceVal = rewriter.create<LLVM::UndefOp>(loc, reduceTy);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    for (unsigned i = 0; i < grouped_accs.size(); ++i) {
+      batchedReduceVal = b.insert_element(reduceTy, batchedReduceVal,
+                                          grouped_accs[i], b.i32_val(i));
+    }
+    XeBuilder vISABuilder;
+    std::string batchedHorizontalReduce;
+    if (isa<arith::AddFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
+
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "add (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else if (isa<arith::MaxNumFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
+
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "max (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else {
+      llvm_unreachable("batched reduce WIP");
+    }
+
+    auto &bReduceOp = *vISABuilder.create<>(batchedHorizontalReduce);
+    auto res = vISABuilder.newOperand("=rw.u");
+    auto in = vISABuilder.newOperand(batchedReduceVal, "rw");
+    bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
+    Value ret = vISABuilder.launch(rewriter, loc, reduceTy, false);
+    Type resultTy = reduceTy.getElementType();
+    for (unsigned i = 0; i < grouped_accs.size(); ++i) {
+      grouped_accs[i] = b.extract_element(resultTy, ret, b.i32_val(i));
+    }
+
+    unsigned grouped_iter = 0;
+    for (auto it : acc) {
+      const SmallVector<unsigned> &key = it.first;
+      SmallVector<Value> &val = acc[key];
+      val[0] = grouped_accs[grouped_iter++];
+    }
+
+    return true;
+  }
+
+  return false;
 }
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
