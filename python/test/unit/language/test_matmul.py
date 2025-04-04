@@ -321,6 +321,8 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
+@pytest.mark.skipif(is_xpu() and not torch.xpu.get_device_capability()['has_subgroup_matrix_multiply_accumulate'],
+                    reason="MXFP requires subgroup mma for XPU backend")
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if is_xpu():
         if (BLOCK_M, BLOCK_N, BLOCK_K) in {(128, 128, 64), (128, 64, 128)}:
