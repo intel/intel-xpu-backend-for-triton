@@ -65,7 +65,6 @@ def num_sms():
     return 148
 
 
-
 def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K, WS = args["M"], args["N"], args["K"], args.get("WARP_SPECIALIZE", False)
@@ -83,7 +82,6 @@ def _matmul_launch_metadata(grid, kernel, args):
 HAS_TMA_DESC = supports_tma() and hasattr(tl, "nv_tma_desc_type")
 HAS_TENSOR_DESC = (is_xpu() or supports_tma()) and hasattr(tl, "make_tensor_descriptor")
 HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
-
 
 
 # TmaAutoTuneHelper used in htyu's PR #5622
