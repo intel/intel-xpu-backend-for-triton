@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
+#include "intel/include/TritonIntelGPUToLLVM/vISAAsmFormat.h"
+
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
@@ -112,6 +114,175 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
+bool TargetInfo::warpBatchReduce(
+    RewriterBase &rewriter, Location loc,
+    std::map<SmallVector<unsigned>, SmallVector<Value>> &acc,
+    triton::ReduceOp op, unsigned numLaneToReduce, unsigned interleave) const {
+  // No horizontal reduce required.
+  if (numLaneToReduce == 1)
+    return false;
+  // Horizontal reduce with interleave stride not supported.
+  if (interleave > 1)
+    return false;
+  // Check if it is a simple reduce operation supported by
+  // TritonGEN::SubGroupReduceOp.
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return false;
+  Region &combineOp = op.getCombineOp();
+  if (combineOp.getBlocks().size() > 1)
+    return false;
+  Block &block = *combineOp.begin();
+  Operation *yield = block.getTerminator();
+  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
+  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
+      reduceOp->getNumResults() != 1)
+    return false;
+  if (reduceOp->getOperand(0) != block.getArgument(0) ||
+      reduceOp->getOperand(1) != block.getArgument(1))
+    return false;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
+  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+    return false;
+
+  // It is only experimental code supports threads_per_warp=16
+  if (warpSize != 16)
+    return false;
+
+  if (acc.size() == 16 && isa<arith::AddFOp, arith::MaxNumFOp>(reduceOp)) {
+
+    // Group the acc in batch.
+    SmallVector<Value> grouped_accs;
+    for (auto it : acc) {
+      SmallVector<Value> &val = it.second;
+      assert(val.size() == 1 && "acc size has to be 1 for ungrouped input");
+      grouped_accs.push_back(val[0]);
+    }
+
+    VectorType reduceTy =
+        vec_ty(grouped_accs[0].getType(), grouped_accs.size());
+    Value batchedReduceVal = rewriter.create<LLVM::UndefOp>(loc, reduceTy);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    for (unsigned i = 0; i < grouped_accs.size(); ++i) {
+      batchedReduceVal = b.insert_element(reduceTy, batchedReduceVal,
+                                          grouped_accs[i], b.i32_val(i));
+    }
+    VISABuilder vISABuilder;
+    std::string batchedHorizontalReduce;
+    if (isa<arith::AddFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
+
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "add (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else if (isa<arith::MaxNumFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
+
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "max (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else {
+      llvm_unreachable("batched reduce WIP");
+    }
+
+    auto &bReduceOp = *vISABuilder.create<>(batchedHorizontalReduce);
+    // The VISA inline asm doesn't support uniform result type. "=rw.u"
+    //    auto res = vISABuilder.newOperand("=rw.u");
+    auto res = vISABuilder.newOperand("=rw");
+    auto in = vISABuilder.newOperand(batchedReduceVal, "rw");
+    bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
+    Type resultTy = reduceTy.getElementType();
+    Value ret = vISABuilder.launch(rewriter, loc, resultTy, false);
+    for (unsigned i = 0; i < grouped_accs.size(); ++i) {
+      // The output of the inline vISA has to be the non-uniform value.
+      // Have to shuffle the result to get the reduce value.
+      grouped_accs[i] = LLVM::intel::shuffleIdx(loc, rewriter, ret, i);
+    }
+
+    unsigned grouped_iter = 0;
+    for (auto it : acc) {
+      SmallVector<Value> &val = it.second;
+      val[0] = grouped_accs[grouped_iter++];
+    }
+  }
+
+  return false;
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
@@ -145,9 +316,122 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
     return false;
 
-  for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
-                           warpSize);
+  if (acc.size() == 16 && isa<arith::AddFOp, arith::MaxNumFOp>(reduceOp)) {
+    VectorType reduceTy = vec_ty(acc[0].getType(), acc.size());
+    Value batchedReduceVal = rewriter.create<LLVM::UndefOp>(loc, reduceTy);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      batchedReduceVal =
+          b.insert_element(reduceTy, batchedReduceVal, acc[i], b.i32_val(i));
+    }
+    VISABuilder vISABuilder;
+    std::string batchedHorizontalReduce;
+    if (isa<arith::AddFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "add (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
+
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "add (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "add (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else if (isa<arith::MaxNumFOp>(reduceOp)) {
+      batchedHorizontalReduce =
+          "{\n"
+          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
+          // 1st round 2x8 + 2x8 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
+          "8)<16;8,1> \n"
+          "max (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
+          "8)<16;8,1> \n"
+
+          // 2nd round 2x2x4 + 2x2x4 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
+          "temp_result(0, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
+          "temp_result(2, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
+          "temp_result(4, 4)<8;4,1> \n"
+          "max (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
+          "temp_result(6, 4)<8;4,1> \n"
+
+          // 3rd round 4x2x2 + 4x2x2 -> 1x16
+          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
+          "temp_result(0, 2)<4;2,1> \n"
+          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
+          "temp_result(2, 2)<4;2,1> \n"
+
+          // 4th round 8x2x1 + 8x2x1 -> 1x16
+          "max (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
+          "temp_result(0, 1)<2;1,0> \n"
+          "}\n";
+    } else {
+      llvm_unreachable("batched reduce WIP");
+    }
+
+    auto &bReduceOp = *vISABuilder.create<>(batchedHorizontalReduce);
+    //    auto res = vISABuilder.newOperand("=rw.u");
+    auto res = vISABuilder.newOperand("=rw");
+    auto in = vISABuilder.newOperand(batchedReduceVal, "rw");
+    bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
+    Type resultTy = reduceTy.getElementType();
+    Value ret = vISABuilder.launch(rewriter, loc, resultTy, true);
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      // The output of the inline vISA has to be the non-uniform value.
+      // Have to shuffle the result to get the reduce value.
+      acc[i] = LLVM::intel::shuffleIdx(loc, rewriter, ret, i);
+    }
+
+  } else {
+    for (unsigned i = 0; i < acc.size(); ++i) {
+      acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+                             warpSize);
+    }
   }
 
   return true;
