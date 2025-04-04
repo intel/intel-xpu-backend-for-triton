@@ -5,16 +5,21 @@ import csv
 import sys
 
 
-def check_report(suite, dtype, mode, test_mode, device, models_file, inductor_log_dir):
-    inductor_log_dir_leaf = Path(inductor_log_dir) / suite / dtype
-    inductor_report_filename = f"inductor_{suite}_{dtype}_{mode}_{device}_{test_mode}.csv"
-    inductor_report_path = Path(inductor_log_dir_leaf / inductor_report_filename)
+def get_inductor_report_path(args) -> Path:
+    inductor_log_dir_leaf = Path(args.inductor_log_dir) / args.suite / args.dtype
+    inductor_report_filename = f"inductor_{args.suite}_{args.dtype}_{args.mode}_{args.device}_{args.test_mode}.csv"
+    return Path(inductor_log_dir_leaf / inductor_report_filename)
+
+
+def check_report(args) -> int:
+    test_mode = args.test_mode
+    inductor_report_path = get_inductor_report_path(args)
 
     subset = []
     report = []
     exitcode = 0
 
-    with open(models_file, encoding="utf-8") as f:
+    with open(args.models_file, encoding="utf-8") as f:
         subset = f.read().splitlines()
 
     with open(inductor_report_path, encoding="utf-8") as f:
@@ -23,7 +28,7 @@ def check_report(suite, dtype, mode, test_mode, device, models_file, inductor_lo
         for l in reader:
             report_with_header.append(l)
         for r in report_with_header[1:]:
-            if r[0] == device:
+            if r[0] == args.device:
                 report.append(r)
 
     test_list = [r[1] for r in report]
@@ -59,8 +64,7 @@ def main():
     argparser.add_argument("--models-file", help="Subset of models list", required=True)
     argparser.add_argument("--inductor-log-dir", help="Inductor test log directory", default="inductor_log")
     args = argparser.parse_args()
-    exitcode = check_report(args.suite, args.dtype, args.mode, args.test_mode, args.device, args.models_file,
-                            args.inductor_log_dir)
+    exitcode = check_report(args)
     print(f"Report check result: {'SUCCESS' if exitcode == 0 else 'FAIL'}")
     sys.exit(exitcode)
 
