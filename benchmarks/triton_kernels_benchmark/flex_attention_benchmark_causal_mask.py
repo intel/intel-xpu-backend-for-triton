@@ -11,6 +11,8 @@ import torch.nn.functional as F
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
 
+torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
+
 # Compile the flex_attention function
 flex_attention = torch.compile(flex_attention, dynamic=False)
 
