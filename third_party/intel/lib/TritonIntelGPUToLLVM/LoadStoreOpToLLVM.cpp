@@ -1234,23 +1234,31 @@ struct LoadOpConversion
         loadResultElemType, packedElemsPerLanePerDPASInst);
 
     // Outer dim: Dim M or N. Inner dim: Dim K.
-    // Round the warp id fit into the tensor shape.
     auto repCluster = dpasLayout.getRepCluster();
-    LLVM_DEBUG(llvm::dbgs() << "repCluster: " << repCluster[0] << ", "
-                            << repCluster[1] << "\n");
     SmallVector<unsigned> warpShape =
         isOperandA ? dpasLayout.getShapeA() : dpasLayout.getShapeB();
-    LLVM_DEBUG({
-      llvm::dbgs() << "warpShape: " << warpShape[0] << ", " << warpShape[1]
-                   << "\n";
-    });
 
     unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
     unsigned dimInner = bool(opIdx) ? rank - 2 : rank - 1;
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "warpsPerCTA: " << warpsPerCTA[dimOuter] << ", "
+                   << warpsPerCTA[dimInner] << "\n";
+      llvm::dbgs() << "tensorShape: " << tensorShape[dimOuter] << ", "
+                   << tensorShape[dimInner] << "\n";
+      llvm::dbgs() << "repCluster: " << repCluster[dimOuter] << ", "
+                   << repCluster[dimInner] << "\n";
+      llvm::dbgs() << "warpShape: " << warpShape[dimOuter] << ", "
+                   << warpShape[dimInner] << "\n";
+    });
+
+    // Round the warp id fit into the tensor shape.
     unsigned outerDimRequiredWarpNum = mlir::ceil<unsigned>(
         tensorShape[dimOuter], warpShape[dimOuter]); // ceil of ratio
+    LLVM_DEBUG(llvm::dbgs() << "tensor to warp shape ratio = " << outerDimRequiredWarpNum << "\n");
     unsigned outerDimWarpNum =
         std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
+    LLVM_DEBUG(llvm::dbgs() << "outerDimWarpNum = " << outerDimRequiredWarpNum << "\n");
     Value outerDimWarpId =
         b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
 
@@ -1494,7 +1502,7 @@ struct LoadOpConversion
     }
     if (newLoadBases.size() > 0) {
       outDims[0] = std::make_pair(outDims[0].first, tensorShape[dimOuter]);
-      outDims[1] = std::make_pair(outDims[1].first, tensorShape[dimInner]);
+      outDims[1] = std::make_pair(outDims[1].first, tensorShape[dimInner]*repCluster[dimInner]);
     }
 
     LLVM_DEBUG({
