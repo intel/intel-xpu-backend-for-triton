@@ -979,10 +979,12 @@ struct LoadOpConversion
   LoadOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      PatternBenefit benefit, bool oneMatrixPerLoadForBT)
+      PatternBenefit benefit, bool oneMatrixPerLoadForBT,
+      bool useTileLoadLinearLayout)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT) {}
+        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
+        useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
@@ -1502,10 +1504,21 @@ struct LoadOpConversion
       }
     });
 
-    // add the bases to the map and replace the tile layout with the new layout
-    bases[kLoad] = newLoadBases;
-    tileLayout = LinearLayout(bases, outDims,
-                              /*requiredSurjective=*/false);
+    // Disable building the load layout if we are not going to use it. Building
+    // the layout manually can cause an error which would abort the pass
+    // pipeline and block us from getting debug info.
+    if (useTileLoadLinearLayout) {
+      // add the bases to the map and replace the tile layout with the new
+      // layout
+      bases[kLoad] = newLoadBases;
+      tileLayout = LinearLayout(bases, outDims,
+                                /*requiredSurjective=*/false);
+    } else {
+      // when linear layouts are disabled generate a single load, so we can have
+      // some reference for linear layout output without generating a layout
+      // that could abort the pass pipeline
+      tileLayout *= LinearLayout::identity1D(1, kLoad, dimOuterStr);
+    }
 
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
@@ -1567,12 +1580,6 @@ struct LoadOpConversion
           const auto offset = tileLayout.apply(
               {{kOffset, 0}, {kIteration, 0}, {kLoad, loadIdx}});
           assert(offset.size() == 2);
-          LLVM_DEBUG({
-            llvm::dbgs() << "x offset from layout: " << offset[0].second
-                         << "\n";
-            llvm::dbgs() << "y offset from layout: " << offset[1].second
-                         << "\n";
-          });
 
           const auto layoutOffsetX = offset[dimInner].second;
           const auto layoutOffsetY = offset[dimOuter].second;
@@ -1589,9 +1596,16 @@ struct LoadOpConversion
               llvm::dbgs() << "y offset: "
                            << outer * repOuterStride + rep * repStride << "\n";
             });
-            offsetY = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                            b.i32_val(layoutOffsetY));
-            offsetX = b.i32_val(layoutOffsetX);
+            if (useTileLoadLinearLayout) {
+              offsetY = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                              b.i32_val(layoutOffsetY));
+              offsetX = b.i32_val(layoutOffsetX);
+            } else {
+              offsetY =
+                  b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                        b.i32_val(outer * repOuterStride + rep * repStride));
+              offsetX = b.i32_val(k * repKStride);
+            }
           } break;
           case DpasEncodingAttr::OpIdx::OperandB: {
             LLVM_DEBUG({
@@ -1599,9 +1613,16 @@ struct LoadOpConversion
                            << outer * repOuterStride + rep * repStride << "\n";
               llvm::dbgs() << "y offset: " << k * repKStride << "\n";
             });
-            offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
-                            b.i32_val(layoutOffsetX));
-            offsetY = b.i32_val(layoutOffsetY);
+            if (useTileLoadLinearLayout) {
+              offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                              b.i32_val(layoutOffsetX));
+              offsetY = b.i32_val(layoutOffsetY);
+            } else {
+              offsetX =
+                  b.add(b.mul(outerDimWarpId, b.i32_val(warpOuterStride)),
+                        b.i32_val(outer * repOuterStride + rep * repStride));
+              offsetY = b.i32_val(k * repKStride);
+            }
           } break;
           case DpasEncodingAttr::OpIdx::OperandC: {
             llvm_unreachable("unexpected OpIdx::OperandC");
@@ -1917,6 +1938,7 @@ struct LoadOpConversion
 
 private:
   bool oneMatrixPerLoadForBT;
+  bool useTileLoadLinearLayout;
 };
 
 struct StoreOpConversion
@@ -2601,7 +2623,8 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit, bool oneMatrixPerLoadForBT) {
+    PatternBenefit benefit, bool oneMatrixPerLoadForBT,
+    bool useTileLoadLinearLayout) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, StoreOpConversion,
                PrefetchOpConversion>(typeConverter, targetInfo,
                                      axisInfoAnalysis, benefit);
@@ -2609,5 +2632,6 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
   patterns.add<LoadOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit.getBenefit() + 2);
   patterns.add<LoadOpConversion>(typeConverter, targetInfo, axisInfoAnalysis,
-                                 benefit, oneMatrixPerLoadForBT);
+                                 benefit, oneMatrixPerLoadForBT,
+                                 useTileLoadLinearLayout);
 }

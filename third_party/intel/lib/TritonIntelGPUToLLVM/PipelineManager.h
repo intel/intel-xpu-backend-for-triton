@@ -166,9 +166,11 @@ private:
 class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
-                                 bool oneMatrixPerLoadForBT)
+                                 bool oneMatrixPerLoadForBT,
+                                 bool useTileLoadLinearLayout)
       : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT) {}
+        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
+        useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
@@ -206,9 +208,9 @@ public:
       intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateElementwiseOpToLLVMPatterns(
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-      intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
-                                               patterns, axisInfoAnalysis,
-                                               benefit, oneMatrixPerLoadForBT);
+      intel::populateLoadStoreOpToLLVMPatterns(
+          typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit,
+          oneMatrixPerLoadForBT, useTileLoadLinearLayout);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
@@ -262,6 +264,7 @@ private:
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
   bool oneMatrixPerLoadForBT = false;
+  bool useTileLoadLinearLayout = true;
 };
 
 } // namespace mlir::triton::intel
