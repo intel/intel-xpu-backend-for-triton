@@ -48,8 +48,9 @@ permissions: read-all
 
 jobs:
   integration-tests:
-    name: Integration tests matrix
-    strategy:
+  name: Integration tests matrix
+  timeout-minutes: 480
+  trategy:
       matrix:
         python: ["3.9"]
     uses: ./.github/workflows/build-test-reusable.yml
