@@ -1,6 +1,6 @@
 ninja
 cmake
-setuptools>=40.8.0
+setuptools>=78.1.0
 wheel
 cmake>=3.18,<4.0
 ninja>=1.11.1
