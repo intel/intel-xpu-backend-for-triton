@@ -1236,6 +1236,10 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
+
+  // FIXME: should this be an assertion instead?
+  // Temporarily added to avoid crashing on some tests.
+  // See issue #3842.
   if (order[0] >= axisInfo->getRank())
     return 1;
 
@@ -1273,9 +1277,14 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
     return 1;
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+
+  // FIXME: should this be an assertion instead?
+  // Temporarily added to avoid crashing on some tests.
+  // See issue #3842.
   auto maskOrder = linAttr.getOrder();
   if (maskOrder[0] >= axisInfo->getRank())
     return 1;
+
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);
