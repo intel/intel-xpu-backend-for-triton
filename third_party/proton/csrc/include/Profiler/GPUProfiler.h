@@ -6,6 +6,7 @@
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
 #include "Utility/Set.h"
+#include <iostream>
 
 #include <atomic>
 #include <deque>
@@ -46,6 +47,11 @@ public:
     return dynamic_cast<ConcreteProfilerT &>(*this);
   }
 
+  ConcreteProfilerT &setSyclQueue(void *syclQueue) {
+    this->syclQueue = syclQueue;
+    return dynamic_cast<ConcreteProfilerT &>(*this);
+  }
+
 protected:
   // OpInterface
   void startOp(const Scope &scope) override {
@@ -70,6 +76,7 @@ protected:
       if (profiler.isOpInProgress())
         return;
       scopeId = Scope::getNewScopeId();
+      std::cout << "\tenterOp:: pushExternId: " << scopeId << "\n";
       profiler.enterOp(Scope(scopeId));
       profiler.correlation.apiExternIds.insert(scopeId);
     }
@@ -77,6 +84,7 @@ protected:
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
+      std::cout << "\texitOp:: popExternId: " << scopeId << "\n";
       profiler.exitOp(Scope(scopeId));
     }
   };
@@ -130,6 +138,7 @@ protected:
 
   static thread_local ThreadState threadState;
   Correlation correlation;
+  void *syclQueue;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid
   // including the cupti header from this header. The cupti header and the

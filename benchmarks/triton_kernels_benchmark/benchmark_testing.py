@@ -3,14 +3,16 @@ import datetime
 import itertools
 import os
 
-from triton.testing import assert_close as triton_assert_close, Benchmark
+import torch
+from torch.profiler import profile, ProfilerActivity, record_function
+import triton
+from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 VERIFY = os.getenv("VERIFY", "1") == "1"
 
 
 def synchronize():
-    import torch
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     elif torch.xpu.is_available():
@@ -18,7 +20,6 @@ def synchronize():
 
 
 def _summarize_statistics(times, quantiles, return_mode):
-    import torch
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if times.numel() > 2:
@@ -53,9 +54,6 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     :type quantiles: list[float]
     """
     assert return_mode in ["min", "max", "mean", "median"]
-    import torch
-    import triton
-    from triton.testing import do_bench as triton_do_bench
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
@@ -109,8 +107,6 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     """
 
     assert return_mode in ["min", "max", "mean", "median"]
-    import torch
-    from torch.profiler import profile, ProfilerActivity, record_function
 
     fn()
     synchronize()
@@ -159,8 +155,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # for correct registration of kernels.
     # For details: https://github.com/pytorch/pytorch/issues/144778
     kernels = [kernel for kernel in kernels if kernel != []]
-    # FIXME: relaxation for new agama release
-    assert len(kernels) >= n_repeat - 1, (
+    assert len(kernels) == n_repeat, (
         f"the profiling number not match; {n_repeat=}, {kernels=}, \n" +
         f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
     # Make the time to the milliseconds.
@@ -201,8 +196,8 @@ class Mark:
     # pylint: disable=too-many-branches
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
              save_precision=6, **kwrags):
-        import matplotlib.pyplot as plt
-        import pandas as pd
+        import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
+        import pandas as pd  # pylint: disable=import-outside-toplevel
         y_vals = []
         for label in bench.ylabel:
             y_mean = [f"{x}-{label}" for x in bench.line_names]
@@ -303,7 +298,7 @@ class Mark:
                 benchmark_dfs.append(df)
 
             if args.reports:
-                import pandas as pd
+                import pandas as pd  # pylint: disable=import-outside-toplevel
 
                 merged_df = pd.concat(benchmark_dfs, axis=0)
                 merged_df.to_csv(os.path.join(args.reports, f"{bench.plot_name}.csv"),
