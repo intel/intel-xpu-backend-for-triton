@@ -1480,21 +1480,19 @@ struct LoadOpConversion
 
       std::vector<std::vector<int32_t>> newLoadBases;
 #if 1
-      // we need more numRepInner. but how much more? and what about for B?
-      llvm::errs() << "inner reps " << numRepInner / numOperandsInnerDimPerLoad
-                   << " vs "
-                   << llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad)
-                   << "\n";
       for (size_t i = 0;
            i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
         newLoadBases.push_back(
-            {0, static_cast<int>((i + 1) * repKStride *
+            {0, static_cast<int>((1 << i) * repKStride *
                                  numOperandsInnerDimPerLoad)});
       }
-      if (numLoadPerOutRepCluster > 1)
-        newLoadBases.push_back({static_cast<int>(repStride), 0});
-      if (numRepOuter > 1)
-        newLoadBases.push_back({static_cast<int>(repOuterStride), 0});
+      for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
+        newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
+      }
+      for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
+        newLoadBases.push_back(
+            {static_cast<int>((1 << i) * repOuterStride), 0});
+      }
 #else
       // TODO: for multiple loads do we multiply by i?
       llvm::errs() << "inner reps " << numRepInner / numOperandsInnerDimPerLoad
