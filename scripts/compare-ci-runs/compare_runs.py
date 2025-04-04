@@ -91,7 +91,7 @@ def parse_pytorch_benchmark_data(config: str, df: pd.DataFrame, file: Path) -> p
     raw_data["suite"] = suite
     raw_data["datatype"] = datatype
     raw_data["mode"] = mode
-    raw_data.rename(columns={"speedup": f"speedup {config}"}, inplace=True)
+    raw_data.rename(columns={"speedup": f"speedup-{config}"}, inplace=True)
 
     return pd.concat([df, raw_data], ignore_index=True)
 
@@ -146,9 +146,16 @@ def parse_directory(triton_benchmark: bool, config: str, directory: Path) -> pd.
     return df
 
 
-def summarize_diff(triton_benchmark: bool, perf_index: str, plot: bool, df: pd.DataFrame, num_col: str, denom_col: str,
-                   numerator: str, denominator: str):
+def get_column_names(perf_index: str, numerator: str, denominator: str):
+    num_col = f"{perf_index}-{numerator}"
+    denom_col = f"{perf_index}-{denominator}"
+    return num_col, denom_col
+
+
+def summarize_diff(perf_index: str, df: pd.DataFrame, numerator: str, denominator: str):
     """Summarize data difference of numerator and denominator."""
+    num_col, denom_col = get_column_names(perf_index, numerator, denominator)
+
     both_failed = df.loc[(df[num_col] == 0.0) & (df[denom_col] == 0.0)]
     print(f"Both failed ({both_failed.shape[0]} configurations):")
     print(both_failed.to_string())
@@ -195,54 +202,60 @@ def summarize_diff(triton_benchmark: bool, perf_index: str, plot: bool, df: pd.D
           f"{numerator}, showing relative difference in {perf_index})")
     print(df.head(print_cfgs))
     print("\n" * 2)
+    return df
 
-    if plot:
-        # pylint: disable=import-outside-toplevel
-        import seaborn as sns
-        import matplotlib.pyplot as plt
-        from matplotlib.backends.backend_pdf import PdfPages
 
-        keys = ["params", "benchmark"] if triton_benchmark else ["suite", "mode", "datatype"]
-        df["xlabel"] = df[keys].agg(", ".join, axis=1)
+def get_filename(perf_index, numerator, denominator) -> str:
+    num_col, denom_col = get_column_names(perf_index, numerator, denominator)
+    return f"performance-plot-{num_col}-{denom_col}.pdf".lower()
 
-        # Sort by configuration
-        order = list(df["xlabel"].unique())
-        order.sort()
-        filename = f"performance-plot-{num_col}-{denom_col}.pdf".lower()
-        with PdfPages(filename) as pdf:
-            fig = plt.figure()
-            plt.xticks(rotation=85)
 
-            title = ("Relative difference 0.0 means both perform identically,\n"
-                     f"relative difference > 0.0 means {numerator} performs better,\n"
-                     f"relative difference < 0.0 means {denominator} performs better")
-            plt.title(f"Comparison {numerator} vs {denominator}.")
+def plot_diff_df(df, triton_benchmark: bool, perf_index: str, numerator: str, denominator: str):
+    # pylint: disable=import-outside-toplevel
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
 
-            plt.figtext(1, 0.5, title)
+    keys = ["params", "benchmark"] if triton_benchmark else ["suite", "mode", "datatype"]
+    df["xlabel"] = df[keys].agg(", ".join, axis=1)
 
-            ax = sns.boxplot(df, x="xlabel", y="relative difference", order=order)
+    # Sort by configuration
+    order = list(df["xlabel"].unique())
+    order.sort()
 
-            ax.set(xlabel=None, ylabel=f"Relative difference in {perf_index}")
+    filename = get_filename(perf_index, numerator, denominator)
+    with PdfPages(filename) as pdf:
+        fig = plt.figure()
+        plt.xticks(rotation=85)
 
-            pdf.savefig(fig, bbox_inches="tight")
-            print(f"Saved performance plot to {filename}")
+        title = ("Relative difference 0.0 means both perform identically,\n"
+                 f"relative difference > 0.0 means {numerator} performs better,\n"
+                 f"relative difference < 0.0 means {denominator} performs better")
+        plt.title(f"Comparison {numerator} vs {denominator}.")
+
+        plt.figtext(1, 0.5, title)
+
+        ax = sns.boxplot(df, x="xlabel", y="relative difference", order=order)
+
+        ax.set(xlabel=None, ylabel=f"Relative difference in {perf_index}")
+
+        pdf.savefig(fig, bbox_inches="tight")
+        print(f"Saved performance plot to {filename}")
 
 
 def eval_data(triton_benchmark: bool, plot: bool, df: pd.DataFrame, numerator: str, denominator: str):
     """Evaluate the data, print a summary and plot if enabled."""
     if triton_benchmark:
-        num_tri2xe_col = f"Tri2Xe-{numerator}"
-        dem_tri2xe_col = f"Tri2Xe-{denominator}"
-
-        df_ratio = df[["params", "benchmark", num_tri2xe_col, dem_tri2xe_col]]
-        summarize_diff(triton_benchmark, "tri2xe", plot, df_ratio, num_tri2xe_col, dem_tri2xe_col, numerator,
-                       denominator)
+        perf_index = "Tri2Xe"
+        num_col, denom_col = get_column_names(perf_index, numerator, denominator)
+        df_ratio = df[["params", "benchmark", num_col, denom_col]]
+        diff_df = summarize_diff(perf_index, df_ratio, numerator, denominator)
     else:
-        num_col = f"speedup {numerator}"
-        denom_col = f"speedup {denominator}"
-
+        perf_index = "speedup"
         df.drop(columns=["batch_size_x", "batch_size_y"], inplace=True)
-        summarize_diff(triton_benchmark, "speedup", plot, df, num_col, denom_col, numerator, denominator)
+        diff_df = summarize_diff(perf_index, df, numerator, denominator)
+    if plot:
+        plot_diff_df(diff_df, triton_benchmark, perf_index, numerator, denominator)
 
 
 def main():
@@ -295,8 +308,8 @@ def main():
             ]
         else:
             cols = [
-                "dev", "suite", "name", "mode", "datatype", "batch_size_x", "batch_size_y", f"speedup {num_cfg}",
-                f"speedup {denom_cfg}"
+                "dev", "suite", "name", "mode", "datatype", "batch_size_x", "batch_size_y", f"speedup-{num_cfg}",
+                f"speedup-{denom_cfg}"
             ]
 
         df = df[cols]

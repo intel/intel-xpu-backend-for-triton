@@ -80,10 +80,6 @@ repos:
           - --disable=missing-function-docstring
           - --disable=missing-class-docstring
           - --disable=duplicate-code
-          - --disable=too-many-locals
-          - --disable=too-many-statements
-          - --disable=too-many-arguments
-          - --disable=too-many-positional-arguments
         stages: [pre-commit, pre-push, manual]
 
       - id: pylint
@@ -106,7 +102,6 @@ repos:
           - --disable=unnecessary-lambda-assignment
           # FIXME: revisit these checks later
           - --disable=too-few-public-methods
-          - --disable=consider-using-generator
           - --disable=missing-module-docstring
           - --disable=missing-function-docstring
           - --disable=missing-class-docstring
