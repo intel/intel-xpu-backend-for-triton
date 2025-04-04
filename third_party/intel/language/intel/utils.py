@@ -3,14 +3,17 @@ from triton.language import core
 
 @core.extern
 def globaltimer(_builder=None):
-    return core.inline_asm_elementwise("mov.u64 $0, %globaltimer;", "=l", [], dtype=core.int64, is_pure=False, pack=1,
-                                       _builder=_builder)
+    return core.inline_asm_elementwise("mov (M1_NM, 2) %0 %%tsc(0,0)<1;1,0>", "=r", [], dtype=core.uint64,
+                                       is_pure=False, pack=1, _builder=_builder)
 
 
 @core.extern
 def smid(_builder=None):
-    return core.inline_asm_elementwise("mov.u32 $0, %smid;", "=r", [], dtype=core.int32, is_pure=True, pack=1,
-                                       _builder=_builder)
+    sr = core.inline_asm_elementwise("mov (M1_NM, 1) %0 %%sr0(0,0)<0;1,0>", "=r", [], dtype=core.uint32, is_pure=True,
+                                     pack=1, _builder=_builder)
+    pos: core.constexpr = core.constexpr(9)
+    subslice_mask: core.constexpr = core.constexpr((1 << 11) - 1)
+    return sr.__and__(subslice_mask, _builder=_builder).__rshift__(pos, _builder=_builder)
 
 
 @core.builtin
