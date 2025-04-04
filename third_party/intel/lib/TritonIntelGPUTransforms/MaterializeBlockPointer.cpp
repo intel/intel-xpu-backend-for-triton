@@ -49,42 +49,8 @@ public:
       LDBG("Considering op: " << loadOp);
 
       Value ptr = loadOp.getPtr();
-      if (!tt::isTensorPointerType(ptr.getType())) {
-        LDBG("Considering tensor of pointer load op: " << loadOp);
-        auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-        if (!tensorTy)
-          return;
-
-        // The axis info gives the information about the value of the indices
-        // tensor. For example, if the indices tensor is tensor<8x16xi32> and
-        // its value is:
-        //
-        //   [[ 0,  1,  2,  3, ..., 12, 13, 14, 15],
-        //    [16, 17, 18, 19, ..., 28, 29, 30, 31],
-        //    ...
-        //    [ 96,  97,  98,  99, ..., 108, 109, 110, 111],
-        //    [112, 113, 114, 115, ..., 124, 125, 126, 127]]
-        // Then the global memory refer by the tensor pointer is row-major
-        // contiguous. And the axis info will be: Contiguity: [1, 16],
-        // Divisibility: [1, 1], Constancy: [1, 1]
-
-        // As long as we have the information about the memory layout, we can
-        // use the Intel Block IO to dereference the memory if the register
-        // layout matches.
-        auto axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
-        unsigned rank = axisInfo->getRank();
-        LDBG("Rank: " << rank);
-        if (rank == 1)
-          return;
-
-        if (axisInfo->getContiguity(0) == tensorTy.getDimSize(0))
-          loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                          StringAttr::get(context, "column_major"));
-        if (axisInfo->getContiguity(1) == tensorTy.getDimSize(1))
-          loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                          StringAttr::get(context, "row_major"));
-        return;
-      }
+      if (!tt::isTensorPointerType(ptr.getType()))
+        return MaterializeTensorOfPointers(loadOp, axisInfoAnalysis);
 
       assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
              "Expected 'loadOp' to load a tensor value.");
@@ -195,6 +161,53 @@ public:
   }
 
 private:
+  void MaterializeTensorOfPointers(
+      tt::LoadOp loadOp,
+      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+    MLIRContext *context = loadOp.getContext();
+    Value ptr = loadOp.getPtr();
+    assert(!tt::isTensorPointerType(ptr.getType()) &&
+           "Expected 'loadOp' to load a tensor value.");
+
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+    if (!tensorTy)
+      return;
+
+    LDBG("Considering tensor of pointer load op: " << loadOp);
+
+    if (loadOp.getMask()) {
+      LDBG("Load op has mask, skip block IO attribute");
+      return;
+    }
+
+    // The axis info gives the information about the value of the indices
+    // tensor. For example, if the indices tensor is tensor<8x16xi32> and
+    // its value is:
+    //   [[ 0,  1,  2,  3, ..., 12, 13, 14, 15],
+    //    [16, 17, 18, 19, ..., 28, 29, 30, 31],
+    //    ...
+    //    [ 96,  97,  98,  99, ..., 108, 109, 110, 111],
+    //    [112, 113, 114, 115, ..., 124, 125, 126, 127]]
+    // Then the global memory refer by the tensor pointer is row-major
+    // contiguous. And the axis info will be: stride: [16, 1],
+    // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
+    auto axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    unsigned rank = axisInfo->getRank();
+    if (rank != 2) {
+      LDBG("Rank is not 2, skip block IO attribute");
+      return;
+    }
+
+    const bool isRowMajor =
+        axisInfo->getContiguity(1) == tensorTy.getDimSize(1) &&
+        axisInfo->getStride(0) > 0 && axisInfo->getDivisibility(1) % 4 == 0;
+    if (isRowMajor) {
+      LDBG("Setting row_major attribute\n");
+      loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                      StringAttr::get(context, "row_major"));
+    }
+  }
+
   // Return the load layout if it is a dot layout. If it is not, check if the
   // load result is converted to a dot layout. If so, return the dot layout,
   // otherwise return nullopt.
