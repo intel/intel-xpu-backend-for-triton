@@ -392,7 +392,7 @@ Block load tile layout after adding iterations:
 where out dims are: [dim0 (size 32), dim1 (size 32)]
 ```
 
-Finally, as suspected when examining the DPAS layout, there are two contiguous blocks separated by a stride so we will need multiple loads. In this case hardware limitations are not a factor, so we generate two loads:
+Finally, as suspected when examining the DPAS layout, there are two contiguous blocks separated by a stride so we will need multiple loads. In this case hardware limitations are not a factor, so we generate two loads separated by the outer stride of `128` elements:
 ```
 Block load tile layout after adding loads:
  - offset=1 -> (0, 1)
@@ -402,11 +402,10 @@ Block load tile layout after adding loads:
    offset=16 -> (1, 0)
    offset=32 -> (2, 0)
    offset=64 -> (4, 0)
- - iteration=1 -> (8, 0)
-   iteration=2 -> (16, 0)
-   iteration=4 -> (0, 16)
- - load is a size 1 dimension
-where out dims are: [dim0 (size 32), dim1 (size 32)]
+ - iteration=1 -> (0, 16)
+   iteration=2 -> (8, 0)
+ - load=1 -> (128, 0)
+where out dims are: [dim0 (size 256), dim1 (size 32)]
 0, 0, 0 : 0, 0
 0, 0, 127 : 7, 15
 0, 1, 0 : 0, 16
@@ -416,17 +415,17 @@ where out dims are: [dim0 (size 32), dim1 (size 32)]
 0, 3, 0 : 8, 16
 0, 3, 127 : 15, 31
 
-1, 0, 0 : 16, 0
-1, 0, 127 : 23, 15
-1, 1, 0 : 16, 16
-1, 1, 127 : 23, 31
-1, 2, 0 : 24, 0
-1, 2, 127 : 31, 15
-1, 3, 0 : 24, 16
-1, 3, 127 : 31, 31
+1, 0, 0 : 128, 0
+1, 0, 127 : 135, 15
+1, 1, 0 : 128, 16
+1, 1, 127 : 135, 31
+1, 2, 0 : 136, 0
+1, 2, 127 : 143, 15
+1, 3, 0 : 136, 16
+1, 3, 127 : 143, 31
 ```
 
-We want our linear layout functions to be `surjective`; that is, all output values should be covered by some input value. This allows us to invert and compose the layouts and makes modifying the layout using intermediate layouts easier. Therefore we omit the replication stride from the second load; i.e. the second load indices start after the first load. We keep track of the stride and apply it after evaluating the layout function to convert to the global tensor coordinate space.
+Note that this layout is not `surjective`. Linear layouts are assumed to be `surjective` by default; that is, all output values should be covered by some input value. But non-`surjective` layouts can be created, albeit with some limitations around invertibility and use in other APIs. For the case of block loads, a non-`surjective` layout is necessary to accurately model the loaded data in the global input coordinate space.
 
 ### `AxBT`
 
@@ -476,9 +475,9 @@ Block load tile layout after adding loads:
    offset=32 -> (4, 0)
    offset=64 -> (8, 0)
  - iteration=1 -> (16, 0)
- - load=1 -> (0, 8)
-   load=2 -> (32, 0)
-where out dims are: [dim0 (size 64), dim1 (size 16)]
+ - load=1 -> (0, 16)
+   load=2 -> (128, 0)
+where out dims are: [dim0 (size 256), dim1 (size 32)]
 ```
 
-The block tile layout after adding loads for `B` (non-transpose) had output size `32, 32`. The transpose layout has output size `64, 16`. Both layouts have the same number of elements, but the transpose layout has a different shape. The `B` block load layout is describing two `16x32` 2D block loads with vnni transform (`32x32` elements per load). The transpose layout describes four `16x32` 2D block loads (the load is actually dispatched as `8x32` with an element size of 32 bits vs 16 bits for the other loads, matching the `bf16` datatype). Even though the DPAS layouts are identical, the linear layout captures the data layout of the load and, through debug prints, allows developers to introspect the load layouts without decoding thousands of lines of LLVMIR or assembly.
+The block load layout has size `256 x 32` after adding loads. As a sanity check, the block load layout tile size should match the block parameters for the kernel for layouts with more than one load (in the one load case we do not modify the layout dimensions). In other words, the layout can represent any used values in the load for the target operand in this block. Note that the load layout does not have the concept of "`warp`". Therefore, it may not represent _all_ used values (see `surjectivity` discussion above). We are concerned with the data loaded from an arbitrary call to the 2D block load hardware extensions; the offsets for warp are added later (e.g. when generating the 2D block load instruction). By replicating the layout over all warps (subgroups) in the block (workgroup) and applying an offset determined by the DPAS layout, we can cover all values in the block dimension (`256 x 32`).
