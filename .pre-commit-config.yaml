@@ -105,7 +105,6 @@ repos:
           # Disable unnecessary-lambda-assignment: benchmark use a lot of lambda assignments
           - --disable=unnecessary-lambda-assignment
           # FIXME: revisit these checks later
-          - --disable=import-outside-toplevel
           - --disable=too-few-public-methods
           - --disable=consider-using-generator
           - --disable=missing-module-docstring
