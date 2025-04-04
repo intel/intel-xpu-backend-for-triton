@@ -2407,7 +2407,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Ensure the compiler can propagate layout in an scf.if returning a block ptr.
+// COM: Reproducer for issue #3817 (to ensure that the compiler doesn't crash).
 
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 
