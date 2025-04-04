@@ -1255,10 +1255,12 @@ struct LoadOpConversion
     // Round the warp id fit into the tensor shape.
     unsigned outerDimRequiredWarpNum = mlir::ceil<unsigned>(
         tensorShape[dimOuter], warpShape[dimOuter]); // ceil of ratio
-    LLVM_DEBUG(llvm::dbgs() << "tensor to warp shape ratio = " << outerDimRequiredWarpNum << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "tensor to warp shape ratio = "
+                            << outerDimRequiredWarpNum << "\n");
     unsigned outerDimWarpNum =
         std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
-    LLVM_DEBUG(llvm::dbgs() << "outerDimWarpNum = " << outerDimRequiredWarpNum << "\n");
+    LLVM_DEBUG(llvm::dbgs()
+               << "outerDimWarpNum = " << outerDimRequiredWarpNum << "\n");
     Value outerDimWarpId =
         b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
 
@@ -1502,7 +1504,8 @@ struct LoadOpConversion
     }
     if (newLoadBases.size() > 0) {
       outDims[0] = std::make_pair(outDims[0].first, tensorShape[dimOuter]);
-      outDims[1] = std::make_pair(outDims[1].first, tensorShape[dimInner]*repCluster[dimInner]);
+      outDims[1] = std::make_pair(outDims[1].first,
+                                  tensorShape[dimInner] * repCluster[dimInner]);
     }
 
     LLVM_DEBUG({
