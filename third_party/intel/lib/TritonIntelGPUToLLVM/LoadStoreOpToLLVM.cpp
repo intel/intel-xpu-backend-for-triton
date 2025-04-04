@@ -1245,18 +1245,10 @@ struct LoadOpConversion
 
     unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
     unsigned dimInner = bool(opIdx) ? rank - 2 : rank - 1;
-    llvm::errs() << "dimOuter = " << dimOuter << "\n";
-    llvm::errs() << "dimInner = " << dimInner << "\n";
-    llvm::errs() << "tensorShape[dimOuter] = " << tensorShape[dimOuter]
-                 << " vs warpShape[dimOuter] = " << warpShape[dimOuter] << "\n";
     unsigned outerDimRequiredWarpNum = mlir::ceil<unsigned>(
         tensorShape[dimOuter], warpShape[dimOuter]); // ceil of ratio
-    llvm::errs() << "warpsPerCTA[dimOuter] = " << warpsPerCTA[dimOuter]
-                 << " vs outerDimRequiredWarpNum = " << outerDimRequiredWarpNum
-                 << "\n";
     unsigned outerDimWarpNum =
         std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
-    llvm::errs() << "outerDimWarpNum = " << outerDimWarpNum << "\n";
     Value outerDimWarpId =
         b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
 
@@ -1380,9 +1372,7 @@ struct LoadOpConversion
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
     numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
-    llvm::errs() << "orig tile height: " << tileHeight << "\n";
     tileHeight = tileHeight * numOperandsPer2DLoadM;
-    llvm::errs() << "new tile height: " << tileHeight << "\n";
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
@@ -1467,11 +1457,10 @@ struct LoadOpConversion
       llvm::dbgs() << "numRepInner = " << numRepInner << "\n";
     });
 
-    llvm::errs() << "tile layout after adding loads, before modifying bases: "
-                 << tileLayout << "\n";
-
+    // For the kLoad dimension we create the basis vector directly, which allows
+    // us to control the stride between loads and create a non-surjective
+    // layout.
     auto bases = tileLayout.getBases();
-
     std::vector<std::vector<int32_t>> newLoadBases;
     for (size_t i = 0;
          i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
@@ -1485,31 +1474,35 @@ struct LoadOpConversion
       newLoadBases.push_back({static_cast<int>((1 << i) * repOuterStride), 0});
     }
 
-    llvm::errs() << "created new bases: \n";
-    for (auto &base : newLoadBases) {
-      llvm::errs() << base[0] << ", " << base[1] << "\n";
-    }
+    LLVM_DEBUG({
+      llvm::dbgs() << "Created Load Bases:\n";
+      for (auto &base : newLoadBases) {
+        assert(base.size() == 2);
+        llvm::dbgs() << base[0] << ", " << base[1] << "\n";
+      }
+    });
 
-    auto origOutDimNames = tileLayout.getOutDimNames();
-    auto origOutDimSizes = tileLayout.getOutDimSizes();
     SmallVector<std::pair<StringAttr, int32_t>> outDims;
-    for (auto [name, size] : llvm::zip(origOutDimNames, origOutDimSizes)) {
+    // Copy the existing dimensions first. This allows us to re-use the existing
+    // dim names as well as the sizes should the bases vector be empty (one
+    // load).
+    for (auto [name, size] :
+         llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
       outDims.push_back(std::make_pair(name, size));
     }
-    llvm::errs() << "num outer loads: " << numRepOuter * numLoadPerOutRepCluster
-                 << "\n";
-    llvm::errs() << "num inner loads: "
-                 << numRepInner / numOperandsInnerDimPerLoad << "\n";
-    llvm::errs() << "warpsPerCTA = " << warpsPerCTA[0] << ", " << warpsPerCTA[1]
-                 << "\n";
     if (newLoadBases.size() > 0) {
       outDims[0] = std::make_pair(outDims[0].first, tensorShape[dimOuter]);
       outDims[1] = std::make_pair(outDims[1].first, tensorShape[dimInner]);
     }
 
-    for (size_t i = 0; i < outDims.size(); i++) {
-      llvm::errs() << outDims[i].first << " = " << outDims[i].second << "\n";
-    }
+    LLVM_DEBUG({
+      llvm::dbgs() << "New tile layout dimensions after adding load bases:\n";
+      for (size_t i = 0; i < outDims.size(); i++) {
+        llvm::dbgs() << outDims[i].first << " = " << outDims[i].second << "\n";
+      }
+    });
+
+    // add the bases to the map and replace the tile layout with the new layout
     bases[kLoad] = newLoadBases;
     tileLayout = LinearLayout(bases, outDims,
                               /*requiredSurjective=*/false);
@@ -1571,11 +1564,9 @@ struct LoadOpConversion
                               k / numOperandsInnerDimPerLoad;
           LLVM_DEBUG(llvm::dbgs() << "loadIdx: " << loadIdx << "\n");
 
-          auto offset = tileLayout.apply(
+          const auto offset = tileLayout.apply(
               {{kOffset, 0}, {kIteration, 0}, {kLoad, loadIdx}});
           assert(offset.size() == 2);
-          // adjust the load offset to compensate for strides related to the
-          // DPAS layout
           LLVM_DEBUG({
             llvm::dbgs() << "x offset from layout: " << offset[0].second
                          << "\n";
@@ -1583,9 +1574,8 @@ struct LoadOpConversion
                          << "\n";
           });
 
-          auto layoutOffsetX = offset[dimInner].second;
-          auto layoutOffsetY = offset[dimOuter].second;
-
+          const auto layoutOffsetX = offset[dimInner].second;
+          const auto layoutOffsetY = offset[dimOuter].second;
           LLVM_DEBUG({
             llvm::dbgs() << "x offset ll: " << layoutOffsetX << "\n";
             llvm::dbgs() << "y offset ll: " << layoutOffsetY << "\n";
