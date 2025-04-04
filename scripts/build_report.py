@@ -35,7 +35,7 @@ def check_cols(target_cols, all_cols):
         raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
-def transform_df(df, args):  # param_cols, tflops_col, hbm_col, benchmark, compiler, tag, mask):
+def transform_df(df, args):
     param_cols = args.param_cols.split(",")
     hbm_col = args.hbm_col
     check_cols(param_cols, df.columns)
