@@ -1467,83 +1467,52 @@ struct LoadOpConversion
       llvm::dbgs() << "numRepInner = " << numRepInner << "\n";
     });
 
-    if (isTransposeRequired) {
-      tileLayout *= LinearLayout::identity1D(
-          numRepInner / numOperandsInnerDimPerLoad, kLoad, dimOuterStr);
-      tileLayout *= LinearLayout::identity1D(
-          numRepOuter * numLoadPerOutRepCluster, kLoad, dimInnerStr);
-    } else {
-      llvm::errs() << "tile layout after adding loads, before modifying bases: "
-                   << tileLayout << "\n";
+    llvm::errs() << "tile layout after adding loads, before modifying bases: "
+                 << tileLayout << "\n";
 
-      auto bases = tileLayout.getBases();
+    auto bases = tileLayout.getBases();
 
-      std::vector<std::vector<int32_t>> newLoadBases;
-#if 1
-      for (size_t i = 0;
-           i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
-        newLoadBases.push_back(
-            {0, static_cast<int>((1 << i) * repKStride *
-                                 numOperandsInnerDimPerLoad)});
-      }
-      for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
-        newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
-      }
-      for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
-        newLoadBases.push_back(
-            {static_cast<int>((1 << i) * repOuterStride), 0});
-      }
-#else
-      // TODO: for multiple loads do we multiply by i?
-      llvm::errs() << "inner reps " << numRepInner / numOperandsInnerDimPerLoad
-                   << " vs "
-                   << llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad)
-                   << "\n";
-      llvm::errs() << "load per out rep " << numLoadPerOutRepCluster << " vs "
-                   << llvm::Log2_32(numLoadPerOutRepCluster) << "\n";
-      llvm::errs() << "numRepOuter " << numRepOuter << " vs "
-                   << llvm::Log2_32(numRepOuter) << "\n";
+    std::vector<std::vector<int32_t>> newLoadBases;
+    for (size_t i = 0;
+         i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
+      newLoadBases.push_back({0, static_cast<int>((1 << i) * repKStride *
+                                                  numOperandsInnerDimPerLoad)});
+    }
+    for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
+      newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
+    }
+    for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
+      newLoadBases.push_back({static_cast<int>((1 << i) * repOuterStride), 0});
+    }
 
-      for (size_t i = 0;
-           i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
-        newLoadBases.push_back(
-            {0, static_cast<int>(repKStride * numOperandsInnerDimPerLoad)});
-      }
-      for (size_t i = 0; i <= llvm::Log2_32(numLoadPerOutRepCluster); i++) {
-        newLoadBases.push_back({static_cast<int>(repStride), 0});
-      }
-      for (size_t i = 0; i <= llvm::Log2_32(numRepOuter); i++) {
-        newLoadBases.push_back({static_cast<int>(repOuterStride), 0});
-      }
-#endif
+    llvm::errs() << "created new bases: \n";
+    for (auto &base : newLoadBases) {
+      llvm::errs() << base[0] << ", " << base[1] << "\n";
+    }
 
-      llvm::errs() << "created new bases: \n";
-      for (auto &base : newLoadBases) {
-        llvm::errs() << base[0] << ", " << base[1] << "\n";
-      }
-
-      auto origOutDimNames = tileLayout.getOutDimNames();
-      auto origOutDimSizes = tileLayout.getOutDimSizes();
-      SmallVector<std::pair<StringAttr, int32_t>> outDims;
-      for (auto [name, size] : llvm::zip(origOutDimNames, origOutDimSizes)) {
-        outDims.push_back(std::make_pair(name, size));
-      }
-      llvm::errs() << "num outer loads: "
-                   << numRepOuter * numLoadPerOutRepCluster << "\n";
-      llvm::errs() << "num inner loads: "
-                   << numRepInner / numOperandsInnerDimPerLoad << "\n";
-      llvm::errs() << "warpsPerCTA = " << warpsPerCTA[0] << ", "
-                   << warpsPerCTA[1] << "\n";
+    auto origOutDimNames = tileLayout.getOutDimNames();
+    auto origOutDimSizes = tileLayout.getOutDimSizes();
+    SmallVector<std::pair<StringAttr, int32_t>> outDims;
+    for (auto [name, size] : llvm::zip(origOutDimNames, origOutDimSizes)) {
+      outDims.push_back(std::make_pair(name, size));
+    }
+    llvm::errs() << "num outer loads: " << numRepOuter * numLoadPerOutRepCluster
+                 << "\n";
+    llvm::errs() << "num inner loads: "
+                 << numRepInner / numOperandsInnerDimPerLoad << "\n";
+    llvm::errs() << "warpsPerCTA = " << warpsPerCTA[0] << ", " << warpsPerCTA[1]
+                 << "\n";
+    if (newLoadBases.size() > 0) {
       outDims[0] = std::make_pair(outDims[0].first, tensorShape[dimOuter]);
       outDims[1] = std::make_pair(outDims[1].first, tensorShape[dimInner]);
-
-      for (size_t i = 0; i < outDims.size(); i++) {
-        llvm::errs() << outDims[i].first << " = " << outDims[i].second << "\n";
-      }
-      bases[kLoad] = newLoadBases;
-      tileLayout = LinearLayout(bases, outDims,
-                                /*requiredSurjective=*/false);
     }
+
+    for (size_t i = 0; i < outDims.size(); i++) {
+      llvm::errs() << outDims[i].first << " = " << outDims[i].second << "\n";
+    }
+    bases[kLoad] = newLoadBases;
+    tileLayout = LinearLayout(bases, outDims,
+                              /*requiredSurjective=*/false);
 
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
@@ -1565,49 +1534,6 @@ struct LoadOpConversion
         llvm::dbgs() << "\n";
       }
     });
-
-#if 0
-    auto inverseDpasLayout = llEncoding->pseudoinvert();
-    llvm::errs() << "dpas inverse: " << inverseDpasLayout << "\n";
-
-    if (!isOperandA) {
-      auto tmpTileLayout = tileLayout;
-      auto bases = tmpTileLayout.getBases();
-      for (auto& base : bases) {
-        llvm::errs() << base.first << " : " << base.second.size() << "\n";
-      }
-
-      auto& loadBases = bases[kLoad];
-      // llvm::errs() << "num loads = " << numRepOuter * numLoadPerOutRepCluster << "\n";
-      // assert(numRepOuter * numLoadPerOutRepCluster - 1 == loadBases.size());
-
-      // multiply the outer loads by repOuterStride
-      for (size_t i = 0; i < loadBases.size(); i++) {
-        const size_t loadIndex = 1<<i;
-        // need to modify every x value - but only every other numLoadPerOutRepCluster * numRepInner value needs to incrase by repOuter
-        llvm::errs() << "loadIndex = " << loadIndex << "\n";
-        auto& base = loadBases[i];
-        llvm::errs() << base[0] << ", " << base[1] << "\n";
-        base[0] *= outerDimWarpNum;
-
-      }
-
-#if 0
-      for (size_t i = 0; i < loadBases.size(); i++) {
-        const size_t loadIndex = 1<<i;
-
-        llvm::errs() << i << " = " << std::to_string(1<<i) << "\n";
-      }
-#endif
-
-#if 1
-      for (auto& base : loadBases) {
-        llvm::errs() << base[0] << ", " << base[1] << " ";
-        llvm::errs() << "\n";
-      }
-#endif
-    }
-#endif
 
     Value pitch;
     if (memoryRowMajor) {
