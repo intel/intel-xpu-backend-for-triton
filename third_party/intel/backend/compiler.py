@@ -60,6 +60,7 @@ class XPUOptions:
     generate_native_code: bool = False
     advanced_path: bool = False
     one_matrix_per_load_for_bt: bool = False
+    enable_tile_load_linear_layout: bool = True
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -187,6 +188,7 @@ class XPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
+        args["enable_tile_load_linear_layout"] = os.getenv("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", "1") == "1"
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -344,7 +346,8 @@ class XPUBackend(BaseBackend):
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
+                                           options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
