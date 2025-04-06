@@ -132,6 +132,25 @@ jobs:
           build_llvm: ${{ inputs.build_llvm }}
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
 
+      - name: Report environment details
+        run: |
+          source ./scripts/capture-hw-details.sh --quiet
+          cat <<EOF | tee .env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ inputs.python_version }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
+          EOF
+
       - name: Create test-triton command line
         run: |
           skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
@@ -211,25 +230,6 @@ jobs:
           python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
           python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
           python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
-
-      - name: Report environment details
-        run: |
-          source ./scripts/capture-hw-details.sh --quiet
-          cat <<EOF | tee .env
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
-          PYTHON_VERSION=${{ inputs.python_version }}
-          PYTORCH_REPO=$PYTORCH_REPO
-          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
-          PYTORCH_VERSION=$PYTORCH_VERSION
-          TRITON_REPO=$GITHUB_REPOSITORY
-          LIBIGC1_VERSION=$LIBIGC1_VERSION
-          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
-          GPU_DEVICE=$GPU_DEVICE
-          AGAMA_VERSION=$AGAMA_VERSION
-          EOF
 
       - name: Upload pass rate report
         # upload reports only for the default branch
