@@ -3,15 +3,27 @@ import argparse
 from pathlib import Path
 import csv
 import sys
+from dataclasses import dataclass
 
 
-def get_inductor_report_path(args) -> Path:
+@dataclass
+class PassedArgs:
+    suite: str
+    dtype: str
+    mode: str
+    test_mode: str
+    device: str
+    models_file: str
+    inductor_log_dir: str
+
+
+def get_inductor_report_path(args: PassedArgs) -> Path:
     inductor_log_dir_leaf = Path(args.inductor_log_dir) / args.suite / args.dtype
     inductor_report_filename = f"inductor_{args.suite}_{args.dtype}_{args.mode}_{args.device}_{args.test_mode}.csv"
     return Path(inductor_log_dir_leaf / inductor_report_filename)
 
 
-def check_report(args) -> int:
+def check_report(args: PassedArgs) -> int:
     test_mode = args.test_mode
     inductor_report_path = get_inductor_report_path(args)
 
@@ -63,8 +75,9 @@ def main():
     argparser.add_argument("--device", help="i.e. xpu", required=True)
     argparser.add_argument("--models-file", help="Subset of models list", required=True)
     argparser.add_argument("--inductor-log-dir", help="Inductor test log directory", default="inductor_log")
-    args = argparser.parse_args()
-    exitcode = check_report(args)
+    parsed_args = argparser.parse_args()
+    passed_args = PassedArgs(**vars(parsed_args))
+    exitcode = check_report(passed_args)
     print(f"Report check result: {'SUCCESS' if exitcode == 0 else 'FAIL'}")
     sys.exit(exitcode)
 

@@ -4,11 +4,25 @@ import os
 import uuid
 import json
 import datetime
+from dataclasses import dataclass
 
 import pandas as pd
 
 
-def parse_args():
+@dataclass
+class PassedArgs:  # pylint: disable=too-many-instance-attributes
+    source: str
+    target: str
+    param_cols: str
+    benchmark: str
+    compiler: str
+    tflops_col: str
+    hbm_col: str
+    tag: str
+    mask: bool
+
+
+def parse_args() -> PassedArgs:
     parser = argparse.ArgumentParser(description="Build report based on triton-benchmark run")
     parser.add_argument("source", help="Path to source csv file with benchmark results")
     parser.add_argument(
@@ -26,7 +40,8 @@ def parse_args():
     parser.add_argument("--hbm_col", help="Column name with HBM results.", required=False, default=None)
     parser.add_argument("--tag", help="How to tag results", required=False, default="")
     parser.add_argument("--mask", help="Mask identifiers among the params", required=False, action="store_true")
-    return parser.parse_args()
+    parsed_args = parser.parse_args()
+    return PassedArgs(**vars(parsed_args))
 
 
 def check_cols(target_cols, all_cols):
@@ -35,7 +50,7 @@ def check_cols(target_cols, all_cols):
         raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
-def transform_df(df, args):
+def transform_df(df, args: PassedArgs) -> pd.DataFrame:
     param_cols = args.param_cols.split(",")
     hbm_col = args.hbm_col
     check_cols(param_cols, df.columns)

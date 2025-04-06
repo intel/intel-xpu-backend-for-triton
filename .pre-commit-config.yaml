@@ -79,7 +79,6 @@ repos:
           - --disable=missing-module-docstring
           - --disable=missing-function-docstring
           - --disable=missing-class-docstring
-          - --disable=duplicate-code
         stages: [pre-commit, pre-push, manual]
 
       - id: pylint
