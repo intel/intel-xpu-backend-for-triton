@@ -2,6 +2,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -256,16 +257,18 @@ void init_triton_intel(py::module &&m) {
     return py::int_(ret);
   });
 
-  // May do this after llvm ir according to user fmath flag.
-  m.def("set_fast_math", [](mlir::ModuleOp mod) {
-    using namespace mlir;
-    MLIRContext *ctx = mod.getContext();
-    mod.walk([&](Operation *op) {
-      if (auto fmIf = dyn_cast<arith::ArithFastMathInterface>(op))
-        op->setAttr(
-            fmIf.getFastMathAttrName(),
-            arith::FastMathFlagsAttr::get(ctx, arith::FastMathFlags::fast));
-    });
+  // May do this according to user fmath flag.
+  m.def("set_fast_math", [](llvm::Module *mod) {
+    using namespace llvm;
+    for (Function &func : *mod) {
+      for (Instruction &inst : instructions(func)) {
+        if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
+          FastMathFlags FMF;
+          FMF.setFast(true);
+          inst.setFastMathFlags(FMF);
+        }
+      }
+    }
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
