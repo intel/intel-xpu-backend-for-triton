@@ -1284,7 +1284,6 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto maskOrder = linAttr.getOrder();
   if (maskOrder[0] >= axisInfo->getRank())
     return 1;
-
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);
