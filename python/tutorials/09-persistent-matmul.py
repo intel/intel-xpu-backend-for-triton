@@ -826,7 +826,6 @@ if __name__ == "__main__":
         if is_cuda():
             proton.start("matmul", hook="triton")
             proton.deactivate()
-
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
             bench(K, dtype)
         if is_cuda():
