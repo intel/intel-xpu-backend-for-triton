@@ -257,7 +257,9 @@ void init_triton_intel(py::module &&m) {
     return py::int_(ret);
   });
 
-  // May do this according to user fmath flag.
+  // This is for internal experimentation. In the end we will need a producer
+  // flag (e.g. PyTorch flag) to allow the Triton compiler to use the fast math
+  // semantics on all arithmetic operations.
   m.def("set_fast_math", [](llvm::Module *mod) {
     using namespace llvm;
     for (Function &func : *mod) {
