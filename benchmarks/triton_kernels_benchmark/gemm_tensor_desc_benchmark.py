@@ -1,8 +1,8 @@
 """
-Gemm benchmark
+Gemm benchmark (tensor descriptor)
 ============================
 
-This benchmark is come from the Triton tutorial 10-experimental-block-pointer.py
+This benchmark uses tensor descriptors to implement a GEMM kernel.
 To compare the performance to XeTLA kernel.
 
 """
@@ -32,7 +32,7 @@ use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_block_pointers(
+def matmul_kernel_with_tensor_descriptors(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -101,7 +101,7 @@ def matmul_kernel_with_block_pointers(
     key=['M', 'N', 'K'],
 )
 @triton.jit
-def matmul_kernel_with_block_pointers_batched(
+def matmul_kernel_with_tensor_descriptors_batched(
         # Pointers to matrices
         a_ptr, b_ptr, c_ptr,
         # Matrix dimensions
@@ -170,7 +170,7 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False):
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_with_block_pointers_batched[grid](
+        matmul_kernel_with_tensor_descriptors_batched[grid](
             a, b, c,  #
             B, M, N, K,  #
             a.stride(0), a.stride(a_major), a.stride(a_minor),  #
@@ -178,7 +178,7 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False):
             c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel_with_block_pointers[grid](
+        matmul_kernel_with_tensor_descriptors[grid](
             a, b, c,  #
             M, N, K,  #
             a.stride(a_major), a.stride(a_minor),  #
@@ -263,7 +263,7 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='matmul-performance',
+        plot_name='matmul-tensor-desc-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
