@@ -152,9 +152,9 @@ jobs:
           pip install defusedxml
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
-            python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
-            python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json; \
-            python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \
+            python scripts/pass_rate.py --reports reports; \
+            python scripts/pass_rate.py --reports reports --json > pass_rate.json; \
+            python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json; \
           "
 
       - name: Upload pass rate report
