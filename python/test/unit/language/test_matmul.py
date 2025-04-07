@@ -34,7 +34,8 @@ def matmul_kernel(  #
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-        NUM_STAGES: tl.constexpr, SCALE_A: tl.constexpr = None, PRECISION: tl.constexpr = "ieee"):
+        NUM_STAGES: tl.constexpr, SCALE_A: tl.constexpr = None, PRECISION: tl.constexpr = "ieee",
+        A_TRANS: tl.constexpr = False):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
@@ -42,7 +43,10 @@ def matmul_kernel(  #
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    if not A_TRANS:
+        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    else:
+        a_ptrs = a_ptr + (offs_k[:, None] * stride_ak + offs_am[None, :] * stride_am)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
@@ -50,15 +54,16 @@ def matmul_kernel(  #
         a = tl.load(a_ptrs, mask=mask_a, other=0.0)
         if SCALE_A is not None:
             a = a * SCALE_A
+        if A_TRANS:
+            a = a.T
         b = tl.load(b_ptrs)
         accumulator = tl.dot(a, b, acc=accumulator, out_dtype=output_ptr.dtype.element_ty, input_precision=PRECISION)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    tl.store(output_ptrs, accumulator, mask=mask_c)
+    tl.store(output_ptrs, accumulator)
 
 
 def get_src_element_ty_size(dtype_str):
@@ -131,15 +136,15 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         atol = 0.01
         rtol = 0.01
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
-    # Make sure the mma is pipelined by checking if in the TTGIR we are waiting for the
-    # barrier coming from the loop args (previous iteration).
+    # Make sure the mma is pipelined by checking if in the TTGIR we see two mmav5
+    # operations. (Pipeliner will add additional mma operation by peeling the prologue.)
     # This applies only if TCv5 MMA is used (M % 64 == 0 and N % 8 == 0) and
     # when MMA arguments loads are pipelined (N > 16)
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and NUM_STAGES > 1 and BLOCK_M % 64 == 0
             and BLOCK_N % 8 == 0 and BLOCK_N > 16 and not (precision == "ieee" and dtype_src_str == "float32")):
         ttgir = k.asm["ttgir"]
-        pattern = (r"ttng.wait_barrier %arg")
-        assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
+        count = ttgir.count("ttng.tc_gen5_mma")
+        assert count == 2, "The TTGIR does not match the expected pattern."
 
 
 # persistent matmul with fused loops
@@ -247,15 +252,14 @@ def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW
 
     torch.testing.assert_close(ref_out, output, atol=0.01, rtol=0.01)
 
-    # Make sure the mma is pipelined by checking if in the TTGIR we are waiting for the
-    # barrier coming from the loop args (previous iteration).
+    # Make sure the mma is pipelined by checking if in the TTGIR we have peeled mmav5 ops.
     # This applies only if TCv5 MMA is used (M % 64 == 0 and N % 8 == 0) and
     # when MMA arguments loads are pipelined (N > 16)
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and BLOCK_M % 64 == 0 and BLOCK_N % 8 == 0
             and BLOCK_N > 16):
         ttgir = k.asm["ttgir"]
-        pattern = "ttng.wait_barrier %arg"
-        assert ttgir.count(pattern) > 0, "Expect barrier coming from the previous iteration."
+        pattern = "ttng.tc_gen5_mma"
+        assert ttgir.count(pattern) > 0, "Expect peeled mmav5 operations."
 
 
 @triton.jit
@@ -318,7 +322,13 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if is_xpu():
-        pytest.skip("FIXME: Fail RuntimeError on XPU")
+        if (BLOCK_M, BLOCK_N, BLOCK_K) in {(128, 128, 64), (128, 64, 128)}:
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
+                triton.runtime.driver.active.utils.get_device_properties(
+                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
+            pytest.xfail("Not enough shared memory")
+
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
@@ -365,10 +375,12 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     atol = 0.0001
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
+    if not is_cuda():
+        return
 
     # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
     # requires the scales to be in the blocked layout in global memory.
-    assert "ttng.wait_barrier" not in out.asm["ttgir"]
+    assert out.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):
@@ -430,7 +442,7 @@ def block_scale_mxfp_matmul(  #
             scale_a = scale_a.reshape(BLOCK_M // 128, BLOCK_K // 128, 32, 4, 4)
             scale_b = scale_b.reshape(BLOCK_N // 128, BLOCK_K // 128, 32, 4, 4)
 
-        # Scales are comming in for optimial peformance, but we reshape here for
+        # Scales are coming in for optimial performance, but we reshape here for
         # the canonical inputs to dot_scaled
         # These reshapes and transposes will be optimized away during lowering
         scale_a = scale_a.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, BLOCK_K // 32)
@@ -457,8 +469,12 @@ def block_scale_mxfp_matmul(  #
                     reason="Requires compute capability >= 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device, monkeypatch):
     if is_xpu():
-        pytest.skip("FIXME: Fail RuntimeError on XPU")
-
+        if not torch.xpu.get_device_capability()["has_subgroup_matrix_multiply_accumulate"]:
+            pytest.skip("The device does not support MMA")
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
+                triton.runtime.driver.active.utils.get_device_properties(
+                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
+            pytest.xfail("Not enough shared memory")
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
@@ -483,7 +499,6 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
                                         b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                                         NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD)
     ttgir = out.asm["ttgir"]
-    ptx = out.asm["ptx"]
 
     def flatten_scale(scale):
         num_chunk_m, num_chunk_k, _, _, _ = scale.shape
@@ -508,7 +523,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     if USE_2D_SCALE_LOAD:
         # Due to an issue in the coalescing pass, tmem_copy can not be generated for the 5D load.
         # The issue is fixed using the patch from https://github.com/triton-lang/triton/pull/4914
-        assert "tcgen05.cp" in ptx
+        assert is_xpu() or "tcgen05.cp" in out.asm["ptx"]
     if NUM_STAGES > 1:
         if BLOCK_M == BLOCK_K and BLOCK_N == BLOCK_K:
             load_pipelined = ttgir.count(f"ttg.local_alloc : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_M}x{BLOCK_K}") == 2
@@ -526,91 +541,49 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
             print(f"SWP failed for M = {M}, N = {N}")
 
 
-@triton.jit
-def lhs_in_tmem_kernel(  #
-        a_ptr, b_ptr, output_ptr,  #
-        stride_am, stride_ak,  #
-        stride_bk, stride_bn,  #
-        stride_cm, stride_cn,  #
-        M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, A_TRANS: tl.constexpr, BLOCK_M: tl.constexpr,
-        BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_M)
-    pid_m = pid % num_pid_m
-    pid_n = pid // num_pid_m
-    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
-    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
-    offs_k = tl.arange(0, BLOCK_K)
-
-    if not A_TRANS:
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    else:
-        a_ptrs = a_ptr + (offs_k[:, None] * stride_am + offs_am[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=1):
-        k_remaining = K - k * BLOCK_K
-        valid_k = offs_k < k_remaining
-        m_remaining = M - pid_m * BLOCK_M
-        valid_m = offs_am < m_remaining
-        a = tl.load(a_ptrs, mask=(valid_k[None, :] & valid_m[:, None]), other=0.0)
-        if A_TRANS:
-            a = a.T
-        n_remaining = N - pid_n * BLOCK_N
-        valid_n = offs_bn < n_remaining
-        b = tl.load(b_ptrs, mask=(valid_k[:, None] & valid_n[None, :]), other=0.0)
-        accumulator = tl.dot(a, b, acc=accumulator)
-        a_ptrs += BLOCK_K * stride_ak
-        b_ptrs += BLOCK_K * stride_bk
-
-    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-
-    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(output_ptrs, accumulator, mask=mask_c)
-
-
-@pytest.mark.parametrize("M, N, K", [(128, 64, 64), (1024, 512, 256)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 128, 32), (128, 256, 32)])
 @pytest.mark.parametrize("a_trans", [False, True])
 @pytest.mark.parametrize("dtype_src_str", ["float32", "float16", "float8e5"])
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
                     reason="Requires compute capability >= 10")
-def test_lhs_in_tmem(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
+def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
+    M = 1024
+    N = 512
+    K = 256
     _knob_promote_lhs_to_tmem(monkeypatch)
-    if M != BLOCK_M or N != BLOCK_N or K != BLOCK_K:
+    if is_xpu() and (M != BLOCK_M or N != BLOCK_N or K != BLOCK_K):
         # TODO: Make LHS TMEM promotion work for all problem sizes regardless of block dims
-        pytest.xfail(
+        pytest.skip(
             "LHS TMEM promotion produces incorrect results when the workload dimensions are not equal to the block dims"
         )
     torch.manual_seed(42)
     if dtype_src_str == "float8e5":
         a = torch.randint(20, 40, (M, K), dtype=torch.int8, device=device).view(torch.float8_e5m2)
-        if (a_trans):
-            a = a.T
         b = torch.randint(20, 40, (K, N), dtype=torch.int8, device=device).view(torch.float8_e5m2)
+        if a_trans:
+            a = a.T.contiguous().T
         A = f8_to_f16(a, dtype_src_str)
         B = f8_to_f16(b, dtype_src_str)
     else:
         dtype_src = getattr(torch, dtype_src_str)
         a = torch.randn(M, K, dtype=dtype_src, device=device)
-        if (a_trans):
-            a = a.T
         b = torch.randn(K, N, dtype=dtype_src, device=device)
+        if a_trans:
+            a = a.T.contiguous().T
         A = a
         B = b
-    output = torch.empty((M, N), dtype=torch.float16, device=device)
-    grid = (1, 1)
-    lhs_in_tmem_kernel[grid](a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
-                             output.stride(1), M, N, K, A_TRANS=a_trans, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-                             BLOCK_K=BLOCK_K)
-    ref_out = torch.matmul(A if not a_trans else A.T, B).to(torch.float16)
-
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
+                            output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=1, SCALE_A=None, PRECISION="tf32",
+                            A_TRANS=a_trans)
+    ref_out = torch.matmul(A, B).to(torch.float32)
     atol = 0.03
     rtol = 0.03
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
+    pattern = r"%\w+\s*=\s*ttng\.tmem_alloc[\s\S]*?tng\.tc_gen5_mma\s+%\w+,"
+    ttgir = k.asm["ttgir"]
+    assert re.search(pattern, ttgir)
 
 
 @triton.jit
@@ -644,8 +617,8 @@ def lhs_in_tmem_kernel_mxfp(  #
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] < 10,
                     reason="Requires compute capability >= 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
-    if is_xpu():
-        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
+    if is_xpu() and not torch.xpu.get_device_capability()["has_subgroup_matrix_multiply_accumulate"]:
+        pytest.skip("The device does not support MMA")
     _knob_promote_lhs_to_tmem(monkeypatch)
     M, N, K = 128, 64, 32
     torch.manual_seed(42)

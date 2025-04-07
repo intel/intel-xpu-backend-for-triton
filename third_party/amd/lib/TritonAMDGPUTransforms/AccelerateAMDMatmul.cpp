@@ -15,6 +15,8 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+using ::mlir::LLVM::AMD::isChainDotHead;
+using ::mlir::LLVM::AMD::isChainDotTail;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
 
@@ -53,49 +55,6 @@ FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
       .Case<Float6E2M3FNType>([](Type) { return ScaleDotElemType::E2M3; })
       .Case<Float4E2M1FNType>([](Type) { return ScaleDotElemType::E2M1; })
       .Default([](Type) { return failure(); });
-}
-
-// Check if the result of this tl.dot is used as opA of another tl.dot
-// in the same region
-bool isChainDotHead(tt::DotOpInterface dotOp) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  ForwardSliceOptions fwdOpt;
-  fwdOpt.filter = isInSameRegion;
-  SetVector<mlir::Operation *> fwdSlices;
-  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
-  for (Operation *op : fwdSlices) {
-    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
-      assert(dOp != dotOp);
-      auto opA = dOp.getA().getDefiningOp();
-      if (opA && fwdSlices.contains(opA)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-// Check if the opA of this tl.dot is the result of another tl.dot
-// in the same region
-bool isChainDotTail(tt::DotOpInterface dotOp) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = isInSameRegion;
-  SetVector<Operation *> bwdSlices;
-  Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return false;
-  getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::DotOpInterface>(op);
-      }) != bwdSlices.end())
-    return true;
-  return false;
 }
 
 SmallVector<unsigned, 3>
@@ -180,7 +139,7 @@ FailureOr<MfmaIntrinsic>
 chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
                       Type bElemType, int inputKSize, int enforcedNonKDim,
                       bool withScale, bool allowXF32) {
-  // number of matrix elements along k dim per one MFMA intruction
+  // number of matrix elements along k dim per one MFMA instruction
   unsigned kDim = 0;
 
   auto resShape = cType.getShape();
@@ -216,7 +175,7 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
   assert(kDim != 0);
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // if inputKSize % kDim != 0 this layout will introduce data duplication,
-  // consider FMA dot is prefered, except cases MFMA layout is enforced.
+  // consider FMA dot is preferred, except cases MFMA layout is enforced.
   if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
     return failure();
   return maybeMfmaIntrinsic;
@@ -852,7 +811,6 @@ public:
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
-    auto warpOrder = mfmaEnc.getDefaultWarpOrder();
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);

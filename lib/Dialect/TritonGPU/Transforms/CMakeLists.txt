@@ -5,12 +5,14 @@ add_triton_library(TritonGPUTransforms
   FuseNestedLoops.cpp
   CombineTensorSelectAndIf.cpp
   DecomposeScaledBlocked.cpp
+  HoistTMEMAlloc.cpp
   ReduceDataDuplication.cpp
   OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
   OptimizeThreadLocality.cpp
   Pipeliner/AssignLatencies.cpp
   Pipeliner/LowerLoops.cpp
+  Pipeliner/MMAv5PipelineUtility.cpp
   Pipeliner/ScheduleLoops.cpp
   Pipeliner/WGMMAPipeline.cpp
   Pipeliner/PipelineExpander.cpp
@@ -18,9 +20,8 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/TestPipelineScheduleLoop.cpp
   Pipeliner/TestPipelineLowerLoop.cpp
   Pipeliner/SoftwarePipeliner.cpp
-  Pipeliner/TC05MMAPipeline.cpp
   Pipeliner/TMAStoresPipeline.cpp
-  Pipeliner/ModifiedAccMMAPipeline.cpp
+  Pipeliner/MMAv5PipelineUtility.cpp
   Pipeliner/Partition.cpp
   Pipeliner/PipeliningUtility.cpp
   Pipeliner/Schedule.cpp
@@ -31,6 +32,7 @@ add_triton_library(TritonGPUTransforms
   Utility.cpp
   WarpSpecialization/AutomaticWarpSpecialization.cpp
   WarpSpecialization/LoadMMASpecialization.cpp
+  WarpSpecialization/OptimizePartitionWarps.cpp
   WarpSpecialization/PartitionLoops.cpp
   WarpSpecialization/RewritePartitionDependencies.cpp
 
@@ -44,5 +46,6 @@ add_triton_library(TritonGPUTransforms
   TritonIR
   TritonGPUIR
   TritonNvidiaGPUIR
+  TritonToTritonGPU
   MLIRTransformUtils
 )

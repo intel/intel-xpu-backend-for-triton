@@ -4,7 +4,7 @@
 
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
-| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
+| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
 # Triton
 
@@ -70,7 +70,7 @@ Finally, follow the instructions below to install triton from source.
 git clone https://github.com/triton-lang/triton.git
 cd triton
 
-pip install ninja cmake wheel pybind11 # build-time dependencies
+pip install -r python/requirements.txt # build-time dependencies
 pip install -e python
 ```
 
@@ -83,7 +83,7 @@ cd triton
 python -m venv .venv --prompt triton
 source .venv/bin/activate
 
-pip install ninja cmake wheel pybind11 # build-time dependencies
+pip install -r python/requirements.txt # build-time dependencies
 pip install -e python
 ```
 
@@ -137,6 +137,10 @@ arbitrary LLVM version.
   directory where Triton's cache is located and downloads are stored
   during the build. By default, this is the user's home directory. It
   can be changed anytime.
+
+- If you're running out of memory when building Triton, specify the `MAX_JOBS`
+  environment variable (to the `pip install -e python` command) to limit the
+  number of jobs.
 
 - Pass `--no-build-isolation` to `pip install` to make nop builds faster.
   Without this, every invocation of `pip install` uses a different symlink to

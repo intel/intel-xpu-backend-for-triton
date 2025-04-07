@@ -430,7 +430,7 @@ def NVMMASharedEncodingAttr :
         } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
           swizzlingByteWidth = 32;
         } else {
-          llvm_unreachable("unsupported shared memory layout for MMAv3");
+          llvm_unreachable("unsupported NVMMA layout (MMAv3 or TMA)");
         }
         bool transposed = order[0] == 0;
         return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CTALayout);
@@ -597,34 +597,10 @@ We call each individual tile "rep".
                      /*defaultImplementation=*/[{
                          return toLinearEncoding($_self, shape).getElemsPerThread(shape);
                      }]>,
-    // Interface for the meta information about the multiple thread hierarchy.
-    InterfaceMethod<"Get the shape of the warps per CTA.",
-                    "SmallVector<unsigned>",
-                    "getWarpsPerCTA">,
-
-
-    InterfaceMethod<"Get the shape of the threads per warp",
-                    "SmallVector<unsigned>",
-                    "getThreadsPerWarp">,
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
                     (ins "ArrayRef<int64_t>":$shape)>,
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    // that is, the fact that we use them to tile the tensor.
-    InterfaceMethod<"Get the default order of the registers per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultOrder">,
-
-    InterfaceMethod<"Get the default order of the threads per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultThreadOrder">,
-
-    InterfaceMethod<"Get the default order of the warps per CTA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultWarpOrder">
-
   ];
 }
 
@@ -666,20 +642,14 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     // Implemented in subclasses
     SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
-    SmallVector<unsigned> getWarpsPerCTA() const;
-    SmallVector<unsigned> getThreadsPerWarp() const;
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    SmallVector<unsigned> getDefaultWarpOrder() const;
-    SmallVector<unsigned> getDefaultThreadOrder() const;
-    SmallVector<unsigned> getDefaultOrder() const;
   }];
 }
 
@@ -713,6 +683,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> getWarpOrder() const;
     SmallVector<unsigned> getThreadOrder() const;
 
+
     // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
     // Returns the order of the dimensions `dimName` of the layout.
     // If more than dimension is of size one, it uses defaultOrder to determine
@@ -725,6 +696,8 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     // If skipBroadcast is false, we count a base zero
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
+    SmallVector<unsigned> getThreadsPerWarp() const;
+    SmallVector<unsigned> getWarpsPerCTA() const;
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
     SmallVector<unsigned> getShapePerCTATile() const;
@@ -834,8 +807,8 @@ for
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$sizePerThread,
-    ArrayRefParameter<"unsigned">:$threadsPerWarp__,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$threadsPerWarp,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
 
     // CTALayout is optional in the textual IR.  If omitted, we infer it to be a
@@ -923,11 +896,6 @@ for
 def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
-    InterfaceMethod<"Return the number of threads per warp for dot operands.",
-                    "SmallVector<unsigned>",
-                    "getThreadsPerWarpForOperand",
-                    (ins "int":$opIdx)>,
-
     InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
                     "SmallVector<unsigned>",
                     "getRepOrderForOperand",
@@ -1039,7 +1007,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     ins
     "unsigned": $versionMajor,
     "unsigned": $versionMinor,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "unsigned":$MDim,
     "unsigned":$NDim,
     "bool":$isTransposed,
@@ -1050,7 +1018,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
 
     // Returns a swizzled shared layout matching this MFMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
@@ -1160,7 +1127,7 @@ Row |
     ins
     "unsigned": $version,
     "bool":$isTransposed,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout
   );
 
@@ -1172,7 +1139,6 @@ Row |
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     unsigned getKWidthForOperands() const;
     static SmallVector<unsigned> getMNKDimPerInstr();
   }];
@@ -1266,7 +1232,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     ins
     "unsigned":$versionMajor,
     "unsigned":$versionMinor,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
@@ -1282,7 +1248,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int bitwidth, int kWidth,
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1404,4 +1369,5 @@ def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
     Attribute to indicate that the memory descriptor points to shared memory.
   }];
 }
+
 #endif

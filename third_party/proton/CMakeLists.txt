@@ -9,6 +9,26 @@ endif()
 if(NOT ROCTRACER_INCLUDE_DIR)
   message(FATAL_ERROR "ROCTRACER include directory not defined")
 endif()
+if (NOT XPUPTI_INCLUDE_DIR)
+  message(FATAL_ERROR "XPUPTI include directory not defined")
+else()
+  option(ENABLE_XPUTPI_PROFILER "Enable Xpupti Profiler" ON)
+  set(ENABLE_XPUTPI_PROFILER ${ENABLE_XPUTPI_PROFILER} CACHE BOOL "Enable Xpupti Profiler" FORCE)
+
+  if(EXISTS "/opt/intel/oneapi/compiler/latest/include")
+    list(APPEND XPUPTI_INCLUDE_DIR "/opt/intel/oneapi/compiler/latest/include")
+  else()
+    message(WARNING "SYCL FOLDER /opt/intel/oneapi/compiler/latest/include not found")
+    set(ENABLE_XPUTPI_PROFILER, OFF)
+  endif()
+
+  if(EXISTS "/opt/intel/oneapi/compiler/latest/include/sycl")
+    list(APPEND XPUPTI_INCLUDE_DIR "/opt/intel/oneapi/compiler/latest/include/sycl")
+  else()
+    message(WARNING "SYCL FOLDER /opt/intel/oneapi/compiler/latest/include/sycl not found")
+    set(ENABLE_XPUTPI_PROFILER, OFF)
+  endif()
+endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
@@ -36,6 +56,7 @@ function(add_proton_library name)
     PRIVATE
       "${CUPTI_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
+      "${XPUPTI_INCLUDE_DIR}"
       "${PROTON_SRC_DIR}/include"
   )
 
@@ -72,6 +93,20 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module)
+find_library(SYCL_LIB NAMES sycl PATHS /opt/intel/oneapi/compiler/latest/lib)
+find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
+find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
+
+if(SYCL_LIB)
+    target_link_libraries(proton PRIVATE ${SYCL_LIB})
+endif()
+if(ZE_TRACING_LIB)
+    target_link_libraries(proton PRIVATE ${ZE_TRACING_LIB})
+endif()
+if(ZE_LOADER_LIB)
+    target_link_libraries(proton PRIVATE ${ZE_LOADER_LIB})
+endif()
+
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})

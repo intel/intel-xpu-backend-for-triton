@@ -205,7 +205,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
       build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
       }]>,
     ];
-    let assemblyFormat = "$alloc `,` $phase attr-dict (`,` $pred^)? (`deps` $deps^)? `:` qualified(type($alloc)) (`,` type($deps)^)?";
+    let assemblyFormat = "$alloc `,` $phase (`,` $pred^)? (`deps` $deps^)? attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?";
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -366,6 +366,8 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [DeclareOpInterfaceMet
     $desc_ptr `[` $x_offsets `,` $y_offset `]` $src
     attr-dict `:` type(operands)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {

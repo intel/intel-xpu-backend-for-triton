@@ -1,13 +1,28 @@
 import argparse
+import warnings
 import os
 import uuid
 import json
 import datetime
+from dataclasses import dataclass
 
 import pandas as pd
 
 
-def parse_args():
+@dataclass
+class PassedArgs:  # pylint: disable=too-many-instance-attributes
+    source: str
+    target: str
+    param_cols: str
+    benchmark: str
+    compiler: str
+    tflops_col: str
+    hbm_col: str
+    tag: str
+    mask: bool
+
+
+def parse_args() -> PassedArgs:
     parser = argparse.ArgumentParser(description="Build report based on triton-benchmark run")
     parser.add_argument("source", help="Path to source csv file with benchmark results")
     parser.add_argument(
@@ -25,7 +40,8 @@ def parse_args():
     parser.add_argument("--hbm_col", help="Column name with HBM results.", required=False, default=None)
     parser.add_argument("--tag", help="How to tag results", required=False, default="")
     parser.add_argument("--mask", help="Mask identifiers among the params", required=False, action="store_true")
-    return parser.parse_args()
+    parsed_args = parser.parse_args()
+    return PassedArgs(**vars(parsed_args))
 
 
 def check_cols(target_cols, all_cols):
@@ -34,16 +50,18 @@ def check_cols(target_cols, all_cols):
         raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
-def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, mask):
+def transform_df(df, args: PassedArgs) -> pd.DataFrame:
+    param_cols = args.param_cols.split(",")
+    hbm_col = args.hbm_col
     check_cols(param_cols, df.columns)
-    check_cols([tflops_col] + [] if hbm_col is None else [hbm_col], df.columns)
+    check_cols([args.tflops_col] + [] if hbm_col is None else [hbm_col], df.columns)
     # Build json with parameters
     df_results = pd.DataFrame()
     # Type conversion to int is important here, because dashboards expect
     # int values.
     # Changing it without changing dashboards and database will
     # break comparison of old and new results
-    if mask:
+    if args.mask:
         df_results["MASK"] = df[param_cols[-1]]
         param_cols = param_cols[:-1]
         for p in param_cols:
@@ -51,15 +69,27 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, 
             df_results["params"] = [json.dumps(j) for j in df[[*param_cols, "MASK"]].to_dict("records")]
     else:
         df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
-    df_results["tflops"] = df[tflops_col]
+    df_results["tflops"] = df[args.tflops_col]
     if hbm_col is not None:
         df_results["hbm_gbs"] = df[hbm_col]
 
-    df_results["run_uuid"] = uuid.uuid4().hex
-    df_results["datetime"] = datetime.datetime.now()
-    df_results["benchmark"] = benchmark
-    df_results["compiler"] = compiler
-    df_results["tag"] = tag
+    if "run_counter" in df.columns:
+        # We are currently using `run_counter` as a way to separate runs inside of a one benchmark run.
+        max_counter = df["run_counter"].max()
+        mapping = {i: uuid.uuid4().hex for i in range(1, max_counter + 1)}
+        df_results["run_uuid"] = df["run_counter"].map(mapping)
+    else:
+        df_results["run_uuid"] = uuid.uuid4().hex
+
+    # All incoming benchmarks should have datetime now
+    if "datetime" not in df.columns:
+        warnings.warn("No datetime column found in the input file, using current time")
+        df_results["datetime"] = datetime.datetime.now()
+    else:
+        df_results["datetime"] = df["datetime"]
+    df_results["benchmark"] = args.benchmark
+    df_results["compiler"] = args.compiler
+    df_results["tag"] = args.tag
 
     host_info = {
         n: os.getenv(n.upper(), default="")
@@ -83,10 +113,8 @@ def transform_df(df, param_cols, tflops_col, hbm_col, benchmark, compiler, tag, 
 
 def main():
     args = parse_args()
-    param_cols = args.param_cols.split(",")
     df = pd.read_csv(args.source)
-    result_df = transform_df(df, param_cols=param_cols, tflops_col=args.tflops_col, hbm_col=args.hbm_col,
-                             benchmark=args.benchmark, compiler=args.compiler, tag=args.tag, mask=args.mask)
+    result_df = transform_df(df, args)
     result_df.to_csv(args.target, index=False)
 
 

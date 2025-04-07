@@ -461,7 +461,7 @@ static scf::IfOp eraseIfResults(ImplicitLocOpBuilder &b, scf::IfOp ifOp,
 // epilogueK and the first iteration of bodyj(K+1). Hence the `- N` term in the
 // total number of iterations.
 //
-// What the above Python-psuedo-code glosses over is SSA dependency management.
+// What the above Python-pseudo-code glosses over is SSA dependency management.
 // To interpret the pseudocode as SSA IR, just imagine everything is put back
 // into allocas and SSA formation re-runs after fusion, which one should note
 // will introduce undefs.
@@ -899,6 +899,13 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       yieldOperand->set(newResults[i]);
     epilogueIf.erase();
   }
+
+  // Propagate warp specialization flags.
+  if (outer->hasAttr(kWarpSpecializeAttrName) ||
+      llvm::any_of(innerLoops, [](scf::ForOp loop) {
+        return loop->hasAttr(kWarpSpecializeAttrName);
+      }))
+    fused->setAttr(kWarpSpecializeAttrName, b.getUnitAttr());
 
   // Propagate the `tt.disallow_acc_multi_buffer` attribute to the parent loop.
   bool disallowAccMultiBuffer = getDisallowAccMultiBuffer(outer);

@@ -418,7 +418,7 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
 
-  const SmallVector<unsigned> warpsPerCTA = dpas.getWarpsPerCTA();
+  auto warpsPerCTA = dpas.getWarpsPerCTA();
   int threadsPerWarp = product<unsigned>(dpas.getThreadsPerWarp());
   unsigned opsPerChannel = dpas.getOpsPerChannel();
   auto repCluster = dpas.getRepCluster();

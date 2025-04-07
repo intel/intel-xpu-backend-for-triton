@@ -4,6 +4,8 @@
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -15,13 +17,16 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
+
 #define DEBUG_TYPE "ttg-utility"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 namespace mlir {
 
 using namespace triton;
@@ -668,6 +673,19 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
   return newForOp;
 }
 
+Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
+                                          ValueRange newIterOperands) {
+  unsigned curArgIdx = loop.getNumRegionIterArgs();
+  scf::ForOp newLoop =
+      replaceForOpWithNewSignature(rewriter, loop, newIterOperands);
+  // Save the caller from insertion point invalidation.
+  if (rewriter.getInsertionPoint() == loop->getIterator())
+    rewriter.setInsertionPoint(newLoop);
+  loop.erase();
+  loop = newLoop;
+  return loop.getRegionIterArgs().slice(curArgIdx);
+}
+
 scf::WhileOp replaceWhileOpWithNewSignature(
     OpBuilder &rewriter, scf::WhileOp loop, ValueRange newIterOperands,
     TypeRange newResultTypes,
@@ -1066,7 +1084,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
         return std::nullopt;
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy);
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
@@ -1267,6 +1285,198 @@ getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
   }
 
   return eligible;
+}
+
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo) {
+  if (ops.size() == 0) {
+    return nullptr;
+  }
+  if (ops.size() == 1) {
+    return ops[0];
+  }
+  llvm::SmallPtrSet<Block *, 16> blocks;
+  for (auto op : ops) {
+    blocks.insert(op->getBlock());
+  }
+  Block *domBlock = domInfo.findNearestCommonDominator(blocks);
+  if (domBlock == nullptr) {
+    return nullptr;
+  }
+  SmallVector<Operation *> ancestorOps;
+  for (auto op : ops) {
+    ancestorOps.push_back(domBlock->findAncestorOpInBlock(*op));
+  }
+  Operation *dom = ancestorOps[0];
+  for (unsigned i = 1; i < ops.size(); i++) {
+    if (ancestorOps[i]->isBeforeInBlock(dom)) {
+      dom = ancestorOps[i];
+    }
+  }
+  return dom;
+}
+
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (OpOperand &operand : nestedOp->getOpOperands()) {
+      if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
+    }
+  });
+}
+
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor) {
+  visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
+}
+
+SetVector<Value> getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
+void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
+  // Pad the indices in case new arguments were added.
+  while (indices.size() != loop.getInitArgs().size())
+    indices.push_back(false);
+
+  loop.getBody()->getTerminator()->eraseOperands(indices);
+  loop.getBody()->eraseArguments([&](BlockArgument arg) {
+    int idx = arg.getArgNumber();
+    return idx != 0 && indices.test(idx - 1);
+  });
+
+  llvm::BitVector loopOperandIndices(loop->getNumOperands());
+  for (auto [i, operand] : llvm::enumerate(loop.getInitArgsMutable())) {
+    if (indices.test(i))
+      loopOperandIndices.set(operand.getOperandNumber());
+  }
+  loop->eraseOperands(loopOperandIndices);
+
+  // Rewrite the loop to erase results.
+  OperationState state(loop.getLoc(), loop->getName(), loop->getOperands(),
+                       loop.getInitArgs().getTypes(), loop->getAttrs());
+  state.addRegion()->takeBody(loop.getBodyRegion());
+
+  OpBuilder b(loop);
+  auto newLoop = cast<scf::ForOp>(b.create(state));
+
+  // Replace uses of the old loop with the new loop.
+  unsigned newResultIdx = 0;
+  for (auto [i, result] : llvm::enumerate(loop.getResults())) {
+    if (indices.test(i)) {
+      assert(result.use_empty() && "loop carried value still has uses");
+      continue;
+    }
+    result.replaceAllUsesWith(newLoop.getResult(newResultIdx++));
+  }
+
+  loop.erase();
+  loop = newLoop;
+}
+
+// Find all underlying shared, tensory memory, or global scratch allocations of
+// `value`, returning failure if the function lost track of the allocation.
+LogicalResult findUnderlyingAllocations(Value value, DenseSet<Value> &allocs,
+                                        DenseSet<Value> &seen) {
+  // Don't get stuck in an infinite loop.
+  if (!seen.insert(value).second)
+    return success();
+
+  // We found an allocation.
+  if (isa_and_nonnull<ttg::LocalAllocOp, ttg::GlobalScratchAllocOp,
+                      ttng::TMEMAllocOp>(value.getDefiningOp())) {
+    allocs.insert(value);
+    return success();
+  }
+
+  // Assume poison aliases nothing.
+  if (value.getDefiningOp<ub::PoisonOp>())
+    return success();
+
+  // Look through subviews.
+  if (auto view = value.getDefiningOp<ttg::MemDescSubviewOp>()) {
+    return findUnderlyingAllocations(view.getSrc(), allocs, seen);
+  }
+
+  // Look through conditionals.
+  if (auto select = value.getDefiningOp<arith::SelectOp>()) {
+    if (failed(
+            findUnderlyingAllocations(select.getTrueValue(), allocs, seen)) ||
+        failed(
+            findUnderlyingAllocations(select.getFalseValue(), allocs, seen))) {
+      return failure();
+    }
+    return success();
+  }
+  if (auto ifOp = value.getDefiningOp<scf::IfOp>()) {
+    unsigned idx = cast<OpResult>(value).getResultNumber();
+    if (failed(findUnderlyingAllocations(ifOp.thenYield().getOperand(idx),
+                                         allocs, seen)) ||
+        failed(findUnderlyingAllocations(ifOp.elseYield().getOperand(idx),
+                                         allocs, seen))) {
+      return failure();
+    }
+    return success();
+  }
+
+  // Look through loops.
+  if (auto forOp = value.getDefiningOp<scf::ForOp>()) {
+    unsigned idx = cast<OpResult>(value).getResultNumber();
+    if (failed(findUnderlyingAllocations(forOp.getYieldedValues()[idx], allocs,
+                                         seen)) ||
+        failed(
+            findUnderlyingAllocations(forOp.getInitArgs()[idx], allocs, seen)))
+      return failure();
+    return success();
+  }
+
+  // Handle block arguments.
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+
+    // Loop through loops.
+    if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
+      unsigned idx = arg.getArgNumber() - 1;
+      if (failed(findUnderlyingAllocations(forOp.getYieldedValues()[idx],
+                                           allocs, seen)) ||
+          failed(findUnderlyingAllocations(forOp.getInitArgs()[idx], allocs,
+                                           seen)))
+        return failure();
+      return success();
+    }
+
+    // Look through warp specialization.
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(
+            arg.getOwner()->getParentOp())) {
+      return findUnderlyingAllocations(
+          wsOp.getParentOp().getOperand(arg.getArgNumber()), allocs, seen);
+    }
+
+    // Unhandled block argument type.
+    return failure();
+  }
+
+  return failure();
+}
+
+bool mayAliasAllocations(const DenseSet<Value> &lhs,
+                         const DenseSet<Value> &rhs) {
+  DenseSet<Value> lhsAllocs, rhsAllocs;
+  DenseSet<Value> lhsSeen, rhsSeen;
+
+  // If we failed to find the underlying allocations, we assume they may alias.
+  for (Value lhsValue : lhs) {
+    if (failed(findUnderlyingAllocations(lhsValue, lhsAllocs, lhsSeen)))
+      return true;
+  }
+  for (Value rhsValue : rhs) {
+    if (failed(findUnderlyingAllocations(rhsValue, rhsAllocs, rhsSeen)))
+      return true;
+  }
+
+  // The allocations alias if they may share the same underlying allocations.
+  return !llvm::set_intersection(lhsAllocs, rhsAllocs).empty();
 }
 
 } // namespace mlir
