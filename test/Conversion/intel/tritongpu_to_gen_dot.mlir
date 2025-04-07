@@ -76,68 +76,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-SAME:    %[[A:.*]]: !llvm.struct<(f32, f32, f32, f32)>, %[[B:.*]]: !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>,
   // CHECK-SAME:    %[[C:.*]]: !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>) attributes {intel_reqd_sub_group_size = 32 : i32, triton_gen.max_work_group_size = array<i32: 32, 1, 1>} {
   tt.func @dot_f32_tf32_tf32_f32_1(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x16xf32, #dot_operand_b>, %c: tensor<8x16xf32, #dpas>) {
-    // CHECK %[[CST_7:.*]] = llvm.mlir.constant(7 : i32) : i32
-    // CHECK %[[CST_6:.*]] = llvm.mlir.constant(6 : i32) : i32
-    // CHECK %[[CST_5:.*]] = llvm.mlir.constant(5 : i32) : i32
-    // CHECK %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK %[[VAL_0:.*]] = llvm.mlir.undef : vector<8xf32>
-    // CHECK %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK %[[VAL_1:.*]] = llvm.mlir.undef : vector<4xf32>
-    // CHECK %[[VAL_2:.*]] = llvm.extractvalue %[[A]][0]
-    // CHECK %[[VAL_3:.*]] = llvm.extractvalue %[[A]][1]
-    // CHECK %[[VAL_4:.*]] = llvm.extractvalue %[[A]][2]
     // CHECK %[[VAL_5:.*]] = llvm.extractvalue %[[A]][3]
-    // CHECK %[[VAL_6:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_2]])
-    // CHECK %[[VAL_7:.*]] = llvm.insertelement %[[VAL_6]], %[[VAL_1]]{{\[}}%[[CST_0]] : i32] : vector<4xf32>
-    // CHECK %[[VAL_8:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_3]])
-    // CHECK %[[VAL_9:.*]] = llvm.insertelement %[[VAL_8]], %[[VAL_7]]{{\[}}%[[CST_1]] : i32] : vector<4xf32>
-    // CHECK %[[VAL_10:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_4]])
-    // CHECK %[[VAL_11:.*]] = llvm.insertelement %[[VAL_10]], %[[VAL_9]]{{\[}}%[[CST_2]] : i32] : vector<4xf32>
     // CHECK %[[VAL_12:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_5]])
-    // CHECK %[[A_0:.*]] = llvm.insertelement %[[VAL_12]], %[[VAL_11]]{{\[}}%[[CST_3]] : i32] : vector<4xf32>
-    // CHECK %[[VAL_13:.*]] = llvm.extractvalue %[[B]][0]
-    // CHECK %[[VAL_14:.*]] = llvm.extractvalue %[[B]][1]
-    // CHECK %[[VAL_15:.*]] = llvm.extractvalue %[[B]][2]
-    // CHECK %[[VAL_16:.*]] = llvm.extractvalue %[[B]][3]
-    // CHECK %[[VAL_17:.*]] = llvm.extractvalue %[[B]][4]
-    // CHECK %[[VAL_18:.*]] = llvm.extractvalue %[[B]][5]
-    // CHECK %[[VAL_19:.*]] = llvm.extractvalue %[[B]][6]
+    // CHECK %[[A_0:.*]] = llvm.insertelement %[[VAL_12]], %{{.*}}{{\[}}%{{.*}} : i32] : vector<4xf32>
     // CHECK %[[VAL_20:.*]] = llvm.extractvalue %[[B]][7]
-    // CHECK %[[VAL_21:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_13]])
-    // CHECK %[[VAL_22:.*]] = llvm.insertelement %[[VAL_21]], %[[VAL_0]]{{\[}}%[[CST_0]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_23:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_14]])
-    // CHECK %[[VAL_24:.*]] = llvm.insertelement %[[VAL_23]], %[[VAL_22]]{{\[}}%[[CST_1]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_25:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_15]])
-    // CHECK %[[VAL_26:.*]] = llvm.insertelement %[[VAL_25]], %[[VAL_24]]{{\[}}%[[CST_2]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_27:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_16]])
-    // CHECK %[[VAL_28:.*]] = llvm.insertelement %[[VAL_27]], %[[VAL_26]]{{\[}}%[[CST_3]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_29:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_17]])
-    // CHECK %[[VAL_30:.*]] = llvm.insertelement %[[VAL_29]], %[[VAL_28]]{{\[}}%[[CST_4]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_31:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_18]])
-    // CHECK %[[VAL_32:.*]] = llvm.insertelement %[[VAL_31]], %[[VAL_30]]{{\[}}%[[CST_5]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_33:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_19]])
-    // CHECK %[[VAL_34:.*]] = llvm.insertelement %[[VAL_33]], %[[VAL_32]]{{\[}}%[[CST_6]] : i32] : vector<8xf32>
     // CHECK %[[VAL_35:.*]] = llvm.call spir_funccc @_Z25__spirv_RoundFToTF32INTELf(%[[VAL_20]])
-    // CHECK %[[B_0:.*]] = llvm.insertelement %[[VAL_35]], %[[VAL_34]]{{\[}}%[[CST_7]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_36:.*]] = llvm.extractvalue %[[C]][0]
-    // CHECK %[[VAL_37:.*]] = llvm.extractvalue %[[C]][1]
-    // CHECK %[[VAL_38:.*]] = llvm.extractvalue %[[C]][2]
-    // CHECK %[[VAL_39:.*]] = llvm.extractvalue %[[C]][3]
-    // CHECK %[[VAL_40:.*]] = llvm.extractvalue %[[C]][4]
-    // CHECK %[[VAL_41:.*]] = llvm.extractvalue %[[C]][5]
-    // CHECK %[[VAL_42:.*]] = llvm.extractvalue %[[C]][6]
+    // CHECK %[[B_0:.*]] = llvm.insertelement %[[VAL_35]], %{{.*}}{{\[}}%{{.*}} : i32] : vector<8xf32>
     // CHECK %[[VAL_43:.*]] = llvm.extractvalue %[[C]][7]
-    // CHECK %[[VAL_44:.*]] = llvm.insertelement %[[VAL_36]], %[[VAL_0]]{{\[}}%[[CST_0]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_45:.*]] = llvm.insertelement %[[VAL_37]], %[[VAL_44]]{{\[}}%[[CST_1]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_46:.*]] = llvm.insertelement %[[VAL_38]], %[[VAL_45]]{{\[}}%[[CST_2]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_47:.*]] = llvm.insertelement %[[VAL_39]], %[[VAL_46]]{{\[}}%[[CST_3]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_48:.*]] = llvm.insertelement %[[VAL_40]], %[[VAL_47]]{{\[}}%[[CST_4]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_49:.*]] = llvm.insertelement %[[VAL_41]], %[[VAL_48]]{{\[}}%[[CST_5]] : i32] : vector<8xf32>
-    // CHECK %[[VAL_50:.*]] = llvm.insertelement %[[VAL_42]], %[[VAL_49]]{{\[}}%[[CST_6]] : i32] : vector<8xf32>
-    // CHECK %[[C_0:.*]] = llvm.insertelement %[[VAL_43]], %[[VAL_50]]{{\[}}%[[CST_7]] : i32] : vector<8xf32>
+    // CHECK %[[C_0:.*]] = llvm.insertelement %[[VAL_43]], %{{.*}}{{\[}}%{{.*}} : i32] : vector<8xf32>
     // CHECK : llvm.call spir_funccc @_Z39intel_sub_group_tf32_tf32_matrix_mad_k8Dv4_fDv8_fS0_(%[[A_0]], %[[B_0]], %[[C_0]]) {{.*}} : (vector<4xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32>
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<8x8xf32, #dot_operand_a> * tensor<8x16xf32, #dot_operand_b> -> tensor<8x16xf32, #dpas>
     tt.return

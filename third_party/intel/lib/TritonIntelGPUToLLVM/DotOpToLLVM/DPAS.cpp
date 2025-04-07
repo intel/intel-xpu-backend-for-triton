@@ -5,6 +5,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/IR/Value.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -339,11 +340,9 @@ private:
         totalElems /
         ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
-    // dot3d precision loss
+    // TODO: IGC bug, remove workaround for one dot3d case once issue # fixed
     isFToTF32Enabled = elemTy.isFloat(32) &&
                        ((rank == 3) ? isOperandA : (isOperandA || isOperandB));
-    if (isFToTF32Enabled)
-      dotOpTy = vec_ty(f32_ty, numElemsPerOperand);
 
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     int offset = 0;
@@ -356,9 +355,9 @@ private:
               Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
               for (int k = 0; k < numElemsPerOperand; ++k) {
                 if (isFToTF32Enabled) {
-                  auto f32Val = elems[offset++];
+                  Value f32Val = elems[offset++];
                   auto t32Val =
-                      rewriter.create<TritonGEN::FToTf32Op>(loc, f32_ty, f32Val)
+                      rewriter.create<TritonGEN::FToTf32Op>(loc, f32Val)
                           .getResult();
                   matVal =
                       tb.insert_element(dotOpTy, matVal, t32Val, tb.i32_val(k));

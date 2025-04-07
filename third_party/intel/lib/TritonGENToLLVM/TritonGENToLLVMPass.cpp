@@ -313,8 +313,8 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                                          intel::noUnwindWillReturnAttrs);
 }
 
-static LLVM::CallOp createGenISAFToTf32(TritonGEN::FToTf32Op op,
-                                        ConversionPatternRewriter &rewriter) {
+static LLVM::CallOp createSPIRVExtFToTf32(TritonGEN::FToTf32Op op,
+                                          ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -724,7 +724,7 @@ struct TritonFToTf32OpLowering
   LogicalResult
   matchAndRewrite(TritonGEN::FToTf32Op op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM::CallOp callOp = createGenISAFToTf32(op, rewriter);
+    LLVM::CallOp callOp = createSPIRVExtFToTf32(op, rewriter);
     rewriter.replaceOp(op, callOp);
     return success();
   }

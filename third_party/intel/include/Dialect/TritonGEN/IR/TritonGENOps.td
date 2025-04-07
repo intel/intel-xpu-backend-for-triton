@@ -20,6 +20,7 @@ include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMTypes.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/OpAsmInterface.td"
+include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 
 //===----------------------------------------------------------------------===//
 // TritonGEN op definitions
@@ -313,7 +314,8 @@ def TritonGEN_SubGroupBlockWriteOp : TritonGEN_Op<"sub_group_block_write"> {
   }];
 }
 
-def TritonGEN_FToTf32Op : TritonGEN_Op<"f_to_tf32"> {
+def TritonGEN_FToTf32Op
+    : TritonGEN_Op<"f_to_tf32", [SameOperandsAndResultType]> {
   let summary = "Rounding instruction from float to tensor float (TF32) data format";
 
   let description = [{
