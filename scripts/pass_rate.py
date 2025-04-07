@@ -101,10 +101,10 @@ def get_warnings(reports_path: pathlib.Path, suite: str) -> List[TestWarning]:
 
 
 def get_missing_tests(warnings: List[TestWarning]) -> List[str]:
-    """Searches warnings for PytestSelectWarning and returns a list of missing tests."""
+    """Searches warnings for UserWarning and returns a list of missing tests."""
     tests = set()
     for warning in warnings:
-        if 'PytestSelectWarning: pytest-select: Not all deselected' not in warning.message:
+        if 'UserWarning: pytest-skip: Not all deselected' not in warning.message:
             continue
         for line in warning.message.splitlines():
             if line.startswith('  - '):
