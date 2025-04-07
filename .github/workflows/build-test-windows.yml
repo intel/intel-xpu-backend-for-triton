@@ -32,7 +32,7 @@ jobs:
       - windows
       - ${{ inputs.runner_label }}
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
-    timeout-minutes: 480
+    timeout-minutes: 720
     steps:
       - name: Enable long paths
         run: |
