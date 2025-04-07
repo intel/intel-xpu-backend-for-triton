@@ -87,7 +87,7 @@ def launch_exhaustive_populate(dst_dtype, offset, numel, force_odd, output_bits,
 
 
 @triton.jit
-def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr, device_ : tl.constexpr):
+def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr, from_bf16 : tl.constexpr):
 
     tl.static_assert(x.dtype == tl.float32, "input must be float32")
     numbits_dst : tl.constexpr = 1 + exponent_bits + mantissa_bits
@@ -118,7 +118,7 @@ def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.const
     mantissa = tl.where(exponent > -1, mantissa, mantissa * 0.5)
     exponent = tl.where(exponent > -1, exponent, exponent + 1)
 
-    if device_ == 'xpu':
+    if from_bf16:
         # convert mantissa to int with proper rounding without inline asm.
         to_cast = mantissa.to(tl.uint32, bitcast=True)
         mantissa2 = (to_cast & 0x7fffff)
@@ -165,13 +165,13 @@ def arbitrary_fp32_downcast(x, rounding : tl.constexpr, exponent_bits : tl.const
 
 
 @triton.jit
-def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr, device_: tl.constexpr):
+def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constexpr, exponent_bits : tl.constexpr, mantissa_bits : tl.constexpr, exponent_bias : tl.constexpr, from_bf16: tl.constexpr):
 
     tl.static_assert(src.dtype.element_ty == tl.float32, "src dtype must be float32")
 
     idxs = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     x = tl.load(src + idxs)
-    y = arbitrary_fp32_downcast(x, rounding, exponent_bits, mantissa_bits, exponent_bias, device_=device_)
+    y = arbitrary_fp32_downcast(x, rounding, exponent_bits, mantissa_bits, exponent_bias, from_bf16)
     y = y.to(dst.dtype.element_ty, bitcast=True)
     tl.store(dst + idxs, y)
 
@@ -179,9 +179,9 @@ def downcast_emulated(src, dst, rounding : tl.constexpr, BLOCK_SIZE : tl.constex
 def launch_downcast_emulated(src, src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, device, BLOCK_SIZE=4096):
 
     dst = torch.empty(src.shape, dtype=matching_int(dst_dtype), device=device)
-    device_ = device if src_dtype == tl.bfloat16 else None
+    from_bf16 = src_dtype == tl.bfloat16 and device == 'xpu'
     downcast_emulated[(src.shape[0] // BLOCK_SIZE,)](
-        triton.reinterpret(src, tl.float32), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias, device_=device_)
+        triton.reinterpret(src, tl.float32), triton.reinterpret(dst, dst_dtype), rounding, BLOCK_SIZE, exponent_bits, mantissa_bits, exponent_bias, from_bf16=from_bf16)
     # 0x80 in float8e4b8 or float8e5b16 represents inf/nan. downcast_emulated kernel will
     # convert -0. in higher precision to 0x80 and thus need to fix the result to 0.
     if dst_dtype == tl.float8e4b8 or dst_dtype == tl.float8e5b16:

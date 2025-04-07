@@ -529,7 +529,6 @@ Fp16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value val = b.bitcast(v[0], i16_ty);
   Value sign = b.and_(i16_ty, val, b.i16_val(0x8000));
-  sign = b.trunc(i8_ty, b.lshr(sign, b.i16_val(8)));
   Value nosign = b.and_(i16_ty, val, b.i16_val(0x7fff));
 
   Value exp = b.and_(i16_ty, b.lshr(nosign, b.i16_val(10)), b.i16_val(0x1f));
@@ -573,13 +572,11 @@ Fp16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
 
   // Choose between subnormal and normal values.
   Value res_val = b.select(is_subnormal, subnormal, normal);
+  res_val = b.or_(i16_ty, res_val, sign);
   auto fp8x4VecTy = vec_ty(i8_ty, 2);
-  res_val = b.bitcast(res_val, fp8x4VecTy);
-  res_val = b.extract_element(i8_ty, res_val, b.i16_val(1));
+  Value res = b.bitcast(res_val, fp8x4VecTy);
 
-  Value res = b.or_(i8_ty, res_val, sign);
-
-  return {res};
+  return {b.extract_element(i8_ty, res, b.i16_val(1))};
 }
 
 static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
