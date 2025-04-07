@@ -66,11 +66,6 @@ def create_argument_parser() -> argparse.ArgumentParser:
         default='all',
         help='name of the test suite, default: %(default)s',
     )
-    argument_parser.add_argument(
-        '--skip-list',
-        type=str,
-        help='an exclude list dir used in pass rate calculation',
-    )
     return argument_parser
 
 
@@ -225,10 +220,6 @@ def main():
     """Main."""
     args = create_argument_parser().parse_args()
     args.report_path = pathlib.Path(args.reports)
-    if args.skip_list:
-        args.skiplist_dir = pathlib.Path(args.skip_list)
-    else:
-        args.skiplist_dir = None
 
     missing_tests = get_all_missing_tests(args.report_path)
     if missing_tests:
