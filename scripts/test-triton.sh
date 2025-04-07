@@ -252,7 +252,7 @@ run_tutorial_tests() {
   run_tutorial_test "06-fused-attention"
   run_tutorial_test "07-extern-functions"
   run_tutorial_test "08-grouped-gemm"
-  TRITON_TEST_REPORTS=false  run_tutorial_test "09-persistent-matmul"
+  TRITON_TEST_REPORTS=false run_tutorial_test "09-persistent-matmul"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
 
@@ -292,6 +292,9 @@ run_benchmark_gemm() {
 
   echo "GEMM with tensor of pointer:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
+
+  echo "GEMM with tensor descriptor:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_desc_benchmark.py
 }
 
 run_benchmark_attention() {
