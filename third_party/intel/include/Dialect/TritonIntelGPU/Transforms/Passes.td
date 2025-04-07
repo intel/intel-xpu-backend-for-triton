@@ -377,4 +377,19 @@ def TritonIntelGPURewriteStackPtr
     "mlir::arith::ArithDialect"
   ];
 }
+
+def TritonIntelGPUPrefetch : Pass<"tritonintelgpu-prefetch", "mlir::ModuleOp"> {
+  let summary = "prefetch";
+
+  let description = [{
+    This pass attempts to prefetch from global memory the operands (A and B)
+    of a `tt.dot`, when this operation is located in a loop and
+    the operands are out of the loop.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES

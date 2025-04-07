@@ -305,7 +305,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
-        passes.ttgpuir.add_prefetch(pm)
+        intel.passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
