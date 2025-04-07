@@ -8,7 +8,7 @@ import os
 import pathlib
 import platform
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from defusedxml.ElementTree import parse
 
@@ -74,22 +74,6 @@ def create_argument_parser() -> argparse.ArgumentParser:
     return argument_parser
 
 
-def get_deselected(report_path: pathlib.Path, skiplist_dir: pathlib.Path) -> int:
-    """Calculates deselected (via skiplist) tests."""
-    skiplist_path = skiplist_dir / f'{report_path.stem}.txt'
-    if not skiplist_path.exists():
-        return 0
-    with skiplist_path.open('r') as f:
-        count = 0
-        for line in f.readlines():
-            # `strip` allows to skip lines with only '\n' character
-            line = line.strip()
-            # skip empty lines and comments
-            if line and not line.startswith('#'):
-                count += 1
-        return count
-
-
 def get_warnings(reports_path: pathlib.Path, suite: str) -> List[TestWarning]:
     """Returns a list of warnings for the specified suite."""
     path = reports_path / f'{suite}-warnings.json'
@@ -124,7 +108,7 @@ def get_all_missing_tests(reports_path: pathlib.Path) -> Dict[str, List[str]]:
     return all_missing_tests
 
 
-def parse_report(report_path: pathlib.Path, skiplist_dir: Optional[pathlib.Path]) -> ReportStats:
+def parse_report(report_path: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
@@ -145,13 +129,6 @@ def parse_report(report_path: pathlib.Path, skiplist_dir: Optional[pathlib.Path]
                 testsuite_fixme_tests.add(warning.location)
         stats.fixme += len(testsuite_fixme_tests)
 
-    test_unskip = os.getenv('TEST_UNSKIP', 'false')
-    if test_unskip not in ('true', 'false'):
-        raise ValueError('Error: please set TEST_UNSKIP true or false')
-    if skiplist_dir and test_unskip == 'false':
-        deselected = get_deselected(report_path, skiplist_dir)
-        stats.skipped += deselected
-        stats.total += deselected
     stats.passed = stats.total - stats.failed - stats.skipped - stats.xfailed
     return stats
 
@@ -180,7 +157,7 @@ def find_stats(stats: List[ReportStats], name: str) -> ReportStats:
 def parse_junit_reports(args: argparse.Namespace) -> List[ReportStats]:
     """Parses junit report in the specified directory."""
     reports_path = pathlib.Path(args.reports)
-    return [parse_report(report, args.skiplist_dir) for report in reports_path.glob('*.xml')]
+    return [parse_report(report) for report in reports_path.glob('*.xml')]
 
 
 def parse_tutorials_reports(args: argparse.Namespace) -> List[ReportStats]:
