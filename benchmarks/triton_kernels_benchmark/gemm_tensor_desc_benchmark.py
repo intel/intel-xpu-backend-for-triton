@@ -60,7 +60,7 @@ def matmul_kernel_with_block_pointers(
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
-    for k in range(0, K, BLOCK_SIZE_K):
+    for _ in range(0, K, BLOCK_SIZE_K):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
@@ -133,7 +133,7 @@ def matmul_kernel_with_block_pointers_batched(
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     off_k = 0
-    for k in range(0, K, BLOCK_SIZE_K):
+    for _ in range(0, K, BLOCK_SIZE_K):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         accumulator += tl.dot(a, b)
