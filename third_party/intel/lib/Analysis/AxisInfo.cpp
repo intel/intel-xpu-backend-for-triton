@@ -107,28 +107,37 @@ public:
     const auto &rhsInfo = operands[1]->getValue();
     auto rank = lhsInfo.getRank();
     assert(operands.size() == 2 && "Expected two operands");
+    AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
     auto constantValue = getConstantValue(op, lhsInfo, rhsInfo);
     for (auto d = 0; d < rank; ++d) {
       if (constantValue.has_value()) {
+        stride.push_back(0);
         contiguity.push_back(1);
         constancy.push_back(
             std::max(lhsInfo.getConstancy(d), rhsInfo.getConstancy(d)));
         divisibility.push_back(
             highestPowOf2Divisor<int64_t>(constantValue.value()));
       } else {
+        stride.push_back(getStride(op, lhsInfo, rhsInfo, d));
         contiguity.push_back(getContiguity(op, lhsInfo, rhsInfo, d));
         constancy.push_back(getConstancy(op, lhsInfo, rhsInfo, d));
         divisibility.push_back(getDivisibility(op, lhsInfo, rhsInfo, d));
       }
     }
-    return AxisInfo(std::move(contiguity), std::move(divisibility),
-                    std::move(constancy), constantValue);
+    return AxisInfo(std::move(stride), std::move(contiguity),
+                    std::move(divisibility), std::move(constancy),
+                    constantValue);
   }
 
 protected:
+  virtual int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                            int dim) {
+    return -1;
+  }
+
   virtual int64_t getContiguity(OpTy op, const AxisInfo &lhs,
                                 const AxisInfo &rhs, int dim) {
     return 1;
@@ -302,6 +311,13 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
+  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                    int dim) override {
+    if (lhs.getStride(dim) < 0 || rhs.getStride(dim) < 0)
+      return -1;
+    return lhs.getStride(dim) + rhs.getStride(dim);
+  }
+
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     // Contiguity assumes an increasing sequence. So for SubIOp contiguous
@@ -373,6 +389,15 @@ public:
   using BinaryOpVisitorImpl<arith::MulIOp>::BinaryOpVisitorImpl;
 
 private:
+  int64_t getStride(arith::MulIOp op, const AxisInfo &lhs, const AxisInfo &rhs,
+                    int dim) override {
+    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value())
+      return lhs.getStride(dim) * rhs.getConstantValue().value();
+    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
+      return rhs.getStride(dim) * lhs.getConstantValue().value();
+    return -1;
+  }
+
   int64_t getContiguity(arith::MulIOp op, const AxisInfo &lhs,
                         const AxisInfo &rhs, int dim) override {
     // lhs * 1 = lhs
@@ -559,16 +584,18 @@ public:
     Type _retTy = *op->result_type_begin();
     TensorType retTy = cast<TensorType>(_retTy);
     AxisInfo opInfo = operands[0]->getValue();
+    AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
     for (int d = 0; d < retTy.getRank(); ++d) {
+      stride.push_back(0);
       contiguity.push_back(1);
       divisibility.push_back(opInfo.getDivisibility(0));
       constancy.push_back(retTy.getShape()[d]);
     }
-    return AxisInfo(std::move(contiguity), std::move(divisibility),
-                    std::move(constancy),
+    return AxisInfo(std::move(stride), std::move(contiguity),
+                    std::move(divisibility), std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -655,17 +682,19 @@ public:
     ArrayRef<int64_t> retShape = retTy.getShape();
     ArrayRef<int64_t> opShape = opTy.getShape();
     AxisInfo opInfo = operands[0]->getValue();
+    AxisInfo::DimVectorT stride;
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
     for (int d = 0; d < retTy.getRank(); ++d) {
+      stride.push_back(opShape[d] == 1 ? 0 : opInfo.getStride(d));
       contiguity.push_back(opShape[d] == 1 ? 1 : opInfo.getContiguity(d));
       divisibility.push_back(opInfo.getDivisibility(d));
       constancy.push_back(opShape[d] == 1 ? retShape[d]
                                           : opInfo.getConstancy(d));
     }
-    return AxisInfo(std::move(contiguity), std::move(divisibility),
-                    std::move(constancy),
+    return AxisInfo(std::move(stride), std::move(contiguity),
+                    std::move(divisibility), std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -1048,15 +1077,18 @@ public:
     if (rank > 2)
       return AxisInfo();
 
-    SmallVector<AxisInfo> strideInfo;
+    SmallVector<AxisInfo, 2> strideInfo;
     for (int i = rank + 1; i <= rank * 2; ++i)
       strideInfo.emplace_back(operands[i]->getValue());
 
     AxisInfo ptrInfo = operands[0]->getValue();
     int64_t ptrDivisibility = ptrInfo.getDivisibility(0);
 
-    AxisInfo::DimVectorT contiguity, constancy, divisibility;
+    AxisInfo::DimVectorT stride, contiguity, constancy, divisibility;
     for (int dim = 0; dim < rank; ++dim) {
+      stride.push_back(strideInfo[dim].getConstantValue().has_value()
+                           ? strideInfo[dim].getConstantValue().value()
+                           : -1);
       contiguity.push_back(
           strideInfo[dim].getConstantValue() == 1 ? blkShape[dim] : 1);
       divisibility.push_back(
@@ -1069,8 +1101,9 @@ public:
       constancy.push_back(1);
     }
 
-    auto axisInfo = AxisInfo(std::move(contiguity), std::move(divisibility),
-                             std::move(constancy));
+    auto axisInfo =
+        AxisInfo(std::move(stride), std::move(contiguity),
+                 std::move(divisibility), std::move(constancy), std::nullopt);
 
     LLVM_DEBUG({
       std::string axisStr;
@@ -1176,8 +1209,9 @@ LogicalResult AxisInfoAnalysis::visitOperation(
     auto vals = cast<DenseElementsAttr>(attr).getValues<int>();
     newConstancy = AxisInfo::DimVectorT(vals.begin(), vals.end());
   }
-  curr = AxisInfo(std::move(newContiguity), std::move(newDivisibility),
-                  std::move(newConstancy), curr.getConstantValue());
+  curr = AxisInfo(curr.getStride(), std::move(newContiguity),
+                  std::move(newDivisibility), std::move(newConstancy),
+                  curr.getConstantValue());
   // join all lattice elements
   for (auto *result : results)
     propagateIfChanged(result, result->join(curr));
