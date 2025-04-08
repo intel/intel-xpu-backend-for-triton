@@ -50,7 +50,10 @@ def matmul_kernel(  #
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        mask_a = (offs_am[:, None] < M) & (offs_k[None, :] + k * BLOCK_K < K)
+        if not A_TRANS:
+            mask_a = (offs_am[:, None] < M) & (offs_k[None, :] + k * BLOCK_K < K)
+        else:
+            mask_a = (offs_k[:, None] + k * BLOCK_K < K) & (offs_am[None, :] < M)
         a = tl.load(a_ptrs, mask=mask_a, other=0.0)
         if SCALE_A is not None:
             a = a * SCALE_A
@@ -551,11 +554,6 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     N = 512
     K = 256
     _knob_promote_lhs_to_tmem(monkeypatch)
-    if is_xpu() and (M != BLOCK_M or N != BLOCK_N or K != BLOCK_K):
-        # TODO: Make LHS TMEM promotion work for all problem sizes regardless of block dims
-        pytest.skip(
-            "LHS TMEM promotion produces incorrect results when the workload dimensions are not equal to the block dims"
-        )
     torch.manual_seed(42)
     if dtype_src_str == "float8e5":
         a = torch.randint(20, 40, (M, K), dtype=torch.int8, device=device).view(torch.float8_e5m2)
@@ -581,9 +579,10 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     atol = 0.03
     rtol = 0.03
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
-    pattern = r"%\w+\s*=\s*ttng\.tmem_alloc[\s\S]*?tng\.tc_gen5_mma\s+%\w+,"
-    ttgir = k.asm["ttgir"]
-    assert re.search(pattern, ttgir)
+    if not is_xpu():
+        pattern = r"%\w+\s*=\s*ttng\.tmem_alloc[\s\S]*?tng\.tc_gen5_mma\s+%\w+,"
+        ttgir = k.asm["ttgir"]
+        assert re.search(pattern, ttgir)
 
 
 @triton.jit
