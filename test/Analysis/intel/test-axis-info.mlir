@@ -702,13 +702,13 @@ tt.func @vecadd_mask_align_16(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, 
   %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
   %8 = tt.addptr %7, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   %9 = tt.splat %n_elements : i32 -> tensor<64xi32>
-  // CHECK: arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [16], constant_value = <none>
+  // CHECK: arith.cmpi slt, %{{.*}} => stride = [-1], contiguity = [1], divisibility = [1], constancy = [16], constant_value = <none>
   %mask = arith.cmpi slt, %4, %9 : tensor<64xi32>
   %11 = tt.load %6, %mask : tensor<64x!tt.ptr<f32>>
   %12 = tt.load %8, %mask : tensor<64x!tt.ptr<f32>>
   %13 = arith.addf %11, %12 : tensor<64xf32>
   %14 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
-  // CHECK: tt.addptr %{{.*}} => contiguity = [64], divisibility = [16], constancy = [1], constant_value = <none>
+  // CHECK: tt.addptr %{{.*}} => stride = [1], contiguity = [64], divisibility = [16], constancy = [1], constant_value = <none>
   %15 = tt.addptr %14, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   tt.store %15, %13, %mask : tensor<64x!tt.ptr<f32>>
   tt.return
@@ -731,7 +731,7 @@ tt.func @vecadd_mask_align_1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %
   %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
   %8 = tt.addptr %7, %4 : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
   %9 = tt.splat %n_elements : i32 -> tensor<64xi32>
-  // CHECK: arith.cmpi slt, %{{.*}} => contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  // CHECK: arith.cmpi slt, %{{.*}} => stride = [-1], contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %10 = arith.cmpi slt, %4, %9 : tensor<64xi32>
   %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>>
   %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>>
@@ -885,11 +885,11 @@ tt.func public @make_tensor_ptr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E5M2> {tt.
   %c1_i64 = arith.constant 1 : i64
   %c32_i64 = arith.constant 32 : i64
   %c128_i64 = arith.constant 128 : i64
-  // CHECK: tt.make_tensor_ptr %arg0, {{.*}} => contiguity = [128, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  // CHECK: tt.make_tensor_ptr %arg0, {{.*}} => stride = [1, 1], contiguity = [128, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %0 = tt.make_tensor_ptr %arg0, [%c128_i64, %c32_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : !tt.ptr<tensor<128x32xf16>>
-  // CHECK: tt.make_tensor_ptr %arg1, {{.*}} => contiguity = [64, 1], divisibility = [16, 1], constancy = [1, 1], constant_value = <none>
+  // CHECK: tt.make_tensor_ptr %arg1, {{.*}} => stride = [1, -1], contiguity = [64, 1], divisibility = [16, 1], constancy = [1, 1], constant_value = <none>
   %1 = tt.make_tensor_ptr %arg1, [%c32_i64, %c32_i64], [%c1_i64, %arg2], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf8E5M2>>
-  // CHECK: tt.make_tensor_ptr %arg1, {{.*}} => contiguity = [32, 64], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
+  // CHECK: tt.make_tensor_ptr %arg1, {{.*}} => stride = [1, 1], contiguity = [32, 64], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %2 = tt.make_tensor_ptr %arg1, [%arg2, %c128_i64], [%c1_i64, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x64xf8E5M2>>
   tt.return
 }
