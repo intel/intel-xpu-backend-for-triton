@@ -27,9 +27,7 @@ use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
             num_stages=s, num_warps=32) for s in [2]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w)
-        for s in [2, 3, 4]
-        for (m, w) in ([('large', 32), ('small', 64)])
+                      num_stages=s, num_warps=w) for s in [2, 3, 4] for (m, w) in ([('large', 32), ('small', 64)])
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
