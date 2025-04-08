@@ -8,6 +8,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
+import numpy as np
 
 
 # pylint: disable=unused-argument
@@ -531,8 +532,8 @@ def check_close(f_val, f_ref, atol, rtol):
     y = f_ref()
     x = x.cpu().detach().numpy()
     y = y.cpu().detach().numpy()
-    close = torch.isclose(x, y, atol=atol, rtol=rtol)
-    num_close = torch.count_nonzero(close)
+    close = np.isclose(x, y, atol=atol, rtol=rtol)
+    num_close = np.count_nonzero(close)
     num_not_close = close.size - num_close
     num_perc = num_not_close / close.size * 100
     if num_not_close != 0:
