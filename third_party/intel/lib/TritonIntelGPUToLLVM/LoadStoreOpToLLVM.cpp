@@ -1279,8 +1279,11 @@ struct LoadOpConversion
       llvm::dbgs() << "dimInnerStr: " << dimInnerStr << "\n";
     });
 
-    const unsigned dpasTileToPackedIndicesRatio =
+    unsigned dpasTileToPackedIndicesRatio =
         elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst;
+    // if the number of elements in the DPAS tile is less than the number of
+    // packed elems per lane set the ratio to 1
+    dpasTileToPackedIndicesRatio = std::max(dpasTileToPackedIndicesRatio, 1u);
     LLVM_DEBUG(llvm::dbgs() << "dpasTileToPackedIndicesRatio = "
                             << dpasTileToPackedIndicesRatio << "\n");
 
@@ -1504,8 +1507,11 @@ struct LoadOpConversion
     }
     if (newLoadBases.size() > 0) {
       outDims[0] = std::make_pair(outDims[0].first, tensorShape[dimOuter]);
-      outDims[1] = std::make_pair(outDims[1].first,
-                                  tensorShape[dimInner] * repCluster[dimInner]);
+      outDims[1] = std::make_pair(
+          outDims[1].first,
+          std::max(warpShape[dimInner],
+                   static_cast<unsigned int>(tensorShape[dimInner] *
+                                             repCluster[dimInner])));
     }
 
     LLVM_DEBUG({
