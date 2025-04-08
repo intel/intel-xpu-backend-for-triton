@@ -579,10 +579,11 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     atol = 0.03
     rtol = 0.03
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
-    if not is_xpu():
-        pattern = r"%\w+\s*=\s*ttng\.tmem_alloc[\s\S]*?tng\.tc_gen5_mma\s+%\w+,"
-        ttgir = k.asm["ttgir"]
-        assert re.search(pattern, ttgir)
+    if not is_cuda():
+        return
+    pattern = r"%\w+\s*=\s*ttng\.tmem_alloc[\s\S]*?tng\.tc_gen5_mma\s+%\w+,"
+    ttgir = k.asm["ttgir"]
+    assert re.search(pattern, ttgir)
 
 
 @triton.jit
