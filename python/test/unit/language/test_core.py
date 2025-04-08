@@ -5736,7 +5736,6 @@ def test_num_threads(device):
 
 
 def test_globaltimer(device):
-    check_cuda_or_hip(device)
     if is_hip():
         pytest.skip("test_globaltimer is flaky on AMD GPUs")
 
@@ -5762,6 +5761,8 @@ def test_globaltimer(device):
     assert out2[1] - out2[0] > 0
     if is_cuda():
         assert h.asm["ptx"].count("%globaltimer") == 2
+    elif is_xpu():
+        assert h.asm["llir"].count("%tsc") == 2
     else:
         target_arch = triton.runtime.driver.active.get_current_target().arch
         if "gfx11" in target_arch or "gfx12" in target_arch:
@@ -5771,7 +5772,6 @@ def test_globaltimer(device):
 
 
 def test_smid(device):
-    check_cuda_or_hip(device)
 
     @triton.jit
     def kernel(Out, get_smid: tl.constexpr):
@@ -5788,6 +5788,8 @@ def test_smid(device):
     assert out.sort()[0].unique().shape[0] > 0
     if is_cuda():
         assert h.asm["ptx"].count("%smid") == 1
+    elif is_xpu():
+        assert h.asm["llir"].count("%sr0") == 1
     else:
         assert h.asm["amdgcn"].count("s_getreg_b32") >= 1
 
