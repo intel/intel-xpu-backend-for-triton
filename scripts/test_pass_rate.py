@@ -9,14 +9,14 @@ WARNINGS = """\
 """
 
 PYTEST_SELECT_WARNING_1 = """\
-plugin.py:100: PytestSelectWarning: pytest-select: Not all deselected tests exist (or have been selected otherwise).
+plugin.py:100: UserWarning: pytest-skip: Not all deselected tests exist (or have been selected otherwise).
 Missing deselected test names:
   - test11
   - test12
 """
 
 PYTEST_SELECT_WARNING_2 = """\
-plugin.py:100: PytestSelectWarning: pytest-select: Not all deselected tests exist (or have been selected otherwise).
+plugin.py:100: UserWarning: pytest-skip: Not all deselected tests exist (or have been selected otherwise).
 Missing deselected test names:
   - test21
   - test22
