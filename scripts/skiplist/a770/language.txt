@@ -349,3 +349,6 @@ test/unit/language/test_pipeliner.py::test_indirect_matmul[1-128-64-128]
 test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-128-128]
 test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-128-64]
 test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-64-128]
+
+# mxfp 
+test/unit/language/test_matmul.py::test_mxfp
