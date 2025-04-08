@@ -316,3 +316,4 @@ test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-128-64]
 test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-64-128]
 test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-256-256]
 test/unit/language/test_matmul.py::test_mxfp
+test/unit/language/test_matmul.py::test_lhs_in_tmem
