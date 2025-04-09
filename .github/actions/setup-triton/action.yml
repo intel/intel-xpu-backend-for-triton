@@ -98,8 +98,7 @@ runs:
       shell: bash
       run: |
         cd python
-        pip install wheel pybind11
-        pip install -U "setuptools>=78.1.0"
+        pip install -r requirements.txt
         ${{ inputs.command }}
 
     - name: Save Triton cache
