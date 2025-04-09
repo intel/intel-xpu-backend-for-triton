@@ -494,6 +494,11 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                          getSupportSG2DBlockAttrName()))
+      return failure();
+
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr)
@@ -727,6 +732,10 @@ struct LoadOpToBlockIOConversion
         if (otherElems.size())
           others[offset] = otherElems[i];
       }
+      // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
+      // pitch.
+      if (ptrs.count({0, 0}) < 1 || ptrs.count({1, 0}) < 1)
+        return failure();
     }
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
@@ -769,6 +778,8 @@ struct LoadOpToBlockIOConversion
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
+    if (totalBytesPerRowPerDPASOp > 64)
+      return failure();
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
 
@@ -814,6 +825,8 @@ struct LoadOpToBlockIOConversion
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
+
+    const unsigned originalElemBits = elemSizeInBits;
 
     ValueTable loadVals;
     for (int inner = 0; inner < numRepInner;
@@ -884,9 +897,9 @@ struct LoadOpToBlockIOConversion
                     /*tile_height*/ tileHeight,
                     /*v_blocks*/ vBlocks,
                     /*transpose*/ false,
-                    /*vnni_transform*/ opIdx ==
-                            DpasEncodingAttr::OpIdx::OperandB &&
-                        usePackedType);
+                    /*vnni_transform*/
+                    (usePackedType && !isOperandA && !isTransposeRequired &&
+                     originalElemBits != 32));
                 return SmallVector<Value, 1>{load2dOp};
               });
           Value ret = *endBlock.args_begin();
