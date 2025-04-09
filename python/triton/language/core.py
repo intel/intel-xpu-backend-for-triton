@@ -2609,6 +2609,22 @@ def debug_barrier(_builder=None):
 
 
 @builtin
+def barrier_arrive(scope, _builder=None):
+    '''
+    Insert a barrier to synchronize all threads in a block.
+    '''
+    return semantic.barrier_arrive(scope, _builder)
+
+
+@builtin
+def barrier_wait(scope, _builder=None):
+    '''
+    Insert a barrier to synchronize all threads in a block.
+    '''
+    return semantic.barrier_wait(scope, _builder)
+
+
+@builtin
 def multiple_of(input, values, _builder=None):
     """
     Let the compiler know that the values in :code:`input` are all multiples of :code:`value`.
