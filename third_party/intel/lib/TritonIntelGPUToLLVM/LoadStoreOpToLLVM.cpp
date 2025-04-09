@@ -471,6 +471,11 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                          getSupportSG2DBlockAttrName()))
+      return failure();
+
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr)
@@ -750,6 +755,8 @@ struct LoadOpToBlockIOConversion
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
+    if (totalBytesPerRowPerDPASOp > 64)
+      return failure();
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
 

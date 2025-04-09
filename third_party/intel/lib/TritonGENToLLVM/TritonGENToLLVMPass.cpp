@@ -110,6 +110,39 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
+[[maybe_unused]] static bool
+isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  VectorType resTy = op.getRes().getType();
+  unsigned resElemTySize = resTy.getElementType().getIntOrFloatBitWidth();
+  bool needsResElemSizeEqualTo32 =
+      op.getElemSizeInBits() == 32 || op.getVnniTransform();
+  assert((!needsResElemSizeEqualTo32 || resElemTySize == 32) &&
+         "Expecting 32-bit element type");
+  if (!needsResElemSizeEqualTo32 && resElemTySize != 16)
+    return false;
+
+  if (op.getVnniTransform())
+    return true;
+
+  if (op.getTranspose() && op.getTileHeight() != 16)
+    return false;
+
+  uint32_t tileWidth = op.getTileWidth();
+  uint32_t tileHeight = op.getTileHeight();
+  switch (op.getElemSizeInBits()) {
+  case 8:
+    return (tileWidth == 32);
+  case 16:
+    return (tileWidth == 16) && (tileHeight != 32);
+  case 32:
+    return (tileWidth == 8 || tileWidth == 16) && (tileHeight != 32);
+  default:
+    llvm_unreachable("unexpected element size");
+  }
+
+  return false;
+}
+
 [[maybe_unused]] static Value
 createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                         ConversionPatternRewriter &rewriter) {
@@ -119,11 +152,19 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   Value ptr = op.getPtr();
-  Value baseWidth = op.getBaseWidth();
   Value baseHeight = op.getBaseHeight();
   Value basePitch = op.getBasePitch();
-  Value x = op.getX();
   Value y = op.getY();
+
+  // compensate the non-64 byte aligned base.
+  Value offset =
+      b.trunc(i32_ty, b.and_(b.ptrtoint(i64_ty, ptr), b.i64_val(0x3f)));
+  // In number of bytes.
+  Value baseWidth = b.add(op.getBaseWidth(), offset);
+  // In number of scalar elements.
+  Value offsetX =
+      b.add(op.getX(),
+            b.lshr(offset, b.i32_val(std::log2(op.getElemSizeInBits() / 8))));
 
   std::string funcName =
       "llvm.genx.GenISA.LSC2DBlockRead." + getGenISATypeMangling(resType);
@@ -139,7 +180,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                              baseWidth.getType(),
                              baseHeight.getType(),
                              basePitch.getType(),
-                             x.getType(),
+                             offsetX.getType(),
                              y.getType(),
                              int32Ty,
                              int32Ty,
@@ -153,7 +194,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                           b.sub(baseWidth, one),
                           b.sub(baseHeight, one),
                           b.sub(basePitch, one),
-                          x,
+                          offsetX,
                           y,
                           b.i32_val(op.getElemSizeInBits()),
                           b.i32_val(op.getTileWidth()),
@@ -421,8 +462,9 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
-        op.getVBlocks() != 4 && !op.getVnniTransform()) {
+    if (!isOCLBuiltinAvailable(op) ||
+        op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
+            op.getVBlocks() != 4 && !op.getVnniTransform()) {
       // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
       // vBlock reads
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
