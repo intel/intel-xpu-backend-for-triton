@@ -48,6 +48,10 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
+#define ADD_PASS_WRAPPER_OPT_3(name, builder, ty0, ty1, ty2)                   \
+  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
+    pm.addPass(builder({val0, val1, val2}));                                   \
+  })
 #define ADD_PASS_WRAPPER_OPT_6(name, builder, ty0, ty1, ty2, ty3, ty4, ty5)    \
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
                  ty3 val3, ty4 val4, ty5 val5) {                               \
@@ -77,9 +81,9 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_2("add_to_llvmir",
+  ADD_PASS_WRAPPER_OPT_3("add_to_llvmir",
                          gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
-                         bool);
+                         bool, bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
