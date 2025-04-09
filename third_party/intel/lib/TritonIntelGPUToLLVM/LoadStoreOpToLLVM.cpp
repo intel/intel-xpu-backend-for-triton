@@ -727,6 +727,10 @@ struct LoadOpToBlockIOConversion
         if (otherElems.size())
           others[offset] = otherElems[i];
       }
+      // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
+      // pitch.
+      if (ptrs.count({0, 0}) < 1 || ptrs.count({1, 0}) < 1)
+        return failure();
     }
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
