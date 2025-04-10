@@ -2226,9 +2226,6 @@ struct StoreOpConversion
                    << std::to_string(1 << mask.second) << ")\n";
     }
 #endif
-    // mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
-    // TODO: do we care about the original mask here? we seem to be overwriting
-    // it in the previous version.
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("register")];
@@ -2394,7 +2391,9 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value mask =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -2422,20 +2421,33 @@ struct AtomicCASOpConversion
             loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
             spirv::MemorySemantics::SequentiallyConsistent |
                 spirv::MemorySemantics::CrossWorkgroupMemory);
-      Block &endBlock =
-          LLVM::intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
-            // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-            casCmp = b.bitcast(casCmp, zero.getType());
-            casVal = b.bitcast(casVal, zero.getType());
+      Value ret;
+      // TODO: de-duplicate 
+      if (mask) {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, mask, {zero}, [&] {
+              // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
+              casCmp = b.bitcast(casCmp, zero.getType());
+              casVal = b.bitcast(casVal, zero.getType());
 
-            auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-                loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
-            Value newLoaded =
-                rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-            return SmallVector<Value, 1>{newLoaded};
-          });
+              auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+                  loc, casPtr, casCmp, casVal, successOrdering,
+                  failureOrdering);
+              Value newLoaded =
+                  rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+              return SmallVector<Value, 1>{newLoaded};
+            });
 
-      Value ret = endBlock.getArgument(0);
+        ret = endBlock.getArgument(0);
+      } else {
+        // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
+        casCmp = b.bitcast(casCmp, zero.getType());
+        casVal = b.bitcast(casVal, zero.getType());
+
+        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
+        ret = rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+      }
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
 
