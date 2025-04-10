@@ -261,7 +261,7 @@ public:
         value = intAttr.getValue().getZExtValue();
       else
         value = boolAttr.getValue() ? 1 : 0;
-      return AxisInfo(/*contiguity=*/{1},
+      return AxisInfo(/*stride=*/{0}, /*contiguity=*/{1},
                       /*divisibility=*/{highestPowOf2Divisor(value)},
                       /*constancy=*/{1},
                       /*knownConstantValue=*/{value});
@@ -272,6 +272,7 @@ public:
       int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
+          /*stride=*/AxisInfo::DimVectorT(ty.getRank(), 0),
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
           /*divisibility=*/
           AxisInfo::DimVectorT(ty.getRank(), highestPowOf2Divisor(value)),
@@ -393,12 +394,12 @@ public:
 private:
   int64_t getStride(arith::MulIOp op, const AxisInfo &lhs, const AxisInfo &rhs,
                     int dim) override {
-    if (lhs.getStride(dim) == 0 || rhs.getStride(dim) == 0)
-      return 0;
     if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value())
       return lhs.getStride(dim) * rhs.getConstantValue().value();
     if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
       return lhs.getConstantValue().value() * rhs.getStride(dim);
+    if (lhs.getStride(dim) == 0 || rhs.getStride(dim) == 0)
+      return 0;
     return -1;
   }
 
@@ -655,6 +656,7 @@ public:
   getAxisInfo(triton::ExpandDimsOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     AxisInfo opInfo = operands[0]->getValue();
+    AxisInfo::DimVectorT stride = opInfo.getStride();
     AxisInfo::DimVectorT contiguity = opInfo.getContiguity();
     AxisInfo::DimVectorT divisibility = opInfo.getDivisibility();
     AxisInfo::DimVectorT constancy = opInfo.getConstancy();
@@ -673,11 +675,12 @@ public:
                 opInfo.getContiguity(d) > 1 ? 1 : opInfo.getDivisibility(d));
       }
     }
+    stride.insert(stride.begin() + op.getAxis(), 0);
     contiguity.insert(contiguity.begin() + op.getAxis(), 1);
     divisibility.insert(divisibility.begin() + op.getAxis(), newDivisibility);
     constancy.insert(constancy.begin() + op.getAxis(), 1);
-    return AxisInfo(std::move(contiguity), std::move(divisibility),
-                    std::move(constancy),
+    return AxisInfo(std::move(stride), std::move(contiguity),
+                    std::move(divisibility), std::move(constancy),
                     operands[0]->getValue().getConstantValue());
   }
 };
@@ -702,7 +705,7 @@ public:
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
     for (int d = 0; d < retTy.getRank(); ++d) {
-      stride.push_back(opShape[d] == 1 ? 0 : opInfo.getStride(d));
+      stride.push_back(opInfo.getStride(d));
       contiguity.push_back(opShape[d] == 1 ? 1 : opInfo.getContiguity(d));
       divisibility.push_back(opInfo.getDivisibility(d));
       constancy.push_back(opShape[d] == 1 ? retShape[d]
