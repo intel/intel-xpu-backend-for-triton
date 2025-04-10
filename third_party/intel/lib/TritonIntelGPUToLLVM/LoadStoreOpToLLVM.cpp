@@ -23,16 +23,75 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
+// Returns a Value for the format string, which you can reuse. Writes the byte
+// count for the string to |formatStrByteCount| if not null.
+Value llPrintf(StringRef msg, ValueRange args, ArrayRef<bool> isSigned,
+               ConversionPatternRewriter &rewriter,
+               const triton::intel::TargetInfo &targetInfo,
+               int *formatStrByteCount = nullptr) {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue = targetInfo.getGlobalStringStart(
+      rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
+      /*addressSpace=*/TritonGEN::kUniformConstant);
+  targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args,
+                    isSigned);
+  return msgValue;
+}
+
+Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  if (a && b) {
+    return tb.and_(a, b);
+  }
+  return a ? a : b;
+}
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask. The predicate may be null to indicate no
+// predication is required.
+Value emitRedundantThreadPredicate(
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const triton::intel::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ctx = rewriter.getContext();
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
+
+  Value pred;
+  auto dimNames = {kLane, kWarp, kBlock};
+  auto dimIds = {laneId, warpId, blockId};
+  for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
+    int32_t mask = freeVarMasks.lookup(dimName);
+    if (mask != 0) {
+      auto dimPred = b.icmp_eq(b.and_(dimId, b.i32_val(mask)), zero);
+      pred = maybeAnd(rewriter, loc, pred, dimPred);
+    }
+  }
+  return pred;
+}
+
 // Return the mask for the unique data accessed by given tensor type.
 // Used to mask out the redundant data accessed by threads.
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc,
                         const triton::intel::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
+
   Value mask = b.true_val();
-  auto tid = getThreadId(rewriter, loc);
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
+
+  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   if (tensorTy) {
     // To remove this use, port https://github.com/triton-lang/triton/pull/5432
     // to the INTELGPU dialect
@@ -81,6 +140,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     // If the tensor is not ranked, then it is a scalar and only thread 0 of
     // CTA0 can write
     mask = b.and_(mask, b.icmp_eq(clusterCTAId, b.i32_val(0)));
+    auto tid = getThreadId(rewriter, loc);
     mask = b.and_(mask, b.icmp_eq(tid, b.i32_val(0)));
   }
   return mask;
@@ -2160,7 +2220,20 @@ struct StoreOpConversion
     assert(!maskElems.size() ||
            valueElems.size() == maskElems.size() && "Mask size mismatch");
 
-    mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+#if 0
+    for (auto mask : freeVarMasks) {
+      llvm::errs() << mask.first << " = " << mask.second << " ("
+                   << std::to_string(1 << mask.second) << ")\n";
+    }
+#endif
+    // mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    // TODO: do we care about the original mask here? we seem to be overwriting
+    // it in the previous version.
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
+
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -2168,6 +2241,10 @@ struct StoreOpConversion
     unsigned elemsPerThread = getTotalElemsPerThread(valueTy);
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
+      if (!isCanonicalIndex(vecStart, regMask)) {
+        // Don't emit store ops for redundant elements within a thread
+        continue;
+      }
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
 
@@ -2205,8 +2282,11 @@ struct StoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      Value maskVal =
-          maskElems.size() ? b.and_(mask, maskElems[vecStart]) : mask;
+      Value maskVal = threadPred;
+      if (llMask) {
+        auto mask = maskElems[vecStart];
+        maskVal = maybeAnd(rewriter, loc, maskVal, mask);
+      }
 
       auto vecTy = vec_ty(valArgTy, nWords);
       Value vecWord = b.undef(vecTy);
@@ -2214,6 +2294,22 @@ struct StoreOpConversion
         auto llWord = asmArgs[index].first;
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
+
+#if 0
+      auto vecTestElem = b.extract_element(valArgTy, vecWord, b.i32_val(0));
+      auto testElemBitcast = b.bitcast(vecTestElem, wordTy);
+      auto testElemVal =
+          b.extract_element(valueElemTy, testElemBitcast, b.i32_val(0));
+
+      Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+
+      auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+      llPrintf("warp %d lane %d mask %d & %d = %d addr %p val %f vec %d",
+               {warpId, laneId, threadPred, maskElems[vecStart], maskVal, addrElem,
+                testElemVal, b.i32_val(vecStart)},
+               {true, true, true, true, true, true, true, true}, rewriter,
+               targetInfo);
+#endif
 
       // Create a predicated store operation.
       LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
