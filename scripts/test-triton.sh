@@ -119,7 +119,7 @@ while [ -v 1 ]; do
       shift 2
       ;;
     --help)
-      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --skip-pip-install | --skip-pytorch-install | --reports | --reports-dir DIR | --warning-reports | --ignore-errors | --skip-list SKIPLIST"
+      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --skip-pip-install | --skip-pytorch-install | --reports | --reports-dir DIR | --warning-reports | --ignore-errors | --skip-list SKIPLIST | --select-from-file SELECTFILE"
       ;;
     *)
       err "Unknown argument: $1."
@@ -187,12 +187,10 @@ run_unit_tests() {
 }
 
 run_pytest_command() {
-  local pytest_command=$1
-
   if [[ -n "$TRITON_TEST_SELECTFILE" ]]; then
-    eval "${pytest_command}" --collect-only > /dev/null 2>&1 && eval "${pytest_command}" || true
+    pytest "$@" --collect-only > /dev/null 2>&1 && pytest "$@" || true
   else
-    eval "${pytest_command}"
+    pytest "$@"
   fi
 }
 
@@ -203,41 +201,32 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  cmd_language="TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py"
-  run_pytest_command "$cmd_language"
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
 
-  cmd_subprocess="TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py"
-  run_pytest_command "$cmd_subprocess"
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
 
   # run runtime tests serially to avoid race condition with cache handling.
-  cmd_runtime="TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
-    pytest -k \"not test_within_2gb\" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py"
-  run_pytest_command "$cmd_runtime"
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=runtime \
+    run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
 
-  cmd_debug="TRITON_TEST_SUITE=debug \
-    pytest --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu"
-  run_pytest_command "$cmd_debug"
-
+  TRITON_TEST_SUITE=debug \
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-  cmd_line_info="TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
-    pytest -k \"not test_line_info_interpreter\" --verbose --device xpu language/test_line_info.py"
-  run_pytest_command "$cmd_line_info"
+  TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
+    run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 
-  cmd_tools="TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    pytest -k \"not test_disam_cubin\" --verbose tools"
-  run_pytest_command "$cmd_tools"
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
+    run_pytest_command -k "not test_disam_cubin" --verbose tools
 
-  cmd_intel="TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/"
-  run_pytest_command "$cmd_intel"
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
 
   cd $TRITON_PROJ/third_party/intel/python/test
-  cmd_third_party="TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-    pytest --device xpu ."
-  run_pytest_command "$cmd_third_party"
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
+  run_pytest_command --device xpu .
 }
 
 run_regression_tests() {
@@ -246,9 +235,8 @@ run_regression_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/regression
 
-  cmd_regression="TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-    pytest -vvv -s --device xpu . --ignore=test_performance.py"
-  run_pytest_command "$cmd_regression"
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
+    run_pytest_command -vvv -s --device xpu . --ignore=test_performance.py
 }
 
 run_interpreter_tests() {
@@ -257,10 +245,9 @@ run_interpreter_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
 
-  cmd_interpreter="TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
-    pytest -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
-    language/test_random.py language/test_line_info.py --device cpu"
-  run_pytest_command "$cmd_interpreter"
+  TRITON_INTERPRET=1 TRITON_TEST_SUITE=interpreter \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-16} -m interpreter language/test_core.py language/test_standard.py \
+    language/test_random.py language/test_line_info.py --device cpu
 }
 
 run_tutorial_tests() {
@@ -373,7 +360,7 @@ run_instrumentation_tests() {
 
   TRITON_TEST_SUITE=instrumentation \
     TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
-    pytest -vvv --device xpu instrumentation/test_gpuhello.py
+    run_pytest_command -vvv --device xpu instrumentation/test_gpuhello.py
 }
 
 run_inductor_tests() {
