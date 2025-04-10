@@ -286,7 +286,7 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   std::string opcode;
   if (twoCTAs) {
     // .multicast::cluster and mask 0x3 means the completion of UTCMMA.2CTA will
-    // be boardcasted into CTAid 0 and 1
+    // be broadcasted into CTAid 0 and 1
     auto *ctaMask = ptxBuilder.newOperand(b.int_val(16, 0x3), "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "
@@ -393,11 +393,11 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                                                      interleaved, transA);
   } else {
     aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-        a, baseA, shapeA, zero, 1, transA, aOperandShape,
+        a, baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
         aTensorTy.getElementTypeBitWidth(), rewriter, loc);
   }
   DotOpMmaV3SmemLoader bLoader =
-      DotOpMmaV3SmemLoader(b, baseB, shapeB, zero, 1, transB,
+      DotOpMmaV3SmemLoader(b, baseB, shapeB, shapeB, zero, 1, transB,
                            {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                            bTensorTy.getElementTypeBitWidth(), rewriter, loc);
   DotOpMmaV5TmemLoader dLoader = DotOpMmaV5TmemLoader(
@@ -492,11 +492,16 @@ struct TCGen5MMAScaledOpConversion
     }
     auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
     bool transB = !bSharedLayout.getTransposed();
-    Value baseA =
-        getSharedMemoryObjectFromStruct(
-            loc, adaptor.getA(),
-            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
-            .getBase();
+    Value baseA;
+    if (aInTmem) {
+      baseA = adaptor.getA();
+    } else {
+      baseA =
+          getSharedMemoryObjectFromStruct(
+              loc, adaptor.getA(),
+              typeConverter->convertType(aTensorTy.getElementType()), rewriter)
+              .getBase();
+    }
     Value baseB =
         getSharedMemoryObjectFromStruct(
             loc, adaptor.getB(),
@@ -511,11 +516,14 @@ struct TCGen5MMAScaledOpConversion
 
     unsigned int M = dTensorTy.getDimSize(0);
     unsigned int N = dTensorTy.getDimSize(1);
-    int numBitsPerElementA = opKindIsMXFP4 ? getFormatBitSize(op.getAType())
-                                           : aTensorTy.getElementTypeBitWidth();
-    int numBitsPerElementB = opKindIsMXFP4 ? getFormatBitSize(op.getBType())
-                                           : bTensorTy.getElementTypeBitWidth();
-    unsigned int K = (aTensorTy.getDimSize(1) * 8) / numBitsPerElementA;
+    int numBitsUnpackedPerElementA = opKindIsMXFP4
+                                         ? getFormatBitSize(op.getAType())
+                                         : aTensorTy.getElementTypeBitWidth();
+    int numBitsUnpackedPerElementB = opKindIsMXFP4
+                                         ? getFormatBitSize(op.getBType())
+                                         : bTensorTy.getElementTypeBitWidth();
+    unsigned int K =
+        (aTensorTy.getDimSize(1) * 8) / getFormatBitSize(op.getAType());
 
     // Get MMA size based on acc layout.
     auto tensorMemAttr = cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
@@ -545,13 +553,13 @@ struct TCGen5MMAScaledOpConversion
           op.getA(), baseA, aOperandShape, interleaved, transA);
     } else {
       aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-          op.getA(), baseA, shapeA, zero, 1, transA, aOperandShape,
-          numBitsPerElementA, rewriter, loc);
+          op.getA(), baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
+          numBitsUnpackedPerElementA, rewriter, loc);
     }
     DotOpMmaV3SmemLoader bLoader =
-        DotOpMmaV3SmemLoader(op.getB(), baseB, shapeB, zero, 1, transB,
+        DotOpMmaV3SmemLoader(op.getB(), baseB, shapeB, shapeB, zero, 1, transB,
                              {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
-                             numBitsPerElementB, rewriter, loc);
+                             numBitsUnpackedPerElementB, rewriter, loc);
 
     // Only run mma on one thread. We currently use elect as ptxas is not able
     // to detect that tid.x == 0 is true only for 1 thread.

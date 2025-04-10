@@ -9,19 +9,25 @@
 
 using namespace proton;
 
-void initProton(pybind11::module &&m) {
+static void initProton(pybind11::module &&m) {
   using ret = pybind11::return_value_policy;
   using namespace pybind11::literals;
 
-  m.def("start",
-        [](const std::string &path, const std::string &contextSourceName,
-           const std::string &dataName, const std::string &profilerName,
-           const std::string &profilerPath) {
-          auto sessionId = SessionManager::instance().addSession(
-              path, profilerName, profilerPath, contextSourceName, dataName);
-          SessionManager::instance().activateSession(sessionId);
-          return sessionId;
-        });
+  m.def(
+      "start",
+      [](const std::string &path, const std::string &contextSourceName,
+         const std::string &dataName, const std::string &profilerName,
+         const std::string &profilerPath, long sycl_queue) {
+        void *queue = reinterpret_cast<void *>(sycl_queue);
+        auto sessionId = SessionManager::instance().addSession(
+            path, profilerName, profilerPath, contextSourceName, dataName,
+            queue);
+        SessionManager::instance().activateSession(sessionId);
+        return sessionId;
+      },
+      pybind11::arg("path"), pybind11::arg("contextSourceName"),
+      pybind11::arg("dataName"), pybind11::arg("profilerName"),
+      pybind11::arg("profilerPath"), pybind11::arg("sycl_queue") = 0);
 
   m.def("activate", [](size_t sessionId) {
     SessionManager::instance().activateSession(sessionId);
@@ -77,6 +83,10 @@ void initProton(pybind11::module &&m) {
            const std::map<std::string, MetricValueType> &metrics) {
           SessionManager::instance().addMetrics(scopeId, metrics);
         });
+
+  m.def("get_context_depth", [](size_t sessionId) {
+    return SessionManager::instance().getContextDepth(sessionId);
+  });
 
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }

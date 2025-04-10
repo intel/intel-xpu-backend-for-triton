@@ -1,27 +1,22 @@
 #include "PatternTritonGPUOpToLLVM.h"
-#include "ReduceScanCommon.h"
-#include "Utility.h"
+#include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <vector>
 
 using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DistributedEncodingTrait;
-using ::mlir::triton::gpu::getOrder;
-using ::mlir::triton::gpu::getThreadOrder;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
 struct ReduceOpConversion
-    : public ConvertTritonIntelGPUReduceScanToLLVMPattern<triton::ReduceOp> {
+    : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
 public:
   ReduceOpConversion(LLVMTypeConverter &typeConverter,
                      const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertTritonIntelGPUReduceScanToLLVMPattern<triton::ReduceOp>(
-            typeConverter, benefit),
+      : ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp>(typeConverter,
+                                                                  benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
@@ -227,14 +222,9 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value threadId = getThreadId(rewriter, loc);
     auto srcLayout =
         mlir::cast<DistributedEncodingTrait>(helper.getSrcLayout());
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
-    Value warpSize =
-        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-    Value warpId = b.udiv(threadId, warpSize);
-    Value laneId = b.urem(threadId, warpSize);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
 
@@ -286,9 +276,9 @@ private:
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto mod = op->getParentOfType<ModuleOp>();
     unsigned numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numWarps = triton::gpu::lookupNumWarps(op.getOperation());
+    int numWarps = triton::gpu::lookupNumWarps(op);
     int numThreads = numLanes * numWarps;
 
     Value threadId = getThreadId(rewriter, loc);
@@ -383,7 +373,6 @@ private:
         auto resultIndices = emitIndices(loc, rewriter, targetInfo,
                                          resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
-        auto resultCTATile = getShapePerCTATile(resultLayout);
         assert(resultIndices.size() == resultElems);
 
         SmallVector<Value> resultVals(resultElems);
@@ -393,8 +382,7 @@ private:
           for (size_t resultIdx = 0, resultDim = resultShape.size();
                resultIdx < resultDim; ++resultIdx) {
             auto smemIdx = resultIdx < op.getAxis() ? resultIdx : resultIdx + 1;
-            if (resultCTATile[resultIdx] > smemShape[smemIdx] ||
-                resultShape[resultIdx] > smemShape[smemIdx]) {
+            if (resultShape[resultIdx] > smemShape[smemIdx]) {
               // When srcShape smaller then src sizePerThread, only srcShape
               // elements is accumulated in smem. Modulo smemShape effectively
               // replicates srcShape elements to src sizePerThread.

@@ -20,16 +20,13 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
-#include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/PatternMatch.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "PatternTritonGPUOpToLLVM.h"
 
@@ -73,19 +70,19 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
                              const TargetInfoBase &targetInfo) const {
     // Push back two new arguments that indicate the current pointer to shared
     // memory and global scratch memory.
-    auto loc = funcOp.getLoc();
-    auto ctx = funcOp->getContext();
+    Location loc = funcOp.getLoc();
+    MLIRContext *ctx = funcOp->getContext();
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
-    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    Type globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
     // 1. Modify the function type to add the new arguments.
-    auto funcTy = funcOp.getFunctionType();
+    FunctionType funcTy = funcOp.getFunctionType();
     auto amendedInputTy = llvm::to_vector<4>(funcTy.getInputs());
     bool isKernel = LLVM::isKernel(funcOp);
-    if (!isKernel) {
+    if (!isKernel)
       amendedInputTy.push_back(sharedPtrTy);
-    }
+
     amendedInputTy.push_back(globalPtrTy);
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
@@ -93,11 +90,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     SmallVector<NamedAttribute> amendedAttrs;
     filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
     if (auto argAttrs = funcOp.getAllArgAttrs()) {
-      llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
-                                                         argAttrs.end());
-      while (amendedArgAttrs.size() < amendedInputTy.size()) {
+      SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                   argAttrs.end());
+      while (amendedArgAttrs.size() < amendedInputTy.size())
         amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-      }
+
       amendedAttrs.push_back(
           rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
                                 rewriter.getArrayAttr(amendedArgAttrs)));
@@ -106,10 +103,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // 3. Add the new arguments to the region
     auto amendedFuncOp = rewriter.create<triton::FuncOp>(
         funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
-    auto &region = funcOp.getBody();
-    if (!isKernel) {
+    Region &region = funcOp.getBody();
+    if (!isKernel)
       region.addArgument(sharedPtrTy, loc);
-    }
+
     region.addArgument(globalPtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
@@ -163,52 +160,17 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-struct AddSPIRVEnvPattern : public mlir::OpRewritePattern<ModuleOp> {
-
-  using mlir::OpRewritePattern<ModuleOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ModuleOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!gpu::intel::hasSpirvTargetArch(op) || spirv::lookupTargetEnv(op)) {
-      return failure();
-    }
-
-    int subgroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(op);
-
-    auto resourceLimit = spirv::getDefaultResourceLimits(rewriter.getContext());
-    auto newResourceLimit = rewriter.getAttr<spirv::ResourceLimitsAttr>(
-        resourceLimit.getMaxComputeSharedMemorySize(),
-        resourceLimit.getMaxComputeWorkgroupInvocations(),
-        resourceLimit.getMaxComputeWorkgroupSize(), subgroupSize,
-        resourceLimit.getMinSubgroupSize(), resourceLimit.getMaxSubgroupSize(),
-        resourceLimit.getCooperativeMatrixPropertiesKhr(),
-        resourceLimit.getCooperativeMatrixPropertiesNv());
-    auto triple = spirv::VerCapExtAttr::get(
-        spirv::Version::V_1_2,
-        {spirv::Capability::GroupNonUniform, spirv::Capability::Addresses,
-         spirv::Capability::Float16Buffer, spirv::Capability::Int64,
-         spirv::Capability::Int16, spirv::Capability::Int8,
-         spirv::Capability::Kernel, spirv::Capability::Linkage,
-         spirv::Capability::Vector16, spirv::Capability::GenericPointer,
-         spirv::Capability::Groups, spirv::Capability::Float64},
-        {}, rewriter.getContext());
-    auto newTargetEnv = spirv::TargetEnvAttr::get(triple, newResourceLimit);
-    rewriter.modifyOpInPlace(op, [op, newTargetEnv] {
-      op->setAttr(spirv::getTargetEnvAttrName(), newTargetEnv);
-    });
-    return success();
-  }
-};
-
 /// Manages TritonIntelGPU --> LLVM the conversion pipeline.
 /// Currently the conversion pipeline depends on whether the kernel contains
 /// block pointers or not.
 class TritonGPUToLLVMPipelineManager {
 public:
   TritonGPUToLLVMPipelineManager(ModuleOp &mod, MLIRContext *ctx, bool advanced,
-                                 bool oneMatrixPerLoadForBT)
+                                 bool oneMatrixPerLoadForBT,
+                                 bool useTileLoadLinearLayout)
       : mod(mod), ctx(ctx), isAdvancedPathEnabled(advanced),
-        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT) {}
+        oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
+        useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   /// FIXME: remove once the block ptr conversion path is capable of handling
   ///        shared memory.
@@ -234,16 +196,11 @@ public:
     using namespace mlir;
     using namespace mlir::triton;
 
-    // should run before other patterns that need the SPIRV-ENV attr
-    // (e.g. patterns that output triton_gen.sub_group_reduce)
-    patterns.add<AddSPIRVEnvPattern>(&typeConverter.getContext(),
-                                     patternBenefitAddSPIRVEnv);
-
     if (isAdvancedPathEnabled) {
       intel::populateArithOpsToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateBF16CastsLLVMPatterns(typeConverter, patterns, benefit);
-      mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                       targetInfo, benefit);
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
       intel::populateTritonOpsToLLVMPatterns(typeConverter, patterns, benefit);
     } else {
       intel::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
@@ -251,9 +208,9 @@ public:
       intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
       intel::populateElementwiseOpToLLVMPatterns(
           typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-      intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
-                                               patterns, axisInfoAnalysis,
-                                               benefit, oneMatrixPerLoadForBT);
+      intel::populateLoadStoreOpToLLVMPatterns(
+          typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit,
+          oneMatrixPerLoadForBT, useTileLoadLinearLayout);
       intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                             benefit);
       mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
@@ -274,12 +231,11 @@ public:
                                     benefit);
       mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                    patterns, benefit);
-      mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
-                                                       targetInfo, benefit);
-      intel::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
-                                              patterns, benefit);
-      intel::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
-                                              targetInfo, benefit);
+      intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                targetInfo, benefit);
+      mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                                     patterns, benefit);
+      intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
     }
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
@@ -308,6 +264,7 @@ private:
   /// determine whether a kernel uses block pointers.
   bool isAdvancedPathEnabled = false;
   bool oneMatrixPerLoadForBT = false;
+  bool useTileLoadLinearLayout = true;
 };
 
 } // namespace mlir::triton::intel

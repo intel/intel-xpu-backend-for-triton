@@ -1,5 +1,4 @@
 #include "intel/include/Analysis/Membar.h"
-
 #include "intel/include/Analysis/Utility.h"
 
 namespace mlir::intel {

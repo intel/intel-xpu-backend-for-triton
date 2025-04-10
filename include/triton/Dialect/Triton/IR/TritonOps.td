@@ -75,8 +75,7 @@ def TT_BitcastOp : TT_Op<"bitcast", [Elementwise,
     let results = (outs TT_Type:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
-
-    // TODO: Add verifier
+    let hasVerifier = 1;
 }
 
 def TT_FpToFpOp : TT_Op<"fp_to_fp", [Elementwise,
@@ -504,9 +503,7 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
 }
 
 def TT_JoinOp : TT_Op<"join", [
-    NoMemoryEffect, SameTypeOperands,
-    InferTypeOpWithLayoutEquivalence,
-]> {
+    NoMemoryEffect, SameTypeOperands]> {
     let summary = "join two tensors along a new, minor dimension";
     let description = [{
         For example, if the two input tensors are 4x8xf32, returns a tensor of
@@ -516,9 +513,13 @@ def TT_JoinOp : TT_Op<"join", [
         the two input tensors must have the same shape.
     }];
 
+    let builders = [
+      OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
+    ];
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+    let hasVerifier = 1;
 }
 
 def TT_SplitOp : TT_Op<"split", [
@@ -1253,7 +1254,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
 }
 
 
-def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
+def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
   let summary = "Load from descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA load operation on targets supporting it.
@@ -1284,7 +1285,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
   let hasVerifier = 1;
 }
 
-def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
+def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [
     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
 ]> {
   let summary = "store value based on descriptor";
@@ -1310,10 +1311,10 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
   let hasVerifier = 1;
 }
 
-def TT_ExperimentalDescriptorGatherOp : TT_Op<"experimental_descriptor_gather", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
+def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
   let summary = "gather multiple rows from a descriptor into a single tensor";
   let description = [{
-    The `tt.experimental_desciptor_gather` op will be lowered to NVIDIA TMA
+    The `tt.descriptor_gather` op will be lowered to NVIDIA TMA
     load operations on targets that support it.
 
     `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
@@ -1339,13 +1340,14 @@ def TT_ExperimentalDescriptorGatherOp : TT_Op<"experimental_descriptor_gather", 
   let hasVerifier = 1;
 
   let extraClassDeclaration = [{
-    // TMA gathers have resstrictions on the minimum size of the gather result.
+    // TMA gathers have restrictions on the minimum size of the gather result.
     // This function verifies the result type.
-    static LogicalResult verifyResultType(Operation *op, mlir::ShapedType type);
+    static LogicalResult verifyResultType(Operation *op, ShapedType resultType,
+                                          RankedTensorType indicesType);
   }];
 }
 
-def TT_ExperimentalDescriptorScatterOp : TT_Op<"experimental_descriptor_scatter", [
+def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [
     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
 ]> {
   let arguments = (ins
@@ -1359,6 +1361,8 @@ def TT_ExperimentalDescriptorScatterOp : TT_Op<"experimental_descriptor_scatter"
     $desc `[` $x_offsets `,` $y_offset `]` `,` $src
     attr-dict `:` type(operands)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TT_ExperimentalTensormapCreateOp: TT_Op<
@@ -1377,7 +1381,7 @@ def TT_ExperimentalTensormapCreateOp: TT_Op<
       Variadic<I32>:$global_dim,
       Variadic<I64>:$global_stride,
       Variadic<I32>:$element_stride,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<12>]>:$elem_type,
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<15>]>:$elem_type,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<2>]>:$interleave_layout,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<3>]>:$swizzle_mode,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode

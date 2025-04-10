@@ -85,6 +85,28 @@ unsigned getVectorSize(Value ptr, Value offset,
 
 Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
+// Returns true if we can perform coalesced write from the source encoding to
+// the destination encoding.
+bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
+                                      const LinearLayout &srcToSharedLayout,
+                                      unsigned threadsPerWarp);
+
+// Returns true if the swizzling pattern does only swizzle the shared memory
+// offsets of a warp and does not exchange destination elements across warps
+bool doesSwizzleInsideWarp(RewriterBase &rewriter,
+                           const LinearLayout &srcToSharedLayout,
+                           unsigned threadsPerWarp);
+
+// Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
+bool isUsedByDotScaledOp(Operation *op);
+
+// Check if the result of this tl.dot is used as opA of another tl.dot
+// in the same region
+bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
+
+// Check if the opA of this tl.dot is the result of another tl.dot
+// in the same region
+bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

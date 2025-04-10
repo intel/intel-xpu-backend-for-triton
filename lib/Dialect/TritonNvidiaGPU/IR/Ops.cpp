@@ -173,6 +173,25 @@ void WaitBarrierOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
+// -- ArriveBarrierOp --
+LogicalResult ArriveBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
+  return success();
+}
+
+void ArriveBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  // The arrive will increment the pending arrival count inside the barrier.
+  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
 // -- TensorDescToTMAPtrOp --
 LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
                                                  PatternRewriter &rewriter) {
@@ -225,7 +244,8 @@ LogicalResult AsyncTMAGatherOp::verify() {
   triton::gpu::MemDescType resultType = getResult().getType();
   if (!resultType.getMutableMemory())
     return emitOpError("cannot store into immutable memory");
-  return ExperimentalDescriptorGatherOp::verifyResultType(*this, resultType);
+  return DescriptorGatherOp::verifyResultType(*this, resultType,
+                                              getXOffsets().getType());
 }
 
 void AsyncTMAGatherOp::getEffects(
@@ -240,6 +260,11 @@ void AsyncTMAGatherOp::getEffects(
 }
 
 // -- AsyncTMAScatter --
+LogicalResult AsyncTMAScatterOp::verify() {
+  return DescriptorGatherOp::verifyResultType(*this, getSrc().getType(),
+                                              getXOffsets().getType());
+}
+
 void AsyncTMAScatterOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -406,7 +431,7 @@ void TMEMAllocOp::getEffects(
                          mlir::triton::nvidia_gpu::TensorMemory::get());
 }
 
-bool isDescendingOrder(triton::gpu::MemDescType type) {
+static bool isDescendingOrder(triton::gpu::MemDescType type) {
   auto order = triton::gpu::getOrder(type);
   auto rank = type.getRank();
   for (int i = 0; i < rank; ++i) {
@@ -458,6 +483,46 @@ void TMEMCopyOp::getEffects(
                        mlir::triton::nvidia_gpu::TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- TMEMSubSliceOp --
+LogicalResult TMEMSubSliceOp::verify() {
+  auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
+  auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      srcTy.getEncoding());
+  if (!encoding)
+    return emitOpError("The source must be a tensor memory buffer.");
+  if (encoding.getBlockM() != 128)
+    return emitOpError("The source must be a 128xN layout.");
+  auto dstTy = cast<triton::gpu::MemDescType>(getResult().getType());
+  auto dstEncoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+      dstTy.getEncoding());
+  if (!dstEncoding)
+    return emitOpError("The destination must be a tensor memory buffer.");
+  if (dstEncoding.getBlockM() != encoding.getBlockM() ||
+      dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
+      dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
+      dstEncoding.getUnpacked() != encoding.getUnpacked())
+    return emitOpError("The destination must have the same block size and "
+                       "CTASplit size as the source.");
+  return mlir::success();
+}
+
+void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
+                           Value alloc, int offset, int size) {
+  auto allocTy = cast<triton::gpu::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape(allocTy.getShape());
+  shape.back() = size;
+  auto encoding =
+      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(allocTy.getEncoding());
+  unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
+  auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
+      builder.getContext(), encoding.getBlockM(), newBlockN,
+      encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
+  auto subsliceType = gpu::MemDescType::get(
+      shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
+      allocTy.getMutableMemory());
+  build(builder, state, subsliceType, alloc, offset);
 }
 
 } // namespace nvidia_gpu

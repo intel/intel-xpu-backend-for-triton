@@ -12,11 +12,9 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/GPUToTritonGEN/GPUToTritonGENPass.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
-#include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/Membar.h"
-#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -59,9 +57,8 @@ public:
     addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
-    addDynamicallyLegalOp<ModuleOp>([](ModuleOp op) {
-      return !triton::gpu::intel::hasSpirvTargetArch(op) ||
-             spirv::lookupTargetEnv(op) != nullptr;
+    addDynamicallyLegalOp<LLVM::CallOp>([](LLVM::CallOp op) {
+      return op.getCConv() == triton::gpu::intel::getRequiredCConv(op);
     });
   }
 };
@@ -71,9 +68,11 @@ struct ConvertTritonGPUToLLVM
           ConvertTritonGPUToLLVM> {
   using ConvertTritonIntelGPUToLLVMBase::ConvertTritonIntelGPUToLLVMBase;
   ConvertTritonGPUToLLVM() = default;
-  ConvertTritonGPUToLLVM(bool advancedPath, bool oneMatrixPerLoadForBT) {
+  ConvertTritonGPUToLLVM(bool advancedPath, bool oneMatrixPerLoadForBT,
+                         bool useTileLoadLinearLayout) {
     this->advancedPath = advancedPath;
     this->oneMatrixPerLoadForBT = oneMatrixPerLoadForBT;
+    this->useTileLoadLinearLayout = useTileLoadLinearLayout;
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -95,11 +94,12 @@ struct ConvertTritonGPUToLLVM
                               getSupportDPASAttrName()) &&
              "Target do not support blocked load/mma");
     mlir::triton::intel::TritonGPUToLLVMPipelineManager pipelineManager(
-        mod, context, isAdvancedPathEnabled, oneMatrixPerLoadForBT);
+        mod, context, isAdvancedPathEnabled, oneMatrixPerLoadForBT,
+        useTileLoadLinearLayout);
     mlir::LowerToLLVMOptions option(context);
-    mlir::triton::intel::TargetInfo targetInfo;
-    TritonIntelGPUToLLVMTypeConverter typeConverter(context, option, targetInfo,
-                                                    isAdvancedPathEnabled);
+    auto targetInfo = mlir::triton::intel::createTargetInfo(mod);
+    TritonIntelGPUToLLVMTypeConverter typeConverter(
+        context, option, *targetInfo, isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
     int numWarps = triton::gpu::lookupNumWarps(&*mod.getOps().begin());
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
@@ -117,11 +117,11 @@ struct ConvertTritonGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonIntelGPUToLLVMTypeConverter typeConverter(
-          context, option, targetInfo, isAdvancedPathEnabled);
+          context, option, *targetInfo, isAdvancedPathEnabled);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       pipelineManager.populateFunctionConversionPatterns(
-          funcPatterns, typeConverter, numWarps, targetInfo);
+          funcPatterns, typeConverter, numWarps, *targetInfo);
 
       if (failed(
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
@@ -137,7 +137,7 @@ struct ConvertTritonGPUToLLVM
     {
       mlir::LowerToLLVMOptions option(context);
       TritonIntelGPUToLLVMTypeConverter typeConverter(
-          context, option, targetInfo, isAdvancedPathEnabled);
+          context, option, *targetInfo, isAdvancedPathEnabled);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       if (failed(
@@ -151,7 +151,7 @@ struct ConvertTritonGPUToLLVM
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     pipelineManager.populateConversionPatterns(
-        patterns, axisInfoAnalysis, typeConverter, targetInfo, benefit);
+        patterns, axisInfoAnalysis, typeConverter, *targetInfo, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

@@ -1204,48 +1204,58 @@ void AxisInfoAnalysis::visitForOpInductionVar(
 
 } // anonymous namespace
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+  auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
-
   // FIXME: This is not as good as it could be, as we don't need to restrict
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
-  unsigned align = getPtrAlignment(ptr);
+  unsigned align = getAlignment(value);
 
   auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
-  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
+  LDBG("getContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = ttgi::getRankedTensorType(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+  auto tensorTy = ttgi::getRankedTensorType(value.getType());
   if (!tensorTy)
     return 1;
-  auto *axisInfo = getAxisInfo(ptr);
+  auto *axisInfo = getAxisInfo(value);
   if (!axisInfo)
     return 1;
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
+
+  // FIXME: should this be an assertion instead?
+  // Temporarily added to avoid crashing on some tests.
+  // See issue #3842.
+  if (order[0] >= axisInfo->getRank())
+    return 1;
+
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
-  unsigned elemNumBits = isTensorPointerType(ptr.getType())
-                             ? tensorTy.getElementType().getIntOrFloatBitWidth()
-                             : triton::getPointeeBitWidth(tensorTy);
+
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  auto elemNumBits = elemTy.getIntOrFloatBitWidth();
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getPtrAlignment order[0] "
+  LDBG("getAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
        << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
@@ -1267,7 +1277,13 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
     return 1;
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+
+  // FIXME: should this be an assertion instead?
+  // Temporarily added to avoid crashing on some tests.
+  // See issue #3842.
   auto maskOrder = linAttr.getOrder();
+  if (maskOrder[0] >= axisInfo->getRank())
+    return 1;
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);

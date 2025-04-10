@@ -167,7 +167,9 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<
   }];
 }
 
-def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
+      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+      AttrSizedOperandSegments]> {
     let summary = "wait until the mbarrier phase completes.";
 
     let description = [{
@@ -177,6 +179,9 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
       This lowers a waitloop using PTX instruction
       mbarrier.try_wait.parity.shared.b64.
 
+      Accepts optional list of memory. If present, it is assumed that any of the
+      dependencies may be accessed until the barrier completes.
+
       The barrier behavior is described here:
       https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms
     }];
@@ -184,13 +189,60 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc,
                          I32:$phase,
-                         Optional<I1>:$pred);
+                         Optional<I1>:$pred,
+                         Variadic<TTG_MemDescType>:$deps);
     let builders = [
       OpBuilder<(ins "Value":$alloc, "Value":$phase),
       [{
-      build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr));
-      }]>];
-    let assemblyFormat = "$alloc `,` $phase attr-dict (`,` $pred^)? `:` qualified(type($alloc))";
+      build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), /*deps=*/{});
+      }]>,
+      OpBuilder<(ins "Value":$alloc, "Value":$phase, "Value":$pred),
+      [{
+      build($_builder, $_state, alloc, phase, pred, /*deps=*/{});
+      }]>,
+      OpBuilder<(ins "Value":$alloc, "Value":$phase, "ValueRange":$deps),
+      [{
+      build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
+      }]>,
+    ];
+    let assemblyFormat = "$alloc `,` $phase (`,` $pred^)? (`deps` $deps^)? attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?";
+}
+
+def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "perform the arrive operation on an mbarrier";
+  let description = [{
+    The `ttng.arrive_barrier` operation performs the "arrive" operation on an
+    mbarrier object in shared memory. The operation requires a `count` attribute
+    of at least 1, and decreasing the pending arrival count of the mbarrier by
+    the specific count.
+
+    The operation accepts an optional predicate.
+
+    Example:
+
+    ```mlir
+    ttng.arrive_barrier %barrier, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ```
+  }];
+
+  let arguments = (ins
+    TTG_MemDescType:$alloc,
+    I32Attr:$count,
+    Optional<I1>:$pred
+  );
+
+  let assemblyFormat = [{
+    $alloc `,` $count (`,` $pred^)? attr-dict `:` qualified(type($alloc))
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
+      return build($_builder, $_state, alloc, count, /*pred=*/Value());
+    }]>
+  ];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
@@ -314,6 +366,8 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [DeclareOpInterfaceMet
     $desc_ptr `[` $x_offsets `,` $y_offset `]` $src
     attr-dict `:` type(operands)
   }];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
@@ -411,8 +465,31 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
   let arguments = (ins Optional<TT_Tensor>:$src);
 
-  let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
+  let assemblyFormat = [{
+    ($src^)? attr-dict `:` functional-type(operands, results)
+  }];
 
+  let results = (outs TTG_MemDescType:$result);
+  let hasVerifier = 1;
+}
+
+def TTNG_TMEMSubSliceOp : TTNG_Op<"tmem_subslice", [Pure]> {
+  let summary = "Take a subslice of a tensor memory allocation";
+  let description = [{
+    This operation takes a subslice of a tensor memory allocation and returns a new descriptor
+    containing the address and a view of the subslice.
+    This is similar to ttg.memdesc_subview except the offset needs to be static and we can only
+    slice alog the inner dimension of a 2D memdesc as this is the only one we can do for TMem.
+  }];
+  let arguments = (ins TTG_MemDescType:$src, I32Attr:$N);
+
+  let assemblyFormat = [{
+    $src attr-dict `:` qualified(type($src)) `->` qualified(type($result))
+  }];
+
+  let builders = [
+      OpBuilder<(ins "Value":$alloc, "int":$offset, "int":$size)>,
+    ];
   let results = (outs TTG_MemDescType:$result);
   let hasVerifier = 1;
 }

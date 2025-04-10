@@ -2,6 +2,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -47,6 +48,10 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
     pm.addPass(builder({val0, val1}));                                         \
   })
+#define ADD_PASS_WRAPPER_OPT_3(name, builder, ty0, ty1, ty2)                   \
+  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
+    pm.addPass(builder({val0, val1, val2}));                                   \
+  })
 #define ADD_PASS_WRAPPER_OPT_6(name, builder, ty0, ty1, ty2, ty3, ty4, ty5)    \
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
                  ty3 val3, ty4 val4, ty5 val5) {                               \
@@ -66,6 +71,8 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
+  ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
+                     intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
   ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
                          intel::createTritonRaiseBlockPointer, bool);
@@ -74,17 +81,13 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_2("add_to_llvmir",
+  ADD_PASS_WRAPPER_OPT_3("add_to_llvmir",
                          gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
-                         bool);
+                         bool, bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_WRAPPER_0("add_decompose_unsupported_conversions",
-                     gpu::intel::createIntelDecomposeUnsupportedConversions);
-  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
-                     gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_OPT_2("add_pipeline",
                          gpu::intel::createTritonIntelGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -258,23 +261,28 @@ void init_triton_intel(py::module &&m) {
     return py::int_(ret);
   });
 
-  // May do this after llvm ir according to user fmath flag.
-  m.def("set_fast_math", [](mlir::ModuleOp mod) {
-    using namespace mlir;
-    MLIRContext *ctx = mod.getContext();
-    mod.walk([&](Operation *op) {
-      if (auto fmIf = dyn_cast<arith::ArithFastMathInterface>(op))
-        op->setAttr(
-            fmIf.getFastMathAttrName(),
-            arith::FastMathFlagsAttr::get(ctx, arith::FastMathFlags::fast));
-    });
+  // FIXME: This is for internal experimentation. In the end we will need a
+  // producer flag (e.g. PyTorch flag) to allow the Triton compiler to use the
+  // fast math semantics on all arithmetic operations.
+  // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
+  m.def("set_fast_math", [](llvm::Module *mod) {
+    using namespace llvm;
+    for (Function &func : *mod) {
+      for (Instruction &inst : instructions(func)) {
+        if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
+          FastMathFlags FMF;
+          FMF.setFast(true);
+          inst.setFastMathFlags(FMF);
+        }
+      }
+    }
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
     std::string triple = "spir64-unknown-unknown";
     std::string layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:"
                          "256-v256:256-v512:512-v1024:1024-n8:16:32:64";
-    mod->setTargetTriple(triple);
+    mod->setTargetTriple(llvm::Triple(triple));
     mod->setDataLayout(layout);
   });
 

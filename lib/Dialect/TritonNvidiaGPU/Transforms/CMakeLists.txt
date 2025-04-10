@@ -1,7 +1,8 @@
 add_triton_library(TritonNvidiaGPUTransforms
   FenceInsertion.cpp
   MMALowering.cpp
-  KeepAccInTMem.cpp
+  OptimizeDescriptorEncoding.cpp
+  OptimizeTMemSubtiling.cpp
   PlanCTA.cpp
   PromoteLHSToTMem.cpp
   TensorMemoryAllocation.cpp

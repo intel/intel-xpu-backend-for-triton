@@ -6,7 +6,7 @@ import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
 
-from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_mi200, is_hip, is_xpu
+from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_cdna2, is_hip, is_xpu
 
 
 def check_capabilities():
@@ -219,7 +219,7 @@ def test_pipeline_matmul(scale, device):
         pytest.skip("NYI: scale_dot just implemented in CUDA/HIP/XPU")
     M, N, K = 512, 512, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
-    NUM_STAGES = 4
+    NUM_STAGES = 4 if is_cuda() else 2
 
     if scale:
         # Large enough tile to let our heuristics to pipeline small tensor kick in
@@ -274,11 +274,11 @@ def test_pipeline_matmul(scale, device):
         ref_out = dot_scale_ref(a, scale_a, b, a_type, b_type)
     else:
         ref_out = torch.matmul(a, b)
-    # Bigger tolerance for AMD MI200 devices.
-    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # Bigger tolerance for AMD CDNA2 devices.
+    # CDNA2 devices use reduced precision fp16 and bf16 and flush input and
     # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    atol = 1e-2 if is_hip_mi200() or scale else None
-    rtol = 1e-2 if is_hip_mi200() or scale else None
+    atol = 1e-2 if is_hip_cdna2() or scale else None
+    rtol = 1e-2 if is_hip_cdna2() or scale else None
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol, equal_nan=scale)
     if is_cuda():
         ttgir = handler.asm["ttgir"]
@@ -305,8 +305,7 @@ def test_pipeline_matmul(scale, device):
             if torch.cuda.get_device_capability()[0] == 10:
                 if scale:
                     # A, B, scale, decomposed A shmem
-                    # MMA pipelining fails to identify the MMA pattern in this case, so the barrier is not inserted.
-                    count = 4
+                    count = 5
                 else:
                     # A, B, MMA barrier
                     count = 3
@@ -428,7 +427,7 @@ def indirect_matmul_kernel(
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("num_stages", [1, 3, 5])
 def test_indirect_matmul(BLOCK_M, BLOCK_N, BLOCK_K, num_stages, device):
-    if num_stages > 3 and is_hip():
+    if (num_stages > 3 or (num_stages >= 3 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 128, 128))) and is_hip():
         pytest.skip("Not enough shared memory on HIP.")
     M = BLOCK_M
     N = BLOCK_N
@@ -478,19 +477,19 @@ def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
     num_tiles = num_pid_m * num_pid_n
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    a_desc = tl._experimental_make_tensor_descriptor(
+    a_desc = tl.make_tensor_descriptor(
         a_ptr,
         shape=[M, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
     )
-    b_desc = tl._experimental_make_tensor_descriptor(
+    b_desc = tl.make_tensor_descriptor(
         b_ptr,
         shape=[N, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
     )
-    c_desc = tl._experimental_make_tensor_descriptor(
+    c_desc = tl.make_tensor_descriptor(
         c_ptr,
         shape=[M, N],
         strides=[N, 1],

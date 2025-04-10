@@ -4,9 +4,6 @@
 #include <inttypes.h>
 #include <string.h>
 #include <sstream>
-#include <tuple>
-#include <vector>
-#include <utility>
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
@@ -45,14 +42,15 @@ void unload_{kernel_name}(void) {{
     // Not implemeted
 }}
 
-// TODO: support `is_spv` + some code duplication with `third_party/intel/backend/driver.c` and `SPIRVRunner`
 void load_{kernel_name}() {{
     uint8_t *binary_ptr = (uint8_t *)&SPV_NAME;
     size_t binary_size = {bin_size};
 
+    const bool is_spv = {is_spv};
+
     ze_module_desc_t module_description {{}};
     module_description.stype = ZE_STRUCTURE_TYPE_MODULE_DESC;
-    module_description.format = ZE_MODULE_FORMAT_IL_SPIRV;
+    module_description.format = is_spv ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE;
     module_description.inputSize = static_cast<uint32_t>(binary_size);
     module_description.pInputModule = binary_ptr;
     module_description.pBuildFlags = "{build_flags}";

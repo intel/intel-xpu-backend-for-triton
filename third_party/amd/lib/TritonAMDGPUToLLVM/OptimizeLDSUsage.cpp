@@ -26,9 +26,12 @@
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
+#define DEBUG_TYPE "optimize-amd-lds-usage"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 
@@ -63,7 +66,7 @@ class OptimizeAMDLDSUsage
   // minimal mfma tile is: [1*32, 4*32] = [32, 128]
   // minimal blocked tile is: [1*32*4, 4*2*1] = [128, 8]
   //
-  // Roughtly scratch buffer shape for conversion is:
+  // Roughly scratch buffer shape for conversion is:
   // [max(32, 128), max(128, 16)] = [128, 128].
   //
   // This shape could be reduces by introducing intermediate
@@ -87,6 +90,7 @@ class OptimizeAMDLDSUsage
   // times do not intersect, therefore this transformation lowers LDS
   // consumption.
   void tryFitCvtIntoLDS(triton::gpu::ConvertLayoutOp cvtOp, int targetLDSSize) {
+    LDBG("Trying fit " << cvtOp << " into " << targetLDSSize << " bytes");
     OpBuilder builder(cvtOp);
 
     auto srcType = cvtOp.getSrc().getType();
@@ -100,8 +104,8 @@ class OptimizeAMDLDSUsage
     auto ctx = srcEnc.getContext();
     auto rank = srcType.getRank();
 
-    unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
-    auto warpSize = triton::gpu::getWarpSize(srcEnc);
+    unsigned numWarps = triton::gpu::lookupNumWarps(cvtOp);
+    auto warpSize = triton::gpu::lookupThreadsPerWarp(builder);
 
     // Find all possible shapes of WarpsPerCTA by finding all possible
     // factorizations of numWarps. Pick shape for which both conversions in
@@ -132,11 +136,15 @@ class OptimizeAMDLDSUsage
     SmallVector<Attribute> tmpLayouts;
     for (int i = 0; i < factorizedNumWarps.size(); i++) {
       auto warpsPerCTA = factorizedNumWarps[i];
-      tmpLayouts.push_back(
-          mlir::triton::AMD::createTmpLayout(srcEnc, warpsPerCTA));
-      tmpLayouts.push_back(
-          mlir::triton::AMD::createTmpLayout(dstEnc, warpsPerCTA));
-      tmpLayouts.push_back(
+
+      auto pushNotNull = [&](Attribute enc) {
+        if (enc)
+          tmpLayouts.push_back(enc);
+      };
+
+      pushNotNull(mlir::triton::AMD::createTmpLayout(srcEnc, warpsPerCTA));
+      pushNotNull(mlir::triton::AMD::createTmpLayout(dstEnc, warpsPerCTA));
+      pushNotNull(
           mlir::triton::AMD::createTmpLayout(baseFallbackLayout, warpsPerCTA));
     }
 
@@ -145,6 +153,8 @@ class OptimizeAMDLDSUsage
     for (int i = 0; i < tmpLayouts.size(); i++) {
       auto resources = mlir::triton::AMD::estimateResourcesForReplacement(
           builder, cvtOp, tmpLayouts[i]);
+      LDBG("layout " << tmpLayouts[i] << " requires " << resources.LDS
+                     << " bytes");
       // TODO analyze performance along with LDS consumption
       if (resources.LDS < minLDSUsage) {
         minLDSUsage = resources.LDS;

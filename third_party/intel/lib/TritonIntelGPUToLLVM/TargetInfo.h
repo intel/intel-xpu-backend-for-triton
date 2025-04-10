@@ -57,10 +57,11 @@ public:
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
-              int formatStrByteCount, ValueRange args) const override;
+              int formatStrByteCount, ValueRange args,
+              ArrayRef<bool> isSigned = {}) const override;
 
-  void printf(RewriterBase &rewriter, StringRef msg,
-              ValueRange args) const override;
+  void printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
+              ArrayRef<bool> isSigned = {}) const override;
 
   void assertFail(RewriterBase &rewriter, Location loc, StringRef message,
                   StringRef file, StringRef func, int line) const override;
@@ -74,6 +75,13 @@ public:
                              StringRef name, StringRef value,
                              unsigned addressSpace) const;
 
+protected:
+  virtual bool isSupportedWarpReduceOp(Operation *op, unsigned numLanesToReduce,
+                                       unsigned warpSize) const = 0;
+  virtual Value genWarpReduce(RewriterBase &rewriter, Location loc, Value acc,
+                              Operation *reduceOp, unsigned numLanesToReduce,
+                              unsigned warpSize) const = 0;
+
 private:
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
                                  StringRef name, StringRef value,
@@ -82,5 +90,7 @@ private:
   mutable llvm::DenseMap<std::pair<unsigned, StringAttr>, LLVM::GlobalOp>
       globals;
 };
+
+std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod);
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H

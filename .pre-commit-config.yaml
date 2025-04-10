@@ -60,7 +60,7 @@ repos:
       pass_filenames: false
 
   - repo: https://github.com/pycqa/pylint
-    rev: v3.2.6
+    rev: v3.3.6
     hooks:
       - id: pylint
         name: pylint for scripts
@@ -79,10 +79,6 @@ repos:
           - --disable=missing-module-docstring
           - --disable=missing-function-docstring
           - --disable=missing-class-docstring
-          - --disable=duplicate-code
-          - --disable=too-many-locals
-          - --disable=too-many-statements
-          - --disable=too-many-arguments
         stages: [pre-commit, pre-push, manual]
 
       - id: pylint
@@ -104,9 +100,7 @@ repos:
           # Disable unnecessary-lambda-assignment: benchmark use a lot of lambda assignments
           - --disable=unnecessary-lambda-assignment
           # FIXME: revisit these checks later
-          - --disable=import-outside-toplevel
           - --disable=too-few-public-methods
-          - --disable=consider-using-generator
           - --disable=missing-module-docstring
           - --disable=missing-function-docstring
           - --disable=missing-class-docstring
@@ -114,6 +108,7 @@ repos:
           - --disable=too-many-locals
           - --disable=too-many-statements
           - --disable=too-many-arguments
+          - --disable=too-many-positional-arguments
           - --disable=fixme
         stages: [pre-commit, pre-push, manual]
 
@@ -133,5 +128,6 @@ exclude: |
     ^third_party/amd/backend/include/roctracer/|
     ^third_party/amd/backend/lib/|
     ^third_party/nvidia/backend/include/cuda.h|
-    ^third_party/f2reduce
+    ^third_party/f2reduce|
+    ^third_party/intel/backend/proton/include
   )

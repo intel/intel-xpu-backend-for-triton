@@ -1,6 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 

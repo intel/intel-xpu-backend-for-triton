@@ -1,5 +1,3 @@
-#include <memory>
-
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -23,7 +21,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
-#include <memory>
 
 namespace mlir::triton::gpu {
 
@@ -184,8 +181,8 @@ void LayoutRematerialization::cleanup() {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp,
-          triton::nvidia_gpu::TMEMLoadOp>(op))
+  if (isa<DotOp, DotScaledOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp,
+          AtomicCASOp, triton::nvidia_gpu::TMEMLoadOp>(op))
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
@@ -1118,7 +1115,7 @@ void LayoutRematerialization::hoistConvertDotOperand() {
 void LayoutRematerialization::hoistConvertDotOperand(
     ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
-  // The pass is targeted to Nvidia mma/wgmma dot operands
+  // The pass is targeted to MMA dot operands
 
   auto canBePipelined = [&](ConvertLayoutOp convertOp) {
     // FIXME: Check that the parent is a for loop
@@ -1126,7 +1123,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
     if (!parent)
       return false;
 
-    // Find all the dot-like ops in the for loop that have a nvidia dot operand
+    // Find all the dot-like ops in the for loop that have a dot operand
     // encoding on the lhs and check if any of them post-dominates the load +
     // cvt
     SmallVector<Operation *> dotLikeOps;
@@ -1139,7 +1136,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
       auto dotEnc = dyn_cast<DotOperandEncodingAttr>(opType.getEncoding());
       if (!dotEnc)
         return;
-      if (isa<NvidiaMmaEncodingAttr>(dotEnc.getParent()))
+      if (isa<MmaEncodingTrait>(dotEnc.getParent()))
         dotLikeOps.push_back(op);
     });
     if (dotLikeOps.empty())
@@ -1250,7 +1247,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (result.failed())
     return;
 
-  Operation *extOrBroadcatOp = nullptr;
+  Operation *extOrBroadcastOp = nullptr;
   unsigned sliceSize = slice.size();
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
@@ -1274,37 +1271,37 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
-      if (extOrBroadcatOp != nullptr)
+      if (extOrBroadcastOp != nullptr)
         return;
-      extOrBroadcatOp = op;
+      extOrBroadcastOp = op;
     }
   }
 
-  if (extOrBroadcatOp == nullptr)
+  if (extOrBroadcastOp == nullptr)
     return;
-  Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
-  Attribute srcEncoding = inferSrcEncoding(extOrBroadcatOp, dstEncoding);
+  Attribute dstEncoding = layout[extOrBroadcastOp->getResult(0)];
+  Attribute srcEncoding = inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
-  OpBuilder builder(extOrBroadcatOp);
+  OpBuilder builder(extOrBroadcastOp);
   auto tensorType =
-      cast<RankedTensorType>(extOrBroadcatOp->getOperand(0).getType());
+      cast<RankedTensorType>(extOrBroadcastOp->getOperand(0).getType());
   auto newType = RankedTensorType::get(
       tensorType.getShape(), tensorType.getElementType(), srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
-      convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
-  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);
+      convertOp.getLoc(), newType, extOrBroadcastOp->getOperand(0));
+  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcastOp);
   newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
   auto oldExtOrBroadcastType =
-      cast<RankedTensorType>(extOrBroadcatOp->getResult(0).getType());
+      cast<RankedTensorType>(extOrBroadcastOp->getResult(0).getType());
   Type newExtOrBroadcasrType = RankedTensorType::get(
       oldExtOrBroadcastType.getShape(), oldExtOrBroadcastType.getElementType(),
       dstEncoding);
   newExtOrBroadcast->getResult(0).setType(newExtOrBroadcasrType);
   IRMapping mapping;
-  mapping.map(extOrBroadcatOp->getResult(0), newExtOrBroadcast->getResult(0));
-  slice.remove(extOrBroadcatOp->getResult(0));
+  mapping.map(extOrBroadcastOp->getResult(0), newExtOrBroadcast->getResult(0));
+  slice.remove(extOrBroadcastOp->getResult(0));
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }

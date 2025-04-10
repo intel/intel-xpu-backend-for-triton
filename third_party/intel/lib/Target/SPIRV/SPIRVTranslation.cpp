@@ -1,17 +1,11 @@
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
-#include <optional>
 
 #include "LLVMSPIRVLib.h"
-#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/TargetParser/Triple.h"
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
 namespace llvm {
@@ -111,16 +105,40 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
-std::string translateLLVMIRToSPIRV(llvm::Module &module) {
-  // initLLVM();
+static SPIRV::TranslatorOpts getSPIRVOopts() {
+  SPIRV::TranslatorOpts SPIRVOpts;
+  static constexpr std::array<SPIRV::ExtensionID, 12> AllowedExtensions{
+      SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
+      SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
+      SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
+      SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
+      SPIRV::ExtensionID::SPV_INTEL_cache_controls,
+      SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
+      SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
+      SPIRV::ExtensionID::SPV_INTEL_subgroups,
+      SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
+      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
+      SPIRV::ExtensionID::SPV_KHR_bit_instructions,
+      SPIRV::ExtensionID::SPV_KHR_non_semantic_info};
 
+  SPIRVOpts.setMemToRegEnabled(true);
+  SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
+  SPIRVOpts.setPreserveAuxData(false);
+  SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
+  SPIRV::TranslatorOpts TransOpt{SPIRV::VersionNumber::SPIRV_1_4};
+
+  for (auto &Ext : AllowedExtensions)
+    SPIRVOpts.setAllowedToUseExtension(Ext, true);
+  return SPIRVOpts;
+}
+
+std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createVerifierPass());
   pm.run(module);
-  // module->print(llvm::outs(), nullptr);
 
   if (module.materializeAll()) {
     llvm::errs() << "SPIRVTranslation: failed to read the LLVM module IR!";
@@ -134,14 +152,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts;
-  SPIRVOpts.enableAllExtensions();
-  SPIRVOpts.setAllowedToUseExtension(
-      SPIRV::ExtensionID::SPV_KHR_untyped_pointers, false);
-  SPIRVOpts.setMemToRegEnabled(true);
-  SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
-  SPIRVOpts.setPreserveAuxData(false);
-  SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOopts();
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;

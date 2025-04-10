@@ -39,7 +39,7 @@ pytest() {
         sed -e '/^#/d' -e '/^\s*$/d' "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" > "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
         if [[ $TEST_UNSKIP = false ]]; then
             pytest_extra_args+=(
-                "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--skip-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
             )
         else
             pytest_extra_args+=(

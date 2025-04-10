@@ -1,15 +1,18 @@
 import argparse
+import datetime
 import itertools
 import os
 
-from triton.testing import assert_close as triton_assert_close, Benchmark
+import torch
+from torch.profiler import profile, ProfilerActivity, record_function
+import triton
+from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 VERIFY = os.getenv("VERIFY", "1") == "1"
 
 
 def synchronize():
-    import torch
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     elif torch.xpu.is_available():
@@ -17,7 +20,6 @@ def synchronize():
 
 
 def _summarize_statistics(times, quantiles, return_mode):
-    import torch
     if quantiles is not None:
         ret = torch.quantile(times, torch.tensor(quantiles, dtype=torch.float)).tolist()
         if times.numel() > 2:
@@ -52,9 +54,6 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     :type quantiles: list[float]
     """
     assert return_mode in ["min", "max", "mean", "median"]
-    import torch
-    import triton
-    from triton.testing import do_bench as triton_do_bench
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
@@ -108,8 +107,6 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     """
 
     assert return_mode in ["min", "max", "mean", "median"]
-    import torch
-    from torch.profiler import profile, ProfilerActivity, record_function
 
     fn()
     synchronize()
@@ -158,12 +155,11 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # for correct registration of kernels.
     # For details: https://github.com/pytorch/pytorch/issues/144778
     kernels = [kernel for kernel in kernels if kernel != []]
-    # FIXME: relaxation for new agama release
-    assert len(kernels) >= n_repeat - 1, (
+    assert len(kernels) == n_repeat, (
         f"the profiling number not match; {n_repeat=}, {kernels=}, \n" +
         f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
     # Make the time to the milliseconds.
-    times = torch.tensor([sum([k.duration for k in ks]) * 1e-3 for ks in kernels], dtype=torch.float)
+    times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
 
 
@@ -198,10 +194,10 @@ class Mark:
         self.benchmarks = benchmarks
 
     # pylint: disable=too-many-branches
-    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False,
+    def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
              save_precision=6, **kwrags):
-        import matplotlib.pyplot as plt
-        import pandas as pd
+        import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
+        import pandas as pd  # pylint: disable=import-outside-toplevel
         y_vals = []
         for label in bench.ylabel:
             y_mean = [f"{x}-{label}" for x in bench.line_names]
@@ -244,6 +240,7 @@ class Mark:
             rows += row_vals["CV"][0]
             df.loc[len(df)] = list(x) + rows
 
+        filename = f"{bench.plot_name}_{run_counter}"
         if bench.plot_name:
             plt.figure()
             ax = plt.subplot()
@@ -269,7 +266,7 @@ class Mark:
             if show_plots:
                 plt.show()
             if save_path:
-                plt.savefig(os.path.join(save_path, f"{bench.plot_name}.png"))
+                plt.savefig(os.path.join(save_path, f"{filename}.png"))
         # df = df[x_names + bench.line_names]
         if diff_col and df.shape[1] == 2:
             col0, col1 = df.columns.tolist()
@@ -279,38 +276,45 @@ class Mark:
             print(bench.plot_name + ":")
             print(df.to_string())
         if save_path:
-            df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
-                      index=False)
+            df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, save_path="", return_df=False, **kwargs):
-        save_path = save_path_from_args(save_path)
+    def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, **kwargs):
+        args = parse_args()
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
 
-        for bench in benchmarks:
-            result_dfs.append(self._run(bench, save_path, show_plots, print_data, **kwargs))
-
-        if save_path:
+        if args.reports:
             # Create directory if it doesn't exist
-            os.makedirs(save_path, exist_ok=True)
-            with open(os.path.join(save_path, "results.html"), "w", encoding="utf-8") as html:
-                html.write("<html><body>\n")
-                for bench in benchmarks:
-                    html.write(f"<image src=\"{bench.plot_name}.png\"/>\n")
-                html.write("</body></html>\n")
+            os.makedirs(args.reports, exist_ok=True)
+
+        for bench in benchmarks:
+            benchmark_dfs = []
+            for run_counter in range(args.n_runs):
+                df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
+                df["datetime"] = datetime.datetime.now()
+                df["run_counter"] = run_counter + 1
+                benchmark_dfs.append(df)
+
+            if args.reports:
+                import pandas as pd  # pylint: disable=import-outside-toplevel
+
+                merged_df = pd.concat(benchmark_dfs, axis=0)
+                merged_df.to_csv(os.path.join(args.reports, f"{bench.plot_name}.csv"),
+                                 float_format=f"%.{save_precision}f", index=False)
+            result_dfs.extend(benchmark_dfs)
 
         if return_df:
-            return result_dfs[0] if has_single_bench else result_dfs
+            if len(result_dfs) == 1:
+                return result_dfs[0]
+            return result_dfs
 
         return None
 
 
-def save_path_from_args(save_path: str):
-    """Returns a save path that is specified as an argument or via --reports comman line option."""
-    if save_path:
-        return save_path
+def parse_args():
+    """Parses arguments via CLI, allows save_path overloading to `reports`."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--reports",
@@ -318,5 +322,10 @@ def save_path_from_args(save_path: str):
         default="",
         help="directory to save reports",
     )
-    args = parser.parse_args()
-    return args.reports
+    parser.add_argument(
+        "--n_runs",
+        type=int,
+        default=1,
+        help="number of runs for this benchmark",
+    )
+    return parser.parse_args()

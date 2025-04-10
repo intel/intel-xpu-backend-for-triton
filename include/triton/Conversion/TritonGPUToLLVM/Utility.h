@@ -515,6 +515,7 @@ inline Value getStackPointer(RewriterBase &rewriter,
 }
 
 inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                                 const TargetInfoBase &targetInfo,
                                  FunctionOpInterface funcOp,
                                  Value allocOffset = {}) {
   // See NOTE: [Additional Function Arguments]
@@ -553,6 +554,11 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   Value linearId = gridIdx[2];
   for (int k = 0; k < 2; ++k) {
     linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
+  }
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  if (numCTAs > 1) {
+    linearId = b.mul(linearId, b.i32_val(numCTAs));
+    linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
   }
 
   auto allocSize = allocSizeAttr.getValue().getZExtValue();
@@ -816,6 +822,41 @@ isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
          /*swizzling and rank-reduced and rank >= 2*/
          (shape == allocShape.take_back(rank) && rank >= 2);
 }
+
+inline llvm::MapVector<StringAttr, int32_t>
+getAllFreeVarMasks(MLIRContext *ctx) {
+  // Mask where all elements are redundant
+  auto kReg = str_attr("reg");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  int32_t fullMask = -1;
+  llvm::MapVector<StringAttr, int32_t> ret;
+  for (auto dimName : {kReg, kLane, kWarp, kBlock}) {
+    ret[dimName] = fullMask;
+  }
+  return ret;
+}
+
+inline llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
+  auto ctx = type.getContext();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
+  if (!tensorTy) {
+    return getAllFreeVarMasks(ctx);
+  }
+  auto ll =
+      triton::gpu::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+  return ll.getFreeVariableMasks();
+}
+
+inline bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return (index & freeVarMask) == 0;
+}
+
+// Certain lowerings may introduce references to function arguments. Keep warp
+// group code isolated from above by invoking this function.
+void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 
 } // namespace mlir
 

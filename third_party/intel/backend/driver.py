@@ -100,7 +100,9 @@ class CompilationHelper:
 
     @cached_property
     def _compute_compilation_options_lazy(self):
-        ze_root = os.getenv("ZE_PATH", default="/usr/local")
+        ze_root = os.getenv("LEVEL_ZERO_V1_SDK_PATH")
+        if ze_root is None:
+            ze_root = os.getenv("ZE_PATH", default="/usr/local")
         include_dir = [os.path.join(ze_root, "include")]
 
         library_dir = []
@@ -329,12 +331,12 @@ def ty_to_cpp(ty):
     if ty[0] == '*':
         return "void*"
     return {
-        "i1": "int32_t",
+        "i1": "int8_t",
         "i8": "int8_t",
         "i16": "int16_t",
         "i32": "int32_t",
         "i64": "int64_t",
-        "u1": "uint32_t",
+        "u1": "uint8_t",
         "u8": "uint8_t",
         "u16": "uint16_t",
         "u32": "uint32_t",

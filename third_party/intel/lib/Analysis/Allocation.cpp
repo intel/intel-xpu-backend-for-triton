@@ -1,11 +1,7 @@
 #include "intel/include/Analysis/Allocation.h"
-
-#include "llvm/ADT/TypeSwitch.h"
-
-#include "triton/Dialect/Triton/IR/Utility.h"
-
 #include "intel/include/Analysis/Utility.h"
-#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::intel {
 namespace {
@@ -25,7 +21,8 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
             : std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
     unsigned numElements = product(srcTy.getShape());
     Attribute encoding = srcTy.getEncoding();
-    int subGroupSize = product(gpu::getThreadsPerWarp(encoding));
+    int subGroupSize =
+        product(gpu::getThreadsPerWarp(encoding, srcTy.getShape()));
     assert(numElements % subGroupSize == 0 &&
            "Sub-group transposable tensors have a number of elements multiple "
            "of the sub-group size");

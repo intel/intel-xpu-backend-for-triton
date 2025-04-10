@@ -9,8 +9,6 @@
 #ifndef TRITON_CONVERSION_TRITONGENTOLLVMPASS_H
 #define TRITON_CONVERSION_TRITONGENTOLLVMPASS_H
 
-#include <memory>
-
 namespace mlir {
 
 class DialectRegistry;

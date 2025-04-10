@@ -31,12 +31,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/identity.h"
-#include "llvm/IR/Attributes.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/ModRef.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
@@ -424,6 +421,14 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
+        op.getVBlocks() != 4 && !op.getVnniTransform()) {
+      // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
+      // vBlock reads
+      rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);

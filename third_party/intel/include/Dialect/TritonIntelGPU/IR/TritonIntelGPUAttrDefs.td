@@ -184,9 +184,9 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     "unsigned":$systolicDepth,
     "unsigned":$executionSize,
     "unsigned":$opsPerChannel,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$repCluster,
-    "unsigned":$threadsPerWarp__
+    "unsigned":$threadsPerWarp
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
@@ -204,18 +204,13 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     SmallVector<unsigned> getShapeC() const;
 
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, OpIdx opIdx) const;
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, OpIdx opIdx) const;
     SmallVector<unsigned> getElemsPerThreadForOperands(ArrayRef<int64_t> shape, Type eltTy, OpIdx opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(OpIdx opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, OpIdx opIdx) const;
 
     // Forwarder functions for casting unsigned to OpIdx.
     SmallVector<int64_t> getDPASRepetitions(ArrayRef<int64_t> shape, unsigned opIdx) const {
       return getDPASRepetitions(shape, static_cast<OpIdx>(opIdx));
-    }
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, unsigned opIdx) const {
-      return getSizePerThreadForOperand(kWidth, static_cast<OpIdx>(opIdx));
     }
     SmallVector<unsigned> getRepOrderForOperand(unsigned opIdx) const {
       return getRepOrderForOperand(static_cast<OpIdx>(opIdx));
@@ -278,6 +273,8 @@ def WarpEncodingAttr : DistributedEncoding<"WarpEncoding", "intel_warp_encoding"
   let extraClassDeclaration = extraDistributedDeclaration #  [{
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+    SmallVector<unsigned> getSizePerThread() const;
+    SmallVector<unsigned> getThreadsPerWarp() const;
   }];
 
   let hasCustomAssemblyFormat = 1;

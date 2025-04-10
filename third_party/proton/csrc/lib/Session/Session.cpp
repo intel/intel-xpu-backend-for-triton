@@ -4,17 +4,22 @@
 #include "Data/TreeData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
+#include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Utility/String.h"
 
 namespace proton {
 
 namespace {
-Profiler *getProfiler(const std::string &name, const std::string &path) {
+Profiler *getProfiler(const std::string &name, const std::string &path,
+                      void *sycl_queue = nullptr) {
   if (proton::toLower(name) == "cupti") {
     return &CuptiProfiler::instance().setLibPath(path);
   }
   if (proton::toLower(name) == "cupti_pcsampling") {
     return &CuptiProfiler::instance().setLibPath(path).enablePCSampling();
+  }
+  if (proton::toLower(name) == "xpupti") {
+    return &XpuptiProfiler::instance().setSyclQueue(sycl_queue);
   }
   if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
@@ -69,11 +74,13 @@ void Session::finalize(OutputFormat outputFormat) {
   data->dump(outputFormat);
 }
 
+size_t Session::getContextDepth() { return contextSource->getDepth(); }
+
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName) {
-  auto profiler = getProfiler(profilerName, profilerPath);
+    const std::string &dataName, void *sycl_queue) {
+  auto profiler = getProfiler(profilerName, profilerPath, sycl_queue);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -142,7 +149,8 @@ size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
                                   const std::string &profilerPath,
                                   const std::string &contextSourceName,
-                                  const std::string &dataName) {
+                                  const std::string &dataName,
+                                  void *sycl_queue) {
   std::lock_guard<std::mutex> lock(mutex);
   if (hasSession(path)) {
     auto sessionId = getSessionId(path);
@@ -152,7 +160,7 @@ size_t SessionManager::addSession(const std::string &path,
   auto sessionId = nextSessionId++;
   sessionPaths[path] = sessionId;
   sessions[sessionId] = makeSession(sessionId, path, profilerName, profilerPath,
-                                    contextSourceName, dataName);
+                                    contextSourceName, dataName, sycl_queue);
   return sessionId;
 }
 
@@ -238,6 +246,12 @@ void SessionManager::setState(std::optional<Context> context) {
       contextSource->setState(context);
     }
   }
+}
+
+size_t SessionManager::getContextDepth(size_t sessionId) {
+  std::lock_guard<std::mutex> lock(mutex);
+  throwIfSessionNotInitialized(sessions, sessionId);
+  return sessions[sessionId]->getContextDepth();
 }
 
 } // namespace proton

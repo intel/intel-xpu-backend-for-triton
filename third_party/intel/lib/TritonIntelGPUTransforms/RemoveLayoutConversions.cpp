@@ -186,8 +186,8 @@ bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return ttgi::isExpensiveLoadOrStore(op);
   // TODO: we should estimate the cost of the not propagating layout for
-  // AtomicCAS and UpcastMXFP ops for further performance consideration.
-  if (isa<DotOp, AtomicCASOp, ttgi::UpcastMXFPOp>(op))
+  // AtomicCAS for further performance consideration.
+  if (isa<DotOp, AtomicCASOp>(op))
     return true;
   if (isa<AtomicRMWOp>(op))
     if (auto tensorType =
@@ -966,10 +966,19 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
           auto it = layout.find(res);
           assert(it != layout.end());
 
-          auto oldType = cast<RankedTensorType>(res.getType());
-          auto newType = RankedTensorType::get(
-              oldType.getShape(), oldType.getElementType(), it->second);
-          newTypes.push_back(newType);
+          Type resType = res.getType();
+          if (auto oldType = dyn_cast<RankedTensorType>(resType)) {
+            auto newType = RankedTensorType::get(
+                oldType.getShape(), oldType.getElementType(), it->second);
+            newTypes.push_back(newType);
+          } else if (auto ptrType = dyn_cast<PointerType>(resType)) {
+            auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+            auto newType = triton::PointerType::get(
+                RankedTensorType::get(tensorType.getShape(),
+                                      tensorType.getElementType(), it->second),
+                ptrType.getAddressSpace());
+            newTypes.push_back(newType);
+          }
         }
       }
       scf::IfOp newIfOp =
@@ -1234,12 +1243,10 @@ void LayoutRematerialization::hoistConvertDotOperand(
 
   // We hoist over any operation that can be done without data movement between
   // threads We do views and elementwise pure ops for now
-  // UpcastMXFPOp is here temporarily until
-  // https://github.com/triton-lang/triton/pull/5475 lands
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp,
-               ttgi::UpcastMXFPOp, ConvertLayoutOp>(op);
+           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, Fp4ToFpOp,
+               ConvertLayoutOp>(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
   // data movement between threads

@@ -22,10 +22,9 @@ permissions: read-all
 env:
   PYTHONIOENCODING: utf-8
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
-  ZE_PATH: C:\level_zero
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
-
+=======
 jobs:
   build:
     name: Build and test
@@ -33,7 +32,7 @@ jobs:
       - windows
       - ${{ inputs.runner_label || 'a770' }}
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
-    timeout-minutes: 480
+    timeout-minutes: 720
     steps:
       - name: Enable long paths
         run: |
@@ -65,8 +64,6 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          # FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/3522
-          $env:INCLUDE += ";C:\Program Files (x86)\Intel\oneAPI\dnnl\latest\include\oneapi\dnnl"
           # Required to build on Windows
           $env:CMAKE_SHARED_LINKER_FLAGS = "/FORCE:MULTIPLE"
           $env:CMAKE_MODULE_LINKER_FLAGS = "/FORCE:MULTIPLE"
@@ -94,9 +91,8 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           cd python
-          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
-          # $env:DEBUG = 1
-          pip install -v --no-build-isolation '.[build,tests,tutorials]'
+          pip install -U wheel pybind11 cython cmake
+          pip install -v '.[build,tests,tutorials]'
 
       - name: Triton version
         run: |
@@ -156,9 +152,9 @@ jobs:
           pip install defusedxml
           bash -c "\
             source ./scripts/capture-hw-details.sh; \
-            python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}; \
-            python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json; \
-            python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json; \
+            python scripts/pass_rate.py --reports reports; \
+            python scripts/pass_rate.py --reports reports --json > pass_rate.json; \
+            python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json; \
           "
 
       - name: Upload pass rate report

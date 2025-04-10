@@ -13,6 +13,7 @@
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -27,6 +28,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "nvidia/include/NVGPUToLLVM/Passes.h"
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
@@ -66,6 +68,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerConvertTritonToTritonGPUWarpPass();
+  mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
   mlir::triton::intel::registerTritonRaiseBlockPointer();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
@@ -85,7 +88,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // TritonAMDGPUToLLVM passes
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
-  mlir::triton::registerDecomposeUnsupportedAMDConversions();
   mlir::triton::registerOptimizeAMDLDSUsage();
 
   // TritonAMDGPUTransforms passes
@@ -97,18 +99,24 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUStreamPipeline();
   mlir::registerTritonAMDGPUCanonicalizePointers();
   mlir::registerTritonAMDGPUConvertToBufferOps();
+  mlir::registerTritonAMDGPUInThreadTranspose();
+  mlir::registerTritonAMDGPUCoalesceAsyncCopy();
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
+  mlir::registerTritonAMDFoldTrueCmpI();
 
-  registry
-      .insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-              mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-              mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-              mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-              mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-              mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
-              mlir::triton::amdgpu::TritonAMDGPUDialect,
-              mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect,
-              mlir::triton::gpu::intel::TritonIntelGPUDialect,
-              mlir::triton::TritonGEN::TritonGENDialect>();
+  // NVWS passes
+  mlir::registerNVWSTransformsPasses();
+
+  registry.insert<
+      mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+      mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+      mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+      mlir::arith::ArithDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
+      mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
+      mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect,
+      mlir::triton::amdgpu::TritonAMDGPUDialect,
+      mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect,
+      mlir::triton::gpu::intel::TritonIntelGPUDialect,
+      mlir::triton::TritonGEN::TritonGENDialect>();
 }

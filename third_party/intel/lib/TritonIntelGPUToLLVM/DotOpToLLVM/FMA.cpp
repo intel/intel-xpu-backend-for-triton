@@ -1,5 +1,4 @@
 #include "../TritonGPUToLLVMBase.h"
-#include "../Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -10,7 +9,6 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::expandMatrixOrderWithBatch;
 using ::mlir::triton::gpu::expandMatrixShapeWithBatch;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getSizePerThread;
 
 using ValueTableFMA = std::map<std::tuple<int, int, int>, Value>;
 
@@ -60,10 +58,15 @@ LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   Value llA = adaptor.getA();
   Value llB = adaptor.getB();
 
-  auto sizePerThread =
-      expandMatrixShapeWithBatch(ArrayRef(getSizePerThread(dLayout)));
-  auto shapePerCTATile =
-      expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(dLayout)));
+  auto sizePerThread = getContigPerThread(dTensorTy);
+  SmallVector<unsigned> shapePerCTATile;
+  for (auto [reg, thread, warp] :
+       llvm::zip(sizePerThread, dLayout.getThreadsPerWarp(),
+                 dLayout.getWarpsPerCTA())) {
+    shapePerCTATile.push_back(reg * thread * warp);
+  }
+  shapePerCTATile = expandMatrixShapeWithBatch(ArrayRef(shapePerCTATile));
+  sizePerThread = expandMatrixShapeWithBatch(ArrayRef(sizePerThread));
 
   unsigned K = aShapePerCTA[2];
 

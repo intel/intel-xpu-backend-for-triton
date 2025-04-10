@@ -60,6 +60,6 @@ def matmul(a, b, activation=""):
     return c
 
 
-a = torch.randn((32, 32), device="cuda", dtype=torch.float16)
-b = torch.randn((32, 32), device="cuda", dtype=torch.float16)
+a = torch.randn((32, 32), device="xpu", dtype=torch.float16)
+b = torch.randn((32, 32), device="xpu", dtype=torch.float16)
 matmul(a, b)

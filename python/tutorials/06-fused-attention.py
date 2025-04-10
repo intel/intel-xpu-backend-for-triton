@@ -20,11 +20,6 @@ import triton.tools.experimental_descriptor
 import triton
 import triton.language as tl
 
-# ENABLE_LHS_TO_TMEM is an experimental environment variable for Blackwell.
-# If it is set to 1 it can improve performance of Blackwell attention. However,
-# it defaults to 0 as it is known to cause correctness issues outside of the
-# _attn_fwd_tma kernel below.
-
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
@@ -811,7 +806,7 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     # compare
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
     rtol = 0.0
-    # Relative tolerance workaround for known hardware limitation of MI200 GPU.
+    # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
     if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
         rtol = 1e-2

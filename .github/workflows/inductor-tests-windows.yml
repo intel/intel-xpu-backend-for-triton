@@ -1,0 +1,167 @@
+name: PyTorch inductor tests on Windows
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pytorch_ref:
+        description: PyTorch ref, keep empty for default
+        type: string
+        default: ""
+      suite:
+        description: Space separated lists of test suites or "all"
+        type: string
+        default: >-
+          inductor/test_kernel_benchmark.py
+          inductor/test_codegen_triton.py
+          inductor/test_triton_extension_backend.py
+          inductor/test_triton_heuristics.py
+          inductor/test_triton_wrapper.py
+          inductor/test_triton_kernels.py
+          inductor/test_gpu_cpp_wrapper.py
+          inductor/test_aot_inductor.py
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      python_version:
+        description: Python version
+        type: string
+        default: "3.9"
+      run_name:
+        description: Custom run name
+        type: string
+        default: "PyTorch inductor tests on Windows"
+
+permissions: read-all
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHON_VERSION: "${{ inputs.python_version || '3.9' }}"
+  NEW_WORKSPACE: C:\gh${{ github.run_id }}
+
+jobs:
+  build:
+    name: Test
+    runs-on:
+      - windows
+      # when selecting different runner take care of "bmg" references in the rest of the workflow
+      - ${{ inputs.runner_label || 'b580' }}
+    timeout-minutes: 960
+    steps:
+      - name: Print inputs
+        shell: bash
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
+      # Copy workspace to a temporary location with a shorter name.
+      - name: Copy workspace
+        run: |
+          Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
+
+      - name: Create venv
+        run:
+          python -m venv .venv
+
+      - name: Identify PyTorch commit id
+        if: (inputs.pytorch_ref || '') != ''
+        id: commit-id
+        uses: ./.github/actions/get-commit-id
+        with:
+          repository: pytorch/pytorch
+          branch: ${{ inputs.pytorch_ref || '' }}
+
+      - name: Set PyTorch commit id
+        if: (inputs.pytorch_ref || '') != ''
+        shell: bash
+        run: |
+          echo ${{ steps.commit-id.outputs.commit_id }} > .github/pins/pytorch.txt
+
+      - name: Install PyTorch (source)
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          # Required to build on Windows
+          $env:CMAKE_SHARED_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:CMAKE_MODULE_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:CMAKE_EXE_LINKER_FLAGS = "/FORCE:MULTIPLE"
+          $env:TORCH_XPU_ARCH_LIST = "bmg"
+          bash -c "PYTORCH_PROJ=/c/gh${{ github.run_id }}/pytorch ./scripts/install-pytorch.sh --source"
+
+      - name: PyTorch version
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          python -c 'import torch;print(torch.__version__)'
+
+      - name: Clean up Triton cache
+        shell: bash
+        run: |
+          rm -rf ~/.triton/cache
+
+      # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
+      # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
+      # runner.
+      - name: Setup Triton
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          cd python
+          pip install -U wheel pybind11 cython cmake
+          pip install -v '.[build,tests,tutorials]'
+
+      - name: Triton version
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Install test dependencies
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          pip install pandas scipy tqdm
+
+      - name: Run inductor tests
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+
+          $env:PYTORCH_TESTING_DEVICE_ONLY_FOR = "bmg"
+          bash scripts/test-pytorch.sh ${{ inputs.suite }}
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ env.PYTHON_VERSION }}
+          path: ${{ env.NEW_WORKSPACE }}\pytorch\test\test-reports
+          include-hidden-files: true
+
+      - name: Clean up workspace
+        if: ${{ always() }}
+        run: |
+          Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
+
+      - name: Clean up temporary files
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf rm -rf /tmp/triton-* /tmp/tmp*

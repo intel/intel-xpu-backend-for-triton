@@ -1,4 +1,5 @@
-name: Pytorch inductor tests
+name: PyTorch inductor tests on Linux
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
@@ -11,6 +12,7 @@ on:
         description: Space separated lists of test suites or "all"
         type: string
         default: >-
+          inductor/test_kernel_benchmark.py
           inductor/test_codegen_triton.py
           inductor/test_triton_extension_backend.py
           inductor/test_triton_heuristics.py
@@ -30,6 +32,10 @@ on:
         description: Python version
         type: string
         default: "3.9"
+      run_name:
+        description: Custom run name
+        type: string
+        default: "PyTorch inductor tests on Linux"
 
 permissions: read-all
 

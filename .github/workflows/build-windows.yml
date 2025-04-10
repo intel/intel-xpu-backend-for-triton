@@ -54,8 +54,8 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           cd python
-          pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
-          pip install -v --no-build-isolation '.[build]'
+          pip install -U wheel pybind11 cython cmake
+          pip install -v '.[build]'
 
       - name: Clean
         if: ${{ always() }}

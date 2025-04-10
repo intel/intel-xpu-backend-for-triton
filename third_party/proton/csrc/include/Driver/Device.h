@@ -6,7 +6,7 @@
 
 namespace proton {
 
-enum class DeviceType { HIP, CUDA, COUNT };
+enum class DeviceType { XPU, HIP, CUDA, COUNT };
 
 template <DeviceType T> struct DeviceTraits;
 
@@ -18,6 +18,11 @@ template <> struct DeviceTraits<DeviceType::CUDA> {
 template <> struct DeviceTraits<DeviceType::HIP> {
   constexpr static DeviceType type = DeviceType::HIP;
   constexpr static const char *name = "HIP";
+};
+
+template <> struct DeviceTraits<DeviceType::XPU> {
+  constexpr static DeviceType type = DeviceType::XPU;
+  constexpr static const char *name = "XPU";
 };
 
 struct Device {
