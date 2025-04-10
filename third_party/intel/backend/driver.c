@@ -14,8 +14,6 @@
 #include <variant>
 #include <vector>
 
-#include <fstream>
-
 #include "sycl_functions.h"
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -69,6 +67,49 @@ void freeKernelBundle(PyObject *p) {
 }
 
 using Spills = int32_t;
+
+// todo: add me
+// struct BuildFlags2 {
+//   std::vector<std::string> build_flags;
+
+//   BuildFlags(const std::string& flags) {
+//     auto split = [](const std::string& str, const string& delim) -> std::vector<std::string> {
+//       std::vector<std::string> res;
+//       size_t start{0}, end;
+//       while((end = str.find(delim, start)) != std::string::npos) {
+//         if (str.substr(start, end-start).size())
+//             res.push_back(str.substr(start, end-start));
+//         start = end+delim.size();
+//       }
+//       if (str.substr(start, end-start).size())
+//         res.push_back(str.substr(start, end - start));
+//       return res;
+//     };
+//     build_flags = split(flags, " ");
+//   }
+
+//   int32_t n_regs() const {
+//     if (build_flags.count(LARGE_GRF_FLAG)) {
+//       return 256;
+//     }
+//     if (build_flags.count(SMALL_GRF_FLAG)) {
+//       return 128;
+//     }
+//     // TODO: arguably we could return 128 if we find no flag instead of 0. For
+//     // now, stick with the conservative choice and alert the user only if a
+//     // specific GRF mode is specified.
+//     return 0;
+//   }
+
+//   const bool hasGRFSizeFlag() const {
+//     return (build_flags.count(LARGE_GRF_FLAG) ||
+//         build_flags.count(SMALL_GRF_FLAG) ||
+//         build_flags.count(AUTO_GRF_FLAG)); 
+  
+//   void addLargeGRFSizeFlag() {
+//     build_flags.push_back(LARGE_GRF_FLAG);
+//   }
+// };
 
 struct BuildFlags {
   std::string build_flags_str;
@@ -130,14 +171,9 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 }
 
 static std::vector<std::byte> toBytes(uint8_t* ptr, size_t size) {
-    // std::vector<unsigned char> chars(ptr, ptr+size);
-    // std::ofstream out1("original.spv", std::ios::out | std::ios::binary);
-    // out1.write(reinterpret_cast<const char*>(chars.data()), chars.size());
     std::vector<std::byte> bytes(size);
     std::transform(ptr, ptr+size, bytes.begin(),
                    [](uint8_t c) { return std::byte(c); });
-    // std::ofstream out("test.spv", std::ios::out | std::ios::binary);
-    // out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return bytes;
 }
 
@@ -182,7 +218,6 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
     sycl::kernel_bundle<sycl::bundle_state::ext_oneapi_source> kb_src =
       syclex::create_kernel_bundle_from_source(
           ctx, syclex::source_language::spirv, spv); 
-    // std::cout << "Context for kernel bundle: " << &ctx << std::endl;
 
     // TODO: add build args
     // if (is_spv) {
@@ -221,19 +256,19 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
 
     auto n_regs = build_flags.n_regs();
 
-    sycl::kernel_bundle<sycl::bundle_state::executable>* mod = 
-      new sycl::kernel_bundle<sycl::bundle_state::executable>(syclex::build(kb_src));
-    
+    std::string log;
+    std::vector<std::string> flags{build_flags()}; // todo: split the string
+    sycl::kernel_bundle<sycl::bundle_state::executable> *mod =
+        new sycl::kernel_bundle<sycl::bundle_state::executable>(syclex::build(
+            kb_src, syclex::properties{syclex::build_options{flags},
+                                       syclex::save_log{&log}}));
+
     auto fun = new sycl::kernel(mod->ext_oneapi_get_kernel(kernel_name));
-    std::string kernel_name_1 = fun->get_info<sycl::info::kernel::function_name>();
-    // std::cout << "Kernel name right after compilation: " << kernel_name_1 << std::endl;
-    
     auto kernel_py =
         PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
-    // std::cout << "Capsuled kernel pointer: " << reinterpret_cast<void *>(fun) << std::endl;
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
-    Spills n_spills{};
+    Spills n_spills{}; // todo: needs a sycl equivalent
 
     sycl::kernel* kernel_ptr = reinterpret_cast<sycl::kernel*>(PyCapsule_GetPointer(kernel_py, "kernel"));
     assert(kernel_ptr && "kernel is null!");
