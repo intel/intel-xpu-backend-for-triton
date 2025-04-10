@@ -89,8 +89,7 @@ jobs:
 
           cd benchmarks/third_party/liger_kernels
 
-          LIGER_KERNEL_PIN="$<.github/pins/liger-kernel.txt>"
-          git clone https://github.com/linkedin/Liger-Kernel --branch $LIGER_KERNEL_PIN --single-branch
+          git clone https://github.com/linkedin/Liger-Kernel
           pip install -e Liger-Kernel
 
           # To remember return code, but still copy results
