@@ -825,6 +825,7 @@ struct LoadOpToBlockIOConversion
         rewriter, loc,
         rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
         0);
+    const unsigned originalElemBits = elemSizeInBits;
 
     ValueTable loadVals;
     for (int inner = 0; inner < numRepInner;
@@ -917,9 +918,9 @@ struct LoadOpToBlockIOConversion
                     /*tile_height*/ tileHeight,
                     /*v_blocks*/ vBlocks,
                     /*transpose*/ false,
-                    /*vnni_transform*/ opIdx ==
-                            DpasEncodingAttr::OpIdx::OperandB &&
-                        usePackedType);
+                    /*vnni_transform*/
+                    (usePackedType && !isOperandA && !isTransposeRequired &&
+                     originalElemBits != 32));
                 return SmallVector<Value, 1>{load2dOp};
               });
           Value ret = *endBlock.args_begin();
