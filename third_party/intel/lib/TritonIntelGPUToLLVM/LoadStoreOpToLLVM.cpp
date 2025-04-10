@@ -2175,7 +2175,6 @@ struct StoreOpConversion
     auto *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
-    Value mask = op.getMask();
     Value llMask = adaptor.getMask();
 
     // Determine the vectorization size
@@ -2185,7 +2184,7 @@ struct StoreOpConversion
     SmallVector<Value> ptrElems, maskElems;
     unsigned vec = getVectorSize(ptr);
     if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(mask));
+      vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
 
     if (isTensorPointerType(ptr.getType())) {
       // fallback to scatter store.
@@ -2269,7 +2268,7 @@ struct StoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      Value maskVal = threadPred;
+      Value maskVal = threadPred ? threadPred : b.true_val();
       if (llMask) {
         auto mask = maskElems[vecStart];
         maskVal = maybeAnd(rewriter, loc, maskVal, mask);
