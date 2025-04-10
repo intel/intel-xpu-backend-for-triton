@@ -819,6 +819,13 @@ struct LoadOpToBlockIOConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
 
+    Value warpSize = b.i32_val(threadsPerWarp);
+    Value laneId = b.urem(getThreadId(rewriter, loc), warpSize);
+    Value programId = targetInfo.programId(
+        rewriter, loc,
+        rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
+        0);
+
     ValueTable loadVals;
     for (int inner = 0; inner < numRepInner;
          inner += numOperandsInnerDimPerLoad) {
@@ -866,6 +873,9 @@ struct LoadOpToBlockIOConversion
             other_ = rewriter.create<LLVM::ConstantOp>(
                 loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
           }
+          targetInfo.printf(rewriter,
+                            "A pid=%d warp %d lane %d johnlu 2d load pred %d",
+                            ValueRange{programId, warpId, laneId, pred});
 
           // Create a predicated load operation.
           Block &endBlock = LLVM::intel::createPredicatedBlock(
@@ -874,6 +884,25 @@ struct LoadOpToBlockIOConversion
                 Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
                                            ptr_ty(ctx, 1 /*global*/));
                 addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+#if 1
+                if (opIdx == DpasEncodingAttr::OpIdx::OperandA) {
+                  targetInfo.printf(
+                      rewriter,
+                      "A pid=%d warp %d lane %d johnlu 2d load addr=%p, "
+                      "pitch (bytes)=%d, base_width (bytes)=%d, "
+                      "base_height=%d",
+                      ValueRange{programId, warpId, laneId, addrElem, pitch,
+                                 baseWidth, baseHeight});
+                } else {
+                  targetInfo.printf(
+                      rewriter,
+                      "B pid=%d warp %d lane %d johnlu 2d load addr=%p, "
+                      "pitch (bytes)=%d, base_width (bytes)=%d, "
+                      "base_height=%d",
+                      ValueRange{programId, warpId, laneId, addrElem, pitch,
+                                 baseWidth, baseHeight});
+                }
+#endif
 
                 auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
                     loc, load2DGenXType,

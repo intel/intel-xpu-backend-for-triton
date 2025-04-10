@@ -240,6 +240,29 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_withDPASRepetitions) {
           {S("dim0"), S("dim1")}));
 }
 
+TEST_F(DPAStoLinearLayoutTest, BlockIoLowering) {
+  SmallVector<int64_t> tensorShape{64, 64};
+  auto dpasLinearLayout =
+      DPAStoLinearLayout(tensorShape, dpas({2, 1}, 8, 8, 16, 2, {4, 2}, 32));
+  llvm::outs() << "johnlu dpas:" << dpasLinearLayout << "\n";
+
+  auto numElem = dpasLinearLayout.getInDimSize(S("register"));
+  constexpr unsigned tileWidth = 16;
+  unsigned tileHeight = 8;
+  unsigned vBlocks = 1;
+  unsigned numOperandsOuterDimPerLoad = 1;
+  unsigned numOperandsInnerDimPerLoad = 1;
+  unsigned numOperandsPer2DLoadM = 1, numOperandsPer2DloadN = 1;
+  unsigned numRepOuter = 1;
+  unsigned numLoadPerOutRepCluster;
+  unsigned numRepInner;
+
+  LinearLayout packedBlockIOLayout =
+      LinearLayout({{S("RepOuter"), {{tileWidth}}}}, {{S("register"), numElem}},
+                   /*requiresSurjective=*/false);
+  llvm::outs() << "johnlu packedBlockIOLayout:" << packedBlockIOLayout << "\n";
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
 
