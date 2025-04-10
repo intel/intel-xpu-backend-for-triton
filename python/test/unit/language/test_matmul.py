@@ -339,7 +339,12 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if is_xpu():
-        if (BLOCK_M, BLOCK_N, BLOCK_K) in {(128, 128, 64), (128, 64, 128)}:
+        if (nonKDim == 0 and NUM_WARPS == 4 and (M, N, K, BLOCK_M, BLOCK_N, BLOCK_K) in {
+            (1024, 512, 256, 128, 64, 128),
+            (1024, 512, 256, 128, 128, 64),
+            (128, 256, 256, 128, 128, 64),
+            (128, 128, 128, 128, 128, 64),
+        }):
             pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
         elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
                 triton.runtime.driver.active.utils.get_device_properties(
