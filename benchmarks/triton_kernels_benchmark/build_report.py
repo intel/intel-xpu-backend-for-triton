@@ -50,7 +50,8 @@ def check_cols(target_cols, all_cols):
         raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
-def transform_df(df, args: PassedArgs) -> pd.DataFrame:
+def build_report(args: PassedArgs):
+    df = pd.read_csv(args.source)
     param_cols = args.param_cols.split(",")
     hbm_col = args.hbm_col
     check_cols(param_cols, df.columns)
@@ -108,14 +109,12 @@ def transform_df(df, args: PassedArgs) -> pd.DataFrame:
     for name, val in host_info.items():
         df_results[name] = val
 
-    return df_results
+    df_results.to_csv(args.target, index=False)
 
 
 def main():
     args = parse_args()
-    df = pd.read_csv(args.source)
-    result_df = transform_df(df, args)
-    result_df.to_csv(args.target, index=False)
+    build_report(args)
 
 
 if __name__ == "__main__":
