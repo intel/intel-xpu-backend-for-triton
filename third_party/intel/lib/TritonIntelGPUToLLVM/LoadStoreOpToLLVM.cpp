@@ -23,24 +23,6 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-// Returns a Value for the format string, which you can reuse. Writes the byte
-// count for the string to |formatStrByteCount| if not null.
-Value llPrintf(StringRef msg, ValueRange args, ArrayRef<bool> isSigned,
-               ConversionPatternRewriter &rewriter,
-               const triton::intel::TargetInfo &targetInfo,
-               int *formatStrByteCount = nullptr) {
-  assert(!msg.empty() && "printf with empty string not supported");
-  llvm::SmallString<64> msgNewline(msg);
-  msgNewline.push_back('\n');
-  msgNewline.push_back('\0');
-  Value msgValue = targetInfo.getGlobalStringStart(
-      rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
-      /*addressSpace=*/TritonGEN::kUniformConstant);
-  targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args,
-                    isSigned);
-  return msgValue;
-}
-
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   if (a && b) {
@@ -79,71 +61,6 @@ Value emitRedundantThreadPredicate(
     }
   }
   return pred;
-}
-
-// Return the mask for the unique data accessed by given tensor type.
-// Used to mask out the redundant data accessed by threads.
-Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                        Location loc,
-                        const triton::intel::TargetInfo &targetInfo) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  Value mask = b.true_val();
-  auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
-
-  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  if (tensorTy) {
-    // To remove this use, port https://github.com/triton-lang/triton/pull/5432
-    // to the INTELGPU dialect
-    auto layout = cast<DistributedEncodingTrait>(tensorTy.getEncoding());
-    auto shape = tensorTy.getShape();
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
-    auto kWarp = StringAttr::get(rewriter.getContext(), "warp");
-    auto maskLane =
-        std::get<1>(delinearize(rewriter, loc, layout, shape, kLane, laneId));
-    auto maskWarp =
-        std::get<1>(delinearize(rewriter, loc, layout, shape, kWarp, warpId));
-    mask = b.and_(maskLane, maskWarp);
-
-    // Do not write duplicated data when multicast is enabled
-    if (triton::gpu::getNumCTAs(layout) > 1) {
-      auto _0 = b.i32_val(0);
-      auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
-      auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
-      auto CTAOrder = triton::gpu::getCTAOrder(layout);
-
-      auto multiDimClusterCTAId =
-          delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
-
-      auto rank = tensorTy.getRank();
-      for (unsigned dim = 0; dim < rank; ++dim) {
-        // Skip when multicast is not enabled in this dimension
-        if (CTAsPerCGA[dim] == CTASplitNum[dim])
-          continue;
-        // This wrapping rule must be consistent with emitCTAOffsetForLayout
-        unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-        Value repId = b.udiv(multiDimClusterCTAId[dim], b.i32_val(splitNum));
-        // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
-        //     CTA0 and CTA2 holds data of block0,
-        //     CTA1 and CTA3 holds data of block1.
-        // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
-        // be masked. We add the following mask:
-        //     multiDimClusterCTAId[dim] / splitNum == 0
-        // Actually in all existing cases of multicast, splitNum is always 1.
-        // The mask is equivalent to:
-        //     multiDimClusterCTAId[dim] == 0
-        mask = b.and_(mask, b.icmp_eq(repId, _0));
-      }
-    }
-  } else {
-    // If the tensor is not ranked, then it is a scalar and only thread 0 of
-    // CTA0 can write
-    mask = b.and_(mask, b.icmp_eq(clusterCTAId, b.i32_val(0)));
-    auto tid = getThreadId(rewriter, loc);
-    mask = b.and_(mask, b.icmp_eq(tid, b.i32_val(0)));
-  }
-  return mask;
 }
 
 /// Holds the values related to a block pointer.
@@ -2220,12 +2137,6 @@ struct StoreOpConversion
            valueElems.size() == maskElems.size() && "Mask size mismatch");
 
     auto freeVarMasks = getFreeVariableMasks(valueTy);
-#if 0
-    for (auto mask : freeVarMasks) {
-      llvm::errs() << mask.first << " = " << mask.second << " ("
-                   << std::to_string(1 << mask.second) << ")\n";
-    }
-#endif
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("register")];
@@ -2290,22 +2201,6 @@ struct StoreOpConversion
         auto llWord = asmArgs[index].first;
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
-
-#if 0
-      auto vecTestElem = b.extract_element(valArgTy, vecWord, b.i32_val(0));
-      auto testElemBitcast = b.bitcast(vecTestElem, wordTy);
-      auto testElemVal =
-          b.extract_element(valueElemTy, testElemBitcast, b.i32_val(0));
-
-      Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-
-      auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-      llPrintf("warp %d lane %d mask %d & %d = %d addr %p val %f vec %d",
-               {warpId, laneId, threadPred, maskElems[vecStart], maskVal, addrElem,
-                testElemVal, b.i32_val(vecStart)},
-               {true, true, true, true, true, true, true, true}, rewriter,
-               targetInfo);
-#endif
 
       // Create a predicated store operation.
       LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
@@ -2680,7 +2575,7 @@ struct AtomicRMWOpConversion
         }
       }
 
-      ret = endBlock ? endBlock->getArgument(0) : ret; 
+      ret = endBlock ? endBlock->getArgument(0) : ret;
       assert(ret);
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
