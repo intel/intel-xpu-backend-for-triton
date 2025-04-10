@@ -42,6 +42,7 @@ pytest() {
 
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
         mkdir -p "$CURRENT_SKIPLIST_DIR"
+        cp "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
         if [[ $TEST_UNSKIP = false ]]; then
             pytest_extra_args+=(
                 "--skip-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
