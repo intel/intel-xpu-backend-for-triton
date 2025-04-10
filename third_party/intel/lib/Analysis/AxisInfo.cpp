@@ -315,6 +315,8 @@ private:
                     int dim) override {
     if (lhs.getStride(dim) < 0 || rhs.getStride(dim) < 0)
       return -1;
+    if (isa<arith::SubIOp>(op))
+      return -1;
     return lhs.getStride(dim) + rhs.getStride(dim);
   }
 
@@ -391,10 +393,12 @@ public:
 private:
   int64_t getStride(arith::MulIOp op, const AxisInfo &lhs, const AxisInfo &rhs,
                     int dim) override {
+    if (lhs.getStride(dim) == 0 || rhs.getStride(dim) == 0)
+      return 0;
     if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value())
       return lhs.getStride(dim) * rhs.getConstantValue().value();
     if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
-      return rhs.getStride(dim) * lhs.getConstantValue().value();
+      return lhs.getConstantValue().value() * rhs.getStride(dim);
     return -1;
   }
 
@@ -450,6 +454,17 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
+  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                    int dim) override {
+    if (lhs.getStride(dim) == 0 || rhs.getStride(dim) == 0)
+      return 0;
+    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value())
+      return lhs.getStride(dim) / rhs.getConstantValue().value();
+    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
+      return lhs.getConstantValue().value() / rhs.getStride(dim);
+    return -1;
+  }
+
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     // lhs / 1 = lhs

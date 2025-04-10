@@ -21,7 +21,6 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUMATERIALIZEBLOCKPOINTER
-#include "Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
@@ -42,10 +41,10 @@ public:
             ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
       return;
 
-    mlir::triton::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     MLIRContext *context = &getContext();
-    mod.walk([context, this, &axisInfoAnalysis](tt::LoadOp loadOp) {
+    mod.walk([&](tt::LoadOp loadOp) {
       LDBG("Considering op: " << loadOp);
 
       Value ptr = loadOp.getPtr();
@@ -163,7 +162,7 @@ public:
 private:
   void MaterializeTensorOfPointers(
       tt::LoadOp loadOp,
-      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     MLIRContext *context = loadOp.getContext();
     Value ptr = loadOp.getPtr();
     assert(!tt::isTensorPointerType(ptr.getType()) &&
@@ -191,14 +190,18 @@ private:
     // Then the global memory refer by the tensor pointer is row-major
     // contiguous. And the axis info will be: stride: [16, 1],
     // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
-    auto axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
     unsigned rank = axisInfo->getRank();
     if (rank != 2) {
       LDBG("Rank is not 2, skip block IO attribute");
       return;
     }
 
+    // Determine if LoadOp is row-major or column-major.
     auto isMajor = [&](unsigned fastChangeDim) {
+      assert((fastChangeDim == 0 || fastChangeDim == 1) &&
+             "fastChangeDim is expected to be 0 or 1");
+      const unsigned otherDim = !fastChangeDim;
       // Limit to full row being contiguous.
       if (axisInfo->getContiguity(fastChangeDim) !=
           tensorTy.getDimSize(fastChangeDim)) {
@@ -208,8 +211,9 @@ private:
       }
 
       // Value -1 is used to represent the unknown stride.
-      if (axisInfo->getStride(!fastChangeDim) <= 0) {
-        LDBG("Found unknown stride");
+      if (axisInfo->getStride(otherDim) <= 0) {
+        LDBG("Found unknown or non positive stride: "
+             << axisInfo->getStride(otherDim));
         return false;
       }
 
@@ -217,14 +221,14 @@ private:
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      if ((axisInfo->getStride(!fastChangeDim) * elemSizeInBytes) % 16 != 0) {
+      if ((axisInfo->getStride(otherDim) * elemSizeInBytes) % 16 != 0) {
         LDBG("Found Non 16 bytes aligned stride: "
-             << axisInfo->getStride(!fastChangeDim));
+             << axisInfo->getStride(otherDim));
         return false;
       }
 
-      // Base pointer can be compensate by OffsetX and BaseWidth. The OffsetX
-      // and BaseWidth has restriction that it has to be 4 bytes aligned.
+      // Base pointer can be compensate by the offset and base width, where they
+      // each has restriction that it has to be 4 bytes aligned.
       if (axisInfo->getDivisibility(fastChangeDim) % 4 != 0) {
         LDBG(
             "Found Non 4 bytes aligned base: " << axisInfo->getDivisibility(1));
@@ -234,7 +238,8 @@ private:
       return true;
     };
 
-    if (isMajor(1)) {
+    // Check if loadOp is row major, i.e., fast changing dimension is one.
+    if (isMajor(1 /*fastChangeDim*/)) {
       LDBG("Setting row_major attribute\n");
       loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                       StringAttr::get(context, "row_major"));

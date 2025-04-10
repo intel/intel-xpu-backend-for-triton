@@ -729,7 +729,7 @@ struct LoadOpToBlockIOConversion
       }
       // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
       // pitch.
-      if (ptrs.count({0, 0}) < 1 || ptrs.count({1, 0}) < 1)
+      if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
         return failure();
     }
 
