@@ -2182,10 +2182,10 @@ struct StoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      Value maskVal = threadPred ? threadPred : b.true_val();
+      Value maskVal = threadPred;
       if (llMask) {
         auto mask = maskElems[vecStart];
-        maskVal = maybeAnd(rewriter, loc, maskVal, mask);
+        maskVal = maybeAnd(rewriter, loc, threadPred, mask);
       }
 
       auto vecTy = vec_ty(valArgTy, nWords);
@@ -2195,14 +2195,22 @@ struct StoreOpConversion
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
-      // Create a predicated store operation.
-      LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
+      if (maskVal) {
+        // Create a predicated store operation.
+        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
+          Value addrElem =
+              b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+          uint32_t alignment = nWords * width / 8;
+          b.store(vecWord, addrElem, alignment);
+          return ArrayRef<Value>();
+        });
+      } else {
         Value addrElem =
             b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
         b.store(vecWord, addrElem, alignment);
-        return ArrayRef<Value>();
-      });
+      }
+
     } // for
     rewriter.eraseOp(op);
     return success();
