@@ -268,6 +268,14 @@ jobs:
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/prefix-sums.csv $REPORTS/prefix_sums-triton-report.csv --benchmark prefix_sums --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
+      - name: Run SGLang FP8 GEMM benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix_sums.py') }}
+        run: |
+          cd benchmarks/triton_kernels_benchmark/sglang
+          python block_fp8_matmul.py --reports $REPORTS
+          source ../../scripts/capture-hw-details.sh
+          python ../../scripts/build_report.py $REPORTS/block_fp8_matmul.csv $REPORTS/block_fp8_matmul-triton-report.csv --benchmark block_fp8_matmul --compiler triton --param_cols "N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
       - name: Run micro benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'micro_benchmarks.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'micro_benchmarks') }}
         run: |
