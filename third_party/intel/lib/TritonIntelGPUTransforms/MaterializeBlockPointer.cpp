@@ -64,8 +64,6 @@ public:
       if (rank == 1)
         return;
 
-      // Note: we will compensate the offset of non-64 bytes aligned base to the
-      // offsetX and baseWidth.
       if (!satisfies2DBlockReadAlignment(loadOp)) {
         LDBG("Alignment checks failed for: " << loadOp);
         return;
@@ -205,9 +203,9 @@ private:
     if (shape.size() == 1)
       return false;
 
-    // The 2D block read function we generate is restricted to 4-byte aligned
-    // pointers.
     // Ensure the base ptr is 4-byte aligned.
+    // Note: the HW requires the address to be 64-byte aligned, however we will
+    // compensate by imposing restrictions on the offsetX and baseWidth.
     TypedValue<tt::PointerType> base = makeTensorPtrOp.getBase();
     if (!ttgi::isDivisible(base, 4)) {
       LDBG("Found non 4-bytes aligned base: " << base);
