@@ -362,7 +362,9 @@ class XPUBackend(BaseBackend):
         llvm_mod = llvm.to_module(mod, context)
         intel.set_spv_target_triple(llvm_mod)
         if os.getenv("TRITON_INTEL_FAST_MATH", "0") == "1":
-            intel.set_fast_math(llvm_mod)
+            intel.set_fast_math(llvm_mod, True)
+        else:
+            intel.set_fast_math(llvm_mod, False)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
