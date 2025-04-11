@@ -1,3 +1,4 @@
+#include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -40,13 +41,15 @@ public:
             ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
       return;
 
+    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+
     MLIRContext *context = &getContext();
-    mod.walk([context, this](tt::LoadOp loadOp) {
+    mod.walk([&](tt::LoadOp loadOp) {
       LDBG("Considering op: " << loadOp);
 
       Value ptr = loadOp.getPtr();
       if (!tt::isTensorPointerType(ptr.getType()))
-        return;
+        return MaterializeTensorOfPointers(loadOp, axisInfoAnalysis);
 
       assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
              "Expected 'loadOp' to load a tensor value.");
@@ -157,6 +160,94 @@ public:
   }
 
 private:
+  void MaterializeTensorOfPointers(
+      tt::LoadOp loadOp,
+      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+    MLIRContext *context = loadOp.getContext();
+    Value ptr = loadOp.getPtr();
+    assert(!tt::isTensorPointerType(ptr.getType()) &&
+           "Expected 'loadOp' to load a tensor value.");
+
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+    if (!tensorTy)
+      return;
+
+    LDBG("Considering tensor of pointer load op: " << loadOp);
+
+    if (loadOp.getMask()) {
+      LDBG("Load op has mask, skip block IO attribute");
+      return;
+    }
+
+    // The axis info gives the information about the value of the indices
+    // tensor. For example, if the indices tensor is tensor<8x16xi32> and
+    // its value is:
+    //   [[ 0,  1,  2,  3, ..., 12, 13, 14, 15],
+    //    [16, 17, 18, 19, ..., 28, 29, 30, 31],
+    //    ...
+    //    [ 96,  97,  98,  99, ..., 108, 109, 110, 111],
+    //    [112, 113, 114, 115, ..., 124, 125, 126, 127]]
+    // Then the global memory refer by the tensor pointer is row-major
+    // contiguous. And the axis info will be: stride: [16, 1],
+    // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
+    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    unsigned rank = axisInfo->getRank();
+    if (rank != 2) {
+      LDBG("Rank is not 2, skip block IO attribute");
+      return;
+    }
+
+    // Determine if LoadOp is row-major or column-major.
+    auto isMajor = [&](unsigned fastChangeDim) {
+      assert((fastChangeDim == 0 || fastChangeDim == 1) &&
+             "fastChangeDim is expected to be 0 or 1");
+      const unsigned otherDim = !fastChangeDim;
+      // Limit to full row being contiguous.
+      if (axisInfo->getContiguity(fastChangeDim) !=
+          tensorTy.getDimSize(fastChangeDim)) {
+        LDBG("Found non-contiguous row: "
+             << axisInfo->getContiguity(fastChangeDim));
+        return false;
+      }
+
+      // Value -1 is used to represent the unknown stride.
+      if (axisInfo->getStride(otherDim) <= 0) {
+        LDBG("Found unknown or non positive stride: "
+             << axisInfo->getStride(otherDim));
+        return false;
+      }
+
+      // Surface pitch is required to be 16 bytes aligned.
+      Type elemTy =
+          cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+      unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      if ((axisInfo->getStride(otherDim) * elemSizeInBytes) % 16 != 0) {
+        LDBG("Found Non 16 bytes aligned stride: "
+             << axisInfo->getStride(otherDim));
+        return false;
+      }
+
+      // Base pointer can be compensate by the offset and base width, where they
+      // each has restriction that it has to be 4 bytes aligned.
+      if (axisInfo->getDivisibility(fastChangeDim) % 4 != 0) {
+        LDBG(
+            "Found Non 4 bytes aligned base: " << axisInfo->getDivisibility(1));
+        return false;
+      }
+
+      return true;
+    };
+
+    // Check if loadOp is row major, i.e., fast changing dimension is one.
+    if (isMajor(1 /*fastChangeDim*/)) {
+      LDBG("Setting row_major attribute\n");
+      loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                      StringAttr::get(context, "row_major"));
+    }
+
+    // TODO: set column_major attribute
+  }
+
   // Return the load layout if it is a dot layout. If it is not, check if the
   // load result is converted to a dot layout. If so, return the dot layout,
   // otherwise return nullopt.
