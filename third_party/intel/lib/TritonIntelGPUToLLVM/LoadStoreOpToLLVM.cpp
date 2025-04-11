@@ -727,6 +727,10 @@ struct LoadOpToBlockIOConversion
         if (otherElems.size())
           others[offset] = otherElems[i];
       }
+      // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
+      // pitch.
+      if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
+        return failure();
     }
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
@@ -815,6 +819,8 @@ struct LoadOpToBlockIOConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
 
+    const unsigned originalElemBits = elemSizeInBits;
+
     ValueTable loadVals;
     for (int inner = 0; inner < numRepInner;
          inner += numOperandsInnerDimPerLoad) {
@@ -884,9 +890,9 @@ struct LoadOpToBlockIOConversion
                     /*tile_height*/ tileHeight,
                     /*v_blocks*/ vBlocks,
                     /*transpose*/ false,
-                    /*vnni_transform*/ opIdx ==
-                            DpasEncodingAttr::OpIdx::OperandB &&
-                        usePackedType);
+                    /*vnni_transform*/
+                    (usePackedType && !isOperandA && !isTransposeRequired &&
+                     originalElemBits != 32));
                 return SmallVector<Value, 1>{load2dOp};
               });
           Value ret = *endBlock.args_begin();

@@ -25,7 +25,7 @@ public:
   typedef SmallVector<int64_t> DimVectorT;
 
 public:
-  AxisInfo() : AxisInfo({}, {}, {}) {}
+  AxisInfo() : AxisInfo({}, {}, {}, {}, std::nullopt) {}
 
   AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
            ArrayRef<int64_t> constancy)
@@ -33,11 +33,64 @@ public:
 
   AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
            ArrayRef<int64_t> constancy, std::optional<int64_t> constantValue)
-      : contiguity(contiguity), divisibility(divisibility),
+      : AxisInfo(AxisInfo::DimVectorT(contiguity.size(), -1), contiguity,
+                 divisibility, constancy, constantValue) {
+    for (size_t i = 0; i < contiguity.size(); ++i) {
+      if (contiguity[i] > 1) {
+        stride[i] = 1;
+      }
+    }
+  }
+
+  AxisInfo(ArrayRef<int64_t> stride, ArrayRef<int64_t> contiguity,
+           ArrayRef<int64_t> divisibility, ArrayRef<int64_t> constancy,
+           std::optional<int64_t> constantValue)
+      : stride(stride), contiguity(contiguity), divisibility(divisibility),
         constancy(constancy), constantValue(constantValue) {
+    assert(stride.size() == contiguity.size());
     assert(divisibility.size() == contiguity.size());
     assert(constancy.size() == contiguity.size());
   }
+
+  // TODO: Support non compile time constant strides.
+  // stride[d] is the stride of contiguityWithStride[d] elements along dimension
+  // d. Value -1 is used to represent the unknown stride.
+  // For example, the 2D array
+  //
+  //   [[10, 11, 12, 13, 18, 19, 20, 21],
+  //    [20, 21, 22, 23, 28, 29, 30, 31]]
+  //
+  // has stride [10, 1], and
+  //
+  //   [[12, 16, 20, 24],
+  //    [13, 17, 21, 25],
+  //    [14, 18, 22, 26],
+  //    [15, 19, 23, 27],
+  //    [18, 22, 26, 30],
+  //    [19, 23, 27, 31]]
+  //
+  // has stride [1, 4].
+  int64_t getStride(size_t dim) const { return stride[dim]; }
+  const DimVectorT &getStride() const { return stride; }
+
+  // TODO: Add contiguity with stride.
+  // contiguityWithStride[d] is the length of the shortest sequence of
+  // contiguous integers with the same stride along dimension d. For example,
+  // the 2D array
+  //
+  //   [[10, 11, 12, 13, 18, 19, 20, 21],
+  //    [20, 21, 22, 23, 28, 29, 30, 31]]
+  //
+  // has contiguityWithStride [2, 4], and
+  //
+  //   [[12, 16, 20, 24],
+  //    [13, 17, 21, 25],
+  //    [14, 18, 22, 26],
+  //    [15, 19, 23, 27],
+  //    [18, 22, 26, 30],
+  //    [19, 23, 27, 31]]
+  //
+  // has contiguityWithStride [2, 4].
 
   // contiguity[d] is the length of the shortest sequence of contiguous integers
   // along dimension d.
@@ -134,7 +187,8 @@ public:
       llvm::interleaveComma(vec, os);
       os << "]";
     };
-    print("contiguity", contiguity);
+    print("stride", stride);
+    print(", contiguity", contiguity);
     print(", divisibility", divisibility);
     print(", constancy", constancy);
     os << ", constant_value = ";
@@ -145,6 +199,7 @@ public:
   }
 
 private:
+  DimVectorT stride;
   DimVectorT contiguity;
   DimVectorT divisibility;
   DimVectorT constancy;
