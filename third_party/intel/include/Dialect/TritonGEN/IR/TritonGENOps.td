@@ -321,7 +321,6 @@ def TritonGEN_FToTf32Op
   let description = [{
     The op converts value numerically from
     a 32-bit floating point type to TF32 with rounding to the nearest even.
-     ```
   }];
 
   let arguments = (ins F32:$val);

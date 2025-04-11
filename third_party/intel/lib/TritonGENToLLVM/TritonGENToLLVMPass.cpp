@@ -313,24 +313,6 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                                          intel::noUnwindWillReturnAttrs);
 }
 
-static LLVM::CallOp createSPIRVExtFToTf32(TritonGEN::FToTf32Op op,
-                                          ConversionPatternRewriter &rewriter) {
-  MLIRContext *ctx = rewriter.getContext();
-  Location loc = op->getLoc();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  Value value = op->getOperand(0);
-
-  SmallVector<Type> argTypes{f32_ty};
-
-  SmallVector<Value> args{value};
-
-  const StringLiteral funcName = "_Z25__spirv_RoundFToTF32INTELf";
-  auto retType = f32_ty;
-  return intel::createDeviceFunctionCall(rewriter, funcName, retType,
-                                         {argTypes}, {args}, {},
-                                         intel::noUnwindWillReturnAttrs);
-}
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -724,7 +706,19 @@ struct TritonFToTf32OpLowering
   LogicalResult
   matchAndRewrite(TritonGEN::FToTf32Op op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM::CallOp callOp = createSPIRVExtFToTf32(op, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    Value value = op->getOperand(0);
+    SmallVector<Type> argTypes{f32_ty};
+    SmallVector<Value> args{value};
+
+    const StringLiteral funcName = "_Z25__spirv_RoundFToTF32INTELf";
+    auto retType = f32_ty;
+    auto callOp = intel::createDeviceFunctionCall(
+        rewriter, funcName, retType, {argTypes}, {args}, {},
+        intel::noUnwindWillReturnAttrs);
     rewriter.replaceOp(op, callOp);
     return success();
   }
