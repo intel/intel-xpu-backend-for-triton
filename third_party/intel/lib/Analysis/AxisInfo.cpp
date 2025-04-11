@@ -457,12 +457,17 @@ public:
 private:
   int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                     int dim) override {
-    if (lhs.getStride(dim) == 0 || rhs.getStride(dim) == 0)
-      return 0;
-    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value())
+    if (getContiguity(op, lhs, rhs, dim) > 1)
+      return 1;
+    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value() &&
+        rhs.getConstantValue().has_value() != 0 &&
+        lhs.getStride(dim) % rhs.getConstantValue().value() == 0)
       return lhs.getStride(dim) / rhs.getConstantValue().value();
-    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
+    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value() &&
+        lhs.getConstantValue().value() % rhs.getStride(dim) == 0)
       return lhs.getConstantValue().value() / rhs.getStride(dim);
+    if (lhs.getStride(dim) == 0)
+      return 0;
     return -1;
   }
 
