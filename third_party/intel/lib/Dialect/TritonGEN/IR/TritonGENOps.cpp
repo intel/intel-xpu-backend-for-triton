@@ -157,12 +157,15 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
     return this->emitOpError(
         "1st operand (C) and result (D) should have the same type");
 
-  if (CTy.getNumElements() != getRc() || DTy.getNumElements() != getRc())
+  auto useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
+
+  if (!useGenISA &&
+      (CTy.getNumElements() != getRc() || DTy.getNumElements() != getRc()))
     return this->emitOpError("the dimension for 1st operand (C) and "
                              "result (D) should match repeat count");
 
   constexpr unsigned SD = 8;
-  if (BTy.getNumElements() != SD)
+  if (!useGenISA && BTy.getNumElements() != SD)
     return this->emitOpError("the dimension for the 3rd operand (B) should "
                              "match the systolic depth of 8");
 
@@ -213,7 +216,7 @@ LogicalResult TritonGEN::MatrixDPASOp::verify() {
   case TritonGEN::PrecisionType::FP16:
   case TritonGEN::PrecisionType::U8:
   case TritonGEN::PrecisionType::S8:
-    if (ATy.getNumElements() != getRc())
+    if (!useGenISA && ATy.getNumElements() != getRc())
       return this->emitOpError("2nd operand (A) should have the same number of "
                                "elements as repeat count");
     if (!AElemTy.isInteger(16))
@@ -315,6 +318,9 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockLoadHWRestriction(*this).failed())
     return failure();
 
@@ -333,6 +339,10 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
+
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
