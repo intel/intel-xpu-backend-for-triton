@@ -119,6 +119,7 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
       SPIRV::ExtensionID::SPV_INTEL_tensor_float32_rounding,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
       SPIRV::ExtensionID::SPV_INTEL_vector_compute,
+      SPIRV::ExtensionID::SPV_INTEL_split_barrier,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
       SPIRV::ExtensionID::SPV_KHR_non_semantic_info};
 

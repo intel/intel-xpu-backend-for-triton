@@ -114,6 +114,7 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
 
   let dependentDialects = ["mlir::arith::ArithDialect",
                            "mlir::scf::SCFDialect",
+                           "mlir::spirv::SPIRVDialect",
                            "mlir::triton::TritonDialect",
                            "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
 
@@ -124,6 +125,9 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
     Option<"supportRegularPtr", "support-regular-ptr",
            "bool", /*default*/"false",
            "Enable support for prefetching non-block pointers">,
+    Option<"splitBarrierScope", "split-barriers-scope",
+           "int32_t", /*default*/"0",
+           "Insert split barriers in the main loop as follow: 0:No barrier / 1:Workgroup scope / 2:Subgroup scope">,
   ];
 }
 
