@@ -314,7 +314,8 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, M, N, K, dtype, provider):
+def benchmark(B, M, N, K, dtype, provider, verify=True):
+    # pylint: disable=too-many-branches:w
     res_dtype = torch.float32 if dtype.is_floating_point else torch.int32
     if dtype.is_floating_point:
         rand = lambda shape, dtype: torch.rand(shape, device='xpu', dtype=dtype)
@@ -342,17 +343,18 @@ def benchmark(B, M, N, K, dtype, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=res_dtype)
         triton_fn = lambda: matmul(a, b, d, c)
-        if not dtype.is_floating_point:
-            # Torch does not support integer calculation in matmul
-            torch_fn = lambda: torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(device='cpu', dtype=res_dtype)
-                                            ).to(device='xpu', dtype=res_dtype).add_(d)
-        else:
-            torch_fn = lambda: torch.matmul(a, b).add_(d)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         if dtype.is_floating_point or [B, M, N, K] in [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048],
                                                        [1, 512, 8192, 32768], [4, 32768, 4096, 128]]:
-            # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            if not dtype.is_floating_point:
+                # Torch does not support integer calculation in matmul
+                torch_fn = lambda: torch.matmul(a.to(device='cpu', dtype=res_dtype), b.to(
+                    device='cpu', dtype=res_dtype)).to(device='xpu', dtype=res_dtype).add_(d)
+            else:
+                torch_fn = lambda: torch.matmul(a, b).add_(d)
+            if verify:
+                rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+                # torch int8 matmul on GPU is not supported. only check a few int8 shapes to reduce runtime
+                benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
     else:

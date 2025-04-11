@@ -50,7 +50,7 @@ def causal_mask(_, __, q_idx, kv_idx):
         plot_name='flexAttnCausal-performance',
         args={},
     ))
-def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider, verify=True):
     assert MODE in ['fwd', 'bwd']
     assert CAUSAL
     dtype = torch.float16
@@ -71,17 +71,19 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        torch_fn = lambda: F.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(), is_causal=True, scale=sm_scale).to(
-            torch.float32)
-        if MODE == 'bwd':
-            torch_o = torch_fn()
-            torch_do = torch.randn_like(torch_o)
-            torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
-        if MODE == 'fwd':
-            atol = 1e-1 if N_CTX == 16384 else 1e-2
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
-        else:
-            benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=1e-2, rtol=0, err_msg='triton to torch')
+        if verify:
+            torch_fn = lambda: F.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(), is_causal=True, scale=sm_scale
+                                                              ).to(torch.float32)
+            if MODE == 'bwd':
+                torch_o = torch_fn()
+                torch_do = torch.randn_like(torch_o)
+                torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
+            if MODE == 'fwd':
+                atol = 1e-1 if N_CTX == 16384 else 1e-2
+                benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+            else:
+                benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=1e-2, rtol=0,
+                                            err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'xetla':

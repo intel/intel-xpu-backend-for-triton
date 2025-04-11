@@ -260,7 +260,7 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, M, N, K, provider):
+def benchmark(B, M, N, K, provider, verify=True):
     if B == 1:
         a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
         b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
@@ -278,9 +278,10 @@ def benchmark(B, M, N, K, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.empty((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
-        torch_fn = lambda: torch.matmul(torch.exp(a), b).to(torch.float32)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        if verify:
+            torch_fn = lambda: torch.matmul(torch.exp(a), b).to(torch.float32)
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
     else:

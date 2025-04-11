@@ -120,7 +120,7 @@ def softmax(x, y):
         plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
         args={"M": 4096},  # values for function arguments not in `x_names` and `y_name`
     ))
-def benchmark(M, N, provider):
+def benchmark(M, N, provider, verify=True):
     x = torch.randn(M, N, device="xpu", dtype=torch.bfloat16)
     quantiles = [0.5, 0.0, 1.0]
     if provider == "torch-native":
@@ -129,8 +129,9 @@ def benchmark(M, N, provider):
     if provider == "triton":
         out = torch.empty_like(x, device="xpu")
         triton_fn = lambda: softmax(x, out)
-        torch_fn = lambda: torch.softmax(x, axis=-1)
-        benchmark_suit.assert_close(triton_fn, torch_fn, err_msg="triton to torch")
+        if verify:
+            torch_fn = lambda: torch.softmax(x, axis=-1)
+            benchmark_suit.assert_close(triton_fn, torch_fn, err_msg="triton to torch")
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, quantiles=quantiles, n_warmup=10, n_repeat=10)
 
     elif provider == "torch-jit":

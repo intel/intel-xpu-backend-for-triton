@@ -551,7 +551,8 @@ attention = _attention.apply
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider, verify=True):
+    # pylint: disable=too-many-branches
     assert MODE in ['fwd', 'bwd']
     dtype = torch.float16
     q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
@@ -577,11 +578,13 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        if MODE == 'fwd':
-            atol = 1e-1 if N_CTX == 16384 else 1e-2
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
-        else:
-            benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=1e-2, rtol=0, err_msg='triton to torch')
+        if verify:
+            if MODE == 'fwd':
+                atol = 1e-1 if N_CTX == 16384 else 1e-2
+                benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+            else:
+                benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=1e-2, rtol=0,
+                                            err_msg='triton to torch')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'xetla':

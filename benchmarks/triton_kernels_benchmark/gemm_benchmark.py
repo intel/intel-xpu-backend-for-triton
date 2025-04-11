@@ -287,7 +287,7 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, M, N, K, provider):
+def benchmark(B, M, N, K, provider, verify=True):
     a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
 
     torch.manual_seed(0)
@@ -315,9 +315,10 @@ def benchmark(B, M, N, K, provider):
             assert len(a.shape) == 2, 'Expecting shape of length 2'
             c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
-        torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+        if verify:
+            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
     elif provider == 'xetla':

@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import itertools
+import inspect
 import os
 
 import torch
@@ -195,7 +196,7 @@ class Mark:
 
     # pylint: disable=too-many-branches
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
-             save_precision=6, **kwrags):
+             save_precision=6, **kwargs):
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         import pandas as pd  # pylint: disable=import-outside-toplevel
         y_vals = []
@@ -220,7 +221,11 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
-                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
+                # We only verify the first run.
+                sig = inspect.signature(self.fn)
+                if run_counter > 0 and "verify" in sig.parameters:
+                    kwargs["veryfy"] = False
+                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
                         y_mean, y_min, y_max = ret[i]
