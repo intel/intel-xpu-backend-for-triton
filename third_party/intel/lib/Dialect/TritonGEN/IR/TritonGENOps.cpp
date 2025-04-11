@@ -12,6 +12,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
+#include <triton/Dialect/Triton/IR/Utility.h>
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -322,6 +323,9 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockLoadHWRestriction(*this).failed())
     return failure();
 
@@ -340,6 +344,10 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
+
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
