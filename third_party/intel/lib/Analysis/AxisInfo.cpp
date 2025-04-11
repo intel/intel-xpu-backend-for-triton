@@ -317,7 +317,7 @@ private:
     if (lhs.getStride(dim) < 0 || rhs.getStride(dim) < 0)
       return -1;
     if (isa<arith::SubIOp>(op))
-      return -1;
+      return std::max(lhs.getStride(dim) - rhs.getStride(dim), int64_t(-1));
     return lhs.getStride(dim) + rhs.getStride(dim);
   }
 
