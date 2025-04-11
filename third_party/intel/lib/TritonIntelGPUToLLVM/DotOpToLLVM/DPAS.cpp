@@ -338,8 +338,9 @@ private:
         totalElems /
         ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
-    // TODO: IGC bug, Update isFToTF32Enabled as follows once issue #3870 fixed.
-    // isFToTF32Enabled = elemTy.isFloat(32) && (isOperandA || isOperandB)
+    // TODO: IGC bug, Update isFToTF32Enabled as follows once issue #3870 is
+    // fixed. isFToTF32Enabled = elemTy.isFloat(32) && (isOperandA ||
+    // isOperandB)
     isFToTF32Enabled = elemTy.isFloat(32) &&
                        ((rank == 3) ? isOperandA : (isOperandA || isOperandB));
 
