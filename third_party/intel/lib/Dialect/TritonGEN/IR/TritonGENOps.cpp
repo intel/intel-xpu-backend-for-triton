@@ -12,6 +12,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
+#include <triton/Dialect/Triton/IR/Utility.h>
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -176,12 +177,15 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
     return op->emitOpError(
         "1st operand (C) and result (D) should have the same type");
 
-  if (CTy.getNumElements() != op.getRc() || DTy.getNumElements() != op.getRc())
+  auto useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
+
+  if (!useGenISA && (CTy.getNumElements() != op.getRc() ||
+                     DTy.getNumElements() != op.getRc()))
     return op->emitOpError("the dimension for 1st operand (C) and "
                            "result (D) should match repeat count");
 
   constexpr unsigned SD = 8;
-  if (BTy.getNumElements() != SD)
+  if (!useGenISA && BTy.getNumElements() != SD)
     return op->emitOpError("the dimension for the 3rd operand (B) should "
                            "match the systolic depth of 8");
 
@@ -229,7 +233,8 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
 
   switch (precision) {
   case TritonGEN::PrecisionType::TF32:
-    if (ATy.getNumElements() != op.getRc() / 2)
+    if (!((ATy.getNumElements() == mlir::ceil<unsigned>(op.getRc(), 2)) ||
+          (ATy.getNumElements() == mlir::ceil<unsigned>(op.getRc(), 4))))
       return op->emitOpError("the dimension for the 2nd operand (A) should "
                              "be equal to half of the repeat count");
     if (!isa<Float32Type>(AElemTy) && !AElemTy.isInteger(32))
@@ -246,7 +251,7 @@ template <typename Op> static LogicalResult verifyDPASCommonRestriction(Op op) {
   case TritonGEN::PrecisionType::F8E5M2:
   case TritonGEN::PrecisionType::F8E4M3FN:
   case TritonGEN::PrecisionType::F4E2M1:
-    if (ATy.getNumElements() != op.getRc())
+    if (!useGenISA && ATy.getNumElements() != op.getRc())
       return op->emitOpError("2nd operand (A) should have the same number of "
                              "elements as repeat count");
     if (!AElemTy.isInteger(16))
@@ -403,6 +408,9 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockLoadHWRestriction(*this).failed())
     return failure();
 
@@ -421,6 +429,10 @@ LogicalResult TritonGEN::Matrix2DBlockLoadOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TritonGEN::Matrix2DBlockStoreOp::verify() {
+
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
