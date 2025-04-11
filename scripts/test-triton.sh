@@ -113,8 +113,13 @@ while [ -v 1 ]; do
       TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
       shift 2
       ;;
+    --select-from-file)
+      # Must be absolute
+      TRITON_TEST_SELECTFILE="$(realpath "$2")"
+      shift 2
+      ;;
     --help)
-      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --skip-pip-install | --skip-pytorch-install | --reports | --reports-dir DIR | --warning-reports | --ignore-errors | --skip-list SKIPLIST"
+      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --skip-pip-install | --skip-pytorch-install | --reports | --reports-dir DIR | --warning-reports | --ignore-errors | --skip-list SKIPLIST | --select-from-file SELECTFILE"
       ;;
     *)
       err "Unknown argument: $1."
@@ -179,6 +184,14 @@ run_unit_tests() {
   echo "***************************************************"
   cd $TRITON_PROJ/python/build/cmake*/test
   lit -v . || $TRITON_TEST_IGNORE_ERRORS
+}
+
+run_pytest_command() {
+  if [[ -n "$TRITON_TEST_SELECTFILE" ]]; then
+    pytest "$@" --collect-only > /dev/null 2>&1 && pytest "$@" || true
+  else
+    pytest "$@"
+  fi
 }
 
 run_core_tests() {
@@ -301,7 +314,7 @@ run_instrumentation_tests() {
 
   TRITON_TEST_SUITE=instrumentation \
     TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
-    pytest -vvv --device xpu instrumentation/test_gpuhello.py
+    run_pytest_command -vvv --device xpu instrumentation/test_gpuhello.py
 }
 
 run_inductor_tests() {

@@ -527,57 +527,56 @@ static SmallVector<Value>
 Fp16_to_Fp8E4M3Nv_RTNE(Location loc, ConversionPatternRewriter &rewriter,
                        const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value val = b.zext(i32_ty, b.bitcast(v[0], i16_ty));
-  Value sign = b.and_(i32_ty, val, b.i32_val(0x8000));
-  Value nosign = b.and_(i32_ty, val, b.i32_val(0x7fff));
+  Value val = b.bitcast(v[0], i16_ty);
+  Value sign = b.and_(i16_ty, val, b.i16_val(0x8000));
+  Value nosign = b.and_(i16_ty, val, b.i16_val(0x7fff));
 
-  Value exp = b.and_(i32_ty, b.lshr(nosign, b.i32_val(10)), b.i32_val(0x1f));
+  Value exp = b.and_(i16_ty, b.lshr(nosign, b.i16_val(10)), b.i16_val(0x1f));
   // Check if we need a translation to a subnormal value. This happens when
   // exp value is in range [5, 8].
   Value is_subnormal =
-      b.and_(b.icmp_uge(exp, b.i32_val(5)), b.icmp_ule(exp, b.i32_val(8)));
-  Value shift = b.sub(i32_ty, b.i32_val(8), exp);
-  Value subnormal = b.and_(i32_ty, nosign, b.i32_val(0x3ff));
-  subnormal = b.or_(i32_ty, subnormal, b.i32_val(0x400));
+      b.and_(b.icmp_uge(exp, b.i16_val(5)), b.icmp_ule(exp, b.i16_val(8)));
+  Value shift = b.sub(i16_ty, b.i16_val(8), exp);
+  Value subnormal = b.and_(i16_ty, nosign, b.i16_val(0x3ff));
+  subnormal = b.or_(i16_ty, subnormal, b.i16_val(0x400));
   // Make rounding with respect to bits we are going to shift and cut off.
-  Value round_step = b.shl(i32_ty, b.i32_val(0x100), shift);
-  Value tail_mask = b.sub(i32_ty, round_step, b.i32_val(1));
-  Value tail = b.and_(i32_ty, subnormal, tail_mask);
-  Value threshold = b.shl(i32_ty, b.i32_val(0x80), shift);
+  Value round_step = b.shl(i16_ty, b.i16_val(0x100), shift);
+  Value tail_mask = b.sub(i16_ty, round_step, b.i16_val(1));
+  Value tail = b.and_(i16_ty, subnormal, tail_mask);
+  Value threshold = b.shl(i16_ty, b.i16_val(0x80), shift);
   Value odd_truncated =
-      b.icmp_ne(b.and_(i32_ty, subnormal, round_step), b.i32_val(0));
+      b.icmp_ne(b.and_(i16_ty, subnormal, round_step), b.i16_val(0));
   Value round_up = b.or_(b.icmp_ugt(tail, threshold),
                          b.and_(b.icmp_eq(tail, threshold), odd_truncated));
   subnormal =
-      b.select(round_up, b.add(i32_ty, subnormal, round_step), subnormal);
+      b.select(round_up, b.add(i16_ty, subnormal, round_step), subnormal);
   // Now shift to get the final result.
-  subnormal = b.lshr(i32_ty, subnormal, shift);
+  subnormal = b.lshr(i16_ty, subnormal, shift);
 
   // Normalized case. Start with rounding, then apply exp range to fit 4 bits,
   // adjust bias and shift left.
   // TODO: NaN values might be mishandled.
-  tail = b.and_(i32_ty, nosign, b.i32_val(0x7f));
+  tail = b.and_(i16_ty, nosign, b.i16_val(0x7f));
   odd_truncated =
-      b.icmp_ne(b.and_(i32_ty, nosign, b.i32_val(0x80)), b.i32_val(0));
-  round_up = b.or_(b.icmp_ugt(tail, b.i32_val(0x40)),
-                   b.and_(b.icmp_eq(tail, b.i32_val(0x40)), odd_truncated));
+      b.icmp_ne(b.and_(i16_ty, nosign, b.i16_val(0x80)), b.i16_val(0));
+  round_up = b.or_(b.icmp_ugt(tail, b.i16_val(0x40)),
+                   b.and_(b.icmp_eq(tail, b.i16_val(0x40)), odd_truncated));
   Value rounded =
-      b.and_(i32_ty, b.add(i32_ty, nosign, b.i32_val(0x80)), b.i32_val(0x7f80));
-  nosign = b.select(round_up, rounded, nosign);
+      b.and_(i16_ty, b.add(i16_ty, nosign, b.i16_val(0x80)), b.i16_val(0x7f80));
+  Value normal = b.select(round_up, rounded, nosign);
 
-  nosign = b.umax(i32_ty, nosign, b.i32_val(0x2000));
-  nosign = b.umin(i32_ty, nosign, b.i32_val(0x5c00));
-  nosign = b.sub(i32_ty, nosign, b.i32_val(0x2000));
-  nosign = b.shl(i32_ty, nosign, b.i32_val(1));
+  normal = b.umax(i16_ty, normal, b.i16_val(0x2000));
+  normal = b.umin(i16_ty, normal, b.i16_val(0x5f00));
+  normal = b.sub(i16_ty, normal, b.i16_val(0x2000));
+  normal = b.shl(i16_ty, normal, b.i16_val(1));
 
   // Choose between subnormal and normal values.
-  nosign = b.select(is_subnormal, subnormal, nosign);
-
-  Value res_val = b.or_(i32_ty, nosign, sign);
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value res_val = b.select(is_subnormal, subnormal, normal);
+  res_val = b.or_(i16_ty, res_val, sign);
+  auto fp8x4VecTy = vec_ty(i8_ty, 2);
   Value res = b.bitcast(res_val, fp8x4VecTy);
 
-  return {b.extract_element(i8_ty, res, b.i32_val(1))};
+  return {b.extract_element(i8_ty, res, b.i16_val(1))};
 }
 
 static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
