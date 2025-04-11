@@ -894,7 +894,7 @@ def mxfp8_mxfp4_matmul(  #
 @pytest.mark.parametrize("WITH_B_SCALE", [True, False])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, CONST_SCALE,
-                            A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
+                            A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device, request):
     if is_cuda():
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("Requires compute capability >= 10")
@@ -917,7 +917,17 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         pytest.xfail("Pack along K can only be False for float4")
 
     if is_xpu():
-        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
+        if A_DATA_TYPE == B_DATA_TYPE == "float4":
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3777")
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256):
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3908")
+            # Comment this out when #3908 is fixed
+            # request.node.add_marker(
+            #     pytest.mark.xfail(strict=True, reason="Not enough shared memory",
+            #                       raises=triton.runtime.errors.OutOfResources))
+        else:
+            # Some tests pass, but it's difficult to filter them out
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
