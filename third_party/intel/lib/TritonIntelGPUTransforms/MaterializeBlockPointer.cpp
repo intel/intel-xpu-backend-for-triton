@@ -89,7 +89,7 @@ public:
 
       if (strideOneDimVal >= (rank - 2)) {
         // HW 2D block read instruction only supports contiguous access.
-        Value fastChangeStride = strides[strideOneDim.value()];
+        Value fastChangeStride = strides[strideOneDimVal];
         if (!tt::intel::isConstant(fastChangeStride, 1))
           return;
 
@@ -205,6 +205,8 @@ private:
     if (shape.size() == 1)
       return false;
 
+    // The 2D block read function we generate is restricted to 4-byte aligned
+    // pointers.
     // Ensure the base ptr is 4-byte aligned.
     TypedValue<tt::PointerType> base = makeTensorPtrOp.getBase();
     if (!ttgi::isDivisible(base, 4)) {
