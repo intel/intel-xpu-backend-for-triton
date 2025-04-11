@@ -40,10 +40,9 @@ def is_enough_memory(M, N, K, dtype):
     # b: (N, K) dtype
     # c: (M, N) float32
     # d: (M, N) float32
-    # pytorch reference: (M, N) float32
     finfo = torch.finfo(dtype)
     dtype_size = finfo.bits // 8
-    required_memory = M * K * dtype_size + N * K * dtype_size + 3 * M * N * 4
+    required_memory = 2 * (M * K * dtype_size + N * K * dtype_size + 2 * M * N * 4)
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
 
     if not enough_memory:
@@ -750,7 +749,7 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
     print(f"\rBenchmarking {label}: done")
 
 
-def bench(K, dtype, reps=10000, warmup_reps=10000):
+def bench(K, dtype, reps=100, warmup_reps=100):
     M = 8192
     N = 8192
     if not is_enough_memory(M, N, K, dtype):
