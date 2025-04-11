@@ -7,6 +7,7 @@
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -54,12 +55,13 @@ public:
       assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
              "Expected 'loadOp' to load a tensor value.");
 
+      // Find the make tensor ptr operation that created the base ptr.
       tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
       if (!makeTensorPtrOp) {
-        LDBG("Could not find make tensor ptr op.");
+        LDBG("Could not find make tensor ptr op for: " << loadOp);
         return;
       }
-      LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
+      LDBG("Make tensor ptr op: " << makeTensorPtrOp);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
       unsigned rank = shape.size();
@@ -334,7 +336,48 @@ private:
     }
     LDBG("offset: " << offset);
 
+    Region *loadRgn = loadOp->getParentRegion();
+    Region *makeTensorPtrRgn = makeTensorPtrOp->getParentRegion();
+    bool inSameRegion = (loadRgn == makeTensorPtrRgn);
+    if (inSameRegion)
+      return satisfies2DBlockReadAlignment(offset, divisor);
+
     // TODO: analyze tt.advance (issue #3762).
+
+    return true;
+  }
+
+  bool satisfies2DBlockReadAlignment(Value offset, unsigned divisor) const {
+    assert(divisor != 0 && "Expected divisor to be non-zero");
+
+    // Ensure the initial offset is divisible by the divisor.
+    Value initialOffset = tt::intel::getFinalValue(offset);
+    if (!ttgi::isDivisible(initialOffset, divisor)) {
+      LDBG("initialOffset does not satisfies HW constraint: " << initialOffset);
+      return false;
+    }
+
+    auto checkUsers = [&](Value::user_range users) {
+      return llvm::all_of(users, [&](Operation *user) {
+        if (isa<tt::MakeTensorPtrOp>(user))
+          return true;
+        if (Operation *addOp = dyn_cast<arith::AddIOp>(user)) {
+          auto other = llvm::find_if(addOp->getOperands(),
+                                     [&](Value op) { return op != offset; });
+          if (!ttgi::isDivisible(*other, divisor)) {
+            LDBG("Found a non-divisible increment: " << *addOp);
+            return false;
+          }
+          return true;
+        }
+        LDBG("Unhandled user kind: " << user);
+        return false;
+      });
+    };
+
+    // Ensure that the offset is incremented by a multiple of the divisor.
+    if (auto blockArg = dyn_cast<BlockArgument>(offset))
+      return checkUsers(blockArg.getUsers());
 
     return true;
   }
