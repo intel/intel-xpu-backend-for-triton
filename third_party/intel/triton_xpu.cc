@@ -265,13 +265,13 @@ void init_triton_intel(py::module &&m) {
   // producer flag (e.g. PyTorch flag) to allow the Triton compiler to use the
   // fast math semantics on all arithmetic operations.
   // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
-  m.def("set_fast_math", [](llvm::Module *mod) {
+  m.def("set_fast_math", [](llvm::Module *mod, bool flag) {
     using namespace llvm;
     for (Function &func : *mod) {
       for (Instruction &inst : instructions(func)) {
         if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
           FastMathFlags FMF;
-          FMF.setFast(true);
+          FMF.setFast(flag);
           inst.setFastMathFlags(FMF);
         }
       }
