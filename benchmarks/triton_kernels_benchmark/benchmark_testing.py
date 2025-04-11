@@ -224,7 +224,7 @@ class Mark:
                 # We only verify the first run.
                 sig = inspect.signature(self.fn)
                 if run_counter > 0 and "verify" in sig.parameters:
-                    kwargs["veryfy"] = False
+                    kwargs["verify"] = False
                 ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
