@@ -32,6 +32,27 @@ from contextlib import contextmanager
 from typing import Optional
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
+DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+
+
+def is_enough_memory(M, N, K, dtype):
+    # a: (M, K) dtype
+    # b: (N, K) dtype
+    # c: (M, N) float32
+    # d: (M, N) float32
+    # pytorch reference: (M, N) float32
+    finfo = torch.finfo(dtype)
+    dtype_size = finfo.bits // 8
+    required_memory = M * K * dtype_size + N * K * dtype_size + 3 * M * N * 4
+    enough_memory = required_memory < DEVICE_TOTAL_MEMORY
+
+    if not enough_memory:
+        deviceName = torch.xpu.get_device_name()
+        print(
+            f"'{M , N, K, dtype}' combination skipped for '{deviceName}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}"
+        )
+    return enough_memory
+
 
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia
@@ -732,6 +753,9 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
 def bench(K, dtype, reps=10000, warmup_reps=10000):
     M = 8192
     N = 8192
+    if not is_enough_memory(M, N, K, dtype):
+        return
+
     a = torch.randn((M, K), device=DEVICE, dtype=torch.float16).to(dtype)
     b = torch.randn((K, N), device=DEVICE, dtype=torch.float16).to(dtype)
 
@@ -766,6 +790,9 @@ def run_test(expect, fn, a, b, label, enabled=True):
 
 
 def validate(M, N, K, dtype):
+    if not is_enough_memory(M, N, K, dtype):
+        return
+
     print(f"{M=}, {N=}, {K=}, verification naive vs: ")
     a = torch.randn((M, K), device=DEVICE, dtype=torch.float16).to(dtype)
     b = torch.randn((K, N), device=DEVICE, dtype=torch.float16).to(dtype)
