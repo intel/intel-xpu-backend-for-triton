@@ -2195,20 +2195,19 @@ struct StoreOpConversion
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
-      if (maskVal) {
-        // Create a predicated store operation.
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
-          Value addrElem =
-              b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-          uint32_t alignment = nWords * width / 8;
-          b.store(vecWord, addrElem, alignment);
-          return ArrayRef<Value>();
-        });
-      } else {
+      auto createStore = [&]() -> ArrayRef<Value> {
         Value addrElem =
-            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+        b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
         b.store(vecWord, addrElem, alignment);
+        return ArrayRef<Value>();
+      };
+
+      if (maskVal) {
+        // Create a predicated store operation.
+        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, createStore);
+      } else {
+        auto _ = createStore();
       }
 
     } // for
@@ -2317,32 +2316,27 @@ struct AtomicCASOpConversion
             loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
             spirv::MemorySemantics::SequentiallyConsistent |
                 spirv::MemorySemantics::CrossWorkgroupMemory);
+      
+      auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
+         // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
+         casCmp = b.bitcast(casCmp, zero.getType());
+         casVal = b.bitcast(casVal, zero.getType());
+
+         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+             loc, casPtr, casCmp, casVal, successOrdering,
+             failureOrdering);
+         Value newLoaded =
+             rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+         return SmallVector<Value, 1>{newLoaded};
+      };
+      
       Value ret;
-      // TODO: de-duplicate
       if (mask) {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, mask, {zero}, [&] {
-              // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-              casCmp = b.bitcast(casCmp, zero.getType());
-              casVal = b.bitcast(casVal, zero.getType());
-
-              auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-                  loc, casPtr, casCmp, casVal, successOrdering,
-                  failureOrdering);
-              Value newLoaded =
-                  rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-              return SmallVector<Value, 1>{newLoaded};
-            });
-
+            rewriter, loc, mask, {zero}, createAtomicCASInstruction);
         ret = endBlock.getArgument(0);
       } else {
-        // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-        casCmp = b.bitcast(casCmp, zero.getType());
-        casVal = b.bitcast(casVal, zero.getType());
-
-        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
-        ret = rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+        ret = createAtomicCASInstruction()[0];
       }
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
