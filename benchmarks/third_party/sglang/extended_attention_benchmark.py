@@ -6,53 +6,51 @@ from sglang.srt.layers.attention.triton_ops.extend_attention import (
 import triton_kernels_benchmark as benchmark_suit
 
 
-def gen_args(BATCH, N_CTX, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, dtype, device):
+def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
 
-    b_seq_len_prefix = torch.randint(1, N_CTX // 2, (BATCH, ), dtype=torch.int32, device=device)
-    b_seq_len_extend = torch.randint(1, N_CTX // 2, (BATCH, ), dtype=torch.int32, device=device)
+    b_seq_len_prefix = torch.randint(1, N_CTX // 2, (B, ), dtype=torch.int32, device=device)
+    b_seq_len_extend = torch.randint(1, N_CTX // 2, (B, ), dtype=torch.int32, device=device)
     b_seq_len = b_seq_len_prefix + b_seq_len_extend
     max_len_in_batch = torch.max(b_seq_len, 0)[0].item()
 
-    b_req_idx = torch.arange(BATCH, dtype=torch.int32, device=device)
-    b_start_loc = torch.zeros((BATCH, ), dtype=torch.int32, device=device)
+    b_req_idx = torch.arange(B, dtype=torch.int32, device=device)
+    b_start_loc = torch.zeros((B, ), dtype=torch.int32, device=device)
     b_start_loc[1:] = torch.cumsum(b_seq_len[:-1], 0)
-    b_start_loc_extend = torch.zeros((BATCH, ), dtype=torch.int32, device=device)
+    b_start_loc_extend = torch.zeros((B, ), dtype=torch.int32, device=device)
     b_start_loc_extend[1:] = torch.cumsum(b_seq_len_extend[:-1], 0)
 
-    kv_indptr = torch.zeros((BATCH + 1, ), dtype=torch.int32, device=device)
-    kv_indptr[1:BATCH + 1] = torch.cumsum(b_seq_len_prefix[:BATCH], dim=0)
+    kv_indptr = torch.zeros((B + 1, ), dtype=torch.int32, device=device)
+    kv_indptr[1:B + 1] = torch.cumsum(b_seq_len_prefix[:B], dim=0)
     kv_indices = torch.zeros((b_seq_len_prefix.sum().item(), ), dtype=torch.int32, device=device)
 
-    for i in range(BATCH):
+    for i in range(B):
         kv_indices[kv_indptr[i]:kv_indptr[i + 1]] = torch.arange(b_start_loc[i], b_start_loc[i] + b_seq_len_prefix[i])
 
     total_token_num = torch.sum(b_seq_len).item()
     extend_token_num = torch.sum(b_seq_len_extend).item()
-    k_buffer = torch.empty((total_token_num, KV_HEAD_NUM, HEAD_DIM), dtype=dtype,
-                           device=device).normal_(mean=0.1, std=0.2)
-    v_buffer = torch.empty((total_token_num, KV_HEAD_NUM, HEAD_DIM), dtype=dtype,
-                           device=device).normal_(mean=0.1, std=0.2)
+    k_buffer = torch.empty((total_token_num, H_KV, D), dtype=dtype, device=device).normal_(mean=0.1, std=0.2)
+    v_buffer = torch.empty((total_token_num, H_KV, D), dtype=dtype, device=device).normal_(mean=0.1, std=0.2)
 
-    k_extend = torch.empty((extend_token_num, KV_HEAD_NUM, HEAD_DIM), dtype=dtype, device=device)
-    v_extend = torch.empty((extend_token_num, KV_HEAD_NUM, HEAD_DIM), dtype=dtype, device=device)
-    q_extend = torch.empty((extend_token_num, Q_HEAD_NUM, HEAD_DIM), dtype=dtype, device=device)
-    for i in range(BATCH):
+    k_extend = torch.empty((extend_token_num, H_KV, D), dtype=dtype, device=device)
+    v_extend = torch.empty((extend_token_num, H_KV, D), dtype=dtype, device=device)
+    q_extend = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device=device)
+    for i in range(B):
         extend_start_in_buffer = b_start_loc[i] + b_seq_len_prefix[i]
         extend_end_in_buffer = b_start_loc[i] + b_seq_len[i]
         extend_start = b_start_loc_extend[i]
         extend_end = b_start_loc_extend[i] + b_seq_len_extend[i]
         k_extend[extend_start:extend_end] = k_buffer[extend_start_in_buffer:extend_end_in_buffer]
         v_extend[extend_start:extend_end] = v_buffer[extend_start_in_buffer:extend_end_in_buffer]
-        q_extend[extend_start:extend_end] = torch.empty((b_seq_len_extend[i], Q_HEAD_NUM, HEAD_DIM), dtype=dtype,
+        q_extend[extend_start:extend_end] = torch.empty((b_seq_len_extend[i], H_Q, D), dtype=dtype,
                                                         device=device).normal_(mean=0.1, std=0.2)
 
-    o_extend = torch.empty((extend_token_num, Q_HEAD_NUM, HEAD_DIM), dtype=dtype, device=device)
-    o_redundant = torch.empty((extend_token_num, Q_HEAD_NUM, HEAD_DIM), dtype=dtype, device=device)
+    o_extend = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device=device)
+    o_redundant = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device=device)
 
     b_seq_len_extend = b_seq_len - b_seq_len_prefix
     max_len_extend = torch.max(b_seq_len_extend, 0)[0].item()
-    qo_indptr = torch.zeros((BATCH + 1, ), dtype=torch.int32, device=device)
-    qo_indptr[1:BATCH + 1] = torch.cumsum(b_seq_len_extend[:BATCH], dim=0)
+    qo_indptr = torch.zeros((B + 1, ), dtype=torch.int32, device=device)
+    qo_indptr[1:B + 1] = torch.cumsum(b_seq_len_extend[:B], dim=0)
 
     params = []
     params.append((q_extend, k_extend, v_extend, o_extend, o_redundant))
@@ -127,8 +125,10 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, VALIDATE, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    tflops = lambda ms: 2 * B * (H_Q + H_KV * N_CTX) * N_CTX * D * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: 2 * B * (H_Q + H_KV * N_CTX) * D * 2 * (1e-9) / (ms * 1e-3)
+    N_CTX_TOTAL = k_buffer.shape[0]
+    N_CTX_EXTEND = k_extend.shape[0]
+    tflops = lambda ms: (H_Q + H_KV) * (N_CTX_EXTEND + N_CTX_TOTAL) * N_CTX_TOTAL * D * (1e-12) / (ms * 1e-3)
+    gbps = lambda ms: 2 * (N_CTX_EXTEND * (H_Q + H_KV) + N_CTX_TOTAL * H_KV) * D * 2 * (1e-9) / (ms * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 

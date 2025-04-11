@@ -5,36 +5,36 @@ from sglang.srt.layers.attention.triton_ops.decode_attention import decode_atten
 import triton_kernels_benchmark as benchmark_suit
 
 
-def gen_args(BATCH, N_CTX, Q_HEAD_NUM, KV_HEAD_NUM, HEAD_DIM, dtype, device):
+def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
 
-    total_tokens = BATCH * N_CTX
-    sm_scale = 1.0 / (HEAD_DIM**0.5)
+    total_tokens = B * N_CTX
+    sm_scale = 1.0 / (D**0.5)
     max_kv_splits = 8
-    num_kv_splits = torch.full((BATCH, ), 4, dtype=torch.int32, device=device)
+    num_kv_splits = torch.full((B, ), 4, dtype=torch.int32, device=device)
 
-    # q represents the new token being generated, one per batch
-    q = torch.randn(BATCH, Q_HEAD_NUM, HEAD_DIM, dtype=dtype, device=device)
+    # q represents the new token being generated, one per B
+    q = torch.randn(B, H_Q, D, dtype=dtype, device=device)
 
     # k_buffer and v_buffer represent all previous tokens
-    k_buffer = torch.randn(total_tokens, KV_HEAD_NUM, HEAD_DIM, dtype=dtype, device=device)
-    v_buffer = torch.randn(total_tokens, KV_HEAD_NUM, HEAD_DIM, dtype=dtype, device=device)
+    k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device=device)
+    v_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device=device)
 
     # o will have the same shape as q
-    o = torch.zeros(BATCH, Q_HEAD_NUM, HEAD_DIM, dtype=dtype, device=device)
+    o = torch.zeros(B, H_Q, D, dtype=dtype, device=device)
 
-    b_seq_len = torch.full((BATCH, ), N_CTX, device=device)
+    b_seq_len = torch.full((B, ), N_CTX, device=device)
 
-    kv_indptr = torch.zeros((BATCH + 1, ), dtype=torch.int32, device=device)
-    kv_indptr[1:BATCH + 1] = torch.cumsum(b_seq_len[:BATCH], dim=0)
+    kv_indptr = torch.zeros((B + 1, ), dtype=torch.int32, device=device)
+    kv_indptr[1:B + 1] = torch.cumsum(b_seq_len[:B], dim=0)
     kv_indices = torch.arange(total_tokens, device=device)
 
     attn_logits = torch.empty(
-        (BATCH, Q_HEAD_NUM, max_kv_splits, HEAD_DIM),
+        (B, H_Q, max_kv_splits, D),
         dtype=torch.float32,
         device=device,
     )
     attn_lse = torch.empty(
-        (BATCH, Q_HEAD_NUM, max_kv_splits),
+        (B, H_Q, max_kv_splits),
         dtype=torch.float32,
         device=device,
     )
@@ -105,7 +105,7 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, VALIDATE, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    tflops = lambda ms: 2 * B * (H_Q + H_KV * N_CTX) * N_CTX * D * (1e-12) / (ms * 1e-3)
+    tflops = lambda ms: 2 * B * (H_Q + H_KV) * N_CTX * D * (1e-12) / (ms * 1e-3)
     gbps = lambda ms: 2 * B * (H_Q + H_KV * N_CTX) * D * 2 * (1e-9) / (ms * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
