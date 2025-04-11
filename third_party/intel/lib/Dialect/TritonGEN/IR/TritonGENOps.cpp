@@ -11,9 +11,13 @@
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cstdint>
+#include <triton/Dialect/Triton/IR/Utility.h>
 #include <type_traits>
+
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 using namespace mlir;
 
@@ -427,6 +431,9 @@ LogicalResult tt::TritonGEN::Matrix2DBlockLoadOp::verify() {
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockLoadHWRestriction(*this).failed())
     return failure();
 
@@ -445,6 +452,10 @@ LogicalResult tt::TritonGEN::Matrix2DBlockLoadOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult tt::TritonGEN::Matrix2DBlockStoreOp::verify() {
+
+  if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA"))
+    return success();
+
   if (verify2DBlockHWRestriction(*this).failed())
     return failure();
 
