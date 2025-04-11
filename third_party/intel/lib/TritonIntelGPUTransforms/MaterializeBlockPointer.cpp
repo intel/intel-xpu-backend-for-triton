@@ -1,3 +1,4 @@
+#include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -40,23 +41,25 @@ public:
             ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
       return;
 
+    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+
     MLIRContext *context = &getContext();
-    mod.walk([context, this](tt::LoadOp loadOp) {
+    mod.walk([&](tt::LoadOp loadOp) {
       LDBG("Considering op: " << loadOp);
 
       Value ptr = loadOp.getPtr();
       if (!tt::isTensorPointerType(ptr.getType()))
-        return;
+        return MaterializeTensorOfPointers(loadOp, axisInfoAnalysis);
 
       assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
              "Expected 'loadOp' to load a tensor value.");
 
       tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
+      if (!makeTensorPtrOp) {
+        LDBG("Could not find make tensor ptr op.");
+        return;
+      }
       LDBG("Found make tensor ptr op: " << makeTensorPtrOp);
-      auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      auto elementWidth = tensorType.getElementTypeBitWidth();
-      LDBG("elementWidth: " << elementWidth);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
       unsigned rank = shape.size();
@@ -64,71 +67,42 @@ public:
       if (rank == 1)
         return;
 
-      // We will compensate the offset of non-64 bytes aligned base to the
-      // OffsetX and BaseWidth. The OffsetX and BaseWidth has extra restriction
-      // that it has to be 4 bytes aligned.
-      auto base = makeTensorPtrOp.getBase();
-      if (!ttgi::isDivisible(base, 4)) {
-        LDBG("Found Non 4 bytes aligned base: " << base);
+      if (!satisfies2DBlockReadAlignment(loadOp)) {
+        LDBG("Alignment checks failed for: " << loadOp);
         return;
       }
+
+      auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+      unsigned elementWidth = tensorType.getElementTypeBitWidth();
+      LDBG("elementWidth: " << elementWidth);
 
       Operation::operand_range strides = makeTensorPtrOp.getStrides();
-      int fastChangeDim = -1;
-      for (size_t i = 0; i < strides.size(); ++i) {
-        if (tt::intel::isConstant(strides[i], 1)) {
-          fastChangeDim = i;
-          break;
-        }
-      }
+      std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
+      assert((strideOneDim && strideOneDim.value() < strides.size()) &&
+             "Expected strideOneDim to be set and less than strides.size()");
+      unsigned strideOneDimVal = strideOneDim.value();
 
-      LDBG("Fast change dim: " << fastChangeDim);
-      if (fastChangeDim < 0) {
-        return;
-      }
-
-      // Check the BaseWidth.
-      Value BaseWidth = shape[fastChangeDim];
-      if (!ttgi::isDivisible(BaseWidth, std::ceil(32 / elementWidth))) {
-        LDBG("Found Non 4 bytes aligned BaseWidth: " << BaseWidth);
-        return;
-      }
-
-      // Check the OffsetX
-      Operation::operand_range offsets = makeTensorPtrOp.getOffsets();
-      Value OffsetX = offsets[fastChangeDim];
-      if (!ttgi::isDivisible(OffsetX, std::ceil(32 / elementWidth))) {
-        LDBG("Found Non 4 bytes aligned offsetX: " << OffsetX);
-        return;
-      }
-
-      // TODO: Check the OffsetX from tl.advance
-
-      if (fastChangeDim == rank - 2 && elementWidth == 8) {
+      if (strideOneDimVal == rank - 2 && elementWidth == 8) {
         // TODO: column major layout w/ fp8 has performance regression
         return;
       }
 
-      if (fastChangeDim >= (rank - 2)) {
+      if (strideOneDimVal >= (rank - 2)) {
         // HW 2D block read instruction only supports contiguous access.
-        Value fastChangeStride = strides[fastChangeDim];
-        LLVM_DEBUG({
-          DBGS() << "fastChangeStride: ";
-          fastChangeStride.print(llvm::dbgs());
-          llvm::dbgs() << "\n";
-        });
+        Value fastChangeStride = strides[strideOneDimVal];
         if (!tt::intel::isConstant(fastChangeStride, 1))
           return;
 
         // Across Intel platforms, the strictest pitch restriction is to be a
         // multiple of OWord(128 bits).
         Value pitch =
-            strides[(fastChangeDim == rank - 1) ? rank - 2 : rank - 1];
+            strides[(strideOneDimVal == rank - 1) ? rank - 2 : rank - 1];
         LDBG("Pitch: " << pitch);
         if (!ttgi::isDivisible(pitch, 128 / elementWidth))
           return;
 
-        const bool isRowMajor = fastChangeDim == rank - 1;
+        const bool isRowMajor = (strideOneDimVal == rank - 1);
         std::optional<ttg::DotOperandEncodingAttr> dotLayout =
             getDotLayout(loadOp);
         if (dotLayout) {
@@ -157,6 +131,94 @@ public:
   }
 
 private:
+  void MaterializeTensorOfPointers(
+      tt::LoadOp loadOp,
+      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+    MLIRContext *context = loadOp.getContext();
+    Value ptr = loadOp.getPtr();
+    assert(!tt::isTensorPointerType(ptr.getType()) &&
+           "Expected 'loadOp' to load a tensor value.");
+
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+    if (!tensorTy)
+      return;
+
+    LDBG("Considering tensor of pointer load op: " << loadOp);
+
+    if (loadOp.getMask()) {
+      LDBG("Load op has mask, skip block IO attribute");
+      return;
+    }
+
+    // The axis info gives the information about the value of the indices
+    // tensor. For example, if the indices tensor is tensor<8x16xi32> and
+    // its value is:
+    //   [[ 0,  1,  2,  3, ..., 12, 13, 14, 15],
+    //    [16, 17, 18, 19, ..., 28, 29, 30, 31],
+    //    ...
+    //    [ 96,  97,  98,  99, ..., 108, 109, 110, 111],
+    //    [112, 113, 114, 115, ..., 124, 125, 126, 127]]
+    // Then the global memory refer by the tensor pointer is row-major
+    // contiguous. And the axis info will be: stride: [16, 1],
+    // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
+    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    unsigned rank = axisInfo->getRank();
+    if (rank != 2) {
+      LDBG("Rank is not 2, skip block IO attribute");
+      return;
+    }
+
+    // Determine if LoadOp is row-major or column-major.
+    auto isMajor = [&](unsigned fastChangeDim) {
+      assert((fastChangeDim == 0 || fastChangeDim == 1) &&
+             "fastChangeDim is expected to be 0 or 1");
+      const unsigned otherDim = !fastChangeDim;
+      // Limit to full row being contiguous.
+      if (axisInfo->getContiguity(fastChangeDim) !=
+          tensorTy.getDimSize(fastChangeDim)) {
+        LDBG("Found non-contiguous row: "
+             << axisInfo->getContiguity(fastChangeDim));
+        return false;
+      }
+
+      // Value -1 is used to represent the unknown stride.
+      if (axisInfo->getStride(otherDim) <= 0) {
+        LDBG("Found unknown or non positive stride: "
+             << axisInfo->getStride(otherDim));
+        return false;
+      }
+
+      // Surface pitch is required to be 16 bytes aligned.
+      Type elemTy =
+          cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+      unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      if ((axisInfo->getStride(otherDim) * elemSizeInBytes) % 16 != 0) {
+        LDBG("Found Non 16 bytes aligned stride: "
+             << axisInfo->getStride(otherDim));
+        return false;
+      }
+
+      // Base pointer can be compensate by the offset and base width, where they
+      // each has restriction that it has to be 4 bytes aligned.
+      if (axisInfo->getDivisibility(fastChangeDim) % 4 != 0) {
+        LDBG(
+            "Found Non 4 bytes aligned base: " << axisInfo->getDivisibility(1));
+        return false;
+      }
+
+      return true;
+    };
+
+    // Check if loadOp is row major, i.e., fast changing dimension is one.
+    if (isMajor(1 /*fastChangeDim*/)) {
+      LDBG("Setting row_major attribute\n");
+      loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                      StringAttr::get(context, "row_major"));
+    }
+
+    // TODO: set column_major attribute
+  }
+
   // Return the load layout if it is a dot layout. If it is not, check if the
   // load result is converted to a dot layout. If so, return the dot layout,
   // otherwise return nullopt.
@@ -200,6 +262,81 @@ private:
     }
 
     return std::nullopt;
+  }
+
+  std::optional<unsigned>
+  getStrideOneDim(tt::MakeTensorPtrOp makeTensorPtrOp) const {
+    assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
+    Operation::operand_range strides = makeTensorPtrOp.getStrides();
+    std::optional<unsigned> strideOneDim{std::nullopt};
+    for (auto [idx, stride] : llvm::enumerate(strides)) {
+      if (!tt::intel::isConstant(stride, 1))
+        continue;
+      strideOneDim = idx;
+      break;
+    }
+    return strideOneDim;
+  }
+
+  bool satisfies2DBlockReadAlignment(tt::LoadOp loadOp) const {
+    Value ptr = loadOp.getPtr();
+    assert(tt::isTensorPointerType(ptr.getType()) &&
+           "Expected a ptr to a tensor of ptrs.");
+    assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
+           "Expected 'loadOp' to load a ranked tensor value.");
+
+    // Find the make tensor ptr operation that created the base ptr for the load
+    // operation.
+    tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
+    assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
+
+    Operation::operand_range shape = makeTensorPtrOp.getShape();
+    if (shape.size() == 1)
+      return false;
+
+    // Ensure the base ptr is 4-byte aligned.
+    // Note: the HW requires the address to be 64-byte aligned, however we will
+    // compensate by imposing restrictions on the offsetX and baseWidth.
+    TypedValue<tt::PointerType> base = makeTensorPtrOp.getBase();
+    if (!ttgi::isDivisible(base, 4)) {
+      LDBG("Found non 4-bytes aligned base: " << base);
+      return false;
+    }
+
+    std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
+    if (!strideOneDim) {
+      LDBG("Could not find stride one dimension in: " << makeTensorPtrOp);
+      return false;
+    }
+
+    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    unsigned strideOneDimVal = strideOneDim.value();
+    LDBG("strideOneDim: " << strideOneDimVal);
+
+    // Analyze the shape of the stride one dimension to ensure it satisfies HW
+    // constraints.
+    Value baseWidth = shape[strideOneDimVal];
+    unsigned divisor = std::ceil(32 / elementWidth);
+    if (!ttgi::isDivisible(baseWidth, divisor)) {
+      LDBG("baseWidth does not satisfies HW constraint: " << baseWidth);
+      return false;
+    }
+    LDBG("baseWidth: " << baseWidth);
+
+    // Analyze the initial offset corresponding to the stride one dimension to
+    // ensure it satisfies HW constraints.
+    Value offset = makeTensorPtrOp.getOffsets()[strideOneDimVal];
+    if (!ttgi::isDivisible(offset, divisor)) {
+      LDBG("offset does not satisfies HW constraints: " << offset);
+      return false;
+    }
+    LDBG("offset: " << offset);
+
+    // TODO: analyze tt.advance (issue #3762).
+
+    return true;
   }
 };
 
