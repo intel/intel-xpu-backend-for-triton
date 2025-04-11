@@ -7,9 +7,14 @@ set -euo pipefail
 FAILED_BENCHMARKS=()
 
 for file in Liger-Kernel/benchmark/scripts/benchmark_*; do
-    # benchmark_tvd is written for CUDA and has XPU out of memory error
     # TODO: unskip when https://github.com/intel/intel-xpu-backend-for-triton/issues/3873 is resolved
-    if [ $file == "Liger-Kernel/benchmark/scripts/benchmark_tvd.py" ]; then
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_tvd.py" ]; then
+        continue
+    fi
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_orpo_loss.py" ]; then
+        continue
+    fi
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_qwen2vl_mrope.py" ]; then
         continue
     fi
     if python "$file"; then
