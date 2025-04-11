@@ -411,8 +411,9 @@ static Attribute inferTransOpDstEncoding(Attribute srcEnc,
 static Attribute inferDstEncoding(triton::gpu::Fp4ToFpOp op, Attribute srcEnc) {
   Attribute dstEnc;
   auto shape = op.getSrc().getType().getShape();
+  auto dotOp = cast_or_null<triton::gpu::DotOperandEncodingAttr>(srcEnc);
   auto result =
-      srcEnc.getDialect()
+      (dotOp ? dotOp.getParent().getDialect() : srcEnc.getDialect())
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferFp4ToFpOpEncoding(shape, op.getAxis(), srcEnc, dstEnc,
                                    /*fwdInference*/ true, std::nullopt);
@@ -423,8 +424,9 @@ static Attribute inferDstEncoding(triton::gpu::Fp4ToFpOp op, Attribute srcEnc) {
 static Attribute inferSrcEncoding(triton::gpu::Fp4ToFpOp op, Attribute dstEnc) {
   Attribute srcEnc;
   auto shape = op.getSrc().getType().getShape();
+  auto dotOp = cast_or_null<triton::gpu::DotOperandEncodingAttr>(dstEnc);
   if (succeeded(
-          dstEnc.getDialect()
+          (dotOp ? dotOp.getParent().getDialect() : dstEnc.getDialect())
               .getRegisteredInterface<triton::DialectInferLayoutInterface>()
               ->inferFp4ToFpOpEncoding(shape, op.getAxis(), dstEnc, srcEnc,
                                        /*fwdInference*/ false, std::nullopt))) {
