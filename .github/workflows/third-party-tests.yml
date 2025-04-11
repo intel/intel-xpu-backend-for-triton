@@ -96,6 +96,11 @@ jobs:
 
           pytest Liger-Kernel/test/
 
+      - name: Run SGLANG tests
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          scripts/test-triton.sh --sglang --skip-pytorch-install --skip-pip-install
+
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v4
