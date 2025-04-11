@@ -9,7 +9,13 @@ import triton
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
-VERIFY = os.getenv("VERIFY", "1") == "1"
+BENCHMARKING_CONFIG = {
+    "verify": os.getenv("VERIFY", "1") == "1",
+}
+
+
+def disable_verification():
+    BENCHMARKING_CONFIG["verify"] = False
 
 
 def synchronize():
@@ -172,7 +178,7 @@ else:
 
 
 def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
-    if VERIFY:
+    if BENCHMARKING_CONFIG["verify"]:
         triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
 
 
@@ -292,6 +298,8 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
+                if run_counter > 0:
+                    disable_verification()
                 df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
