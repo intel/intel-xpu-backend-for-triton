@@ -8,7 +8,7 @@ FAILED_BENCHMARKS=()
 
 for file in Liger-Kernel/benchmark/scripts/benchmark_*; do
     # benchmark_tvd is written for CUDA and has XPU out of memory error
-    if $file == "benchmark_tvd.py"; then
+    if [ $file == "Liger-Kernel/benchmark/scripts/benchmark_tvd.py" ]; then
         continue
     fi
     if python "$file"; then
