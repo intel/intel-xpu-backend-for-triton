@@ -699,6 +699,31 @@ struct TritonSubGroupBlockWriteLowering
   }
 };
 
+struct TritonFToTf32OpLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::FToTf32Op> {
+  using ConvertOpToLLVMPattern<TritonGEN::FToTf32Op>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::FToTf32Op op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    Value value = op->getOperand(0);
+    SmallVector<Type> argTypes{f32_ty};
+    SmallVector<Value> args{value};
+
+    const StringLiteral funcName = "_Z25__spirv_RoundFToTF32INTELf";
+    auto retType = f32_ty;
+    auto callOp = intel::createDeviceFunctionCall(
+        rewriter, funcName, retType, {argTypes}, {args}, {},
+        intel::noUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -760,7 +785,8 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       .add<TritonMatrixDPASLowering, TritonMatrix2DBlockLoadLowering,
            TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering, TritonSubGroupBlockReadLowering,
-           TritonSubGroupBlockWriteLowering>(converter);
+           TritonSubGroupBlockWriteLowering, TritonFToTf32OpLowering>(
+          converter);
 }
 
 void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
