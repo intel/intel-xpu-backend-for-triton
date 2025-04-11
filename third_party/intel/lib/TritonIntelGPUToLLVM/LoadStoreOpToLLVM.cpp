@@ -63,6 +63,33 @@ Value emitRedundantThreadPredicate(
   return pred;
 }
 
+std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
+  switch (atomicOp) {
+  case RMWOp::AND:
+    return LLVM::AtomicBinOp::_and;
+  case RMWOp::OR:
+    return LLVM::AtomicBinOp::_or;
+  case RMWOp::XOR:
+    return LLVM::AtomicBinOp::_xor;
+  case RMWOp::ADD:
+    return LLVM::AtomicBinOp::add;
+  case RMWOp::FADD:
+    return LLVM::AtomicBinOp::fadd;
+  case RMWOp::MAX:
+    return LLVM::AtomicBinOp::max;
+  case RMWOp::MIN:
+    return LLVM::AtomicBinOp::min;
+  case RMWOp::UMAX:
+    return LLVM::AtomicBinOp::umax;
+  case RMWOp::UMIN:
+    return LLVM::AtomicBinOp::umin;
+  case RMWOp::XCHG:
+    return LLVM::AtomicBinOp::xchg;
+  default:
+    return {};
+  }
+}
+
 /// Holds the values related to a block pointer.
 /// It includes the base pointer, base width and height, row and column
 /// stride, and offset base for X and Y.
@@ -2197,7 +2224,7 @@ struct StoreOpConversion
 
       auto createStore = [&]() -> ArrayRef<Value> {
         Value addrElem =
-        b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
         b.store(vecWord, addrElem, alignment);
         return ArrayRef<Value>();
@@ -2316,20 +2343,19 @@ struct AtomicCASOpConversion
             loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
             spirv::MemorySemantics::SequentiallyConsistent |
                 spirv::MemorySemantics::CrossWorkgroupMemory);
-      
-      auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
-         // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-         casCmp = b.bitcast(casCmp, zero.getType());
-         casVal = b.bitcast(casVal, zero.getType());
 
-         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-             loc, casPtr, casCmp, casVal, successOrdering,
-             failureOrdering);
-         Value newLoaded =
-             rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-         return SmallVector<Value, 1>{newLoaded};
+      auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
+        // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
+        casCmp = b.bitcast(casCmp, zero.getType());
+        casVal = b.bitcast(casVal, zero.getType());
+
+        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
+        Value newLoaded =
+            rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+        return SmallVector<Value, 1>{newLoaded};
       };
-      
+
       Value ret;
       if (mask) {
         Block &endBlock = LLVM::intel::createPredicatedBlock(
@@ -2465,19 +2491,18 @@ struct AtomicRMWOpConversion
           .Case<mlir::Float32Type>([&](auto ty) { zero = b.f32_val(0); })
           .Case<mlir::Float64Type>([&](auto ty) { zero = b.f64_val(0); });
 
-      Block *endBlock = nullptr;
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-
       if (valueElemNBits == 16) {
         op.emitWarning(
             "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "
             "risk)");
-        endBlock = emulateFp16AtomicRmw(
+        Block *endBlock = emulateFp16AtomicRmw(
             rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
+        ret = endBlock->getArgument(0);
       } else {
         if (!atomicNeedsSharedMemory(op.getResult()))
           rewriter.create<spirv::ControlBarrierOp>(
@@ -2485,92 +2510,28 @@ struct AtomicRMWOpConversion
               spirv::MemorySemantics::SequentiallyConsistent |
                   spirv::MemorySemantics::CrossWorkgroupMemory);
 
-        // TODO: de-duplicate
-        if (rmwMask) {
-          endBlock = &LLVM::intel::createPredicatedBlock(
-              rewriter, loc, rmwMask, {zero}, [&] {
-                mlir::LLVM::AtomicBinOp rmwKind;
-                switch (atomicRmwAttr) {
-                case RMWOp::AND:
-                  rmwKind = LLVM::AtomicBinOp::_and;
-                  break;
-                case RMWOp::OR:
-                  rmwKind = LLVM::AtomicBinOp::_or;
-                  break;
-                case RMWOp::XOR:
-                  rmwKind = LLVM::AtomicBinOp::_xor;
-                  break;
-                case RMWOp::ADD:
-                  rmwKind = LLVM::AtomicBinOp::add;
-                  break;
-                case RMWOp::FADD:
-                  rmwKind = LLVM::AtomicBinOp::fadd;
-                  break;
-                case RMWOp::MAX:
-                  rmwKind = LLVM::AtomicBinOp::max;
-                  break;
-                case RMWOp::UMAX:
-                  rmwKind = LLVM::AtomicBinOp::umax;
-                  break;
-                case RMWOp::MIN:
-                  rmwKind = LLVM::AtomicBinOp::min;
-                  break;
-                case RMWOp::UMIN:
-                  rmwKind = LLVM::AtomicBinOp::umin;
-                  break;
-                case RMWOp::XCHG:
-                  rmwKind = LLVM::AtomicBinOp::xchg;
-                  break;
-                }
-
-                rmwVal = b.bitcast(rmwVal, valueElemTy);
-                auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
-                    loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
-                return SmallVector<Value, 1>{atomRMW.getRes()};
-              });
-        } else {
-          mlir::LLVM::AtomicBinOp rmwKind;
-          switch (atomicRmwAttr) {
-          case RMWOp::AND:
-            rmwKind = LLVM::AtomicBinOp::_and;
-            break;
-          case RMWOp::OR:
-            rmwKind = LLVM::AtomicBinOp::_or;
-            break;
-          case RMWOp::XOR:
-            rmwKind = LLVM::AtomicBinOp::_xor;
-            break;
-          case RMWOp::ADD:
-            rmwKind = LLVM::AtomicBinOp::add;
-            break;
-          case RMWOp::FADD:
-            rmwKind = LLVM::AtomicBinOp::fadd;
-            break;
-          case RMWOp::MAX:
-            rmwKind = LLVM::AtomicBinOp::max;
-            break;
-          case RMWOp::UMAX:
-            rmwKind = LLVM::AtomicBinOp::umax;
-            break;
-          case RMWOp::MIN:
-            rmwKind = LLVM::AtomicBinOp::min;
-            break;
-          case RMWOp::UMIN:
-            rmwKind = LLVM::AtomicBinOp::umin;
-            break;
-          case RMWOp::XCHG:
-            rmwKind = LLVM::AtomicBinOp::xchg;
-            break;
-          }
+        auto createAtomicBinOpInstruction = [&]() -> SmallVector<Value, 1> {
+          std::optional<mlir::LLVM::AtomicBinOp> rmwKindOpt =
+              matchAtomicOp(atomicRmwAttr);
+          // TODO: should we fail on unsupported ops instead of asserting? See
+          // AMD/LoadStoreOpToLLVM.cpp
+          assert(rmwKindOpt);
+          auto rmwKind = *rmwKindOpt;
 
           rmwVal = b.bitcast(rmwVal, valueElemTy);
           auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
               loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
-          ret = atomRMW.getResult();
+          return {atomRMW.getRes()};
+        };
+
+        if (rmwMask) {
+          Block *endBlock = &LLVM::intel::createPredicatedBlock(
+              rewriter, loc, rmwMask, {zero}, createAtomicBinOpInstruction);
+          ret = endBlock->getArgument(0);
+        } else {
+          ret = createAtomicBinOpInstruction()[0];
         }
       }
-
-      ret = endBlock ? endBlock->getArgument(0) : ret;
       assert(ret);
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
@@ -2607,6 +2568,7 @@ struct AtomicRMWOpConversion
   }
 
   // Emulate 16-bit atomicrmw through a loop with 32-bit cmpxchg.
+  // TODO: optimize for the case when rmwMask is a true constant?
   Block *emulateFp16AtomicRmw(ConversionPatternRewriter &rewriter, Location loc,
                               mlir::triton::RMWOp atomicOp, Type valueElemTy,
                               Value rmwPtr, Value rmwVal, Value rmwMask,
