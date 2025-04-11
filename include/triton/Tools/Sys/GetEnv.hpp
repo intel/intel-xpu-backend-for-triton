@@ -54,6 +54,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_INTEL_FAST_MATH",
     "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT",
     "TRITON_INTEL_REDUCE_TRANSPOSE",
+    "TRITONGEN_FORCE_GENISA",
     // clang-format on
 };
 
