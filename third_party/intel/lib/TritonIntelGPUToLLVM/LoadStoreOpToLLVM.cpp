@@ -63,6 +63,10 @@ Value emitRedundantThreadPredicate(
   return pred;
 }
 
+unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return index & ~freeVarMask;
+}
+
 std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
   switch (atomicOp) {
   case RMWOp::AND:
@@ -1869,8 +1873,21 @@ struct LoadOpConversion
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    // Load redundantly in all dims except reg
+    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    uint32_t regMask = freeVarMasks[str_attr("register")];
+
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      if (auto canonicalVecStart = getCanonicalIndex(vecStart, regMask);
+          vecStart != canonicalVecStart) {
+        // For redundant registers, refer back to the canonical load
+        for (auto iVec = 0; iVec < vec; ++iVec) {
+          loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
+        }
+        continue;
+      }
+
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
@@ -1882,7 +1899,7 @@ struct LoadOpConversion
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      Value pred = maskElems.size() ? maskElems[vecStart] : b.int_val(1, 1);
+      Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
 
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
       Type retTy = retTys.size() > 1
@@ -1923,16 +1940,24 @@ struct LoadOpConversion
                                                    rewriter.getZeroAttr(retTy));
       }
 
+      auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
+        Value addrElem =
+            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+        uint32_t alignment = nWords * width / 8;
+        Value ret = b.load(retTy, addrElem, alignment);
+        return {ret};
+      };
+
+      Value ret;
       // Create a predicated load operation.
-      Block &endBlock = LLVM::intel::createPredicatedBlock(
-          rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-            Value addrElem =
-                b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-            uint32_t alignment = nWords * width / 8;
-            Value ret = b.load(retTy, addrElem, alignment);
-            return SmallVector<Value, 1>{ret};
-          });
-      Value ret = *endBlock.args_begin();
+      if (pred) {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, SmallVector<Value, 1>{other_},
+            createLoadInstruction);
+        ret = *endBlock.args_begin();
+      } else {
+        ret = createLoadInstruction()[0];
+      }
 
       // Extract and store return values
       SmallVector<Value> rets;
