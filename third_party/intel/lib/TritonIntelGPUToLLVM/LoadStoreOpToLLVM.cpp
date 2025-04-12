@@ -23,67 +23,44 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-// Return the mask for the unique data accessed by given tensor type.
-// Used to mask out the redundant data accessed by threads.
-Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                        Location loc,
-                        const triton::intel::TargetInfo &targetInfo) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  Value mask = b.true_val();
-  auto tid = getThreadId(rewriter, loc);
-  auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
-  if (tensorTy) {
-    // To remove this use, port https://github.com/triton-lang/triton/pull/5432
-    // to the INTELGPU dialect
-    auto layout = cast<DistributedEncodingTrait>(tensorTy.getEncoding());
-    auto shape = tensorTy.getShape();
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
-    auto kWarp = StringAttr::get(rewriter.getContext(), "warp");
-    auto maskLane =
-        std::get<1>(delinearize(rewriter, loc, layout, shape, kLane, laneId));
-    auto maskWarp =
-        std::get<1>(delinearize(rewriter, loc, layout, shape, kWarp, warpId));
-    mask = b.and_(maskLane, maskWarp);
-
-    // Do not write duplicated data when multicast is enabled
-    if (triton::gpu::getNumCTAs(layout) > 1) {
-      auto _0 = b.i32_val(0);
-      auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
-      auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
-      auto CTAOrder = triton::gpu::getCTAOrder(layout);
-
-      auto multiDimClusterCTAId =
-          delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
-
-      auto rank = tensorTy.getRank();
-      for (unsigned dim = 0; dim < rank; ++dim) {
-        // Skip when multicast is not enabled in this dimension
-        if (CTAsPerCGA[dim] == CTASplitNum[dim])
-          continue;
-        // This wrapping rule must be consistent with emitCTAOffsetForLayout
-        unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-        Value repId = b.udiv(multiDimClusterCTAId[dim], b.i32_val(splitNum));
-        // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
-        //     CTA0 and CTA2 holds data of block0,
-        //     CTA1 and CTA3 holds data of block1.
-        // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
-        // be masked. We add the following mask:
-        //     multiDimClusterCTAId[dim] / splitNum == 0
-        // Actually in all existing cases of multicast, splitNum is always 1.
-        // The mask is equivalent to:
-        //     multiDimClusterCTAId[dim] == 0
-        mask = b.and_(mask, b.icmp_eq(repId, _0));
-      }
-    }
-  } else {
-    // If the tensor is not ranked, then it is a scalar and only thread 0 of
-    // CTA0 can write
-    mask = b.and_(mask, b.icmp_eq(clusterCTAId, b.i32_val(0)));
-    mask = b.and_(mask, b.icmp_eq(tid, b.i32_val(0)));
+Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  if (a && b) {
+    return tb.and_(a, b);
   }
-  return mask;
+  return a ? a : b;
+}
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask. The predicate may be null to indicate no
+// predication is required.
+Value emitRedundantThreadPredicate(
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const triton::intel::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ctx = rewriter.getContext();
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
+
+  Value pred;
+  auto dimNames = {kLane, kWarp, kBlock};
+  auto dimIds = {laneId, warpId, blockId};
+  for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
+    int32_t mask = freeVarMasks.lookup(dimName);
+    if (mask != 0) {
+      auto dimPred = b.icmp_eq(b.and_(dimId, b.i32_val(mask)), zero);
+      pred = maybeAnd(rewriter, loc, pred, dimPred);
+    }
+  }
+  return pred;
 }
 
 /// Holds the values related to a block pointer.
@@ -2121,7 +2098,6 @@ struct StoreOpConversion
     auto *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
-    Value mask = op.getMask();
     Value llMask = adaptor.getMask();
 
     // Determine the vectorization size
@@ -2131,7 +2107,7 @@ struct StoreOpConversion
     SmallVector<Value> ptrElems, maskElems;
     unsigned vec = getVectorSize(ptr);
     if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(mask));
+      vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
 
     if (isTensorPointerType(ptr.getType())) {
       // fallback to scatter store.
@@ -2153,7 +2129,11 @@ struct StoreOpConversion
     assert(!maskElems.size() ||
            valueElems.size() == maskElems.size() && "Mask size mismatch");
 
-    mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
+
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -2161,6 +2141,10 @@ struct StoreOpConversion
     unsigned elemsPerThread = getTotalElemsPerThread(valueTy);
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
+      if (!isCanonicalIndex(vecStart, regMask)) {
+        // Don't emit store ops for redundant elements within a thread
+        continue;
+      }
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
 
@@ -2198,8 +2182,11 @@ struct StoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      Value maskVal =
-          maskElems.size() ? b.and_(mask, maskElems[vecStart]) : mask;
+      Value maskVal = threadPred ? threadPred : b.true_val();
+      if (llMask) {
+        auto mask = maskElems[vecStart];
+        maskVal = maybeAnd(rewriter, loc, maskVal, mask);
+      }
 
       auto vecTy = vec_ty(valArgTy, nWords);
       Value vecWord = b.undef(vecTy);
@@ -2292,7 +2279,9 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value mask =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -2320,20 +2309,33 @@ struct AtomicCASOpConversion
             loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
             spirv::MemorySemantics::SequentiallyConsistent |
                 spirv::MemorySemantics::CrossWorkgroupMemory);
-      Block &endBlock =
-          LLVM::intel::createPredicatedBlock(rewriter, loc, mask, {zero}, [&] {
-            // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-            casCmp = b.bitcast(casCmp, zero.getType());
-            casVal = b.bitcast(casVal, zero.getType());
+      Value ret;
+      // TODO: de-duplicate
+      if (mask) {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, mask, {zero}, [&] {
+              // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
+              casCmp = b.bitcast(casCmp, zero.getType());
+              casVal = b.bitcast(casVal, zero.getType());
 
-            auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-                loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
-            Value newLoaded =
-                rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-            return SmallVector<Value, 1>{newLoaded};
-          });
+              auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+                  loc, casPtr, casCmp, casVal, successOrdering,
+                  failureOrdering);
+              Value newLoaded =
+                  rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+              return SmallVector<Value, 1>{newLoaded};
+            });
 
-      Value ret = endBlock.getArgument(0);
+        ret = endBlock.getArgument(0);
+      } else {
+        // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
+        casCmp = b.bitcast(casCmp, zero.getType());
+        casVal = b.bitcast(casVal, zero.getType());
+
+        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
+            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
+        ret = rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+      }
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
 
@@ -2430,7 +2432,9 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
@@ -2443,7 +2447,9 @@ struct AtomicRMWOpConversion
       }
 
       Value rmwPtr = ptrElements[i];
-      Value rmwMask = llMask ? b.and_(mask, maskElements[i]) : mask;
+      Value rmwMask = llMask
+                          ? maybeAnd(rewriter, loc, maskElements[i], threadPred)
+                          : threadPred;
 
       assert((valueElemNBits == 16 || valueElemNBits == 32 ||
               valueElemNBits == 64) &&
@@ -2460,64 +2466,110 @@ struct AtomicRMWOpConversion
       Block *endBlock = nullptr;
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
+      Value ret;
+
       if (valueElemNBits == 16) {
         op.emitWarning(
             "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "
             "risk)");
-        endBlock =
-            emulateFp16AtomicRmw(rewriter, loc, atomicRmwAttr, valueElemTy,
-                                 rmwPtr, rmwVal, rmwMask, {zero});
+        endBlock = emulateFp16AtomicRmw(
+            rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
+            maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
       } else {
         if (!atomicNeedsSharedMemory(op.getResult()))
           rewriter.create<spirv::ControlBarrierOp>(
               loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
               spirv::MemorySemantics::SequentiallyConsistent |
                   spirv::MemorySemantics::CrossWorkgroupMemory);
-        endBlock = &LLVM::intel::createPredicatedBlock(
-            rewriter, loc, rmwMask, {zero}, [&] {
-              mlir::LLVM::AtomicBinOp rmwKind;
-              switch (atomicRmwAttr) {
-              case RMWOp::AND:
-                rmwKind = LLVM::AtomicBinOp::_and;
-                break;
-              case RMWOp::OR:
-                rmwKind = LLVM::AtomicBinOp::_or;
-                break;
-              case RMWOp::XOR:
-                rmwKind = LLVM::AtomicBinOp::_xor;
-                break;
-              case RMWOp::ADD:
-                rmwKind = LLVM::AtomicBinOp::add;
-                break;
-              case RMWOp::FADD:
-                rmwKind = LLVM::AtomicBinOp::fadd;
-                break;
-              case RMWOp::MAX:
-                rmwKind = LLVM::AtomicBinOp::max;
-                break;
-              case RMWOp::UMAX:
-                rmwKind = LLVM::AtomicBinOp::umax;
-                break;
-              case RMWOp::MIN:
-                rmwKind = LLVM::AtomicBinOp::min;
-                break;
-              case RMWOp::UMIN:
-                rmwKind = LLVM::AtomicBinOp::umin;
-                break;
-              case RMWOp::XCHG:
-                rmwKind = LLVM::AtomicBinOp::xchg;
-                break;
-              }
 
-              rmwVal = b.bitcast(rmwVal, valueElemTy);
-              auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
-                  loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
-              return SmallVector<Value, 1>{atomRMW.getRes()};
-            });
+        // TODO: de-duplicate
+        if (rmwMask) {
+          endBlock = &LLVM::intel::createPredicatedBlock(
+              rewriter, loc, rmwMask, {zero}, [&] {
+                mlir::LLVM::AtomicBinOp rmwKind;
+                switch (atomicRmwAttr) {
+                case RMWOp::AND:
+                  rmwKind = LLVM::AtomicBinOp::_and;
+                  break;
+                case RMWOp::OR:
+                  rmwKind = LLVM::AtomicBinOp::_or;
+                  break;
+                case RMWOp::XOR:
+                  rmwKind = LLVM::AtomicBinOp::_xor;
+                  break;
+                case RMWOp::ADD:
+                  rmwKind = LLVM::AtomicBinOp::add;
+                  break;
+                case RMWOp::FADD:
+                  rmwKind = LLVM::AtomicBinOp::fadd;
+                  break;
+                case RMWOp::MAX:
+                  rmwKind = LLVM::AtomicBinOp::max;
+                  break;
+                case RMWOp::UMAX:
+                  rmwKind = LLVM::AtomicBinOp::umax;
+                  break;
+                case RMWOp::MIN:
+                  rmwKind = LLVM::AtomicBinOp::min;
+                  break;
+                case RMWOp::UMIN:
+                  rmwKind = LLVM::AtomicBinOp::umin;
+                  break;
+                case RMWOp::XCHG:
+                  rmwKind = LLVM::AtomicBinOp::xchg;
+                  break;
+                }
+
+                rmwVal = b.bitcast(rmwVal, valueElemTy);
+                auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
+                    loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
+                return SmallVector<Value, 1>{atomRMW.getRes()};
+              });
+        } else {
+          mlir::LLVM::AtomicBinOp rmwKind;
+          switch (atomicRmwAttr) {
+          case RMWOp::AND:
+            rmwKind = LLVM::AtomicBinOp::_and;
+            break;
+          case RMWOp::OR:
+            rmwKind = LLVM::AtomicBinOp::_or;
+            break;
+          case RMWOp::XOR:
+            rmwKind = LLVM::AtomicBinOp::_xor;
+            break;
+          case RMWOp::ADD:
+            rmwKind = LLVM::AtomicBinOp::add;
+            break;
+          case RMWOp::FADD:
+            rmwKind = LLVM::AtomicBinOp::fadd;
+            break;
+          case RMWOp::MAX:
+            rmwKind = LLVM::AtomicBinOp::max;
+            break;
+          case RMWOp::UMAX:
+            rmwKind = LLVM::AtomicBinOp::umax;
+            break;
+          case RMWOp::MIN:
+            rmwKind = LLVM::AtomicBinOp::min;
+            break;
+          case RMWOp::UMIN:
+            rmwKind = LLVM::AtomicBinOp::umin;
+            break;
+          case RMWOp::XCHG:
+            rmwKind = LLVM::AtomicBinOp::xchg;
+            break;
+          }
+
+          rmwVal = b.bitcast(rmwVal, valueElemTy);
+          auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
+              loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
+          ret = atomRMW.getResult();
+        }
       }
 
-      Value ret = endBlock->getArgument(0);
+      ret = endBlock ? endBlock->getArgument(0) : ret;
+      assert(ret);
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
 
