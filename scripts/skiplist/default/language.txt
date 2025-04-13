@@ -1,2 +1,5 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3556
 test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-256-256]
+
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/3914
+test/unit/language/test_core.py::test_bin_op[1-int16-bfloat16--]
