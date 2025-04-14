@@ -448,7 +448,7 @@ class _attention(torch.autograd.Function):
                 N_CTX=q.shape[2],  #
                 BLOCK_DMODEL=Lk,  #
                 STAGE=stage,  #
-                split_barriers_scope='Subgroup' if causal else 'Workgroup',  #
+                split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
             )
         else:
             _attn_fwd[grid](
