@@ -7,6 +7,7 @@ import sysconfig
 import tempfile
 from pathlib import Path
 from functools import cached_property
+import subprocess
 
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
@@ -205,7 +206,21 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
-        return self.shared_library.load_binary(args)
+        try:
+            result = self.shared_library.load_binary(args)
+        except RuntimeError:
+            print(f"self.shared_library.load_binary failed for the following {args=}")
+            folder = os.environ["IGC_DumpToCustomDir"]
+            print(f"{os.environ.get('IGC_ShaderDumpEnable')=}")
+            with open(f"{folder}{os.sep}test_bmg.spv", mode="wb") as _file:
+                _file.write(args[1])
+            ocloc_cmd = ['ocloc', 'compile', '-spirv_input', '-file', 'test_bmg.spv', '-device', 'bmg']
+            env = os.environ.copy()
+            env["IGC_ShaderDumpEnable"] = "1"
+            output = subprocess.check_output(ocloc_cmd, text=True, cwd=folder, env=env)
+            print(f"ocloc {output=}")
+            raise
+        return result
 
     if os.name != 'nt':
 
