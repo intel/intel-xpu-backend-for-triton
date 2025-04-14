@@ -319,19 +319,28 @@ private:
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
-    Value baseWidth = shape[strideOneDimVal];
+    Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
     unsigned divisor = std::ceil(32 / elementWidth);
     if (!ttgi::isDivisible(baseWidth, divisor)) {
-      LDBG("baseWidth does not satisfies HW constraint: " << baseWidth);
+      LLVM_DEBUG({
+        llvm::dbgs() << "baseWidth does not satisfies HW constraint: ";
+        baseWidth.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\ndivisor: " << divisor << "\n";
+      });
       return false;
     }
     LDBG("baseWidth: " << baseWidth);
 
     // Analyze the initial offset corresponding to the stride one dimension to
     // ensure it satisfies HW constraints.
-    Value offset = makeTensorPtrOp.getOffsets()[strideOneDimVal];
+    Value offset =
+        tt::intel::getFinalValue(makeTensorPtrOp.getOffsets()[strideOneDimVal]);
     if (!ttgi::isDivisible(offset, divisor)) {
-      LDBG("offset does not satisfies HW constraints: " << offset);
+      LLVM_DEBUG({
+        llvm::dbgs() << "offset does not satisfies HW constraints: ";
+        offset.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\ndivisor: " << divisor << "\n";
+      });
       return false;
     }
     LDBG("offset: " << offset);
@@ -349,13 +358,6 @@ private:
 
   bool satisfies2DBlockReadAlignment(Value offset, unsigned divisor) const {
     assert(divisor != 0 && "Expected divisor to be non-zero");
-
-    // Ensure the initial offset is divisible by the divisor.
-    Value initialOffset = tt::intel::getFinalValue(offset);
-    if (!ttgi::isDivisible(initialOffset, divisor)) {
-      LDBG("initialOffset does not satisfies HW constraint: " << initialOffset);
-      return false;
-    }
 
     auto checkUsers = [&](Value::user_range users) {
       return llvm::all_of(users, [&](Operation *user) {
