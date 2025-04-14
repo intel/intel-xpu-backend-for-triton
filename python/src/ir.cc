@@ -8,8 +8,6 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -326,8 +324,8 @@ void init_triton_ir(py::module &&m) {
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    spirv::SPIRVDialect, ::mlir::triton::proton::ProtonDialect,
-                    LLVM::LLVMDialect, mlir::ub::UBDialect>();
+                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
+                    mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -1737,18 +1735,6 @@ void init_triton_ir(py::module &&m) {
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
-      .def("create_barrier_arrive",
-           [](TritonOpBuilder &self, int scope) {
-             self.create<spirv::INTELControlBarrierArriveOp>(
-                 spirv::Scope::Subgroup, spirv::Scope::Subgroup,
-                 spirv::MemorySemantics::None);
-           })
-      .def("create_barrier_wait",
-           [](TritonOpBuilder &self, int scope) {
-             self.create<spirv::INTELControlBarrierWaitOp>(
-                 spirv::Scope::Subgroup, spirv::Scope::Subgroup,
-                 spirv::MemorySemantics::None);
-           })
       // Make a block pointer (tensor pointer in Triton IR)
       .def("create_make_block_ptr",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,

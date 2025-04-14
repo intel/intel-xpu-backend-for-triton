@@ -31,8 +31,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
-        if STAGE == 1:
-            tl.barrier_arrive(0)
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         k = tl.load(K_block_ptr)
@@ -60,8 +58,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         m_i = m_ij
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
-        if STAGE == 1:
-            tl.barrier_wait(0)
     return acc, l_i, m_i
 
 
@@ -142,7 +138,6 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX  #
                                         )
-
     # stage 2: on-band
     if STAGE & 2:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
@@ -452,7 +447,7 @@ class _attention(torch.autograd.Function):
                 N_CTX=q.shape[2],  #
                 BLOCK_DMODEL=Lk,  #
                 STAGE=stage,  #
-                #split_barriers_scope='Subgroup' if causal else 'Workgroup',  #
+                split_barriers_scope='Subgroup' if causal else 'Workgroup',  #
             )
         else:
             _attn_fwd[grid](

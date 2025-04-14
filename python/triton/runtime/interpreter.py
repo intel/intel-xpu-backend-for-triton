@@ -697,14 +697,6 @@ class InterpreterBuilder:
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
 
-    def create_barrier_arrive(self, scope):
-        # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
-        pass
-
-    def create_barrier_wait(self, scope):
-        # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
-        pass
-
     def create_make_block_ptr(self, base, shape, strides, offsets, block_shape, order):
         # Create new offsets to avoid modifying the original
         new_offsets = [offset.clone() for offset in offsets]
