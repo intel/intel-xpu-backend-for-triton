@@ -14,6 +14,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import cutlass_kernel
 
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
@@ -277,9 +278,11 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn'] + (['xetla'] if use_xetla else []),
+        # line_vals=['triton', 'onednn', 'cutlass'] + (['xetla'] if use_xetla else []),
+        line_vals=['cutlass'] + (['xetla'] if use_xetla else []),
         # label name for the lines
-        line_names=['Triton', 'OneDNN'] + (['XeTLA'] if use_xetla else []),
+        line_names=['CUTLASS'] + (['XeTLA'] if use_xetla else []),
+        # line_names=['Triton', 'OneDNN', 'CUTLASS'] + (['XeTLA'] if use_xetla else []),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -288,6 +291,20 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, provider):
+    print("[+] gemm_benchmark.py::benchmark() -", provider)
+    print()
+
+    print("M = ", M)
+    print("N = ", N)
+    print("K = ", K)
+    print("B = ", B)
+    print()
+
+    print("Device name = ", torch.xpu.get_device_name())
+    print("Device available = ", torch.xpu.is_available())
+    print("Device initialized = ", torch.xpu.is_initialized())
+    print()
+
     a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
 
     torch.manual_seed(0)
@@ -304,9 +321,15 @@ def benchmark(B, M, N, K, provider):
     if TRANSPOSE_B:
         torch_b = torch.transpose(torch_b, -2, -1)
 
+    min_ms = 1
+    max_ms = 1
+    mean_ms = 1
+    cv = 1
+
     if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10,
-                                                                 n_repeat=10, quantiles=quantiles)
+        # Launch benchmark
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10, n_repeat=10, quantiles=quantiles)
+
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
@@ -318,8 +341,10 @@ def benchmark(B, M, N, K, provider):
         torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+
+        # Launch benchmark
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+
     elif provider == 'xetla':
         if B == 1:
             c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -327,12 +352,17 @@ def benchmark(B, M, N, K, provider):
         else:
             c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
             cnt = torch.zeros((B, M, N), device='xpu', dtype=torch.int32)
+
         name = f'gemm_shape_{B}_{M}_{K}_{N}'
         # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
         # better performance.
         if (B, M, N, K) == (1, 3072, 3072, 4096):
             name = 'gemm_streamk_shape_3072_4096_3072'
+
+        print("Name = {}", name)
         func = getattr(xetla_kernel, name)
+        print(func)
+        print()
 
         def xetla_func_with_acc_allocation():
             # allocating `acc` matrix on every function call, to be as similar as
@@ -346,9 +376,50 @@ def benchmark(B, M, N, K, provider):
         xetla_fn = xetla_func_with_acc_allocation
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
+        xetla_fn()
+        print(c)
+        print()
+
         # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+        # Launch benchmark
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+
+    elif provider == 'cutlass':
+        if B == 1:
+            c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+        else:
+            c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+
+        name = 'gemm'
+        print("Name = ", name)
+        func = getattr(cutlass_kernel, name)
+        print(func)
+        print()
+
+        def cutlass_invoker():
+            func(a, b, c, M, N, K, B)
+            # func(a, b, c, M, N, K, B, K, N, 0, N)
+            return c
+
+        cutlass_fn = cutlass_invoker
+        torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+
+        cutlass_c = cutlass_fn()
+        print(cutlass_c)
+        print()
+
+        torch_c = torch_fn()
+        print(torch_c)
+        print()
+
+        # rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+        # benchmark_suit.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(cutlass_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+
+        # user_input = input("Press 'q' to quit")
+        # if user_input.lower() == 'q':
+        #     assert()
+
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
