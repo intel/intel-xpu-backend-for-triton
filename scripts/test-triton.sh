@@ -203,8 +203,8 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  pytest --verbose test_reproducer.py --device xpu -s
-  pytest --verbose "language/test_core.py::test_tensor_atomic_rmw[shape58-1-1-int64-True]" --device xpu -s
+  pytest -vvv test_reproducer.py --device xpu -s
+  pytest -vvv "language/test_core.py::test_tensor_atomic_rmw[shape58-1-1-int64-True]" --device xpu -s
 
 }
 
