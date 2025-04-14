@@ -1,17 +1,11 @@
 """
 Block FP8 Gemm benchmark
 ============================
-
 This benchmark is come from SGLang kernels.
 https://github.com/sgl-project/sglang/blob/07f944631e747d7489fde1f11de93e503afa90ba/python/sglang/srt/layers/quantization/fp8_kernel.py#L375
-
 """
 
-import functools
-import json
-import logging
-import os
-from typing import Any, Dict, List, Optional
+from typing import List
 
 import torch
 import triton
@@ -19,7 +13,8 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 
-logger = logging.getLogger(__name__)
+DEVICE_NAME = torch.xpu.get_device_name()
+DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
 
 
 @triton.jit
@@ -107,42 +102,6 @@ def _w8a8_block_fp8_matmul(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-@functools.lru_cache
-def get_w8a8_block_fp8_configs(N: int, K: int, block_n: int, block_k: int) -> Optional[Dict[int, Any]]:
-    """
-    Return optimized configurations for the w8a8 block fp8 kernel.
-
-    The return value will be a dictionary that maps an irregular grid of
-    batch sizes to configurations of the w8a8 block fp8 kernel. To evaluate the
-    kernel on a given batch size bs, the closest batch size in the grid should
-    be picked and the associated configuration chosen to invoke the kernel.
-    """
-
-    # First look up if an optimized configuration is available in the configs
-    # directory
-    device_name = torch.xpu.get_device_name(0).replace(" ", "_")
-    json_file_name = f"N={N},K={K},device_name={device_name},dtype=fp8_w8a8,block_shape=[{block_n}, {block_k}].json"
-
-    config_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "configs", json_file_name)
-    if os.path.exists(config_file_path):
-        with open(config_file_path, "r", encoding="utf-8") as f:
-            logger.info(
-                "Using configuration from %s for W8A8 Block FP8 kernel.",
-                config_file_path,
-            )
-            # If a configuration has been found, return it
-            return {int(key): val for key, val in json.load(f).items()}
-
-    # If no optimized configuration is available, we will use the default
-    # configuration
-    logger.warning(
-        ("Using default W8A8 Block FP8 kernel config. Performance might be sub-optimal! "
-         "Config file not found at %s"),
-        config_file_path,
-    )
-    return None
-
-
 def w8a8_block_fp8_matmul(
     A: torch.Tensor,
     B: torch.Tensor,
@@ -152,10 +111,8 @@ def w8a8_block_fp8_matmul(
     output_dtype: torch.dtype = torch.float16,
 ) -> torch.Tensor:
     """This function performs matrix multiplication with block-wise quantization.
-
     It takes two input tensors `A` and `B` with scales `As` and `Bs`.
     The output is returned in the specified `output_dtype`.
-
     Args:
         A: The input tensor, e.g., activation.
         B: The input tensor, e.g., weight.
@@ -163,7 +120,6 @@ def w8a8_block_fp8_matmul(
         Bs: The per-block quantization scale for `B`.
         block_size: The block size for per-block quantization. It should be 2-dim, e.g., [128, 128].
         output_dytpe: The dtype of the returned tensor.
-
     Returns:
         torch.Tensor: The result of matmul.
     """
@@ -183,22 +139,16 @@ def w8a8_block_fp8_matmul(
     C_shape = A.shape[:-1] + (N, )
     C = A.new_empty(C_shape, dtype=output_dtype)
 
-    configs = get_w8a8_block_fp8_configs(N, K, block_size[0], block_size[1])
-    if configs:
-        # If an optimal configuration map has been found, look up the
-        # optimal config
-        config = configs[min(configs.keys(), key=lambda x: abs(x - M))]
-    else:
-        # Default config
-        # Block-wise quant: BLOCK_SIZE_K must be divisable by block_size[1]
-        config = {
-            "BLOCK_SIZE_M": 64,
-            "BLOCK_SIZE_N": block_size[0],
-            "BLOCK_SIZE_K": block_size[1],
-            "GROUP_SIZE_M": 32,
-            "num_warps": 4,
-            "num_stages": 3,
-        }
+    # Default config
+    # Block-wise quant: BLOCK_SIZE_K must be divisable by block_size[1]
+    config = {
+        "BLOCK_SIZE_M": 64,
+        "BLOCK_SIZE_N": block_size[0],
+        "BLOCK_SIZE_K": block_size[1],
+        "GROUP_SIZE_M": 32,
+        "num_warps": 4,
+        "num_stages": 3,
+    }
 
     def grid(META):
         return (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
@@ -232,7 +182,7 @@ def w8a8_block_fp8_matmul(
     return C
 
 
-# Reference path
+# For test
 def native_w8a8_block_fp8_matmul(A, B, As, Bs, block_size, output_dtype=torch.float16):
     """This function performs matrix multiplication with block-wise quantization using native torch.
 
@@ -284,55 +234,51 @@ def native_w8a8_block_fp8_matmul(A, B, As, Bs, block_size, output_dtype=torch.fl
     return C
 
 
-X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
-    [1, 1, 13824, 5120],
-    [1, 4, 12288, 4096],
-    [1, 512, 8192, 8192],
-    [1, 512, 8192, 32768],
-    [1, 512, 32768, 8192],
-    [1, 1024, 8192, 16384],
-    [1, 1024, 8192, 28672],
-    [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
-    [1, 4096, 8192, 16384],
-    [1, 8192, 1024, 16384],
-    [1, 8192, 4096, 16384],
-    [1, 16384, 1024, 8192],
-    [1, 16384, 4096, 8192],
-    [1, 16384, 8192, 1024],
-    [1, 16384, 8192, 4096],
-    [4, 32768, 128, 4096],
-    [4, 32768, 4096, 128],
-    [32, 4096, 128, 4096],
-    [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
-]
-
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
-
-
-def is_enough_memory(x_val):
-    # x_val: (B, M, N, K)
-    B, M, N, K = x_val
-    # a: (B, M, K) float8_e4m3
-    # b: (B, N, K) float8_e4m3
-    # c: (B, M, N) bfloat16
-    # pytorch reference: (B, M, N) float32
-    required_memory = B * M * K * 1 + B * N * K * 1 + B * M * N * 2 * 2
+def has_enough_memory(x_val):
+    # x_val: (M, N, K)
+    M, N, K = x_val
+    # a: (M, K) float8_e4m3
+    # b: (N, K) float8_e4m3
+    # c: (M, N) bfloat16
+    # pytorch reference: (M, N) float32
+    required_memory = M * K * 1 + N * K * 1 + M * N * 2 * 2
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
     return enough_memory
 
 
-X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
+X_VALS = [[1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
+    [1, 13824, 5120],
+    [4, 12288, 4096],
+    [512, 8192, 8192],
+    [512, 8192, 32768],
+    [512, 32768, 8192],
+    [1024, 8192, 16384],
+    [1024, 8192, 28672],
+    [3072, 3072, 4096],
+    [4096, 8192, 16384],
+    [8192, 1024, 16384],
+    [8192, 4096, 16384],
+    [16384, 1024, 8192],
+    [16384, 4096, 8192],
+    [16384, 8192, 1024],
+    [16384, 8192, 4096],
+    [32768, 128, 4096],
+    [32768, 4096, 128],
+    [4096, 128, 4096],
+    [8, 128, 16384],
+    [8, 16384, 128],
+]
+
+X_VALS = [x_val for x_val in X_VALS if has_enough_memory(x_val)]
 
 
 # Benchmark Performance
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=["B", "M", "N", "K"],
+        x_names=["M", "N", "K"],
         # different possible values for `x_name`
         x_vals=X_VALS,
         line_arg="provider",
@@ -342,16 +288,14 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_names=["Triton"],
         # line styles
         ylabel=["GB/s", "TFlops"],  # label name for the y-axis
-        plot_name="matmul-performance",
+        plot_name="sglang-fp8-gemm-performance",
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, M, N, K, provider):
-    assert provider == "triton"
+def benchmark(M, N, K, provider):
+    torch.manual_seed(0)
 
     block_size = [128, 128]
-
-    torch.manual_seed(0)
     factor_for_scale = 1e-2
     fp8_info = torch.finfo(torch.float8_e4m3fn)
     fp8_max, fp8_min = fp8_info.max, fp8_info.min
@@ -371,15 +315,18 @@ def benchmark(B, M, N, K, provider):
 
     quantiles = [0.5, 0.0, 1.0]
 
-    triton_fn = lambda: w8a8_block_fp8_matmul(A_fp8, B_fp8, As, Bs, block_size)
-    torch_fn = lambda: native_w8a8_block_fp8_matmul(A_fp8, B_fp8, As, Bs, block_size)
-    rtol = 1e-2
-    atol = 3e-4
-    benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg="triton to torch")
-    _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+    if provider == "triton":
+        triton_fn = lambda: w8a8_block_fp8_matmul(A_fp8, B_fp8, As, Bs, block_size)
+        torch_fn = lambda: native_w8a8_block_fp8_matmul(A_fp8, B_fp8, As, Bs, block_size)
+        benchmark_suit.assert_close(triton_fn, torch_fn, atol=3e-4, rtol=1e-2, err_msg="triton to torch")
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles)
 
-    tflops = lambda ms: 2 * B * M * N * K * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: B * ((M * K + K * N) + 2.0 * (M * N)) * (1e-9) / (ms * 1e-3)
+    else:
+        raise NotImplementedError(f"Unsupported provider {provider}")
+
+    tflops = lambda ms: 2 * M * N * K * (1e-12) / (ms * 1e-3)
+    gbps = lambda ms: (M * K + K * N) + 2.0 * (M * N) * (1e-9) / (ms * 1e-3)
 
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 

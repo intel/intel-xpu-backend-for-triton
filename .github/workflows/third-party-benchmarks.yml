@@ -111,7 +111,7 @@ jobs:
       - name: Install SGLANG
         run: |
           git clone https://github.com/sgl-project/sglang.git
-          pip install sglang/python[srt_xpu]
+          pip install sglang/python[dev_xpu]
 
       - name: Run SGLANG attention prefill stage benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
@@ -139,6 +139,15 @@ jobs:
 
           source ../../../scripts/capture-hw-details.sh
           python ../../triton_kernels_benchmark/build_report.py $REPORTS/extended-attn-performance.csv $REPORTS/attn-append-triton-report.csv --benchmark sglang-extended-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+
+      - name: Run SGLANG Block FP8 GEMM benchmark
+        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'block_fp8_gemm_benchmark.py') }}
+        run: |
+          cd benchmarks/third_party/sglang
+          python block_fp8_gemm_benchmark.py --reports $REPORTS
+
+          source ../../../scripts/capture-hw-details.sh
+          python ../../../scripts/build_report.py $REPORTS/sglang-fp8-gemm-performance.csv $REPORTS/sglang-fp8-gemm-triton-report.csv --benchmark sglang-block-fp8-gemm --compiler triton --param_cols "M,N,K" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
