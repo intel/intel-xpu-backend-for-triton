@@ -1,30 +1,6 @@
 # content of conftest.py
 import os
 import pytest
-import setproctitle
-
-def pytest_runtest_protocol(item, nextitem):
-    """
-    Hook to set the process title to the name of the currently running test.
-    """
-    # Set the process title to the current test name
-    test_name = item.nodeid
-    setproctitle.setproctitle(f"pytest: {test_name}")
-
-    # Run the test
-    outcome = yield
-
-    # Reset the process title after the test is done
-    setproctitle.setproctitle("pytest: idle")
-
-    return outcome
-
-@pytest.hookimpl(tryfirst=True)
-def pytest_xdist_setupnodes(config, specs):
-    """
-    Hook to ensure workers are properly configured.
-    """
-    setproctitle.setproctitle("pytest: worker setup")
 
 def pytest_configure(config):
     if os.getenv('TEST_UNSKIP') == 'true':

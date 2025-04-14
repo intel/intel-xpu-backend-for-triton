@@ -124,7 +124,7 @@ jobs:
 
       - name: Install pass_rate dependencies
         run: |
-          pip install defusedxml
+          pip install defusedxml setproctitle==1.3.5
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
