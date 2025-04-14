@@ -19,6 +19,13 @@ def pytest_runtest_protocol(item, nextitem):
 
     return outcome
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_xdist_setupnodes(config, specs):
+    """
+    Hook to ensure workers are properly configured.
+    """
+    setproctitle.setproctitle("pytest: worker setup")
+
 def pytest_configure(config):
     if os.getenv('TEST_UNSKIP') == 'true':
         # define a function that do nothing
