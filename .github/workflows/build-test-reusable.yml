@@ -173,7 +173,7 @@ jobs:
           } | tee -a $GITHUB_ENV
 
       - name: Run Proton tests
-        if: ${{ inputs.driver_version == 'rolling' }}
+        if: ${{ inputs.driver_version == 'rolling' && inputs.device == 'max1100' }}
         run: |
           cd third_party/proton/test
           pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
@@ -227,9 +227,9 @@ jobs:
       - name: Pass rate
         run: |
           source ./scripts/capture-hw-details.sh
-          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
-          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
+          python scripts/pass_rate.py --reports reports
+          python scripts/pass_rate.py --reports reports --json > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
         # upload reports only for the default branch

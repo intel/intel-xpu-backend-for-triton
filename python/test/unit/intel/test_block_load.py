@@ -6,7 +6,7 @@ import triton
 from triton._internal_testing import is_xpu
 
 
-@pytest.mark.parametrize("M, N", [[256, 64], [256, 32], [128, 32], [64, 64], [64, 32], [32, 32]])
+@pytest.mark.parametrize("M, N", [[256, 64], [256, 32], [128, 32], [128, 16], [128, 8], [64, 64], [64, 32], [32, 32]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
 @pytest.mark.parametrize("transpose", [True, False])
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
@@ -73,5 +73,5 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
     kernel = triton.compile(str(temp_file))
 
     kernel[(1, 1, 1)](a, x, b, y)
-
+    #import pdb; pdb.set_trace()
     assert torch.equal(a, x) and torch.equal(b.T if transpose else b, y)

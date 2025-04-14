@@ -14,5 +14,5 @@ tabulate
 pytest-xdist
 pytest-forked
 pytest-rerunfailures
-pytest-select
+pytest-skip
 pytest-timeout
