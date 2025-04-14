@@ -95,6 +95,9 @@ def get_min_time_flops(df, device_info):
                         max_flops = ((num_sms / 114 * clock_rate / (1755 * 1e3) * 1513) * 1e12) / (width / 8)
                     elif arch == "100":
                         max_flops = (num_sms * 16384 * (clock_rate / 1e3) * 1e6) / (width / 8)
+                elif device_type == "XPU":
+                    # FIXME
+                    raise NotImplementedError
                 elif device_type == "HIP":
                     if arch == "gfx90a":
                         max_flops = 383e12 / (width / 8)
@@ -313,7 +316,7 @@ Derived metrics can be created when source metrics are available.
 - flop[<8/16/32/64>]/s, gflop[<8/16/32/64>]/s, tflop[<8/16/32/64>]/s: flops / time
 - byte/s, gbyte/s, tbyte/s: bytes / time
 - util: max(sum(flops<width>) / peak_flops<width>_time, sum(bytes) / peak_bandwidth_time)
-- <metric>/%%: frame(metric) / sum(metric). Only availble for inclusive metrics (e.g. time)
+- <metric>/%%: frame(metric) / sum(metric). Only available for inclusive metrics (e.g. time)
 """,
     )
     argparser.add_argument(

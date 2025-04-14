@@ -25,7 +25,6 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
-    ModuleAllocation allocation(mod);
     LLVM::LLVMPointerType ptrTy =
         ptr_ty(ctx, mlir::triton::TritonGEN::TritonGENMemorySpace::kWorkgroup);
 
@@ -33,6 +32,7 @@ public:
     if (!globalSmem) {
       return;
     }
+    CallGraph<Allocation> allocation(mod);
     bool usePoison =
         (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0);
 

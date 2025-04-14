@@ -8,6 +8,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
+import numpy as np
 
 
 # pylint: disable=unused-argument
@@ -527,6 +528,19 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
+def check_close(f_val, f_ref, atol, rtol):
+    x = f_val()
+    y = f_ref()
+    x = x.cpu().detach().numpy()
+    y = y.cpu().detach().numpy()
+    close = np.isclose(x, y, atol=atol, rtol=rtol)
+    num_close = np.count_nonzero(close)
+    num_not_close = close.size - num_close
+    num_perc = num_not_close / close.size * 100
+    if num_not_close != 0:
+        print(f'Warning: {num_not_close}, out of {close.size} elements do not match ({num_perc:.2f}%) in XeTLA impl')
+
+
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
@@ -562,6 +576,7 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
     if MODE == 'bwd':
         sm_scale = 1.3
     quantiles = [0.5, 0.0, 1.0]
+    atol = 1e-1 if N_CTX == 16384 else 1e-2
     # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
     torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
     ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
@@ -579,7 +594,6 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             triton_do = torch.randn_like(triton_o)
             triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
         if MODE == 'fwd':
-            atol = 1e-1 if N_CTX == 16384 else 1e-2
             benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
         else:
             benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=1e-2, rtol=0, err_msg='triton to torch')
@@ -598,7 +612,21 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             size_ml = Z * H * N_CTX
             m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
             l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-            xetla_fn = lambda: func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
+
+            def xetla_fwd_fn():
+                func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
+                return out
+
+            xetla_fn = xetla_fwd_fn
+
+            def check_xetla_fwd_result():
+                if os.getenv('XETLA_ASSERT_RESULT', '0') == '1':
+                    benchmark_suit.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
+                elif os.getenv('XETLA_WARN_MISMATCH', '1') == '1':
+                    check_close(xetla_fn, torch_fn, atol, 1e-3)
+
+            check_xetla_fwd_result()
+
         if MODE == 'bwd':
             module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
             func = getattr(xetla_kernel, module_name)
@@ -620,9 +648,14 @@ def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
             bias_strideF = -1
             attn_mask_padding = 0
 
-            xetla_fn = lambda: func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha,
-                                    dropout_prob, grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX,
-                                    N_CTX, bias_strideB, bias_strideN, bias_strideF, attn_mask_padding)
+            def xetla_bwd_fn():
+                func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha, dropout_prob,
+                     grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX, N_CTX, bias_strideB,
+                     bias_strideN, bias_strideF, attn_mask_padding)
+                return out
+
+            xetla_fn = xetla_bwd_fn
+
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:

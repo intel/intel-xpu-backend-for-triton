@@ -116,6 +116,7 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
+      SPIRV::ExtensionID::SPV_INTEL_tensor_float32_rounding,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
       SPIRV::ExtensionID::SPV_INTEL_vector_compute,
       SPIRV::ExtensionID::SPV_INTEL_split_barrier,

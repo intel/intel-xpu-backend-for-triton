@@ -39,7 +39,7 @@ Install Microsoft Visual Studio 2022 and make sure the following [components](ht
 
 ### Intel® Deep Learning Essentials
 
-Install the latest [Intel® Deep Learning Essentials](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
+Install [Intel® Deep Learning Essentials 2025.0.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
 By default, it is installed to `C:\Program Files (x86)\Intel\oneAPI`.
 
 ### Level Zero SDK
@@ -157,14 +157,14 @@ python -c 'import torch;print(torch.__version__)'
 Install build dependencies:
 
 ```
-pip install -U wheel pybind11 cython cmake 'setuptools>=65.6.1'
+pip install -U wheel pybind11 cython cmake
 ```
 
 Build and install Triton:
 
 ```
 cd python
-pip install -v --no-build-isolation '.[build,tests,tutorials]'
+pip install -v '.[build,tests,tutorials]'
 cd ..
 ```
 

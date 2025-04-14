@@ -62,12 +62,13 @@ public:
 
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       return TypeSwitch<Operation *, WalkResult>(op)
-          .Case<tt::DescriptorLoadOp>([&](auto loadOp) {
-            if (failed(rewriteDescriptorLoadOp(loadOp)))
-              loadOp->emitRemark("TritonRaiseToBlockPointer: Failed to rewrite "
-                                 "with tt.LoadOp");
-            return WalkResult::advance();
-          })
+          .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp>(
+              [&](auto loadOrStoreOp) {
+                if (failed(rewriteDescriptorLoadOrStoreOp(loadOrStoreOp)))
+                  loadOrStoreOp->emitRemark(
+                      "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
+                return WalkResult::advance();
+              })
           .Default([&](auto) { return WalkResult::advance(); });
     });
 
@@ -152,14 +153,18 @@ private:
                                      builder.getDenseI32ArrayAttr({1, 0}));
   }
 
-  LogicalResult rewriteDescriptorLoadOp(tt::DescriptorLoadOp descLoadOp) {
-    assert(descLoadOp && "Expecting a valid operation");
-    LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << descLoadOp << "\n");
+  template <typename OpTy,
+            std::enable_if_t<llvm::is_one_of<OpTy, tt::DescriptorLoadOp,
+                                             tt::DescriptorStoreOp>::value,
+                             bool> = true>
+  LogicalResult rewriteDescriptorLoadOrStoreOp(OpTy op) {
+    assert(op && "Expecting a valid operation");
+    LLVM_DEBUG(llvm::dbgs() << "Rewriting: " << op << "\n");
 
-    OpBuilder builder(descLoadOp);
-    Location loc = descLoadOp.getLoc();
-    RankedTensorType resType = descLoadOp.getResult().getType();
-    TypedValue<tt::TensorDescType> tDesc = descLoadOp.getDesc();
+    OpBuilder builder(op);
+    Location loc = op.getLoc();
+    TypedValue<tt::TensorDescType> tDesc = op.getDesc();
+    tt::TensorDescType tDescType = tDesc.getType();
     tt::MakeTensorDescOp makeTensorDescOp = getMakeTensorDescOp(tDesc);
 
     if (!makeTensorDescOp) {
@@ -176,7 +181,7 @@ private:
     SmallVector<int32_t> sizes;
     for (const auto [shape, stride, offset, size] :
          llvm::zip(makeTensorDescOp.getShape(), makeTensorDescOp.getStrides(),
-                   descLoadOp.getIndices(), resType.getShape())) {
+                   op.getIndices(), tDescType.getBlockType().getShape())) {
       shapes.push_back(findOrCreateCast(
           loc, shape, builder.getIntegerType(shapeAndStridesBitwidth),
           builder));
@@ -191,18 +196,27 @@ private:
     Value makeTensorPtrOp =
         findOrCreateMakeTensorPtr(loc, makeTensorDescOp.getBase(), shapes,
                                   strides, offsets, sizes, builder);
-    auto loadOp = builder.createOrFold<tt::LoadOp>(
-        loc, makeTensorPtrOp, descLoadOp.getCache(), descLoadOp.getEvict(),
-        /*volatile*/ false);
 
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << makeTensorPtrOp << "\n";
-      llvm::dbgs().indent(2) << loadOp << "\n";
     });
 
-    descLoadOp.replaceAllUsesWith(loadOp);
-    cleanUp.insert(descLoadOp);
+    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
+    if constexpr (isLoad) {
+      auto loadOp = builder.createOrFold<tt::LoadOp>(
+          loc, makeTensorPtrOp, op.getCache(), op.getEvict(),
+          /*volatile*/ false);
+      LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
+      op.replaceAllUsesWith(loadOp);
+    } else {
+      [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
+          loc, makeTensorPtrOp, op.getSrc(), tt::CacheModifier::NONE,
+          tt::EvictionPolicy::NORMAL);
+      LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
+    }
+
+    cleanUp.insert(op);
     cleanUp.insert(makeTensorDescOp);
 
     return success();

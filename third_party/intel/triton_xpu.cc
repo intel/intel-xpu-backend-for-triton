@@ -2,6 +2,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -80,9 +81,9 @@ void init_triton_intel_passes_ttir(py::module &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_2("add_to_llvmir",
+  ADD_PASS_WRAPPER_OPT_3("add_to_llvmir",
                          gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
-                         bool);
+                         bool, bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
@@ -260,16 +261,21 @@ void init_triton_intel(py::module &&m) {
     return py::int_(ret);
   });
 
-  // May do this after llvm ir according to user fmath flag.
-  m.def("set_fast_math", [](mlir::ModuleOp mod) {
-    using namespace mlir;
-    MLIRContext *ctx = mod.getContext();
-    mod.walk([&](Operation *op) {
-      if (auto fmIf = dyn_cast<arith::ArithFastMathInterface>(op))
-        op->setAttr(
-            fmIf.getFastMathAttrName(),
-            arith::FastMathFlagsAttr::get(ctx, arith::FastMathFlags::fast));
-    });
+  // FIXME: This is for internal experimentation. In the end we will need a
+  // producer flag (e.g. PyTorch flag) to allow the Triton compiler to use the
+  // fast math semantics on all arithmetic operations.
+  // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
+  m.def("set_fast_math", [](llvm::Module *mod) {
+    using namespace llvm;
+    for (Function &func : *mod) {
+      for (Instruction &inst : instructions(func)) {
+        if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
+          FastMathFlags FMF;
+          FMF.setFast(true);
+          inst.setFastMathFlags(FMF);
+        }
+      }
+    }
   });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {

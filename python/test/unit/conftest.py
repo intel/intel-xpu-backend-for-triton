@@ -7,10 +7,6 @@ import tempfile
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
-    worker_id = os.getenv("PYTEST_XDIST_WORKER")
-    # On Windows, use a dedicated Triton cache per pytest worker to avoid PermissionError.
-    if os.name == "nt" and worker_id:
-        os.environ["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="triton-")
     if os.name == "nt":
         config.addinivalue_line("markers", "forked: subprocess analogue of pytest.mark.forked on Windows")
 
