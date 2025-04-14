@@ -203,8 +203,9 @@ run_core_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
-  pytest -vvv test_reproducer.py --device xpu -s
-  pytest -vvv "language/test_core.py::test_tensor_atomic_rmw[shape58-1-1-int64-True]" --device xpu -s
+  mkdir $IGC_DumpToCustomDir
+  IGC_ShaderDumpEnable=1 pytest -vvv test_reproducer.py --device xpu -s
+  IGC_ShaderDumpEnable=1 pytest -vvv "language/test_core.py::test_tensor_atomic_rmw[shape58-1-1-int64-True]" --device xpu -s
 
 }
 
