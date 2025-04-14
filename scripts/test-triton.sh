@@ -204,8 +204,7 @@ run_core_tests() {
   ensure_spirv_dis
 
   mkdir $IGC_DumpToCustomDir
-  IGC_ShaderDumpEnable=1 pytest -vvv test_reproducer.py --device xpu -s
-  IGC_ShaderDumpEnable=1 pytest -vvv "language/test_core.py::test_tensor_atomic_rmw[shape58-1-1-int64-True]" --device xpu -s
+  DISABLE_LLVM_OPT=1 IGC_ShaderDumpEnable=1 pytest -vvv "language/test_core.py::test_tensor_atomic_rmw[shape58-1-1-int64-True]" --device xpu -s
 
 }
 
