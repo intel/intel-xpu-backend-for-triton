@@ -412,10 +412,10 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
     (128, 128, 16, 1),
-    (256, 64, 32, 1),
-    (64, 512, 32, 1),
-    (128, 128, 16, 1),
-    (64, 128, 32, 1),
+    (256, 64, 32, 2),
+    (64, 512, 32, 4),
+    (128, 128, 16, 4),
+    (64, 128, 32, 4),
     (32, 32, 32, 1),
     (256, 128, 32, 1),
 ])
