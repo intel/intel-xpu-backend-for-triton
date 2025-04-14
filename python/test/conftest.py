@@ -2,6 +2,7 @@
 import os
 import pytest
 
+
 def pytest_configure(config):
     if os.getenv('TEST_UNSKIP') == 'true':
         # define a function that do nothing
