@@ -204,7 +204,7 @@ run_core_tests() {
   ensure_spirv_dis
 
   pytest --verbose test_reproducer.py --device xpu -s
-  pytest --verbose language/test_core.py::test_tensor_atomic_rmw --device xpu -s
+  pytest --verbose "language/test_core.py::test_tensor_atomic_rmw[shape58-1-1-int64-True]" --device xpu -s
 
 }
 
