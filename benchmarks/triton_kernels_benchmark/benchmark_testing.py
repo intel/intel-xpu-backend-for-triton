@@ -198,7 +198,6 @@ def perf_report(benchmarks):
 class MarkArgs:
     reports: str = ""
     n_runs: int = 1
-    parser: argparse.ArgumentParser = argparse.ArgumentParser()
 
     @classmethod
     def _parse_common_args(cls) -> tuple[argparse.Namespace, list[str]]:
