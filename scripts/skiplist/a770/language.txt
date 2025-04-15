@@ -340,6 +340,10 @@ test/unit/language/test_matmul.py::test_simple_matmul[True-8-1-64-512-32-2-float
 test/unit/language/test_matmul.py::test_simple_matmul[True-8-1-64-512-32-2-float32-tensorfloat32]
 test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-256-128-32-4-float32-float32]
 test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-256-128-32-4-float16-float16]
+test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-512-64-32-2-float32-float16]
+test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-256-128-32-4-float32-float16]
+test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-512-64-32-2-float32-float8e5]
+test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-256-128-32-4-float32-float8e5]
 test/unit/language/test_matmul.py::test_simple_matmul[False-4-1-256-128-32-4-float32-tensorfloat32]
 test/unit/language/test_matmul.py::test_simple_matmul[4-1-32-32-32-4-float16-float16]
 test/unit/language/test_matmul.py::test_simple_matmul[8-1-512-64-32-2-float16-float16]
@@ -454,6 +458,7 @@ test/unit/language/test_matmul.py::test_blocked_scale_mxfp[True-4-256-128-128-63
 test/unit/language/test_matmul.py::test_blocked_scale_mxfp[True-4-256-128-128-998-111-512]
 test/unit/language/test_matmul.py::test_lhs_in_tmem_mxfp
 test/unit/language/test_matmul.py::test_lhs_in_tmem[float32-False-128-128-64]
+test/unit/language/test_matmul.py::test_lhs_in_tmem[float32-True-128-128-64]
 test/unit/language/test_matmul.py::test_mxfp[0-4-1-128-128-128-1024-512-256]
 test/unit/language/test_matmul.py::test_mxfp[0-4-1-128-128-128-128-128-128]
 test/unit/language/test_matmul.py::test_mxfp[0-4-1-128-128-128-128-256-256]
