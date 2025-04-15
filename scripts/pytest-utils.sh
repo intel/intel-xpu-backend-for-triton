@@ -4,6 +4,7 @@ SCRIPTS_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd 
 TRITON_TEST_REPORTS="${TRITON_TEST_REPORTS:-false}"
 TRITON_TEST_REPORTS_DIR="${TRITON_TEST_REPORTS_DIR:-$HOME/reports/$TIMESTAMP}"
 TRITON_TEST_SKIPLIST_DIR="${TRITON_TEST_SKIPLIST_DIR:-$SCRIPTS_DIR/skiplist/default}"
+TRITON_TEST_SELECTFILE="${TRITON_TEST_SELECTFILE:=}"
 TRITON_TEST_WARNING_REPORTS="${TRITON_TEST_WARNING_REPORTS:-false}"
 TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
 TRITON_INTEL_RAISE_BLOCK_POINTER="${TRITON_INTEL_RAISE_BLOCK_POINTER:-false}"
@@ -33,13 +34,18 @@ pytest() {
         )
     fi
 
-    if [[ -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
+    if [[ -f $TRITON_TEST_SELECTFILE ]]; then
+        pytest_extra_args+=(
+            "--select-from-file=$TRITON_TEST_SELECTFILE"
+        )
+    fi
+
+    if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
         mkdir -p "$CURRENT_SKIPLIST_DIR"
-        # skip comments in the skiplist
-        sed -e '/^#/d' -e '/^\s*$/d' "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" > "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+        cp "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
         if [[ $TEST_UNSKIP = false ]]; then
             pytest_extra_args+=(
-                "--deselect-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--skip-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
             )
         else
             pytest_extra_args+=(

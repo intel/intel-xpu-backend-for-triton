@@ -1901,6 +1901,26 @@ def test_load_scope_sem_coop_grid_cta_one(device):
     out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=1, launch_cooperative_grid=False)
 
 
+@pytest.mark.interpreter
+def test_atomic_min_max_neg_zero(device):
+
+    @triton.jit
+    def kernel(inp, out_max, out_min):
+        idx = tl.program_id(0)
+        x = tl.load(inp + idx)
+        tl.atomic_max(out_max + idx, x)
+        tl.atomic_min(out_min + idx, x)
+
+    N_PROG = 1
+    dtype = torch.float32
+    out_min = torch.full([N_PROG], torch.finfo(torch.float32).max, device=device, dtype=dtype)
+    out_max = torch.full([N_PROG], torch.finfo(torch.float32).min, device=device, dtype=dtype)
+    inp = torch.full([N_PROG], -0.0, device=device, dtype=dtype)
+    kernel[(N_PROG, )](inp, out_max, out_min)
+    torch.testing.assert_close(out_min, inp, atol=0, rtol=0)
+    torch.testing.assert_close(out_max, inp, atol=0, rtol=0)
+
+
 # ---------------
 # test cast
 # ---------------
@@ -1935,8 +1955,12 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         check_type_supported(dtype_x, device)
         check_type_supported(dtype_z, device)
 
-    if is_hip() and (dtype_z in ("bfloat16", "float8_e4m3fn") or dtype_x == "float8_e4m3fn"):
-        pytest.skip(f'test_cast{(dtype_x, dtype_z)} cast to bfloat16 not supported on HIP.')
+    if is_hip():
+        if not is_hip_cdna3() and not is_hip_cdna4() and (dtype_x == 'float8_e4m3fn' or dtype_z == 'float8_e4m3fn'):
+            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA3/CDNA4.')
+        if (not is_hip_cdna4()) and ((dtype_x == 'bfloat16' and dtype_z == "float8_e4m3fn") or
+                                     (dtype_x == "float8_e4m3fn" and dtype_z == 'bfloat16')):
+            pytest.skip(f'test_cast{(dtype_x, dtype_z)} only supported on HIP CDNA4.')
 
     torch.manual_seed(0)
     # This is tricky because numpy doesn't have bfloat, and torch doesn't have uints.
@@ -5204,7 +5228,7 @@ def test_call(type, num_ctas, device):
 def test_if(if_type, device):
 
     @triton.jit
-    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr, StaticVaue: tl.constexpr):
+    def kernel(Cond, XTrue, XFalse, Ret, IfType: tl.constexpr, BoolVar: tl.constexpr, StaticValue: tl.constexpr):
         pid = tl.program_id(0)
         cond = tl.load(Cond)
         if IfType == "if":
@@ -5228,7 +5252,7 @@ def test_if(if_type, device):
             else:
                 tl.store(Ret, tl.load(XFalse))
         elif IfType == "if_and_static":
-            if StaticVaue != 0 and StaticVaue != 0:
+            if StaticValue != 0 and StaticValue != 0:
                 tl.store(Ret, tl.load(XTrue))
             else:
                 tl.store(Ret, tl.load(XFalse))

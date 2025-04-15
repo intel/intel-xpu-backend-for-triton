@@ -74,7 +74,7 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
-    timeout-minutes: 480
+    timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
@@ -124,13 +124,32 @@ jobs:
 
       - name: Install pass_rate dependencies
         run: |
-          pip install defusedxml
+          pip install defusedxml setproctitle==1.3.5
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
         with:
           build_llvm: ${{ inputs.build_llvm }}
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
+
+      - name: Report environment details
+        run: |
+          source ./scripts/capture-hw-details.sh --quiet
+          cat <<EOF | tee .env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=${{ inputs.python_version }}
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
+          EOF
 
       - name: Create test-triton command line
         run: |
@@ -154,7 +173,7 @@ jobs:
           } | tee -a $GITHUB_ENV
 
       - name: Run Proton tests
-        if: ${{ inputs.driver_version == 'rolling' }}
+        if: ${{ inputs.driver_version == 'rolling' && inputs.device == 'max1100' }}
         run: |
           cd third_party/proton/test
           pytest test_api.py test_lib.py test_profile.py test_viewer.py -s -v
@@ -208,28 +227,9 @@ jobs:
       - name: Pass rate
         run: |
           source ./scripts/capture-hw-details.sh
-          python scripts/pass_rate.py --reports reports ${{ env.SKIPLIST }}
-          python scripts/pass_rate.py --reports reports --json ${{ env.SKIPLIST }} > pass_rate.json
-          python scripts/pass_rate.py --reports reports --suite tutorials --json ${{ env.SKIPLIST }} > pass_rate_tutorials.json
-
-      - name: Report environment details
-        run: |
-          source ./scripts/capture-hw-details.sh --quiet
-          cat <<EOF | tee .env
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
-          PYTHON_VERSION=${{ inputs.python_version }}
-          PYTORCH_REPO=$PYTORCH_REPO
-          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
-          PYTORCH_VERSION=$PYTORCH_VERSION
-          TRITON_REPO=$GITHUB_REPOSITORY
-          LIBIGC1_VERSION=$LIBIGC1_VERSION
-          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
-          GPU_DEVICE=$GPU_DEVICE
-          AGAMA_VERSION=$AGAMA_VERSION
-          EOF
+          python scripts/pass_rate.py --reports reports
+          python scripts/pass_rate.py --reports reports --json > pass_rate.json
+          python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
 
       - name: Upload pass rate report
         # upload reports only for the default branch

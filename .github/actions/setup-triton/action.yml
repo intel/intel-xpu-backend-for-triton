@@ -98,7 +98,7 @@ runs:
       shell: bash
       run: |
         cd python
-        pip install wheel pybind11
+        pip install -r requirements.txt
         ${{ inputs.command }}
 
     - name: Save Triton cache

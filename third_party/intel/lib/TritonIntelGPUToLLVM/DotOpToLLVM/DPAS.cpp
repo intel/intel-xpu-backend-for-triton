@@ -310,16 +310,21 @@ private:
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
     unsigned repClusterInner = 0u;
+    bool isOperandA = false;
+    bool isOperandB = false;
+    bool isFToTF32Enabled = false;
     switch (opIdx) {
     case DpasEncodingAttr::OpIdx::OperandA:
       // operand A
       repClusterOuter = repCluster[rank - 2];
       repClusterInner = 1;
+      isOperandA = true;
       break;
     case DpasEncodingAttr::OpIdx::OperandB:
       // operand B
       repClusterInner = 1;
       repClusterOuter = repCluster[rank - 1];
+      isOperandB = true;
       break;
     case DpasEncodingAttr::OpIdx::OperandC:
       // operand C
@@ -333,6 +338,11 @@ private:
         totalElems /
         ((batch * outer * inner) * (repClusterOuter * repClusterInner));
     VectorType dotOpTy = vec_ty(elemTy, numElemsPerOperand);
+    // TODO: IGC bug, Update isFToTF32Enabled as follows once issue #3870 is
+    // fixed. isFToTF32Enabled = elemTy.isFloat(32) && (isOperandA ||
+    // isOperandB)
+    isFToTF32Enabled = elemTy.isFloat(32) &&
+                       ((rank == 3) ? isOperandA : (isOperandA || isOperandB));
 
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     int offset = 0;
@@ -344,8 +354,18 @@ private:
             for (int repInner = 0; repInner < repClusterInner; ++repInner) {
               Value matVal = rewriter.create<LLVM::UndefOp>(loc, dotOpTy);
               for (int k = 0; k < numElemsPerOperand; ++k) {
-                matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
-                                           tb.i32_val(k));
+                if (isFToTF32Enabled) {
+                  Value f32Val = elems[offset++];
+                  auto t32Val =
+                      rewriter.create<TritonGEN::FToTf32Op>(loc, f32Val)
+                          .getResult();
+                  matVal =
+                      tb.insert_element(dotOpTy, matVal, t32Val, tb.i32_val(k));
+
+                } else {
+                  matVal = tb.insert_element(dotOpTy, matVal, elems[offset++],
+                                             tb.i32_val(k));
+                }
               }
               vals[{b, i * repClusterOuter + repOuter,
                     j * repClusterInner + repInner}] = matVal;

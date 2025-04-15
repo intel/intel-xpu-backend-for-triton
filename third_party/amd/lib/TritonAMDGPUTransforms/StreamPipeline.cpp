@@ -60,7 +60,7 @@ namespace {
 // main loop and rotating the loop to schedule global load ops for future loop
 // iterations together with compute for the current iteration. In this way, we
 // can 1) issue memory operations earlier to hide the latency and 2) break the
-// strong dependency inside on loop iteration to give backends flexiblity to
+// strong dependency inside on loop iteration to give backends flexibility to
 // better interleave instructions for better instruction-level parallelism.
 //
 // This StreamPipeliner class creates the pipelining schedule and calls the
@@ -346,11 +346,13 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
       builder.create<ttg::AsyncCommitGroupOp>(loc, newLoadOp->getResult(0));
   ttg::AsyncWaitOp wait =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
-
   // We need to place the prefetches (AsyncCopy) after the AsyncWaits which
   // create a barrier to ensure all warps are finished reading the shared buffer
   // we will write into. This is done by scheduling it as a local_store.
   scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
+  // Place ttg.async_commit_group op next to async load so the later
+  // UpdateAsyncWaitCount pass can deduce better waitcnts
+  scheduleOp(commit, SCHED_LOCAL_STORE);
 
   // Create local load which consumes the async token from the AsyncWait
   auto sharedLoad =
@@ -1049,6 +1051,12 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
       StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
                          globalPrefetch, localPrefetch, useAsyncCopy);
       (void)sp.pipelineLoop();
+    }
+
+    if (useAsyncCopy) {
+      llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
+      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
+      tt::combineRedundantWaitOps(waitOps);
     }
   }
 };
