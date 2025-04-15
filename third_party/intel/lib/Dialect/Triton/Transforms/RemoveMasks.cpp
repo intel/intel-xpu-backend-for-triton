@@ -63,7 +63,9 @@ public:
     auto subOp = cast<arith::SubIOp>(rhs);
     Operation *subLhs = subOp.getLhs().getDefiningOp();
     Operation *subRhs = subOp.getRhs().getDefiningOp();
-    if (subLhs || !isa<arith::MulIOp>(subRhs))
+    if (subLhs && !isa<arith::ConstantIntOp>(subLhs))
+      return false;
+    if (!subRhs || !isa<arith::MulIOp>(subRhs))
       return false;
 
     auto mulOp = cast<arith::MulIOp>(subRhs);
@@ -147,7 +149,6 @@ public:
   //   - splat(N) < [0..END]
   virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
     assert(mask && "Expecting a valid mask");
-
     if (!mask.getDefiningOp() || !isa<arith::CmpIOp>(mask.getDefiningOp()))
       return false;
 
