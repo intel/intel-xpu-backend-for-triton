@@ -535,7 +535,8 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs, int dim) override {
+  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
+                    int dim) override {
     if (getContiguity(op, lhs, rhs, dim) > 1)
       return 1;
     if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value() &&
