@@ -394,7 +394,7 @@ run_sglang_tests() {
   git clone https://github.com/sgl-project/sglang.git
   cd sglang
   git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang.patch
-  pip install ./python/
+  pip install ./python[dev-xpu]
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} test/srt/test_triton_attention_kernels.py
 }
 
