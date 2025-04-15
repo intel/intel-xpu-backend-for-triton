@@ -1,12 +1,13 @@
 import os
 import contextlib
+from typing import Optional
 
 import torch
 from torch.profiler import record_function
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 import numpy as np
 
@@ -482,7 +483,7 @@ class _attention(torch.autograd.Function):
         # https://github.com/pytorch/pytorch/issues/144778 has more details.
         with record_function(
                 '__profile_kernel_of_func_bwd_fa'
-        ) if benchmark_suit.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
+        ) if benchmark_suite.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
             q, k, v, o, M = ctx.saved_tensors
             assert do.is_contiguous()
             assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
@@ -541,26 +542,24 @@ def check_close(f_val, f_ref, atol, rtol):
 
 
 def get_benchmark(
-    providers_filter=None,
+    providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
     xetla_assert_result=False,
     xetla_warn_mismatch=True,
-    **kwargs,
 ):
+    """
+    Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
+    The benchmark can then be executed by calling the :code:`.run` method on the return value.
+    """
+
     supported_providers = {
         'triton': 'Triton',
         'xetla': 'XeTLA',
     }
-    providers = {}
-    if providers_filter is not None:
-        for provider_key, provider_label in supported_providers.items():
-            if provider_key in providers_filter:
-                providers[provider_key] = provider_label
-    else:
-        providers = supported_providers
+    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
-    @benchmark_suit.perf_report(
-        benchmark_suit.Benchmark(
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(
             # argument names to use as an x-axis for the plot
             x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
             x_vals=[[z, h, 16384 // z, dhead, causal, mode]
@@ -572,9 +571,9 @@ def get_benchmark(
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
-            line_vals=providers.keys(),
+            line_vals=list(providers.keys()),
             # label name for the lines
-            line_names=providers.values(),
+            line_names=list(providers.values()),
             # line styles
             styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
             ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -582,8 +581,11 @@ def get_benchmark(
             # name for the plot. Used also as a file name for saving the plot.
             args={},
         ))
+    # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
-        assert MODE in ['fwd', 'bwd']
+        modes = ['fwd', 'bwd']
+        if MODE not in modes:
+            raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
         q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
@@ -600,8 +602,9 @@ def get_benchmark(
             torch_o = torch_fn()
             torch_do = torch.randn_like(torch_o)
             torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
+
         if provider == 'onednn':
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 torch_fn,
                 n_warmup=10,
                 n_repeat=10,
@@ -615,16 +618,16 @@ def get_benchmark(
                 triton_do = torch.randn_like(triton_o)
                 triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
             if MODE == 'fwd':
-                benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+                benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
-                benchmark_suit.assert_close(
+                benchmark_suite.assert_close(
                     lambda: triton_o,
                     lambda: torch_o,
                     atol=1e-2,
                     rtol=0,
                     err_msg='triton to torch',
                 )
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 triton_fn,
                 n_warmup=10,
                 n_repeat=10,
@@ -653,7 +656,7 @@ def get_benchmark(
 
                 def check_xetla_fwd_result():
                     if xetla_assert_result:
-                        benchmark_suit.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
+                        benchmark_suite.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
                     elif xetla_warn_mismatch:
                         check_close(xetla_fn, torch_fn, atol, 1e-3)
 
@@ -688,7 +691,7 @@ def get_benchmark(
 
                 xetla_fn = xetla_bwd_fn
 
-            _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 xetla_fn,
                 n_warmup=10,
                 n_repeat=10,

@@ -3,6 +3,7 @@ import datetime
 import itertools
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 from torch.profiler import profile, ProfilerActivity, record_function
@@ -181,6 +182,19 @@ else:
 def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
     if BENCHMARKING_CONFIG["verify"]:
         triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
+
+
+def filter_providers(
+    supported_providers: dict[str, str],
+    providers_filter: Optional[list[str]],
+) -> dict[str, str]:
+    providers = {}
+    if providers_filter:
+        for provider_key, provider_label in supported_providers.items():
+            if provider_key in providers_filter:
+                providers[provider_key] = provider_label
+        return providers
+    return supported_providers
 
 
 def perf_report(benchmarks):

@@ -6,13 +6,14 @@ This benchmark is come from the Triton tutorial 10-experimental-block-pointer.py
 To compare the performance to XeTLA kernel.
 
 """
+from typing import Optional
 import os
 
 import torch
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 
 SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
@@ -264,25 +265,28 @@ def is_enough_memory(x_val):
 X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
-def get_benchmark(providers_filter=None, transpose_a=False, transpose_b=False):
-    use_xetla = not (transpose_a or transpose_b)
+def get_benchmark(
+    providers_filter: Optional[list[str]] = None,
+    transpose_a=False,
+    transpose_b=False,
+):
+    """
+    Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
+    The benchmark can then be executed by calling the :code:`.run` method on the return value.
+    """
     supported_providers = {
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
+    use_xetla = not (transpose_a or transpose_b)
     if use_xetla:
         supported_providers['xetla'] = 'XeTLA'
-    providers = {}
-    if providers_filter is not None:
-        for provider_key, provider_label in supported_providers.items():
-            if provider_key in providers_filter:
-                providers[provider_key] = provider_label
-    else:
-        providers = supported_providers
+    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
-    @benchmark_suit.perf_report(
-        benchmark_suit.Benchmark(
+    # pylint: disable=too-many-branches
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(
             # argument names to use as an x-axis for the plot
             x_names=['B', 'M', 'N', 'K'],
             # different possible values for `x_name`
@@ -290,9 +294,9 @@ def get_benchmark(providers_filter=None, transpose_a=False, transpose_b=False):
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
-            line_vals=providers.keys(),
+            line_vals=list(providers.keys()),
             # label name for the lines
-            line_names=providers.values(),
+            line_names=list(providers.values()),
             # line styles
             styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
             ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -318,21 +322,31 @@ def get_benchmark(providers_filter=None, transpose_a=False, transpose_b=False):
             torch_b = torch.transpose(torch_b, -2, -1)
 
         if provider == 'onednn':
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b),
-                                                                     n_warmup=10, n_repeat=10, quantiles=quantiles)
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                lambda: torch.matmul(torch_a, torch_b),
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
         elif provider == 'triton':
-            assert len(a.shape) == len(b.shape), 'Incompatible sizes'
+            if len(a.shape) != len(b.shape):
+                raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
             if len(a.shape) == 3:
                 c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
-            else:
-                assert len(a.shape) == 2, 'Expecting shape of length 2'
+            elif len(a.shape) == 2:
                 c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+            else:
+                raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
             triton_fn = lambda: matmul(a, b, c, transpose_a=transpose_a, transpose_b=transpose_b)
             torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                     quantiles=quantiles)
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                triton_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
         elif provider == 'xetla':
             if B == 1:
                 c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -359,9 +373,13 @@ def get_benchmark(providers_filter=None, transpose_a=False, transpose_b=False):
             xetla_fn = xetla_func_with_acc_allocation
             torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
 
-            # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
-                                                                     quantiles=quantiles)
+            # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                xetla_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
