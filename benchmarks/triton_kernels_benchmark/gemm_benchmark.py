@@ -15,9 +15,6 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
 
-TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
-TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
-use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
 SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
 
@@ -267,96 +264,118 @@ def is_enough_memory(x_val):
 X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
-# Benchmark Performance
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
-        # argument names to use as an x-axis for the plot
-        x_names=['B', 'M', 'N', 'K'],
-        # different possible values for `x_name`
-        x_vals=X_VALS,
-        line_arg='provider',
-        # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
-        line_vals=['triton', 'onednn'] + (['xetla'] if use_xetla else []),
-        # label name for the lines
-        line_names=['Triton', 'OneDNN'] + (['XeTLA'] if use_xetla else []),
-        # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='matmul-performance',
-        # name for the plot. Used also as a file name for saving the plot.
-        args={},
-    ))
-def benchmark(B, M, N, K, provider):
-    a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
-
-    torch.manual_seed(0)
-    a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
-    b = torch.rand(b_shape, device='xpu', dtype=torch.bfloat16)
-
-    quantiles = [0.5, 0.0, 1.0]
-
-    torch_a = a
-    if TRANSPOSE_A:
-        torch_a = torch.transpose(torch_a, -2, -1)
-
-    torch_b = b
-    if TRANSPOSE_B:
-        torch_b = torch.transpose(torch_b, -2, -1)
-
-    if provider == 'onednn':
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10,
-                                                                 n_repeat=10, quantiles=quantiles)
-    elif provider == 'triton':
-        assert len(a.shape) == len(b.shape), 'Incompatible sizes'
-        if len(a.shape) == 3:
-            c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
-        else:
-            assert len(a.shape) == 2, 'Expecting shape of length 2'
-            c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-        triton_fn = lambda: matmul(a, b, c, transpose_a=TRANSPOSE_A, transpose_b=TRANSPOSE_B)
-        torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
-        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
-    elif provider == 'xetla':
-        if B == 1:
-            c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-            cnt = torch.zeros((M, N), device='xpu', dtype=torch.int32)
-        else:
-            c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
-            cnt = torch.zeros((B, M, N), device='xpu', dtype=torch.int32)
-        name = f'gemm_shape_{B}_{M}_{K}_{N}'
-        # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
-        # better performance.
-        if (B, M, N, K) == (1, 3072, 3072, 4096):
-            name = 'gemm_streamk_shape_3072_4096_3072'
-        func = getattr(xetla_kernel, name)
-
-        def xetla_func_with_acc_allocation():
-            # allocating `acc` matrix on every function call, to be as similar as
-            # possible to the triton kernel, which also does this on every call.
-            if B == 1:
-                acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-            else:
-                acc = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
-            return func(a, b, c, acc, cnt)
-
-        xetla_fn = xetla_func_with_acc_allocation
-        torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-
-        # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
-                                                                 quantiles=quantiles)
+def get_benchmark(providers_filter=None, transpose_a=False, transpose_b=False):
+    use_xetla = not (transpose_a or transpose_b)
+    supported_providers = {
+        'triton': 'Triton',
+        'onednn': 'OneDNN',
+    }
+    if use_xetla:
+        supported_providers['xetla'] = 'XeTLA'
+    providers = {}
+    if providers_filter is not None:
+        for provider_key, provider_label in supported_providers.items():
+            if provider_key in providers_filter:
+                providers[provider_key] = provider_label
     else:
-        raise NotImplementedError(f'Unsupported provider {provider}')
+        providers = supported_providers
 
-    tflops = lambda ms: 2 * B * M * N * K * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
+    # Benchmark Performance
+    @benchmark_suit.perf_report(
+        benchmark_suit.Benchmark(
+            # argument names to use as an x-axis for the plot
+            x_names=['B', 'M', 'N', 'K'],
+            # different possible values for `x_name`
+            x_vals=X_VALS,
+            line_arg='provider',
+            # argument name whose value corresponds to a different line in the plot
+            # possible values for `line_arg``
+            line_vals=providers.keys(),
+            # label name for the lines
+            line_names=providers.values(),
+            # line styles
+            styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+            ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+            plot_name='matmul-performance',
+            # name for the plot. Used also as a file name for saving the plot.
+            args={},
+        ))
+    def benchmark(B, M, N, K, provider):
+        a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
-    return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+        torch.manual_seed(0)
+        a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
+        b = torch.rand(b_shape, device='xpu', dtype=torch.bfloat16)
+
+        quantiles = [0.5, 0.0, 1.0]
+
+        torch_a = a
+        if transpose_a:
+            torch_a = torch.transpose(torch_a, -2, -1)
+
+        torch_b = b
+        if transpose_b:
+            torch_b = torch.transpose(torch_b, -2, -1)
+
+        if provider == 'onednn':
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b),
+                                                                     n_warmup=10, n_repeat=10, quantiles=quantiles)
+        elif provider == 'triton':
+            assert len(a.shape) == len(b.shape), 'Incompatible sizes'
+            if len(a.shape) == 3:
+                c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+            else:
+                assert len(a.shape) == 2, 'Expecting shape of length 2'
+                c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+            triton_fn = lambda: matmul(a, b, c, transpose_a=transpose_a, transpose_b=transpose_b)
+            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                     quantiles=quantiles)
+        elif provider == 'xetla':
+            if B == 1:
+                c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                cnt = torch.zeros((M, N), device='xpu', dtype=torch.int32)
+            else:
+                c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                cnt = torch.zeros((B, M, N), device='xpu', dtype=torch.int32)
+            name = f'gemm_shape_{B}_{M}_{K}_{N}'
+            # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
+            # better performance.
+            if (B, M, N, K) == (1, 3072, 3072, 4096):
+                name = 'gemm_streamk_shape_3072_4096_3072'
+            func = getattr(xetla_kernel, name)
+
+            def xetla_func_with_acc_allocation():
+                # allocating `acc` matrix on every function call, to be as similar as
+                # possible to the triton kernel, which also does this on every call.
+                if B == 1:
+                    acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                else:
+                    acc = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                return func(a, b, c, acc, cnt)
+
+            xetla_fn = xetla_func_with_acc_allocation
+            torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
+
+            # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
+                                                                     quantiles=quantiles)
+        else:
+            raise NotImplementedError(f'Unsupported provider {provider}')
+
+        tflops = lambda ms: 2 * B * M * N * K * (1e-12) / (ms * 1e-3)
+        gbps = lambda ms: B * (2 * (M * K + K * N) + 4.0 * (M * N)) * (1e-9) / (ms * 1e-3)
+
+        return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
+
+    return benchmark
 
 
 if __name__ == '__main__':
-    benchmark.run(show_plots=False, print_data=True)
+    _benchmark = get_benchmark(
+        transpose_a=(os.getenv('TRANSPOSE_A', '0') == '1'),
+        transpose_b=(os.getenv('TRANSPOSE_B', '0') == '1'),
+    )
+    _benchmark.run(show_plots=False, print_data=True)
