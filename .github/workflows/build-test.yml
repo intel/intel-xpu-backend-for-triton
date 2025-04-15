@@ -103,7 +103,7 @@ jobs:
       matrix:
         python:
           - "3.9"
-        driver: ${{ fromJson((inputs.runner_label || '') == '' && '["rolling"]' || '["rolling", "lts"]') }}
+        driver: ${{ fromJson((inputs.runner_label || '') == '' && '["rolling", "lts"]' || '["rolling"]') }}
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:
