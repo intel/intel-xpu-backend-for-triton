@@ -1489,8 +1489,8 @@ def fma(arg0, arg1, arg2, _builder=None):
 def pow(arg0, arg1, _builder=None):
     return core.extern_elementwise(
         "", "", [arg0, arg1], {
-            (core.dtype("fp32"), core.dtype("int32")): ("__imf_powif", core.dtype("fp32")),
-            (core.dtype("fp64"), core.dtype("int32")): ("__imf_powi", core.dtype("fp64")),
+            (core.dtype("fp32"), core.dtype("int32")): ("__imf_pownf", core.dtype("fp32")),
+            (core.dtype("fp64"), core.dtype("int32")): ("__imf_pown", core.dtype("fp64")),
             (core.dtype("fp32"), core.dtype("fp32")): ("__imf_powf", core.dtype("fp32")),
             (core.dtype("fp64"), core.dtype("fp64")): ("__imf_pow", core.dtype("fp64")),
         }, is_pure=True, _builder=_builder)
