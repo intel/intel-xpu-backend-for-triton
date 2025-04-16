@@ -128,8 +128,7 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value threadMask = b.int_val(type.getIntOrFloatBitWidth(), -1);
-  return rewriter.create<NVVM::VoteSyncOp>(loc, type, threadMask, cmp,
-                                           NVVM::VoteSyncKind::ballot);
+  return rewriter.create<NVVM::VoteBallotOp>(loc, type, threadMask, cmp);
 }
 
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
