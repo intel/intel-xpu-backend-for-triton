@@ -55,7 +55,7 @@ bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
                              ? Triple::spirv64
                              : Triple::spirv32,
                          TargetTriple.getSubArch());
-    M->setTargetTriple(TargetTriple.str());
+    M->setTargetTriple(TargetTriple);
     // We need to reset Data Layout to conform with the TargetMachine
     M->setDataLayout("");
   }
@@ -64,7 +64,7 @@ bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
   if (TranslatorOpts.getMaxVersion() != VersionNumber::MaximumVersion) {
     TargetTriple.setArch(TargetTriple.getArch(),
                          spirvVersionToSubArch(TranslatorOpts.getMaxVersion()));
-    M->setTargetTriple(TargetTriple.str());
+    M->setTargetTriple(TargetTriple);
   }
 
   // Translate the Module into SPIR-V
