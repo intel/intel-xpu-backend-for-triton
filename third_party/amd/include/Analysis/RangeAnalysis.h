@@ -6,10 +6,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
-namespace mlir::triton {
-class FuncOp;
-}
-
 namespace mlir::triton::AMD {
 
 /// This struct (analysis) adapt's upstream's IntegerRangeAnalysis (inferring
@@ -39,14 +35,10 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
-  void initializeFuncOp(triton::FuncOp funcOp);
-
   LogicalResult visitOperation(
       Operation *op,
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) override;
-
-  std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop);
 
   /// This method (which overloads
   /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors)
@@ -97,8 +89,6 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   ///   [0, 2147483647] ∩ [-2147483648, 128] = [0, 128]
   std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor) const;
 
-  int64_t getTotalLoopTripCount(LoopLikeOpInterface loop);
-
   /// Trip counts of all loops with static loop bounds contained under the root
   /// operation being analyzed. Note, nested loops have trip counts computed as
   /// a product of enclosing loops; i.e. for
@@ -127,7 +117,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   llvm::DenseMap<Value, SetVector<Operation *>> assumptions;
 };
 
-std::optional<SmallVector<std::optional<ConstantIntRanges>>>
+std::optional<SmallVector<ConstantIntRanges>>
 collectRanges(const DataFlowSolver &solver, ValueRange values);
 
 bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
@@ -136,9 +126,6 @@ bool isEmptyInitializedRange(ConstantIntRanges rv);
 
 void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
                                     DataFlowSolver *solver);
-
-void initializeFuncOps(Operation *op,
-                       TritonIntegerRangeAnalysis *rangeAnalysis);
 
 } // namespace mlir::triton::AMD
 
