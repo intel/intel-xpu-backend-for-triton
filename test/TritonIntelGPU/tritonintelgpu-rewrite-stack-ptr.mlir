@@ -6,8 +6,10 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
   tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
-    // CHECK: llvm.mlir.poison : !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__(%8, %17, %arg2, %18, %arg2)
+    // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[POISON]], %arg2)
     tt.call @noinline_simple_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
@@ -31,7 +33,9 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
   tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
-    // CHECK: llvm.call spir_funccc @noinline_shared_fn__fp32_fp32_Pfp32__(%8, %17, %arg2, %arg3, %arg2)
+    // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: llvm.call spir_funccc @noinline_shared_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, %arg3, %arg2)
     tt.call @noinline_shared_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
