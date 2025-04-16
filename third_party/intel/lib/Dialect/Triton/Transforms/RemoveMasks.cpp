@@ -40,6 +40,15 @@ public:
 //  `END < N-i*END`.
 class CanonicalMaskValidator final : public MaskValidatorBase {
 public:
+  // This structure is used to store the information about a mask in canonical
+  // form (N + END - 1 / END).
+  struct MaskInfo {
+    Value N;
+    unsigned END;
+  };
+
+  // Check whether the mask is equivalent to the form: `END < N-i*END`.
+  // Returns a structure containing `N` and `END`.
   virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
     assert(mask && "Expecting a valid mask");
 
@@ -88,22 +97,37 @@ public:
     return false;
   }
 
-  // Create the loop versioning condition, assumes the loop upper bound is the
-  // form `(N+END-1)/END`.
-  virtual Value getVersioningCond(scf::ForOp &forOp,
-                                  Value mask = nullptr) const {
-    assert(hasValidUpperBound(forOp) && "Invalid upper bound");
+  // Create the loop versioning condition.
+  // At this point the loop upper bound is in canonical form
+  // `(N+END-1)/END` (possibly folded), the versioning condition will be:
+  // `(N+END-1)%END > 0 && N > END`.
+  virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
+    MaskInfo maskInfo = getMaskInfo(forOp, mask);
+    assert(hasCanonicalUpperBound(forOp, maskInfo) &&
+           "Loop upper bound not in canonical form");
 
+    OpBuilder builder(forOp);
+    Location loc = forOp.getLoc();
     Value ub = tt::intel::getFinalValue(forOp.getUpperBound());
     Operation *defOp = ub.getDefiningOp();
+    assert(defOp && "Expecting a valid operation");
+
+    // The loop UB is a constant.
+    if (isa<arith::ConstantIntOp>(defOp)) {
+      int64_t valN =
+          cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
+      bool cond1 = (valN + maskInfo.END - 1) % maskInfo.END > 0;
+      bool cond2 = valN > maskInfo.END;
+      return builder.create<arith::ConstantIntOp>(
+          forOp.getLoc(), cond1 && cond2, builder.getI1Type());
+    }
+
     auto divOp = cast<arith::DivSIOp>(defOp);
     Operation *divLhsOp = divOp.getLhs().getDefiningOp();
     auto divNumOp = cast<arith::AddIOp>(divLhsOp);
     Value lhs = divNumOp.getLhs();
     Value rhs = divOp.getRhs();
 
-    OpBuilder builder(forOp);
-    Location loc = forOp.getLoc();
     Value zero = tt::intel::findOrCreateIntConstant(
         loc, 0, lhs.getType().getIntOrFloatBitWidth(), builder);
     Value cmp1 = builder.create<arith::CmpIOp>(
@@ -115,10 +139,23 @@ public:
   }
 
   // Ensure the loop upper bound is in canonical form (N+END-1)/END.
-  static bool hasValidUpperBound(scf::ForOp &forOp) {
+  static bool hasCanonicalUpperBound(scf::ForOp &forOp,
+                                     const MaskInfo &maskInfo) {
     Value ub = tt::intel::getFinalValue(forOp.getUpperBound());
     Operation *defOp = ub.getDefiningOp();
-    if (!defOp || !isa<arith::DivSIOp>(defOp))
+    if (!defOp)
+      return false;
+
+    // If the loop UB is constant, use `MaskInfo` to determine whether the UB
+    // was folded from a canonical form.
+    if (isa<arith::ConstantIntOp>(defOp)) {
+      int64_t valN =
+          cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
+      return ((valN + maskInfo.END - 1) / maskInfo.END) ==
+             cast<arith::ConstantIntOp>(defOp).value();
+    }
+
+    if (!isa<arith::DivSIOp>(defOp))
       return false;
 
     auto divOp = cast<arith::DivSIOp>(defOp);
@@ -137,6 +174,25 @@ public:
       return false;
 
     return true;
+  }
+
+private:
+  // Assuming the mask is equivalent to the form: `END < N-i*END`, returns `N`.
+  MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
+    assert(isValidMask(forOp, mask) && "Expecting a valid mask");
+
+    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    Operation *lhs = tt::intel::getFinalValue(cmpOp.getLhs()).getDefiningOp();
+    Operation *rhs = tt::intel::getFinalValue(cmpOp.getRhs()).getDefiningOp();
+    auto rangeOp = cast<tt::MakeRangeOp>(lhs);
+    unsigned end = rangeOp.getEnd();
+
+    auto subOp = cast<arith::SubIOp>(rhs);
+    Operation *subLhs = subOp.getLhs().getDefiningOp();
+    if (!subLhs)
+      return MaskInfo{subOp.getLhs(), end};
+
+    return MaskInfo{cast<arith::ConstantIntOp>(subLhs), end};
   }
 };
 
@@ -278,6 +334,9 @@ public:
   // of the return values.
   static bool version(scf::ForOp &forOp,
                       MaskedOpsCollector<CanonicalMaskValidator> &collector) {
+    assert(!collector.getMaskedOps().empty() &&
+           "Expecting a non-empty collection of masked operations");
+
     // Limitation
     // Currently we can version the loop only if it doesn't have downward
     // exposed uses of return values that are a tensor of pointers.
@@ -294,9 +353,21 @@ public:
     if (!canVersion(forOp))
       return false;
 
+    auto getMask = [](Operation *maskedOp) {
+      assert(isa<tt::LoadOp>(maskedOp) ||
+             isa<tt::StoreOp>(maskedOp) &&
+                 "Expecting a load or store operation");
+      Value mask = isa<tt::LoadOp>(maskedOp)
+                       ? cast<tt::LoadOp>(maskedOp).getMask()
+                       : cast<tt::StoreOp>(maskedOp).getMask();
+      return tt::intel::getFinalValue(mask);
+    };
+
     // Retrieve the versioning condition, bail out if it doesn't exist (in
     // which case the loop upper bound is not in canonical form).
-    Value verCond = collector.getMaskValidator().getVersioningCond(forOp);
+    Operation *maskedOp = *collector.getMaskedOps().begin();
+    Value verCond = collector.getMaskValidator().getVersioningCond(
+        forOp, getMask(maskedOp));
     if (!verCond)
       return false;
 
@@ -367,6 +438,9 @@ public:
 
   static bool version(scf::ForOp &forOp,
                       MaskedOpsCollector<InvariantMaskValidator> &collector) {
+    assert(!collector.getMaskedOps().empty() &&
+           "Expecting a non-empty collection of masked operations");
+
     // Collect the (loop invariant) mask conditions.
     std::set<Operation *> maskConds;
     for (Operation *maskedOp : collector.getMaskedOps()) {
