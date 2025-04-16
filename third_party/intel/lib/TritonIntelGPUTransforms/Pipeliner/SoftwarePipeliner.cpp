@@ -69,7 +69,8 @@ pipelineLoop(scf::ForOp forOp, int numStages, bool supportRegularPtr,
     b.setInsertionPoint(yield);
     b.create<spirv::INTELControlBarrierWaitOp>(
         loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
-  }
+  } else if (isa<scf::ForOp>(loop->getBlock()->getParentOp()) && (barrierScope))
+    loop->emitWarning("Split barrier are not added to nested loop.");
 }
 
 namespace {
@@ -89,7 +90,7 @@ struct IntelGPUPipelinePass
     if (numStages <= 1)
       return;
 
-    std::optional<spirv::Scope> barrierScope;
+    std::optional<spirv::Scope> barrierScope = std::nullopt;
     if (splitBarrierScope == 1)
       barrierScope = spirv::Scope::Workgroup;
     else if (splitBarrierScope == 2)
