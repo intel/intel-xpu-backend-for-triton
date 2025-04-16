@@ -542,8 +542,6 @@ private:
     if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value() &&
         rhs.getConstantValue().value() != 0)
       return lhs.getStride(dim) % rhs.getConstantValue().value();
-    if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
-      return lhs.getConstantValue().value() % rhs.getStride(dim);
     return -1;
   }
 
