@@ -4,14 +4,12 @@
 
 #include "llvm_parser.h"
 #include "sycl_functions.h"
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <ios>
 #include <iostream>
 #include <nlohmann/json.hpp>
-#include <regex>
 #include <string>
 #include <vector>
 using json = nlohmann::json;
@@ -108,8 +106,6 @@ struct KernelArguments {
 };
 
 /** SYCL Globals **/
-SyclQueueMap g_sycl_queue_map;
-
 static std::vector<ze_device_handle_t> g_devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
@@ -186,23 +182,6 @@ loadBinary(const std::string &kernel_name, const std::string &build_flags,
       ctx);
 
   return std::make_tuple(mod, fun, n_regs, n_spills);
-}
-
-ze_context_handle_t initContext(sycl::queue *sycl_queue) {
-  if (g_sycl_queue_map.find(*sycl_queue) == g_sycl_queue_map.end()) {
-    const auto updated_sycl_devices = update(*sycl_queue, g_sycl_queue_map);
-    if (!updated_sycl_devices.empty()) {
-      // Update global data
-      const uint32_t deviceCount =
-          std::min(updated_sycl_devices.size(), g_devices.size());
-      for (uint32_t i = 0; i < deviceCount; ++i) {
-        g_devices[i] = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-            updated_sycl_devices[i]);
-      }
-    }
-  }
-  auto context = g_sycl_queue_map[*sycl_queue].context;
-  return context;
 }
 
 size_t initDevices(sycl::queue *sycl_queue) {
@@ -466,7 +445,6 @@ int main(int argc, char **argv) {
 
     std::cout << "Running on device: "
               << q.get_device().get_info<sycl::info::device::name>() << "\n";
-    initContext(&q);
     initDevices(&q);
 
     // Parse the JSON file and create argument dictionary
