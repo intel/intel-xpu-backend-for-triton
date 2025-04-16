@@ -14,8 +14,6 @@ if [[ $TEST_UNSKIP = true ]]; then
 fi
 # absolute path for the selected skip list
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
-# absolute path for the current skip list
-CURRENT_SKIPLIST_DIR="$SCRIPTS_DIR/skiplist/current"
 
 pytest() {
     pytest_extra_args=()
@@ -41,11 +39,9 @@ pytest() {
     fi
 
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
-        mkdir -p "$CURRENT_SKIPLIST_DIR"
-        cp "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt" "$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
         if [[ $TEST_UNSKIP = false ]]; then
             pytest_extra_args+=(
-                "--skip-from-file=$CURRENT_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--skip-from-file=$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
             )
         else
             pytest_extra_args+=(
