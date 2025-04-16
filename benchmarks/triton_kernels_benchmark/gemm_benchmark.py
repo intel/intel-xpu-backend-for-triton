@@ -19,6 +19,7 @@ from triton_kernels_benchmark import cutlass_kernel
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
 use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
+use_cutlass = not (TRANSPOSE_A or TRANSPOSE_B)
 SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
 
@@ -224,7 +225,12 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
     return a_shape, b_shape
 
 
-X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
+# X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
+X_VALS = [
+    [1, 1024, 1024, 1024],
+    [1, 2048, 2048, 2048],
+    [1, 4096, 4096, 4096],
+    [1, 8192, 8192, 8192],
     [1, 1, 13824, 5120],
     [1, 4, 12288, 4096],
     [1, 512, 8192, 8192],
@@ -240,12 +246,49 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
     [1, 16384, 4096, 8192],
     [1, 16384, 8192, 1024],
     [1, 16384, 8192, 4096],
-    [4, 32768, 128, 4096],
-    [4, 32768, 4096, 128],
-    [32, 4096, 128, 4096],
-    [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
+    # [4, 32768, 128, 4096], # OK for GEMM ; KO for CollectiveBuilder
+    # [4, 32768, 4096, 128], # OK for GEMM ; KO for CollectiveBuilder
+    # [32, 4096, 128, 4096], # OK for GEMM ; KO for CollectiveBuilder
+    # [4096, 8, 128, 16384], # KO ; CUTLASS disabled them in their own benchmark
+    # [4096, 8, 16384, 128], # KO ; CUTLASS disabled them in their own benchmark
 ]
+
+# See https://github.com/codeplaysoftware/cutlass-fork/blob/sycl-develop/benchmarks/pvc/input.in
+TileShape_RRR_1 = [256, 256, 32]
+TileShape_RRR_2 = [128, 512, 32]
+TileShape_RRR_3 = [256, 128, 32]
+TileShape_RRR_4 = [128, 256, 16]
+TileShape_RRR_5 = [8,   128, 32]
+X_SHAPES = [
+    TileShape_RRR_1, # [1,    1024,  1024,  1024],
+    TileShape_RRR_1, # [1,    2048,  2048,  2048],
+    TileShape_RRR_1, # [1,    4096,  4096,  4096],
+    TileShape_RRR_1, # [1,    8192,  8192,  8192],
+    TileShape_RRR_1, # [1,    1,     13824, 5120],
+    TileShape_RRR_1, # [1,    4,     12288, 4096],
+    TileShape_RRR_1, # [1,    512,   8192,  8192],
+    TileShape_RRR_1, # [1,    512,   8192,  32768],
+    TileShape_RRR_1, # [1,    512,   32768, 8192],
+    TileShape_RRR_1, # [1,    1024,  8192,  16384],
+    TileShape_RRR_2, # [1,    1024,  8192,  28672],
+    TileShape_RRR_1, # [1,    3072,  3072,  4096],
+    TileShape_RRR_1, # [1,    4096,  8192,  16384],
+    TileShape_RRR_1, # [1,    8192,  1024,  16384],
+    TileShape_RRR_1, # [1,    8192,  4096,  16384],
+    TileShape_RRR_1, # [1,    16384, 1024,  8192],
+    TileShape_RRR_1, # [1,    16384, 4096,  8192],
+    TileShape_RRR_1, # [1,    16384, 8192,  1024],
+    TileShape_RRR_1, # [1,    16384, 8192,  4096],
+    # TileShape_RRR_1, # [4,    32768, 128,   4096],
+    # TileShape_RRR_1, # [4,    32768, 4096,  128],
+    # TileShape_RRR_3, # [32,   4096,  128,   4096],
+    # TileShape_RRR_4, # [4096, 8,     128,   16384],
+    # TileShape_RRR_5, # [4096, 8,     16384, 128],
+]
+X_MAP = {
+    tuple(vals) : shape
+    for vals, shape in zip(X_VALS, X_SHAPES)
+}
 
 DEVICE_NAME = torch.xpu.get_device_name()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
@@ -278,11 +321,13 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        # line_vals=['triton', 'onednn', 'cutlass'] + (['xetla'] if use_xetla else []),
-        line_vals=['cutlass'] + (['xetla'] if use_xetla else []),
+        # line_vals=['xetla'],
+        line_vals=['cutlass'],
+        # line_vals=['triton', 'onednn'] + (['xetla'] if use_xetla else []) + (['cutlass'] if use_cutlass else []),
         # label name for the lines
-        line_names=['CUTLASS'] + (['XeTLA'] if use_xetla else []),
-        # line_names=['Triton', 'OneDNN', 'CUTLASS'] + (['XeTLA'] if use_xetla else []),
+        # line_names=['XeTLA'],
+        line_names=['CUTLASS'],
+        # line_names=['Triton', 'OneDNN'] + (['XeTLA'] if use_xetla else []) + (['CUTLASS'] if use_cutlass else []),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -298,6 +343,9 @@ def benchmark(B, M, N, K, provider):
     print("N = ", N)
     print("K = ", K)
     print("B = ", B)
+    print()
+    tile_shape = X_MAP.get((B, M, N, K))
+    print("TileShape = ", tile_shape)
     print()
 
     print("Device name = ", torch.xpu.get_device_name())
@@ -390,7 +438,7 @@ def benchmark(B, M, N, K, provider):
         else:
             c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
 
-        name = 'gemm'
+        name = f'gemm_{tile_shape[0]}_{tile_shape[1]}_{tile_shape[2]}'
         print("Name = ", name)
         func = getattr(cutlass_kernel, name)
         print(func)
@@ -398,7 +446,6 @@ def benchmark(B, M, N, K, provider):
 
         def cutlass_invoker():
             func(a, b, c, M, N, K, B)
-            # func(a, b, c, M, N, K, B, K, N, 0, N)
             return c
 
         cutlass_fn = cutlass_invoker
@@ -412,13 +459,13 @@ def benchmark(B, M, N, K, provider):
         print(torch_c)
         print()
 
-        # rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-        # benchmark_suit.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
+        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+        benchmark_suit.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(cutlass_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
-        # user_input = input("Press 'q' to quit")
-        # if user_input.lower() == 'q':
-        #     assert()
+        user_input = input("Press 'q' to quit : ")
+        if user_input.lower() == 'q':
+            assert()
 
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
