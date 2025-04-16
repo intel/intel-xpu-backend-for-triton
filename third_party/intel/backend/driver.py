@@ -308,11 +308,11 @@ class XPUUtils(object):
         self.get_device_properties = self.mod.get_device_properties
         self.context = self.mod.init_context(self.get_sycl_queue())
         self.device_count = self.mod.init_devices(self.get_sycl_queue())
-        self.current_device = 0 if self.device_count[0] > 0 else -1
         self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
 
     def get_current_device(self):
-        return self.current_device
+        import torch
+        return torch.xpu.current_device()
 
     def get_sycl_queue(self):
         import torch
