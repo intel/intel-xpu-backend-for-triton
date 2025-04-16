@@ -5,6 +5,7 @@
 #include "TritonGPUToLLVMBase.h"
 #include "intel/include/Analysis/AxisInfo.h"
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
 namespace mlir::triton::intel {
@@ -84,7 +85,21 @@ void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
+void populateSPIRVFpConversionToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    RewritePatternSet &patterns, PatternBenefit benefit);
+
 /* Third party patterns end */
+
+/* Lowering to LLVM helper functions */
+
+// Generic implementation of ElementwiseOpConversionBase::createDestOps for
+// FpToFp op that can be used by target-specific patterns as a fallback
+// option for conversions cases not supported by the HW.
+SmallVector<Value>
+genericFpToFpToLLVM(FpToFpOp op, ConversionPatternRewriter &rewriter,
+                    const TypeConverter *typeConverter, Type elemTy,
+                    triton::gpu::MultipleOperandsRange operands, Location loc);
 
 } // namespace mlir::triton::intel
 
