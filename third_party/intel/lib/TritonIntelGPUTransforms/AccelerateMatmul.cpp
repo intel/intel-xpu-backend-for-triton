@@ -18,6 +18,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include <optional>
+#include <triton/Tools/Sys/GetEnv.hpp>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -68,6 +69,12 @@ getWarpsPerTile(Operation *dotOp,
   };
 
   SetVector<Operation *> slices = getSlice(dotOp, {filter});
+
+  // TODO: revisit this in flash attention.
+  bool parallelOnrows = false;
+  bool enhance = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_ENHANCED_ACCELERATION_MATMUL");
+
   for (Operation *op : slices) {
     if (isa<tt::DotOp, tt::DotScaledOp>(op) && (op != dotOp)) {
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
@@ -78,14 +85,60 @@ getWarpsPerTile(Operation *dotOp,
         setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
         setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
       }
-      SmallVector<unsigned> ret(shape.size(), 1);
-      ret[0] = numWarps;
-      return ret;
+
+      if (enhance) {
+        parallelOnrows = true;
+        break;
+      } else {
+        SmallVector<unsigned> ret(shape.size(), 1);
+        ret[0] = numWarps;
+        return ret;
+      }
     }
   }
 
   return ttgi::calculateWarpsPerTile(dpasCap.repeatCount, dpasCap.executionSize,
                                      shape, numWarps);
+#if 0
+  size_t rank = shape.size();
+  SmallVector<unsigned> ret(rank, 1);
+
+  if (rank == 3) {
+    int batchWarp = numWarps;
+    while (batchWarp > shape[0])
+      batchWarp /= 2;
+    ret[0] = batchWarp;
+    numWarps /= batchWarp;
+  }
+
+  // Try to find a proper tiling shape for the dot operation.
+  // It doubles the warp number in col or row in each time based on column to
+  // width ratio.
+  // By this, we can minimize the duplication of the dot operands A and B.
+  SmallVector<int64_t> shapePerWarp{dpasCap.repeatCount, dpasCap.executionSize};
+  uint32_t rowColRatio =
+      ceil<uint32_t>(dpasCap.repeatCount, dpasCap.executionSize);
+  uint32_t colRowRatio =
+      ceil<uint32_t>(dpasCap.executionSize, dpasCap.repeatCount);
+
+  int rowDim = rank - 2, colDim = rank - 1;
+  do {
+    if (ret[rowDim] * ret[colDim] >= numWarps)
+      break;
+    if (parallelOnrows ||
+        (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
+         shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim])) {
+      if (ret[rowDim] < shape[rowDim] / shapePerWarp[0])
+        ret[rowDim] *= 2;
+      else
+        ret[colDim] *= 2;
+    } else {
+      ret[colDim] *= 2;
+    }
+  } while (true);
+
+  return ret;
+#endif
 }
 
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
