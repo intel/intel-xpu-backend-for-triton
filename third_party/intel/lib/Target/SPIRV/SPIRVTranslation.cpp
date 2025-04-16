@@ -113,6 +113,7 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
       SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
       SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
       SPIRV::ExtensionID::SPV_INTEL_cache_controls,
+      SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,

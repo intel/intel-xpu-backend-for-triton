@@ -1,12 +1,13 @@
 import os
 import contextlib
+from typing import Optional
 
 import torch
 from torch.profiler import record_function
 import triton
 import triton.language as tl
 
-import triton_kernels_benchmark as benchmark_suit
+import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 import numpy as np
 
@@ -483,7 +484,7 @@ class _attention(torch.autograd.Function):
         # https://github.com/pytorch/pytorch/issues/144778 has more details.
         with record_function(
                 '__profile_kernel_of_func_bwd_fa'
-        ) if benchmark_suit.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
+        ) if benchmark_suite.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
             q, k, v, o, M = ctx.saved_tensors
             assert do.is_contiguous()
             assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
@@ -541,135 +542,182 @@ def check_close(f_val, f_ref, atol, rtol):
         print(f'Warning: {num_not_close}, out of {close.size} elements do not match ({num_perc:.2f}%) in XeTLA impl')
 
 
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
-        # argument names to use as an x-axis for the plot
-        x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
-        x_vals=[[z, h, 16384 // z, dhead, causal, mode]
-                for z in [1, 2, 4, 8, 16, 32]
-                for (h, dhead) in [(16, 128), (32, 64)]
-                for causal in [False, True]
-                for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]]  #
-        + [[4, 48, 1024, 64, causal, mode]
-           for causal in [False, True]
-           for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
-        line_arg='provider',
-        # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
-        line_vals=['triton', 'xetla'],
-        # label name for the lines
-        line_names=['Triton', 'XeTLA'],
-        # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='attn-performance',
-        # name for the plot. Used also as a file name for saving the plot.
-        args={},
-    ))
-def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
-    assert MODE in ['fwd', 'bwd']
-    dtype = torch.float16
-    q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
-    k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
-    v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
-    sm_scale = 0.125
-    if MODE == 'bwd':
-        sm_scale = 1.3
-    quantiles = [0.5, 0.0, 1.0]
-    atol = 1e-1 if N_CTX == 16384 else 1e-2
-    # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-    torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-    ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
-    if MODE == 'bwd':
-        torch_o = torch_fn()
-        torch_do = torch.randn_like(torch_o)
-        torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
-    if provider == 'onednn':
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+def get_benchmark(
+    providers_filter: Optional[list[str]] = None,
+    fa_kernel_mode='fwd',
+    xetla_assert_result=False,
+    xetla_warn_mismatch=True,
+):
+    """
+    Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
+    The benchmark can then be executed by calling the :code:`.run` method on the return value.
+    """
 
-    elif provider == 'triton':
-        triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
+    supported_providers = {
+        'triton': 'Triton',
+        'xetla': 'XeTLA',
+    }
+    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(
+            # argument names to use as an x-axis for the plot
+            x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
+            x_vals=[[z, h, 16384 // z, dhead, causal, mode]
+                    for z in [1, 2, 4, 8, 16, 32]
+                    for (h, dhead) in [(16, 128), (32, 64)]
+                    for causal in [False, True]
+                    for mode in [fa_kernel_mode]]  #
+            + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
+            line_arg='provider',
+            # argument name whose value corresponds to a different line in the plot
+            # possible values for `line_arg``
+            line_vals=list(providers.keys()),
+            # label name for the lines
+            line_names=list(providers.values()),
+            # line styles
+            styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+            ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+            plot_name='attn-performance',
+            # name for the plot. Used also as a file name for saving the plot.
+            args={},
+        ))
+    # pylint: disable=too-many-branches
+    def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+        modes = ['fwd', 'bwd']
+        if MODE not in modes:
+            raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
+        dtype = torch.float16
+        q = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
+        k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
+        v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
+        sm_scale = 0.125
         if MODE == 'bwd':
-            triton_o = triton_fn()
-            triton_do = torch.randn_like(triton_o)
-            triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
-        if MODE == 'fwd':
-            benchmark_suit.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+            sm_scale = 1.3
+        quantiles = [0.5, 0.0, 1.0]
+        atol = 1e-1 if N_CTX == 16384 else 1e-2
+        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
+        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale).to(torch.float32)
+        if MODE == 'bwd':
+            torch_o = torch_fn()
+            torch_do = torch.randn_like(torch_o)
+            torch_fn = lambda: torch_o.backward(torch_do, retain_graph=True)
+
+        if provider == 'onednn':
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                torch_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'triton':
+            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
+            if MODE == 'bwd':
+                triton_o = triton_fn()
+                triton_do = torch.randn_like(triton_o)
+                triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
+            if MODE == 'fwd':
+                benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+            else:
+                benchmark_suite.assert_close(
+                    lambda: triton_o,
+                    lambda: torch_o,
+                    atol=1e-2,
+                    rtol=0,
+                    err_msg='triton to torch',
+                )
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                triton_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'xetla':
+            xetla_fn = None
+            if MODE == 'fwd':
+                module_name = f'flash_attn_causal_{CAUSAL}'.lower()
+                func = getattr(xetla_kernel, module_name)
+                out = torch.empty_like(q, device='xpu', dtype=dtype)
+                size_score = Z * H * N_CTX * N_CTX
+                size_attn_mask = Z * N_CTX * N_CTX
+                dropout_mask = torch.empty((size_score, ), device='xpu', dtype=torch.uint8)
+                bias = torch.empty((size_attn_mask, ), device='xpu', dtype=dtype)
+                size_ml = Z * H * N_CTX
+                m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
+                l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
+
+                def xetla_fwd_fn():
+                    func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
+                    return out
+
+                xetla_fn = xetla_fwd_fn
+
+                def check_xetla_fwd_result():
+                    if xetla_assert_result:
+                        benchmark_suite.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
+                    elif xetla_warn_mismatch:
+                        check_close(xetla_fn, torch_fn, atol, 1e-3)
+
+                check_xetla_fwd_result()
+
+            if MODE == 'bwd':
+                module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
+                func = getattr(xetla_kernel, module_name)
+                grad_out = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
+                bias = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
+                dropout = torch.empty_like(q, device='xpu', dtype=torch.uint8)
+                out = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
+                log_sumexp = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
+                workspace = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
+                grad_q_tmp = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
+                alpha = sm_scale
+                dropout_prob = 0
+                grad_query = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
+                grad_key = torch.empty_like(k, device='xpu', dtype=dtype, requires_grad=True)
+                grad_value = torch.empty_like(v, device='xpu', dtype=dtype, requires_grad=True)
+                grad_bias = torch.empty_like(bias, device='xpu', dtype=dtype, requires_grad=True)
+                bias_strideB = -1
+                bias_strideN = -1
+                bias_strideF = -1
+                attn_mask_padding = 0
+
+                def xetla_bwd_fn():
+                    func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha, dropout_prob,
+                         grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX, N_CTX, bias_strideB,
+                         bias_strideN, bias_strideF, attn_mask_padding)
+                    return out
+
+                xetla_fn = xetla_bwd_fn
+
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                xetla_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
         else:
-            benchmark_suit.assert_close(lambda: triton_o, lambda: torch_o, atol=1e-2, rtol=0, err_msg='triton to torch')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+            raise NotImplementedError(f'Unsupported provider {provider}')
 
-    elif provider == 'xetla':
-        xetla_fn = None
-        if MODE == 'fwd':
-            module_name = f'flash_attn_causal_{CAUSAL}'.lower()
-            func = getattr(xetla_kernel, module_name)
-            out = torch.empty_like(q, device='xpu', dtype=dtype)
-            size_score = Z * H * N_CTX * N_CTX
-            size_attn_mask = Z * N_CTX * N_CTX
-            dropout_mask = torch.empty((size_score, ), device='xpu', dtype=torch.uint8)
-            bias = torch.empty((size_attn_mask, ), device='xpu', dtype=dtype)
-            size_ml = Z * H * N_CTX
-            m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-            l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-
-            def xetla_fwd_fn():
-                func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-                return out
-
-            xetla_fn = xetla_fwd_fn
-
-            def check_xetla_fwd_result():
-                if os.getenv('XETLA_ASSERT_RESULT', '0') == '1':
-                    benchmark_suit.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
-                elif os.getenv('XETLA_WARN_MISMATCH', '1') == '1':
-                    check_close(xetla_fn, torch_fn, atol, 1e-3)
-
-            check_xetla_fwd_result()
+        tflops = lambda mean: 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
+        gbps = lambda mean: Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
 
         if MODE == 'bwd':
-            module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
-            func = getattr(xetla_kernel, module_name)
-            grad_out = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-            bias = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-            dropout = torch.empty_like(q, device='xpu', dtype=torch.uint8)
-            out = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-            log_sumexp = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
-            workspace = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
-            grad_q_tmp = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
-            alpha = sm_scale
-            dropout_prob = 0
-            grad_query = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-            grad_key = torch.empty_like(k, device='xpu', dtype=dtype, requires_grad=True)
-            grad_value = torch.empty_like(v, device='xpu', dtype=dtype, requires_grad=True)
-            grad_bias = torch.empty_like(bias, device='xpu', dtype=dtype, requires_grad=True)
-            bias_strideB = -1
-            bias_strideN = -1
-            bias_strideF = -1
-            attn_mask_padding = 0
+            tflops = lambda mean: 2.5 * 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
+            gbps = lambda mean: 2.5 * Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
 
-            def xetla_bwd_fn():
-                func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha, dropout_prob,
-                     grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX, N_CTX, bias_strideB,
-                     bias_strideN, bias_strideF, attn_mask_padding)
-                return out
+        return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
-            xetla_fn = xetla_bwd_fn
-
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
-
-    else:
-        raise NotImplementedError(f'Unsupported provider {provider}')
-
-    tflops = lambda mean: 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
-    gbps = lambda mean: Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
-
-    if MODE == 'bwd':
-        tflops = lambda mean: 2.5 * 2 * 2 * Z * H * N_CTX * N_CTX * D_HEAD * (1e-12) / (mean * 1e-3)
-        gbps = lambda mean: 2.5 * Z * H * (N_CTX * D_HEAD + N_CTX * D_HEAD) * 2 * 2 * (1e-9) / (mean * 1e-3)
-
-    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
+    return benchmark
 
 
 if __name__ == '__main__':
-    benchmark.run(show_plots=False, print_data=True)
+    _benchmark = get_benchmark(
+        fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
+        xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
+        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+    )
+    _benchmark.run(show_plots=False, print_data=True)

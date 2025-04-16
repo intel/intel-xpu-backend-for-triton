@@ -2,6 +2,8 @@ import argparse
 import datetime
 import itertools
 import os
+from dataclasses import dataclass
+from typing import Optional
 
 import torch
 from torch.profiler import profile, ProfilerActivity, record_function
@@ -182,6 +184,19 @@ def assert_close(x_fn, y_fn, atol=None, rtol=None, err_msg=""):
         triton_assert_close(x_fn(), y_fn(), atol, rtol, err_msg)
 
 
+def filter_providers(
+    supported_providers: dict[str, str],
+    providers_filter: Optional[list[str]],
+) -> dict[str, str]:
+    providers = {}
+    if providers_filter:
+        for provider_key, provider_label in supported_providers.items():
+            if provider_key in providers_filter:
+                providers[provider_key] = provider_label
+        return providers
+    return supported_providers
+
+
 def perf_report(benchmarks):
     """
     Mark a function for benchmarking. The benchmark can then be executed by using the :code:`.run` method on the return value.
@@ -193,6 +208,35 @@ def perf_report(benchmarks):
     return wrapper
 
 
+@dataclass
+class MarkArgs:
+    reports: str = ""
+    n_runs: int = 1
+
+    @classmethod
+    def _parse_common_args(cls) -> tuple[argparse.Namespace, list[str]]:
+        """Parses arguments via CLI, allows save_path overloading to `reports`."""
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--reports",
+            type=str,
+            default="",
+            help="directory to save reports",
+        )
+        parser.add_argument(
+            "--n_runs",
+            type=int,
+            default=1,
+            help="number of runs for this benchmark",
+        )
+        return parser.parse_known_args()
+
+    @classmethod
+    def from_args(cls) -> "MarkArgs":
+        args, _ = cls._parse_common_args()
+        return MarkArgs(args.reports, args.n_runs)
+
+
 class Mark:
 
     def __init__(self, fn, benchmarks):
@@ -201,7 +245,7 @@ class Mark:
 
     # pylint: disable=too-many-branches
     def _run(self, bench: Benchmark, save_path: str, show_plots: bool, print_data: bool, diff_col=False, run_counter=0,
-             save_precision=6, **kwrags):
+             save_precision=6, **kwargs):
         import matplotlib.pyplot as plt  # pylint: disable=import-outside-toplevel
         import pandas as pd  # pylint: disable=import-outside-toplevel
         y_vals = []
@@ -226,7 +270,7 @@ class Mark:
             for label in itertools.chain(bench.ylabel, ["CV"]):
                 row_vals[label] = ([], [], [])
             for y in bench.line_vals:
-                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwrags)
+                ret = self.fn(**x_args, **{bench.line_arg: y}, **bench.args, **kwargs)
                 for i, label in enumerate(itertools.chain(bench.ylabel, ["CV"])):
                     try:
                         y_mean, y_min, y_max = ret[i]
@@ -285,8 +329,9 @@ class Mark:
             df.to_csv(os.path.join(save_path, f"{filename}.csv"), float_format=f"%.{save_precision}f", index=False)
         return df
 
-    def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, **kwargs):
-        args = parse_args()
+    def run(self, show_plots=False, print_data=False, return_df=False, save_precision=6, mark_args=None, **kwargs):
+        args = MarkArgs().from_args() if mark_args is None else mark_args
+
         has_single_bench = isinstance(self.benchmarks, Benchmark)
         benchmarks = [self.benchmarks] if has_single_bench else self.benchmarks
         result_dfs = []
@@ -319,21 +364,3 @@ class Mark:
             return result_dfs
 
         return None
-
-
-def parse_args():
-    """Parses arguments via CLI, allows save_path overloading to `reports`."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--reports",
-        type=str,
-        default="",
-        help="directory to save reports",
-    )
-    parser.add_argument(
-        "--n_runs",
-        type=int,
-        default=1,
-        help="number of runs for this benchmark",
-    )
-    return parser.parse_args()
