@@ -18,6 +18,7 @@
 #include "llvm/Support/Casting.h"
 #include <Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h>
 #include <optional>
+#include <triton/Tools/Sys/GetEnv.hpp>
 
 #define PVC_2D_LOAD_MAXIMUM_NUMBER_OF_ROWS 32
 #define PVC_2D_LOAD_MAXIMUM_BYTES_OF_COLS 64
@@ -63,8 +64,13 @@ getWarpsPerTile(Operation *dotOp,
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
-
   SetVector<Operation *> slices = multiRootGetSlice(dotOp, {filter});
+
+  // TODO: revisit this in flash attention.
+  bool parallelOnrows = false;
+  bool enhance = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_ENHANCED_ACCELERATION_MATMUL");
+
   for (Operation *op : slices) {
     if (isa<tt::DotOp, tt::DotScaledOp>(op) && (op != dotOp)) {
       if (auto forOp = op->getParentOfType<scf::ForOp>()) {
@@ -78,9 +84,15 @@ getWarpsPerTile(Operation *dotOp,
           setAttrOnBOperand(dotScaledOp.getB(), attrName, UnitAttr::get(ctx));
         }
       }
-      SmallVector<unsigned> ret(shape.size(), 1);
-      ret[0] = numWarps;
-      return ret;
+
+      if (enhance) {
+        parallelOnrows = true;
+        break;
+      } else {
+        SmallVector<unsigned> ret(shape.size(), 1);
+        ret[0] = numWarps;
+        return ret;
+      }
     }
   }
 
@@ -109,8 +121,9 @@ getWarpsPerTile(Operation *dotOp,
   do {
     if (ret[rowDim] * ret[colDim] >= numWarps)
       break;
-    if (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
-        shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim]) {
+    if (parallelOnrows ||
+        (shape[rowDim] / (shapePerWarp[0] * colRowRatio) / ret[rowDim] >=
+         shape[colDim] / (shapePerWarp[1] * rowColRatio) / ret[colDim])) {
       if (ret[rowDim] < shape[rowDim] / shapePerWarp[0])
         ret[rowDim] *= 2;
       else
