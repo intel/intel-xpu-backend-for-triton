@@ -135,6 +135,8 @@ public:
 protected:
   virtual int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                             int dim) {
+    if (getContiguity(op, lhs, rhs, dim) > 1)
+      return 1;
     return -1;
   }
 
@@ -535,16 +537,6 @@ public:
   using BinaryOpVisitorImpl<OpTy>::BinaryOpVisitorImpl;
 
 private:
-  int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
-                    int dim) override {
-    if (getContiguity(op, lhs, rhs, dim) > 1)
-      return 1;
-    if (lhs.getStride(dim) > 0 && rhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().value() != 0)
-      return lhs.getStride(dim) % rhs.getConstantValue().value();
-    return -1;
-  }
-
   int64_t getContiguity(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                         int dim) override {
     auto resTy = ttgi::getRankedTensorType(op.getType());

@@ -897,24 +897,28 @@ tt.func public @make_tensor_ptr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E5M2> {tt.
 // -----
 
 // CHECK-LABEL: @ptr_offset
-tt.func public @ptr_offset(%arg0: i32, %arg1: i32) {
+tt.func public @ptr_offset(%arg0: i32) {
   // CHECK: stride = [0, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [128, 1], constant_value = 512
   %cst_0 = arith.constant dense<512> : tensor<128x1xi32>
   // CHECK: stride = [0], contiguity = [1], divisibility = [512], constancy = [128], constant_value = 512
   %cst_1 = arith.constant dense<512> : tensor<128xi32>
-  // CHECK: stride = [0], contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>
-  %0 = tt.splat %arg0 : i32 -> tensor<128xi32>
+  // CHECK: stride = [0], contiguity = [1], divisibility = [128], constancy = [1], constant_value = 128
+  %c128_i32 = arith.constant 128 : i32
+  // CHECK: stride = [0], contiguity = [1], divisibility = [128], constancy = [1], constant_value = <none>
+  %0 = arith.muli %arg0, %c128_i32 : i32
+  // CHECK: stride = [0], contiguity = [1], divisibility = [128], constancy = [128], constant_value = <none>
+  %1 = tt.splat %0 : i32 -> tensor<128xi32>
   // CHECK: stride = [1], contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>
-  %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
-  // CHECK: stride = [1], contiguity = [128], divisibility = [1], constancy = [1], constant_value = <none>
-  %2 = arith.addi %0, %1 : tensor<128xi32>
-  // CHECK: stride = [1], contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
-  %3 = arith.remsi %2, %cst_1 : tensor<128xi32>
-  // CHECK: stride = [1, 0], contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
-  %4 = tt.expand_dims %3 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
+  %2 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // CHECK: stride = [1], contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>
+  %3 = arith.addi %1, %2 : tensor<128xi32>
+  // CHECK: stride = [1], contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>
+  %4 = arith.remsi %3, %cst_1 : tensor<128xi32>
+  // CHECK: stride = [1, 0], contiguity = [128, 1], divisibility = [128, 1], constancy = [1, 1], constant_value = <none>
+  %5 = tt.expand_dims %4 {axis = 1 : i32} : tensor<128xi32> -> tensor<128x1xi32>
   // CHECK: stride = [512, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [1, 1], constant_value = <none>
-  %5 = arith.muli %4, %cst_0 : tensor<128x1xi32>
+  %6 = arith.muli %5, %cst_0 : tensor<128x1xi32>
   // CHECK: stride = [512, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [1, 64], constant_value = <none>
-  %6 = tt.broadcast %5 : tensor<128x1xi32> -> tensor<128x64xi32>
+  %7 = tt.broadcast %6 : tensor<128x1xi32> -> tensor<128x64xi32>
   tt.return
 }
