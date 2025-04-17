@@ -114,7 +114,7 @@ setup(
     version="3.3.0" + get_git_commit_hash(),
     packages=["triton_kernels_benchmark"],
     install_requires=[
-        # "torch",
+        "torch>=2.6",
         "pandas",
         "psutil",
         "tabulate",
