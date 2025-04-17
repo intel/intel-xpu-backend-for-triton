@@ -9,9 +9,7 @@ import time
 
 from triton_kernels_benchmark.benchmark_testing import Benchmark, MarkArgs, Mark
 
-from triton_kernels_benchmark import fused_softmax
-from triton_kernels_benchmark import gemm_benchmark
-from triton_kernels_benchmark import flash_attention_benchmark
+from triton_kernels_benchmark import fused_softmax, gemm_benchmark, flash_attention_benchmark
 
 
 class BenchmarkCategory(Enum):
@@ -52,7 +50,7 @@ class BenchmarkConfig:
     category: BenchmarkCategory
     providers_filter: Optional[list[str]] = None
     config_opts: Dict[str, Union[str, bool, List[str]]] = field(default_factory=dict)
-    benchmark_summary: BenchmarkSummary = field(init=False)
+    config_summary: BenchmarkSummary = field(init=False)
 
     def _get_benchmark(self, apply_providers_filter=True) -> Mark:
         run_opts = self.config_opts
@@ -67,7 +65,7 @@ class BenchmarkConfig:
     def __post_init__(self):
         benchmark: Benchmark = self._get_benchmark().benchmarks
         full_benchmark: Benchmark = self._get_benchmark(False).benchmarks
-        self.benchmark_summary = BenchmarkSummary(
+        self.config_summary = BenchmarkSummary(
             key=self.key,
             name=benchmark.plot_name,
             variant_fields=benchmark.x_names,
@@ -81,15 +79,15 @@ class BenchmarkConfig:
             f"Config: {self.key}",
             f"Config category: {self.category.value}",
             f"Run options: {self.config_opts}",
-            f"Supported providers {self.benchmark_summary.supported_providers}",
-            f"Selected providers: {self.benchmark_summary.selected_providers}",
-            str(self.benchmark_summary),
+            f"Supported providers {self.config_summary.supported_providers}",
+            f"Selected providers: {self.config_summary.selected_providers}",
+            str(self.config_summary),
         ]
         return "\n".join(str_repr)
 
-    def run(self, dry_run: bool, args: MarkArgs):
+    def run(self, collect_only: bool, args: MarkArgs):
         print(str(self))
-        if dry_run:
+        if collect_only:
             return
         # FIXME: add run summary - total timings, etc
         print(f"Running {self.key}")
@@ -99,7 +97,7 @@ class BenchmarkConfig:
 @dataclass
 class BenchmarkConfigs:
     configs: List[BenchmarkConfig]
-    dry_run: bool
+    collect_only: bool
     args: MarkArgs
 
     _benchmark_config_templates: ClassVar[List[BenchmarkConfig]] = [
@@ -138,15 +136,15 @@ class BenchmarkConfigs:
         for config in all_configs:
             key = config.key
             if key == "all":
-                raise AssertionError("`all` can't be a config name key")
+                raise AssertionError("`all` can't be a config name key.")
             if key in config_keys:
-                raise ValueError(f"Duplicate config name key - {key}")
+                raise ValueError(f"Duplicate config name key - {key}.")
             config_keys.append(key)
             if key == suite:
                 selected_config = config
         if selected_config and selected_config.category.value not in categories_filter:
             raise AssertionError(
-                f"Selected config {selected_config.key} category {selected_config.category} is not in the categories filter"
+                f"Selected config {selected_config.key} category {selected_config.category} is not in the categories filter."
             )
         if selected_config:
             return [selected_config]
@@ -158,48 +156,73 @@ class BenchmarkConfigs:
     def run(self):
         start = time.perf_counter()
         for config in self.configs:
-            config.run(args=self.args, dry_run=self.dry_run)
+            config.run(args=self.args, collect_only=self.collect_only)
         end = time.perf_counter()
-        print(f"Total run time: {round(end-start, 3)}")
+        print(f"Total run time including overhead: {round(end-start, 3)} seconds.")
 
     @classmethod
     def _parse_args(cls, remaining_args) -> argparse.Namespace:
 
         parser = argparse.ArgumentParser()
         parser.add_argument(
-            "benchmark_suite",
-            help="Name of the benchmark config. Run `all` `--dry-run` to get the list of the supported configs",
+            "config_filter",
+            help="Name of the benchmark config. Run `all --co` to get the list of the supported configs.",
         )
         parser.add_argument(
-            "--dry-run",
+            "--co",
             action="store_true",
-            help="List all known configs, do not run the benchmarks",
+            help="List all known configs, do not run the benchmarks.",
         )
         parser.add_argument(
             "--provider", action="append",
             help=("Run benchmark with a provider. This option can be executed multiple times. "
                   "If not set all providers will be benchmarked in a given context - "
-                  "hw capabilities, provider support for a specific set of benchmark config params, etc"))
+                  "hw capabilities, provider support for a specific set of benchmark config params, etc."))
         categories = [cat.value for cat in BenchmarkCategory]
+        categories_str = ", ".join(categories)
         parser.add_argument(
-            "--bench-category", action="append", choices=categories, default=categories, help=str(
-                "Apply the action to benchmark suites in the specified category. Must be one of: " +
-                ", ".join(categories), ))
+            "--category",
+            action="append",
+            choices=categories,
+            default=categories,
+            help=str(
+                f"Apply the action to bechmark suites in the specified category. Must be one of: {categories_str}.", ),
+        )
         args = parser.parse_args(remaining_args)
 
         return args
 
     @classmethod
+    def _from_args(
+        cls,
+        args: MarkArgs,
+        configs_filter: str,
+        categories_filter: List[str],
+        providers_filter: List[str],
+        collect_only: bool,
+    ) -> BenchmarkConfigs:
+        template_configs = cls._get_configs(
+            configs_filter,
+            categories_filter,
+        )
+        return BenchmarkConfigs(
+            configs=[replace(template, providers_filter=providers_filter) for template in template_configs],
+            args=args,
+            collect_only=collect_only,
+        )
+
+    @classmethod
     def from_args(cls) -> BenchmarkConfigs:
         base_args, remaining_args = MarkArgs.parse_common_args()
         additional_args = cls._parse_args(remaining_args)
-        template_configs = cls._get_configs(
-            additional_args.benchmark_suite,
-            additional_args.bench_category,
+        args = MarkArgs(**vars(base_args))
+        return cls._from_args(
+            args=args,
+            configs_filter=additional_args.config_filter,
+            categories_filter=additional_args.category,
+            providers_filter=additional_args.provider,
+            collect_only=additional_args.co,
         )
-        return BenchmarkConfigs(
-            configs=[replace(template, providers_filter=additional_args.provider) for template in template_configs],
-            args=MarkArgs(**vars(base_args)), dry_run=additional_args.dry_run)
 
 
 def main():
