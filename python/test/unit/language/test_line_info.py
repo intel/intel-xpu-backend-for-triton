@@ -6,7 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_interpreter, is_xpu
+from triton._internal_testing import is_interpreter
 
 
 @triton.jit
@@ -270,9 +270,6 @@ def test_line_info_env(monkeypatch, status: str):
 
 @pytest.mark.parametrize("status", ["ttir", ""])
 def test_line_info_ir_source(monkeypatch, status, tmp_path):
-    if is_xpu():
-        pytest.skip("KeyError: Unknown key: 'spvbin'")
-
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
@@ -295,7 +292,10 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
     temp_file = tmp_path / "test.ttir"
     temp_file.write_text(src)
     kernel_info = triton.compile(str(temp_file))
-    file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
+    if obj_kind == "spvbin":
+        file_lines = spv_extract_file_lines(kernel_info.asm["spv"], command)
+    else:
+        file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if status == "ttir":
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=False)
         assert check_file_lines(file_lines, str(temp_file), -1, should_contain=True)
