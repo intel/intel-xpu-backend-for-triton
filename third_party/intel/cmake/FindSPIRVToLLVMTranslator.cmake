@@ -21,6 +21,17 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     FetchContent_GetProperties(spirv-llvm-translator)
     if(NOT spirv-llvm-translator_POPULATED)
             FetchContent_Populate(spirv-llvm-translator)
+
+            # FIXME: don't apply patch
+            execute_process(
+                COMMAND curl -sSL https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3118.diff | git apply -
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                RESULT_VARIABLE PATCH_RESULT
+            )
+            if(NOT PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to apply patch to SPIRV-LLVM-Translator")
+            endif()
+
             set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
             set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
             set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
