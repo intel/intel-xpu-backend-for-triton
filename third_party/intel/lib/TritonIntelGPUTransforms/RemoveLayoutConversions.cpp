@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
+#include <triton/Tools/Sys/GetEnv.hpp>
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUREMOVELAYOUTCONVERSIONS
@@ -232,12 +233,14 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
                                     SmallVector<Value> &changed,
                                     Operation *op) {
   for (Value value : values) {
+    if (!value)
+      continue;
     if (!isa<RankedTensorType>(value.getType()))
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
       Attribute dstEncoding;
-      if (isa<ConvertLayoutOp>(op)) {
+      if (isa<StoreOp, ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
         dstEncoding = encoding;
@@ -254,6 +257,9 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
 
 SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
                                                        LayoutInfo &info) {
+
+  bool propagateToStores = mlir::triton::tools::getBoolEnv(
+      "TRITON_INTEL_PROPERGATE_LAYOUT_TO_STORES");
   SmallVector<Value> changed;
   for (OpOperand &use : value.getUses()) {
     Operation *user = use.getOwner();
@@ -300,6 +306,20 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       if (isBlockedOrMma)
         setEncoding(user->getResults(), info, changed, user);
       continue;
+    }
+    if (auto storeOp = dyn_cast<StoreOp>(user)) {
+      if (propagateToStores) {
+        bool isSliceorBlockedorMMA =
+            std::all_of(info.encodings.begin(), info.encodings.end(),
+                        [](Attribute encoding) {
+                          return isa<SliceEncodingAttr, BlockedEncodingAttr,
+                                     MmaEncodingTrait>(encoding);
+                        });
+        if (isSliceorBlockedorMMA)
+          setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
+                      info, changed, user);
+        continue;
+      }
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
@@ -418,6 +438,32 @@ void LayoutPropagation::rewriteRegion(Region &region) {
         if (auto storeOp = dyn_cast<StoreOp>(&op)) {
           if (rewriteStoreOp(storeOp))
             continue;
+
+          auto ops = op.getOpOperands();
+          bool usesNewEncoding =
+              std::all_of(ops.begin(), ops.end(), [&](OpOperand &operand) {
+                auto it = layouts.find(operand.get());
+                if (it == layouts.end())
+                  return false;
+                LayoutInfo &info = it->second;
+                assert(info.encodings.size() == 1 &&
+                       "we should have resolved to a single encoding");
+                return true;
+              });
+          if (usesNewEncoding) {
+            for (OpOperand &operand : op.getOpOperands()) {
+              auto it = layouts.find(operand.get());
+              if (it == layouts.end())
+                continue;
+              Attribute encoding =
+                  cast<RankedTensorType>(operand.get().getType()).getEncoding();
+              LayoutInfo &info = it->second;
+              encoding = info.encodings[0];
+              Value newOperand = getValueAs(operand.get(), encoding);
+              op.setOperand(operand.getOperandNumber(), newOperand);
+            }
+            continue;
+          }
         }
 
         // If we don't need to rewrite the op we still need to remap the
