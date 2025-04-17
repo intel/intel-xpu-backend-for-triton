@@ -6,7 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_interpreter
+from triton._internal_testing import is_interpreter, is_xpu
 
 
 @triton.jit
@@ -270,6 +270,9 @@ def test_line_info_env(monkeypatch, status: str):
 
 @pytest.mark.parametrize("status", ["ttir", ""])
 def test_line_info_ir_source(monkeypatch, status, tmp_path):
+    if is_xpu():
+        pytest.skip("KeyError: Unknown key: 'spvbin'")
+
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
