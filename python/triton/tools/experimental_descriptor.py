@@ -1,4 +1,3 @@
-import torch
 from dataclasses import dataclass
 from typing import List, Any
 
@@ -9,6 +8,7 @@ class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
 
     def __init__(self):
+        import torch
         self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
 
     def fill_(self, ptr, dims, block_dims, element_size):
