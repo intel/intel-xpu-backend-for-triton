@@ -24,7 +24,16 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
 
             # FIXME: don't apply patch
             execute_process(
-                COMMAND curl -sSL https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3118.diff | git apply -
+                COMMAND curl -sSL https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3118.diff
+                OUTPUT_FILE ${CMAKE_BINARY_DIR}/3118.diff
+                RESULT_VARIABLE CURL_RESULT
+            )
+            if(NOT CURL_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to download patch from https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3118.diff")
+            endif()
+
+            execute_process(
+                COMMAND git apply ${CMAKE_BINARY_DIR}/3118.diff
                 WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
                 RESULT_VARIABLE PATCH_RESULT
             )
