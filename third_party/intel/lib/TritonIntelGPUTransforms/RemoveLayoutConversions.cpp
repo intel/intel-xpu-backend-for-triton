@@ -232,12 +232,14 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
                                     SmallVector<Value> &changed,
                                     Operation *op) {
   for (Value value : values) {
+    if (!value)
+      continue;
     if (!isa<RankedTensorType>(value.getType()))
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
       Attribute dstEncoding;
-      if (isa<ConvertLayoutOp>(op)) {
+      if (isa<StoreOp, ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
         dstEncoding = encoding;
@@ -299,6 +301,17 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
           });
       if (isBlockedOrMma)
         setEncoding(user->getResults(), info, changed, user);
+      continue;
+    }
+    if (auto storeOp = dyn_cast<StoreOp>(user)) {
+      bool isBlockedOrMma = std::all_of(
+          info.encodings.begin(), info.encodings.end(), [](Attribute encoding) {
+            return isa<SliceEncodingAttr, BlockedEncodingAttr,
+                       MmaEncodingTrait>(encoding);
+          });
+      if (isBlockedOrMma)
+        setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
+                    info, changed, user);
       continue;
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
@@ -422,12 +435,32 @@ void LayoutPropagation::rewriteRegion(Region &region) {
 
         // If we don't need to rewrite the op we still need to remap the
         // operands.
+        auto ops = op.getOpOperands();
+        bool usesNewEncoding =
+            std::all_of(ops.begin(), ops.end(), [&](OpOperand &operand) {
+              auto it = layouts.find(operand.get());
+              if (it == layouts.end())
+                return false;
+              LayoutInfo &info = it->second;
+              assert(info.encodings.size() == 1 &&
+                     "we should have resolved to a single encoding");
+              return true;
+            });
         for (OpOperand &operand : op.getOpOperands()) {
           auto it = layouts.find(operand.get());
           if (it == layouts.end())
             continue;
           Attribute encoding =
               cast<RankedTensorType>(operand.get().getType()).getEncoding();
+          if (usesNewEncoding) {
+            LayoutInfo &info = it->second;
+            LLVM_DEBUG({
+              DBGS() << "propagateLayout rewrite op:" << op
+                     << ", use new encoding: " << info.encodings[0]
+                     << " to replace old encoding:" << encoding << "\n";
+            });
+            encoding = info.encodings[0];
+          }
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
