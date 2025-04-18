@@ -180,9 +180,12 @@ static Operation *getDefOp(Value v, Operation *op, bool includeArg) {
     if (!seen.insert(v).second)
       break;
     if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-      auto yieldOp = op->getBlock()->getTerminator();
-      v = yieldOp->getOperand(arg.getArgNumber() - 1);
-      continue;
+      Operation *termOp = op->getBlock()->getTerminator();
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(termOp)) {
+        v = yieldOp->getOperand(arg.getArgNumber() - 1);
+        continue;
+      }
+      break;
     }
     break;
   }

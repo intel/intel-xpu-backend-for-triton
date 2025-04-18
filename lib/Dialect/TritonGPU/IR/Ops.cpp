@@ -454,12 +454,10 @@ void LocalAllocOp::getEffects(
   // op.
   if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
     return;
-  effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::gpu::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Allocate::get(), SharedMemory::get());
   if (getSrc())
     effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0),
-                         mlir::triton::gpu::SharedMemory::get());
+                         getOperation()->getOpResult(0), SharedMemory::get());
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
@@ -492,12 +490,15 @@ LogicalResult LocalAllocOp::verify() {
   return success();
 }
 
-// LocalLoadOp
-void LocalLoadOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
+int32_t LocalAllocOp::getAlignmentOrDefault() {
+  auto align = getAlignment();
+  if (align) {
+    return *align;
+  }
+
+  auto ty = getType();
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
 }
 
 // LocalStoreOp
@@ -507,27 +508,11 @@ LogicalResult LocalStoreOp::verify() {
   return success();
 }
 
-void LocalStoreOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
   return success();
-}
-
-void AsyncCopyGlobalToLocalOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
 }
 
 LogicalResult MemDescSubviewOp::verify() {
@@ -595,19 +580,6 @@ LogicalResult MemDescSubviewOp::verify() {
   // resulting code ultimately works.
 
   return success();
-}
-
-// -- LocalAllocOp --
-
-int32_t LocalAllocOp::getAlignmentOrDefault() {
-  auto align = getAlignment();
-  if (align) {
-    return *align;
-  }
-
-  auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
-  return enc ? enc.getAlignment() : 16;
 }
 
 // -- WarpSpecializeOp --
@@ -771,7 +743,7 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
                              ArrayRef<int32_t> partitionNumWarps,
                              unsigned partitionNumRegions) {
   build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
-        partitionNumWarps, /*warpGroupStartIds=*/{});
+        partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
   Block *container = builder.createBlock(state.regions.back().get());
   builder.create<WarpSpecializePartitionsOp>(state.location,

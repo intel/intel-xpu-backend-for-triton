@@ -9,8 +9,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <variant>
 
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
@@ -21,8 +19,6 @@ typedef struct l0_resc_handles {
   ze_command_queue_handle_t queue;
   ze_command_list_handle_t cmd_list;
 } l0_resc_handles;
-
-using SyclQueueMap = std::unordered_map<sycl::queue, l0_resc_handles>;
 
 // Create an exception handler for asynchronous SYCL exceptions
 auto exception_handler = [](sycl::exception_list e_list) {
@@ -145,38 +141,6 @@ void printModuleKernelName(ze_module_handle_t hModule) {
       std::cout << std::string(PNames[i]) << std::endl;
     }
   }
-}
-
-std::vector<sycl::device> update(sycl::queue sycl_queue,
-                                 SyclQueueMap &sycl_queue_map) {
-  // Get l0-context
-  auto sycl_context = sycl_queue.get_context();
-  ze_context_handle_t hCtxt =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_context);
-  // Get l0-device
-  const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
-  assert(sycl_devices.size() > 0);
-  ze_device_handle_t hDev =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-          sycl_devices.front());
-  // Get l0-queue
-  bool immediate_cmd_list = false;
-  std::variant<ze_command_queue_handle_t, ze_command_list_handle_t> queue_var =
-      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_queue);
-  auto l0_queue = std::get_if<ze_command_queue_handle_t>(&queue_var);
-  if (l0_queue == nullptr) {
-    auto imm_cmd_list = std::get_if<ze_command_list_handle_t>(&queue_var);
-    if (imm_cmd_list == nullptr) {
-      return {};
-    }
-    immediate_cmd_list = true;
-    sycl_queue_map[sycl_queue].cmd_list = *imm_cmd_list;
-  }
-  sycl_queue_map[sycl_queue].context = hCtxt;
-  sycl_queue_map[sycl_queue].device = hDev;
-  sycl_queue_map[sycl_queue].queue = immediate_cmd_list ? 0 : *l0_queue;
-
-  return sycl_devices;
 }
 
 #endif // SYCL_FUNCTIONS_INCLUDE_H_

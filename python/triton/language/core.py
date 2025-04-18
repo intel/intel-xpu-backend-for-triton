@@ -1846,8 +1846,8 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 
 @builtin
-def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False, out_dtype=float32,
-               _builder=None):
+def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False, lhs_k_pack=True,
+               rhs_k_pack=True, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks in microscaling format.
 
@@ -1874,11 +1874,15 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
+    :param lhs_k_pack: If false, the lhs tensor is packed into uint8 along M dimension.
+    :type lhs_k_pack: bool, optional
+    :param rhs_k_pack: If false, the rhs tensor is packed into uint8 along N dimension.
+    :type rhs_k_pack: bool, optional
     """
     out_dtype = _constexpr_to_value(out_dtype)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
-    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, out_dtype,
-                               _builder)
+    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, lhs_k_pack,
+                               rhs_k_pack, out_dtype, _builder)
 
 
 # -----------------------
@@ -1945,39 +1949,6 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     volatile = _constexpr_to_value(volatile)
     return semantic.load(pointer, mask, other, boundary_check, padding_option, cache_modifier, eviction_policy,
                          volatile, _builder)
-
-
-@builtin
-def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype, _builder=None) -> tensor_descriptor_base:
-    """
-    Reinterpret a generic pointer as a TMA-backed tensor descriptor object.
-    """
-    block_ty = block_type(_constexpr_to_value(dtype), block_shape)
-    return semantic.reinterpret_tensor_descriptor(desc_ptr, block_ty, _builder)
-
-
-@builtin
-def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=None):
-    """
-    Experimental feature to access TMA descriptors loads. This is an escape hatch to easily exercise TTGIR operations.
-    This will be removed in the future and shouldn't be used in production code.
-
-    This loads a tensor of data based on the descriptor and offsets.
-    """
-    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, shape, dtype, _builder=_builder)
-    return desc.load(offsets, _builder=_builder)
-
-
-@builtin
-def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
-    """
-    Experimental feature to access TMA descriptors stores. This is an escape hatch to easily exercise TTGIR operations.
-    This will be removed in the future and shouldn't be used in production code.
-
-    This stores a tensor of data based on the descriptor and offsets.
-    """
-    desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, value.shape, value.dtype, _builder=_builder)
-    return desc.store(offsets, value, _builder=_builder)
 
 
 @builtin

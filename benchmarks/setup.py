@@ -111,10 +111,10 @@ def get_git_commit_hash(length=8):
 
 setup(
     name="triton-kernels-benchmark",
-    version="3.1.0" + get_git_commit_hash(),
+    version="3.3.0" + get_git_commit_hash(),
     packages=["triton_kernels_benchmark"],
     install_requires=[
-        "torch",
+        "torch>=2.6",
         "pandas",
         "psutil",
         "tabulate",
@@ -126,7 +126,9 @@ setup(
         "build_ext": build_ext,
     },
     ext_modules=[CMakeExtension("triton_kernels_benchmark.xetla_kernel")],
-    extras_require={
-        "pytorch": ["torch>=2.6"],
+    entry_points={
+        "console_scripts": [
+            "triton-benchmarks = triton_kernels_benchmark.benchmark_utils:main",
+        ],
     },
 )

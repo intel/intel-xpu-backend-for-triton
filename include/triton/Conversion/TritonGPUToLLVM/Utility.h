@@ -53,9 +53,6 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
                           TypeRange types, ValueRange args);
 } // namespace mlir::LLVM
 
-// Is v an integer or floating-point scalar constant equal to 0?
-bool isConstantZero(Value v);
-
 namespace mlir::triton {
 
 struct TritonLLVMOpBuilder {
@@ -347,9 +344,6 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 
 namespace LLVM {
 using namespace mlir::triton;
-
-// Is v an integer or floating-point scalar constant equal to 0?
-bool isConstantZero(Value v);
 
 class SharedMemoryObject {
 public:
@@ -712,8 +706,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
-SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           triton::gpu::MemDescType srcTy,
+SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
                                            Type elemLlvmTy,
                                            const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,

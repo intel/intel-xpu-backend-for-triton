@@ -20,15 +20,38 @@ Note that currently this tutorial will fail on devices with a small shared memor
 """
 
 import argparse
+import itertools
 
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 import triton.profiler as proton
+from triton.tools.tensor_descriptor import TensorDescriptor
 from contextlib import contextmanager
 
 from typing import Optional
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
+
+
+def is_enough_memory(M, N, K, dtype):
+    # a: (M, K) dtype
+    # b: (N, K) dtype
+    # c: (M, N) float32
+    # d: (M, N) float32
+    finfo = torch.finfo(dtype)
+    dtype_size = finfo.bits // 8
+    required_memory = 2 * (M * K * dtype_size + N * K * dtype_size + 2 * M * N * 4)
+    enough_memory = required_memory < DEVICE_TOTAL_MEMORY
+
+    if not enough_memory:
+        deviceName = torch.xpu.get_device_name()
+        print(
+            f"'{M , N, K, dtype}' combination skipped for '{deviceName}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}"
+        )
+    return enough_memory
+
 
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia
@@ -42,18 +65,33 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
 def supports_tma():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
 
 
+def supports_ws():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 10
+
+
+def num_sms():
+    if is_cuda():
+        return torch.cuda.get_device_properties("cuda").multi_processor_count
+    if is_xpu():
+        return torch.xpu.get_device_properties("xpu").gpu_eu_count
+    return 148
+
+
 def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
-    M, N, K = args["M"], args["N"], args["K"]
-    ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
+    M, N, K, WS = args["M"], args["N"], args["K"], args.get("WARP_SPECIALIZE", False)
+    ws_str = "_ws" if WS else ""
+    ret["name"] = f"{kernel.name}{ws_str} [M={M}, N={N}, K={K}]"
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
-    elif "c_desc_ptr" in args:
-        bytes_per_elem = 2
     else:
         bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
     ret[f"flops{bytes_per_elem * 8}"] = 2. * M * N * K
@@ -61,53 +99,14 @@ def _matmul_launch_metadata(grid, kernel, args):
     return ret
 
 
-HAS_TMA_DESC = supports_tma() and hasattr(tl, "nv_tma_desc_type")
-HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
+HAS_TENSOR_DESC = (is_xpu() or supports_tma()) and hasattr(tl, "make_tensor_descriptor")
+HAS_HOST_TENSOR_DESC = supports_tma() and hasattr(triton.tools.tensor_descriptor, "TensorDescriptor")
+HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
 
 
-# TmaAutoTuneHelper used in htyu's PR #5622
-class TmaAutoTuneHelper:
-
-    # duck typing wrapper to implement the same interface as TmaDescKernelParam in Triton PR #4498
-    class KernelParamWrapper:
-
-        def __init__(self, desc):
-            self.desc = desc
-
-        def tma_desc_cpu_ptr(self):
-            return self.desc.data_ptr()
-
-    TMA_SIZE = 128
-
-    def __init__(self):
-        self.fill_1d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_1d_tma_descriptor)
-        self.fill_2d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_2d_tma_descriptor)
-        self.descriptors = {}
-
-    # Call this method outside of the lambda function for grid size
-    def init_tma_descriptor(self, name):
-        self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
-
-    # Call this method inside the lambda function for grid size
-    def fill_1d_tma_descriptor(self, name, ptr, dim, block_dim, element_size):
-        desc_x = self.descriptors[name]
-        assert desc_x.data_ptr() % 64 == 0
-        self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
-
-    # Call this method inside the lambda function for grid size
-    def fill_2d_tma_descriptor(self, name, ptr, dim1, dim0, block_dim1, block_dim0, element_size):
-        desc_x = self.descriptors[name]
-        assert desc_x.data_ptr() % 64 == 0
-        self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
-
-    def get_tma_descriptor_kernel_param(self, name):
-        assert self.descriptors[name] is not None
-        return self.KernelParamWrapper(self.descriptors[name])
-
-
-def matmul_get_configs():
+def matmul_get_configs(pre_hook=None):
     return [
-        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8}, num_stages=s, num_warps=w) \
+        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8}, num_stages=s, num_warps=w, pre_hook=pre_hook) \
         for BM in [128] \
         for BN in [128, 256] \
         for BK in [64,128] \
@@ -197,19 +196,33 @@ def matmul(a, b):
     return c
 
 
+def matmul_tma_set_block_size_hook(nargs):
+    EPILOGUE_SUBTILE = nargs.get("EPILOGUE_SUBTILE", False)
+    BLOCK_M = nargs["BLOCK_SIZE_M"]
+    BLOCK_N = nargs["BLOCK_SIZE_N"]
+    BLOCK_K = nargs["BLOCK_SIZE_K"]
+    nargs["a_desc"].block_shape = [BLOCK_M, BLOCK_K]
+    nargs["b_desc"].block_shape = [BLOCK_N, BLOCK_K]
+    if EPILOGUE_SUBTILE:
+        nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N // 2]
+    else:
+        nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N]
+
+
 @triton.autotune(
-    configs=matmul_get_configs(),
-    key=["M", "N", "K"],
+    configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook),
+    key=["M", "N", "K", "WARP_SPECIALIZE"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def matmul_kernel_tma_ws(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
-                         M, N, K,  #
-                         BLOCK_SIZE_M: tl.constexpr,  #
-                         BLOCK_SIZE_N: tl.constexpr,  #
-                         BLOCK_SIZE_K: tl.constexpr,  #
-                         GROUP_SIZE_M: tl.constexpr,  #
-                         FP8_OUTPUT: tl.constexpr,  #
-                         ):
+def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
+                      M, N, K,  #
+                      BLOCK_SIZE_M: tl.constexpr,  #
+                      BLOCK_SIZE_N: tl.constexpr,  #
+                      BLOCK_SIZE_K: tl.constexpr,  #
+                      GROUP_SIZE_M: tl.constexpr,  #
+                      FP8_OUTPUT: tl.constexpr,  #
+                      WARP_SPECIALIZE: tl.constexpr,  #
+                      ):
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
 
     pid = tl.program_id(axis=0)
@@ -229,20 +242,20 @@ def matmul_kernel_tma_ws(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for k in tl.range(k_tiles, warp_specialize=True, num_stages=3):
+    for k in tl.range(k_tiles, warp_specialize=WARP_SPECIALIZE):
         offs_k = k * BLOCK_SIZE_K
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+        a = a_desc.load([offs_am, offs_k])
+        b = b_desc.load([offs_bn, offs_k])
         accumulator = tl.dot(a, b.T, accumulator)
 
     c = accumulator.to(dtype)
 
     offs_cm = pid_m * BLOCK_SIZE_M
     offs_cn = pid_n * BLOCK_SIZE_N
-    tl._experimental_descriptor_store(c_desc_ptr, c, [offs_cm, offs_cn])
+    c_desc.store([offs_cm, offs_cn], c)
 
 
-def matmul_tma_ws(a, b):
+def matmul_tma(a, b, warp_specialize: bool):
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -253,55 +266,22 @@ def matmul_tma_ws(a, b):
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
 
-    desc_helper = TmaAutoTuneHelper()
-    desc_helper.init_tma_descriptor("a")
-    desc_helper.init_tma_descriptor("b")
-    desc_helper.init_tma_descriptor("c")
+    # A dummy block value that will be overwritten when we have the real block size
+    dummy_block = [1, 1]
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), dummy_block)
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), dummy_block)
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), dummy_block)
 
     def grid(META):
-        nonlocal desc_helper
-        desc_helper.fill_2d_tma_descriptor(
-            "a",
-            a.data_ptr(),
-            M,
-            K,
-            META["BLOCK_SIZE_M"],
-            META["BLOCK_SIZE_K"],
-            a.element_size(),
-        )
+        BLOCK_M = META["BLOCK_SIZE_M"]
+        BLOCK_N = META["BLOCK_SIZE_N"]
+        return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
-        desc_helper.fill_2d_tma_descriptor(
-            "b",
-            b.data_ptr(),
-            N,
-            K,
-            META["BLOCK_SIZE_N"],
-            META["BLOCK_SIZE_K"],
-            b.element_size(),
-        )
-
-        store_block_n = META["BLOCK_SIZE_N"]
-
-        desc_helper.fill_2d_tma_descriptor(
-            "c",
-            c.data_ptr(),
-            M,
-            N,
-            META["BLOCK_SIZE_M"],
-            store_block_n,
-            c.element_size(),
-        )
-
-        return (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
-
-    desc_a = desc_helper.get_tma_descriptor_kernel_param("a")
-    desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
-    desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
-
-    matmul_kernel_tma_ws[grid](
-        desc_a, desc_b, desc_c,  #
+    matmul_kernel_tma[grid](
+        a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
+        WARP_SPECIALIZE=warp_specialize,  #
     )
     return c
 
@@ -383,7 +363,8 @@ def matmul_persistent(a, b):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = num_sms()
+
     M, K = a.shape
     K, N = b.shape
     dtype = a.dtype
@@ -402,24 +383,28 @@ def matmul_persistent(a, b):
     return c
 
 
-def matmul_tma_persistent_get_configs():
+def matmul_tma_persistent_get_configs(pre_hook=None):
     return [
-        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8, "EPILOGUE_SUBTILE" : SUBTILE}, num_stages=s, num_warps=w) \
-        for BM in [128] \
-        for BN in [128, 256] \
-        for BK in [64, 128] \
-        for s in ([2, 3, 4]) \
-        for w in [4, 8] \
-        for SUBTILE in [True, False] \
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8, "EPILOGUE_SUBTILE":
+                SUBTILE
+            }, num_stages=s, num_warps=w, pre_hook=pre_hook)  #
+        for BM in [128]  #
+        for BN in [128, 256]  #
+        for BK in [64, 128]  #
+        for s in ([2, 3, 4])  #
+        for w in [4, 8]  #
+        for SUBTILE in [True, False]  #
     ]
 
 
 @triton.autotune(
-    configs=matmul_tma_persistent_get_configs(),
-    key=["M", "N", "K"],
+    configs=matmul_tma_persistent_get_configs(pre_hook=matmul_tma_set_block_size_hook),
+    key=["M", "N", "K", "WARP_SPECIALIZE"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
-def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
+def matmul_kernel_tma_persistent(a_desc, b_desc, c_desc,  #
                                  M, N, K,  #
                                  BLOCK_SIZE_M: tl.constexpr,  #
                                  BLOCK_SIZE_N: tl.constexpr,  #
@@ -427,7 +412,9 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                                  GROUP_SIZE_M: tl.constexpr,  #
                                  FP8_OUTPUT: tl.constexpr,  #
                                  EPILOGUE_SUBTILE: tl.constexpr,  #
-                                 NUM_SMS: tl.constexpr):  #
+                                 NUM_SMS: tl.constexpr,  #
+                                 WARP_SPECIALIZE: tl.constexpr,  #
+                                 ):
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -441,7 +428,7 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     # Enable warp specialization to leverage async warp scheduling in the GPU.
     # FIXME: This only works on Blackwell right now. On older GPUs, this will
     # use software pipelining.
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=True):
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=WARP_SPECIALIZE):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
@@ -449,8 +436,8 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for ki in range(k_tiles):
             offs_k = ki * BLOCK_SIZE_K
-            a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-            b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+            a = a_desc.load([offs_am, offs_k])
+            b = b_desc.load([offs_bn, offs_k])
             accumulator = tl.dot(a, b.T, accumulator)
 
         tile_id_c += NUM_SMS
@@ -467,15 +454,15 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
             acc = tl.permute(acc, (0, 2, 1))
             acc0, acc1 = tl.split(acc)
             c0 = acc0.to(dtype)
-            tl._experimental_descriptor_store(c_desc_ptr, c0, [offs_am_c, offs_bn_c])
+            c_desc.store([offs_am_c, offs_bn_c], c0)
             c1 = acc1.to(dtype)
-            tl._experimental_descriptor_store(c_desc_ptr, c1, [offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2])
+            c_desc.store([offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2], c1)
         else:
             accumulator = accumulator.to(dtype)
-            tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am_c, offs_bn_c])
+            c_desc.store([offs_am_c, offs_bn_c], accumulator)
 
 
-def matmul_tma_persistent(a, b):
+def matmul_tma_persistent(a, b, warp_specialize: bool):
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -486,71 +473,36 @@ def matmul_tma_persistent(a, b):
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
 
-    desc_helper = TmaAutoTuneHelper()
-    desc_helper.init_tma_descriptor("a")
-    desc_helper.init_tma_descriptor("b")
-    desc_helper.init_tma_descriptor("c")
+    NUM_SMS = num_sms()
 
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    # A dummy block value that will be overwritten when we have the real block size
+    dummy_block = [1, 1]
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), dummy_block)
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), dummy_block)
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), dummy_block)
 
     def grid(META):
-        nonlocal desc_helper
-        desc_helper.fill_2d_tma_descriptor(
-            "a",
-            a.data_ptr(),
-            M,
-            K,
-            META["BLOCK_SIZE_M"],
-            META["BLOCK_SIZE_K"],
-            a.element_size(),
-        )
-
-        desc_helper.fill_2d_tma_descriptor(
-            "b",
-            b.data_ptr(),
-            N,
-            K,
-            META["BLOCK_SIZE_N"],
-            META["BLOCK_SIZE_K"],
-            b.element_size(),
-        )
-
-        store_block_n = META["BLOCK_SIZE_N"]
-
-        if META["EPILOGUE_SUBTILE"]:
-            store_block_n = store_block_n // 2
-
-        desc_helper.fill_2d_tma_descriptor(
-            "c",
-            c.data_ptr(),
-            M,
-            N,
-            META["BLOCK_SIZE_M"],
-            store_block_n,
-            c.element_size(),
-        )
-
+        nonlocal a_desc, b_desc, c_desc
+        BLOCK_M = META["BLOCK_SIZE_M"]
+        BLOCK_N = META["BLOCK_SIZE_N"]
         return (min(
             NUM_SMS,
-            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+            triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),
         ), )
 
-    desc_a = desc_helper.get_tma_descriptor_kernel_param("a")
-    desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
-    desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
-
     matmul_kernel_tma_persistent[grid](
-        desc_a, desc_b, desc_c,  #
+        a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         NUM_SMS=NUM_SMS,  #
+        WARP_SPECIALIZE=warp_specialize,  #
     )
     return c
 
 
 @triton.autotune(
     configs=matmul_tma_persistent_get_configs(),
-    key=["M", "N", "K"],
+    key=["M", "N", "K", "WARP_SPECIALIZE"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
@@ -560,7 +512,9 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
                                         BLOCK_SIZE_K: tl.constexpr,  #
                                         GROUP_SIZE_M: tl.constexpr,  #
                                         EPILOGUE_SUBTILE: tl.constexpr,  #
-                                        NUM_SMS: tl.constexpr):  #
+                                        NUM_SMS: tl.constexpr,  #
+                                        WARP_SPECIALIZE: tl.constexpr,  #
+                                        ):
     # Matmul using TMA and device-side descriptor creation
     dtype = c_ptr.dtype.element_ty
     start_pid = tl.program_id(axis=0)
@@ -593,7 +547,7 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     tile_id_c = start_pid - NUM_SMS
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True, warp_specialize=WARP_SPECIALIZE):
         pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
@@ -623,7 +577,7 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
             c_desc.store([offs_cm, offs_cn], c)
 
 
-def matmul_descriptor_persistent(a, b):
+def matmul_descriptor_persistent(a, b, warp_specialize: bool):
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -633,11 +587,11 @@ def matmul_descriptor_persistent(a, b):
     dtype = a.dtype
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = num_sms()
 
     # TMA descriptors require a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-        return torch.empty(size, device="cuda", dtype=torch.int8)
+        return torch.empty(size, device=DEVICE, dtype=torch.int8)
 
     triton.set_allocator(alloc_fn)
 
@@ -646,6 +600,7 @@ def matmul_descriptor_persistent(a, b):
         a, b, c,  #
         M, N, K,  #
         NUM_SMS=NUM_SMS,  #
+        WARP_SPECIALIZE=warp_specialize,  #
     )
     return c
 
@@ -685,77 +640,82 @@ def proton_context():
         proton.deactivate(0)
 
 
-def bench_fn(reps, warmup_reps, fn, *args):
+def bench_fn(label, reps, warmup_reps, fn, *args):
+    print(f"Benchmarking {label}: ...", end="")
     for _ in range(warmup_reps):
         fn(*args)
-    with proton_context():
-        for _ in range(reps):
-            fn(*args)
+    #FIXME: Enable for XPU once proton support works.
+    if is_cuda():
+        with proton_context():
+            for _ in range(reps):
+                fn(*args)
+    print(f"\rBenchmarking {label}: done")
 
 
-def bench(K, dtype, reps=10000, warmup_reps=10000):
+def bench(K, dtype, reps=100, warmup_reps=100):
     M = 8192
     N = 8192
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
+    if not is_enough_memory(M, N, K, dtype):
+        return
+
+    a = torch.randn((M, K), device=DEVICE, dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device=DEVICE, dtype=torch.float16).to(dtype)
 
     b = b.T.contiguous()
 
     if cublas is not None:
-        bench_fn(reps, warmup_reps, cublas_matmul, a, b)
+        bench_fn("cublas", reps, warmup_reps, cublas_matmul, a, b)
     if dtype == torch.float16:
-        bench_fn(reps, warmup_reps, torch_matmul, a, b)
-    bench_fn(reps, warmup_reps, matmul, a, b.T)
-    bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
-    if HAS_TMA_DESC:
-        bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
-    if HAS_TENSOR_DESC:
-        bench_fn(reps, warmup_reps, matmul_descriptor_persistent, a, b)
-        bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
+        bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
+    bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
+    bench_fn("persistent", reps, warmup_reps, matmul_persistent, a, b.T)
+    warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
+    for ws in warp_specialize:
+        ws_str = "_ws" if ws else ""
+        if HAS_HOST_TENSOR_DESC:
+            bench_fn(f"tma_persistent{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_persistent(a, b, ws), a, b)
+            bench_fn(f"tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma(a, b, ws), a, b)
+        if HAS_TENSOR_DESC:
+            bench_fn(f"descriptor_persistent{ws_str}", reps, warmup_reps,
+                     lambda a, b: matmul_descriptor_persistent(a, b, ws), a, b)
+
+
+def run_test(expect, fn, a, b, label, enabled=True):
+    print(f"  {label}: ...", end="")
+    if enabled:
+        actual = fn(a, b)
+        passed = torch.allclose(expect, actual.to(expect.dtype), atol=1.0)
+        icon = "✅" if passed else "❌"
+    else:
+        icon = "⭕"
+    print(f"\r  {label}: {icon}  ")
 
 
 def validate(M, N, K, dtype):
-    a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
-    b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
+    if not is_enough_memory(M, N, K, dtype):
+        return
+
+    print(f"{M=}, {N=}, {K=}, verification naive vs: ")
+    a = torch.randn((M, K), device=DEVICE, dtype=torch.float16).to(dtype)
+    b = torch.randn((K, N), device=DEVICE, dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
 
-    torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
-    cublas_result = cublas_matmul(a, b) if cublas is not None else None
-    naive_result = matmul(a, b.T)
-    tma_ws_result = matmul_tma_ws(a, b) if HAS_TENSOR_DESC else None
-    persistent_result = matmul_persistent(a, b.T)
-    tma_persistent_result = matmul_tma_persistent(a, b) if HAS_TMA_DESC else None
-    descriptor_persistent_result = matmul_descriptor_persistent(a, b) if HAS_TENSOR_DESC else None
+    naive_result = matmul(a, b.T).to(torch.float16)
+    run_test(naive_result, torch_matmul, a, b, "Torch", enabled=dtype == torch.float16)
+    run_test(naive_result, cublas_matmul, a, b, "cuBLAS", enabled=cublas is not None)
+    run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
 
-    if tma_ws_result is not None:
-        naive_vs_tma_ws = "✅" if torch.allclose(naive_result.to(torch.float16), tma_ws_result.to(torch.float16),
-                                                atol=1.0) else "❌"
-    if torch_result is not None:
-        naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
-                                               atol=1.0) else "❌"
-    if cublas_result is not None:
-        naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
-                                                atol=1.0) else "❌"
-    naive_vs_persistent = "✅" if torch.allclose(naive_result.to(torch.float16), persistent_result.to(torch.float16),
-                                                atol=1.0) else "❌"
-    if tma_persistent_result is not None:
-        naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
-                                                        tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
-    if descriptor_persistent_result is not None:
-        naive_vs_descriptor_persistent = "✅" if torch.allclose(cublas_result.to(
-            torch.float16), descriptor_persistent_result.to(torch.float16), atol=1.0) else "❌"
-    print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
-    if tma_ws_result is not None:
-        print(f"tma: {naive_vs_tma_ws} ", end="")
-    if torch_result is not None:
-        print(f"torch: {naive_vs_torch} ", end="")
-    if cublas_result is not None:
-        print(f"cublas: {naive_vs_cublas} ", end="")
-    print(f"persistent: {naive_vs_persistent} ", end="")
-    if tma_persistent_result is not None:
-        print(f"TMA persistent: {naive_vs_tma_persistent} ", end="")
-    if descriptor_persistent_result is not None:
-        print(f"Tensor descriptor persistent: {naive_vs_descriptor_persistent} ", end="")
+    kernels = [
+        (matmul_tma, "TMA", HAS_HOST_TENSOR_DESC),
+        (matmul_tma_persistent, "TMA Persistent", HAS_HOST_TENSOR_DESC),
+        (matmul_descriptor_persistent, "Tensor Descriptor Persistent", HAS_TENSOR_DESC),
+    ]
+    warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
+
+    for (kernel, label, enabled), warp_specialize in itertools.product(kernels, warp_specialize):
+        label = f"{label} (warp_specialize={warp_specialize})"
+        enabled = enabled and (not warp_specialize or HAS_TENSOR_DESC)
+        run_test(naive_result, lambda a, b: kernel(a, b, warp_specialize), a, b, label, enabled)
     print()
 
 
@@ -792,9 +752,11 @@ if __name__ == "__main__":
 
         validate(32, 32, 32, dtype)
         validate(8192, 8192, args.K_range[0], dtype)
-
-        proton.start("matmul", hook="triton")
+        if is_cuda():
+            proton.start("matmul", hook="triton")
+            proton.deactivate()
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
             bench(K, dtype)
-        proton.finalize()
-        show_profile(args.prec, "matmul")
+        if is_cuda():
+            proton.finalize()
+            show_profile(args.prec, "matmul")

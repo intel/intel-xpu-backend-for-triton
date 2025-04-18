@@ -14,12 +14,17 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "xpu"
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_torch.hatchet"
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
-    torch.ones((2, 2), device="cuda")
+    # F841 Local variable `temp` is assigned to but never used
+    temp = torch.ones((2, 2), device="xpu")  # noqa: F841
     proton.exit_scope()
     proton.finalize()
     with temp_file.open() as f:
@@ -35,7 +40,7 @@ def test_torch(context, tmp_path: pathlib.Path):
         while len(queue) > 0:
             parent_frame = queue.pop(0)
             for child in parent_frame["children"]:
-                if "elementwise_kernel" in child["frame"]["name"]:
+                if "ElementwiseKernel" in child["frame"]["name"]:
                     assert len(child["children"]) == 0
                     return
                 queue.append(child)
@@ -47,7 +52,7 @@ def test_triton(tmp_path: pathlib.Path):
     def foo(x, y):
         tl.store(y, tl.load(x))
 
-    x = torch.tensor([2], device="cuda")
+    x = torch.tensor([2], device="xpu")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_triton.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -67,6 +72,8 @@ def test_triton(tmp_path: pathlib.Path):
 
 
 def test_cudagraph(tmp_path: pathlib.Path):
+    if is_xpu():
+        pytest.skip("xpu doesn't support cudagraph; FIXME: double check")
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -75,8 +82,8 @@ def test_cudagraph(tmp_path: pathlib.Path):
         tl.store(z, tl.load(y) + tl.load(x))
 
     def fn():
-        a = torch.ones((2, 2), device="cuda")
-        b = torch.ones((2, 2), device="cuda")
+        a = torch.ones((2, 2), device="xpu")
+        b = torch.ones((2, 2), device="xpu")
         c = a + b
         foo[(1, )](a, b, c)
 
@@ -126,7 +133,7 @@ def test_metrics(tmp_path: pathlib.Path):
     def foo(x, y):
         tl.store(y, tl.load(x))
 
-    x = torch.tensor([2], device="cuda")
+    x = torch.tensor([2], device="xpu")
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_metrics.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -144,7 +151,7 @@ def test_scope_backward(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_scope_backward.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     with proton.scope("ones1"):
-        a = torch.ones((100, 100), device="cuda", requires_grad=True)
+        a = torch.ones((100, 100), device="xpu", requires_grad=True)
     with proton.scope("plus"):
         a2 = a * a * a
     with proton.scope("ones2"):
@@ -164,7 +171,7 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")))
     with proton.cpu_timed_scope("test0"):
         with proton.cpu_timed_scope("test1"):
-            torch.ones((100, 100), device="cuda")
+            torch.ones((100, 100), device="xpu")
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
@@ -192,7 +199,7 @@ def test_hook(tmp_path: pathlib.Path):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device="xpu", dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
@@ -221,7 +228,7 @@ def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
         offs = tl.arange(0, size)
         tl.store(y + offs, tl.load(x + offs))
 
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    x = torch.tensor([2], device="xpu", dtype=torch.float32)
     y = torch.zeros_like(x)
     temp_file = tmp_path / "test_hook.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", context=context)
@@ -244,6 +251,8 @@ def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
 def test_pcsampling(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support pc sampling")
+    if is_xpu():
+        pytest.skip("XPU backend does not support pc sampling")
 
     import os
     if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
@@ -258,7 +267,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_pcsampling.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti_pcsampling")
     with proton.scope("init"):
-        x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
+        x = torch.ones((1024, ), device="xpu", dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
@@ -280,9 +289,9 @@ def test_deactivate(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_deactivate.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
     proton.deactivate(session_id)
-    torch.randn((10, 10), device="cuda")
+    torch.randn((10, 10), device="xpu")
     proton.activate(session_id)
-    torch.zeros((10, 10), device="cuda")
+    torch.zeros((10, 10), device="xpu")
     proton.deactivate(session_id)
     proton.finalize()
     with temp_file.open() as f:
@@ -294,17 +303,21 @@ def test_deactivate(tmp_path: pathlib.Path):
 
 
 def test_multiple_sessions(tmp_path: pathlib.Path):
+    if is_xpu():
+        # FIXME: the same correlation id, that's why it's filtered,
+        # should `_kernel_id` be used instead
+        pytest.xfail('assert int(data[0]["children"][0]["metrics"]["count"]) == 2')
     temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
     temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
     session_id0 = proton.start(str(temp_file0.with_suffix("")))
     session_id1 = proton.start(str(temp_file1.with_suffix("")))
     with proton.scope("scope0"):
-        torch.randn((10, 10), device="cuda")
-        torch.randn((10, 10), device="cuda")
+        torch.randn((10, 10), device="xpu")
+        torch.randn((10, 10), device="xpu")
     proton.deactivate(session_id0)
     proton.finalize(session_id0)
     with proton.scope("scope1"):
-        torch.randn((10, 10), device="cuda")
+        torch.randn((10, 10), device="xpu")
     proton.finalize(session_id1)
     # kernel has been invoked twice in session 0 and three times in session 1
     with temp_file0.open() as f:

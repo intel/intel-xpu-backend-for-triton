@@ -99,7 +99,9 @@ int TargetInfo::getSharedMemorySize() const {
   return kbytes * 1024;
 }
 
-bool TargetInfo::supportMaximumMinimum() const { return false; }
+bool TargetInfo::supportMaximumMinimum() const {
+  return getISAFamily() == ISAFamily::CDNA4;
+}
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
@@ -510,8 +512,9 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
-void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
-                                   size_t localStoreOpCount, Type type) const {
+void TargetInfo::localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
+                                        size_t localStoreOpCount,
+                                        Type type) const {
   storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
@@ -529,6 +532,12 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   }
 
   return false;
+}
+
+void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
+                                       Operation *llLoadOp) const {
+  LLVM::AMD::addLocalLoadNoAliasScope(localLoadOp,
+                                      cast<LLVM::LoadOp>(llLoadOp));
 }
 
 } // namespace mlir::triton::AMD

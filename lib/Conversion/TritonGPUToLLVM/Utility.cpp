@@ -494,18 +494,21 @@ bool emitTransferBetweenRegistersAndShared(
       target, perVectorCallback);
 }
 
-SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           triton::gpu::MemDescType srcTy,
+SmallVector<Value> loadSharedToDistributed(triton::gpu::LocalLoadOp localLoadOp,
                                            Type elemLlvmTy,
                                            const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target) {
+  auto srcTy = localLoadOp.getSrc().getType();
+  auto dstTy = localLoadOp.getResult().getType();
+
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
       rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         auto vecVal = b.load(vecTy, vecAddr);
+        target.localLoadOpAnnotation(localLoadOp, vecVal);
         vecVal.setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
 
@@ -665,18 +668,6 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
   op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
   op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
   return op;
-}
-
-bool isConstantZero(Value v) {
-  if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
-      return attr.getValue().isZero();
-    }
-    if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
-      return attr.getValue().isZero();
-    }
-  }
-  return false;
 }
 
 Value getStructFromSharedMemoryObject(Location loc,

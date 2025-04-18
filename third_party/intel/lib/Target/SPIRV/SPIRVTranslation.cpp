@@ -55,7 +55,7 @@ bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
                              ? Triple::spirv64
                              : Triple::spirv32,
                          TargetTriple.getSubArch());
-    M->setTargetTriple(TargetTriple.str());
+    M->setTargetTriple(TargetTriple);
     // We need to reset Data Layout to conform with the TargetMachine
     M->setDataLayout("");
   }
@@ -64,7 +64,7 @@ bool runSpirvBackend(Module *M, std::string &Result, std::string &ErrMsg,
   if (TranslatorOpts.getMaxVersion() != VersionNumber::MaximumVersion) {
     TargetTriple.setArch(TargetTriple.getArch(),
                          spirvVersionToSubArch(TranslatorOpts.getMaxVersion()));
-    M->setTargetTriple(TargetTriple.str());
+    M->setTargetTriple(TargetTriple);
   }
 
   // Translate the Module into SPIR-V
@@ -107,15 +107,17 @@ public:
 
 static SPIRV::TranslatorOpts getSPIRVOopts() {
   SPIRV::TranslatorOpts SPIRVOpts;
-  static constexpr std::array<SPIRV::ExtensionID, 12> AllowedExtensions{
+  static constexpr std::array<SPIRV::ExtensionID, 14> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
       SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
       SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
       SPIRV::ExtensionID::SPV_INTEL_cache_controls,
+      SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
+      SPIRV::ExtensionID::SPV_INTEL_tensor_float32_conversion,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
       SPIRV::ExtensionID::SPV_INTEL_vector_compute,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,

@@ -60,6 +60,7 @@ class XPUOptions:
     generate_native_code: bool = False
     advanced_path: bool = False
     one_matrix_per_load_for_bt: bool = False
+    enable_tile_load_linear_layout: bool = True
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -70,7 +71,11 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.generate_native_code = bool(os.getenv("TRITON_XPU_GEN_NATIVE_CODE", self.generate_native_code))
+        generate_native_code_env = os.getenv("TRITON_XPU_GEN_NATIVE_CODE")
+        if generate_native_code_env is not None:
+            self.generate_native_code = generate_native_code_env == "1"
+        # ensure generate native code setting is communicated to the external compiler library
+        os.environ["TRITON_XPU_GEN_NATIVE_CODE"] = "1" if self.generate_native_code else "0"
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -183,6 +188,7 @@ class XPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
+        args["enable_tile_load_linear_layout"] = os.getenv("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", "1") == "1"
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -223,6 +229,7 @@ class XPUBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
+        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
         passes.ttir.add_combine(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
@@ -302,14 +309,14 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
-            intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
+        if os.getenv("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", "0") == "1":
+            intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
@@ -339,9 +346,9 @@ class XPUBackend(BaseBackend):
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             passes.ttgpuir.add_allocate_shared_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
+                                           options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
-        intel.set_fast_math(mod)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -354,6 +361,8 @@ class XPUBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         intel.set_spv_target_triple(llvm_mod)
+        if os.getenv("TRITON_INTEL_FAST_MATH", "0") == "1":
+            intel.set_fast_math(llvm_mod)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)

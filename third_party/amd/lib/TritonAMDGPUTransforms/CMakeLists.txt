@@ -10,6 +10,9 @@ add_triton_library(TritonAMDGPUTransforms
   StreamPipeline.cpp
   MfmaGroup.cpp
   InThreadTranspose.cpp
+  FoldTrueCmpIOp.cpp
+  UpdateAsyncWaitCount.cpp
+  Utility.cpp
 
   DEPENDS
   TritonAMDGPUIR

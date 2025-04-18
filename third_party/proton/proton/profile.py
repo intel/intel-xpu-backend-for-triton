@@ -17,6 +17,8 @@ def _select_backend() -> str:
         return "cupti"
     elif backend == "hip":
         return "roctracer"
+    elif backend == "xpu":
+        return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")
 
@@ -97,7 +99,11 @@ def start(
     set_profiling_on()
     if hook and hook == "triton":
         register_triton_hook()
-    return libproton.start(name, context, data, backend, backend_path)
+
+    sycl_queue = 0
+    if hasattr(triton.runtime.driver.active.utils, "get_sycl_queue"):
+        sycl_queue = triton.runtime.driver.active.utils.get_sycl_queue()
+    return libproton.start(name, context, data, backend, backend_path, sycl_queue)
 
 
 def activate(session: Optional[int] = None) -> None:
