@@ -41,16 +41,12 @@ constexpr int AlignmentB = sizeof(ElementInputB);
 constexpr int AlignmentC = sizeof(ElementAccumulator);
 constexpr int AlignmentD = sizeof(ElementOutput);
 
+////////////////////////////////////////////////////////////////////////////////
+// PRIVATE FUNCTION
+////////////////////////////////////////////////////////////////////////////////
+
 template <typename TileShape>
-auto gemm(
-  const at::Tensor &A,
-  const at::Tensor &B,
-  at::Tensor &C,
-  const int M,
-  const int N,
-  const int K,
-  const int L
-) -> int {
+static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C, const int M, const int N, const int K, const int L) -> int {
   RECORD_FUNCTION("cutlass gemm", {});
 
   /// MAIN LOOP ///
@@ -92,6 +88,8 @@ auto gemm(
     CollectiveMainloop,
     CollectiveEpilogue
   >;
+
+  /// GEMM INVOCATION ///
 
   try {
     using Gemm = typename cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
@@ -162,18 +160,42 @@ auto gemm(
   return 0;
 }
 
-// See https://github.com/codeplaysoftware/cutlass-fork/blob/sycl-develop/benchmarks/pvc/input.in
-using TileShape_RRR_1 = typename cute::Shape<cute::_256, cute::_256, cute::_32>;
-using TileShape_RRR_2 = typename cute::Shape<cute::_128, cute::_512, cute::_32>;
-using TileShape_RRR_3 = typename cute::Shape<cute::_256, cute::_128, cute::_32>;
-using TileShape_RRR_4 = typename cute::Shape<cute::_128, cute::_256, cute::_16>;
-using TileShape_RRR_5 = typename cute::Shape<cute::_8, cute::_128, cute::_32>;
+////////////////////////////////////////////////////////////////////////////////
+// PUBLIC FUNCTION
+////////////////////////////////////////////////////////////////////////////////
+
+using Dim  = std::tuple<int,int,int,int>;
+
+/// Hard‑coded shapes
+/// See https://github.com/codeplaysoftware/cutlass-fork/blob/sycl-develop/benchmarks/pvc/benchmarks.hpp
+using TileShape_RRR_1 = cute::Shape<cute::_256, cute::_256, cute::_32>;
+using TileShape_RRR_2 = cute::Shape<cute::_128, cute::_512, cute::_32>;
+using TileShape_RRR_3 = cute::Shape<cute::_256, cute::_128, cute::_32>;
+using TileShape_RRR_4 = cute::Shape<cute::_128, cute::_256, cute::_16>;
+using TileShape_RRR_5 = cute::Shape<cute::_8, cute::_128, cute::_32>;
+
+auto gemm(const at::Tensor &A, const at::Tensor &B, at::Tensor &C, const int M, const int N, const int K, const int L) -> int {
+  const Dim test_case{L, M, N, K};
+
+  /// Mapping rules
+  /// See https://github.com/codeplaysoftware/cutlass-fork/blob/sycl-develop/benchmarks/pvc/input.in
+  if (test_case == Dim{1, 1024, 8192, 28672})
+    return gemm_run<TileShape_RRR_2>(A, B, C, M, N, K, L);
+  if (test_case == Dim{32, 4096, 128, 4096})
+    return gemm_run<TileShape_RRR_3>(A, B, C, M, N, K, L);
+  if (test_case == Dim{4096, 8, 128, 16384})
+    return gemm_run<TileShape_RRR_4>(A, B, C, M, N, K, L);
+  /// FIXME: Getting a compile time error for RRR_5
+  // if (test_case == Dimension{4096, 8, 16384, 128})
+  //   return gemm_run<TileShape_RRR_5>(A, B, C, M, N, K, L);
+
+  return gemm_run<TileShape_RRR_1>(A, B, C, M, N, K, L);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// PYBIND MODULE
+////////////////////////////////////////////////////////////////////////////////
 
 PYBIND11_MODULE(cutlass_kernel, m) {
-  m.def("gemm_256_256_32", &gemm<TileShape_RRR_1>, "gemm (CUTLASS)");
-  m.def("gemm_128_512_32", &gemm<TileShape_RRR_2>, "gemm (CUTLASS)");
-  m.def("gemm_256_128_32", &gemm<TileShape_RRR_3>, "gemm (CUTLASS)");
-  m.def("gemm_128_256_16", &gemm<TileShape_RRR_4>, "gemm (CUTLASS)");
-  /// FIXME: Getting a compile time error for RRR_5
-  // m.def("gemm_8_128_32", &gemm<TileShape_RRR_5>, "gemm (CUTLASS)");
+  m.def("gemm", &gemm, "gemm (CUTLASS)");
 }

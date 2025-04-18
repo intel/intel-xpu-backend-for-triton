@@ -14,10 +14,12 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suit
 from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import cutlass_kernel
 
 TRANSPOSE_A = os.getenv('TRANSPOSE_A', '0') == '1'
 TRANSPOSE_B = os.getenv('TRANSPOSE_B', '0') == '1'
 use_xetla = not (TRANSPOSE_A or TRANSPOSE_B)
+use_cutlass = not (TRANSPOSE_A or TRANSPOSE_B)
 SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
 
@@ -245,8 +247,9 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
     [4, 32768, 128, 4096],
     [4, 32768, 4096, 128],
     [32, 4096, 128, 4096],
-    [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
+    # FIXME: Re-enabled them when https://github.com/codeplaysoftware/cutlass-fork/pull/313 is merged
+    # [4096, 8, 128, 16384], # KO ; CUTLASS disabled them in their own benchmark
+    # [4096, 8, 16384, 128], # KO ; CUTLASS disabled them in their own benchmark
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -280,9 +283,9 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn'] + (['xetla'] if use_xetla else []),
+        line_vals=['triton', 'onednn'] + (['xetla'] if use_xetla else []) + (['cutlass'] if use_cutlass else []),
         # label name for the lines
-        line_names=['Triton', 'OneDNN'] + (['XeTLA'] if use_xetla else []),
+        line_names=['Triton', 'OneDNN'] + (['XeTLA'] if use_xetla else []) + (['CUTLASS'] if use_cutlass else []),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -310,6 +313,7 @@ def benchmark(B, M, N, K, provider):
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(lambda: torch.matmul(torch_a, torch_b), n_warmup=10,
                                                                  n_repeat=10, quantiles=quantiles)
+
     elif provider == 'triton':
         assert len(a.shape) == len(b.shape), 'Incompatible sizes'
         if len(a.shape) == 3:
@@ -323,6 +327,7 @@ def benchmark(B, M, N, K, provider):
         benchmark_suit.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
+
     elif provider == 'xetla':
         if B == 1:
             c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -352,6 +357,27 @@ def benchmark(B, M, N, K, provider):
         # benchmark_suit.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(xetla_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
+
+    elif provider == 'cutlass':
+        name = 'gemm'
+        func = getattr(cutlass_kernel, name)
+
+        def cutlass_invoker():
+            if B == 1:
+                c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+            else:
+                c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+            func(a, b, c, M, N, K, B)
+            return c
+
+        cutlass_fn = cutlass_invoker
+        torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+
+        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+        benchmark_suit.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
+        _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(cutlass_fn, n_warmup=10, n_repeat=10,
+                                                                 quantiles=quantiles)
+
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

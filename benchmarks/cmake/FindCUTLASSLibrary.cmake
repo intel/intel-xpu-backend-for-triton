@@ -2,10 +2,6 @@
 #
 include(FetchContent)
 
-message("")
-message("[+] Try to find CUTLASS library.")
-message("")
-
 if (NOT CUTLASSLibrary_FOUND)
     # TODO: switch ot FetchContent_MakeAvailable once CUTLASS supports it
     cmake_policy(SET CMP0169 OLD)
