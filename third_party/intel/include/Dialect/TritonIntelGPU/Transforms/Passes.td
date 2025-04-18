@@ -377,4 +377,20 @@ def TritonIntelGPURewriteStackPtr
     "mlir::arith::ArithDialect"
   ];
 }
+
+
+def TritonIntelGPUReduceRegisterPressure
+    : Pass<"tritonintelgpu-reduce-register-pressure", "mlir::ModuleOp"> {
+  let summary = "Attempt to reduce the register pressure";
+
+  let description = [{
+    This pass attempts to reduce the register pressure
+    by reducing the distance between loads and usage
+    (reduce variable liveness).
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
 #endif // TRITON_INTEL_GPU_PASSES
