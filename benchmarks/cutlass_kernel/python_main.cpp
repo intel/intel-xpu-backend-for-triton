@@ -139,9 +139,15 @@ static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
     size_t workspace_size = Gemm::get_workspace_size(arguments);
     cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
-    { CUTLASS_CHECK(gemm_op.can_implement(arguments)); }
-    { CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get())); }
-    { CUTLASS_CHECK(gemm_op.run()); }
+    {
+      CUTLASS_CHECK(gemm_op.can_implement(arguments));
+    }
+    {
+      CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
+    }
+    {
+      CUTLASS_CHECK(gemm_op.run());
+    }
   } catch (std::exception &e) {
     std::cerr << "Runtime error: " << e.what() << std::endl;
     return -1;
