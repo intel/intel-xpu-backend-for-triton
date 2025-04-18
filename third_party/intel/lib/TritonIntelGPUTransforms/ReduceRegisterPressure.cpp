@@ -104,6 +104,13 @@ static bool optimizeDotOperands(scf::ForOp forOp,
     OpBuilder b(dotOp);
     TensorValue tensorV = opId == 0 ? dotOp.getA() : dotOp.getB();
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
+    Type elType = tensorType.getElementType();
+    Type loadType =
+        cast<RankedTensorType>(loadOp.getResult().getType()).getElementType();
+    // Types mismatch => Skip this case to avoid inserting to
+    // many addtional operations in the loop.
+    if (elType != loadType)
+      return;
     // Only pointer to tensor are moved
     if (!mlir::triton::isTensorPointerType(loadOp.getPtr().getType()))
       return;
