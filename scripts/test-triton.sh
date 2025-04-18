@@ -286,8 +286,8 @@ run_benchmark_gemm() {
   echo "Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_benchmark.py
 
-  # echo "GEMM with tensor of pointer:"
-  # python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
+  echo "GEMM with tensor of pointer:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/gemm_tensor_of_ptr_benchmark.py
 }
 
 run_benchmark_attention() {
