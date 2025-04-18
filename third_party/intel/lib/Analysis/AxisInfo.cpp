@@ -135,6 +135,8 @@ public:
 protected:
   virtual int64_t getStride(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                             int dim) {
+    if (getContiguity(op, lhs, rhs, dim) > 1)
+      return 1;
     return -1;
   }
 
