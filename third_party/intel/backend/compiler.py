@@ -260,6 +260,9 @@ class XPUBackend(BaseBackend):
             split_barriers_scope_int = 1
         elif opt.split_barriers_scope == 'Subgroup':
             split_barriers_scope_int = 2
+        elif opt.split_barriers_scope == 'Advanced':
+            split_barriers_scope_int = 3
+        split_barriers_scope_int = 3
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
