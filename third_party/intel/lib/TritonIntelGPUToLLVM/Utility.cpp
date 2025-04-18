@@ -8,6 +8,8 @@
 
 #include "Utility.h"
 
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -97,6 +99,23 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
   return shuffleCommon(loc, rewriter, val, i, mlir::gpu::ShuffleMode::IDX);
+}
+
+LLVM::RoundingMode
+convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
+  LLVM::RoundingMode roundingMode;
+  switch (rounding) {
+  case triton::RoundingMode::RTNE:
+    return LLVM::RoundingMode::NearestTiesToEven;
+  case triton::RoundingMode::RTZ:
+    return LLVM::RoundingMode::TowardZero;
+  default:
+    llvm_unreachable(("WARNING: unsupported rounding mode for f32->f16 "
+                      "conversion: " +
+                      stringifyRoundingMode(rounding))
+                         .str()
+                         .c_str());
+  }
 }
 
 } // namespace mlir::LLVM::intel

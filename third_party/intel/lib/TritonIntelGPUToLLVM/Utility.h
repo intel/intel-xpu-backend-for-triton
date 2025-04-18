@@ -72,6 +72,9 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
 
+LLVM::RoundingMode
+convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding);
+
 } // namespace mlir::LLVM::intel
 
 namespace mlir::triton::intel {

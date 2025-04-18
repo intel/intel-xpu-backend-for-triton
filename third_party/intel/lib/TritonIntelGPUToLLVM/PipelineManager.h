@@ -254,9 +254,15 @@ public:
     triton::populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
-    populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
-    populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
-                                          spirv::ClientAPI::OpenCL);
+
+    if (gpu::intel::hasSpirvTargetArch(mod)) {
+      populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
+      populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
+                                            spirv::ClientAPI::OpenCL);
+      if (!isAdvancedPathEnabled)
+        populateSPIRVFpConversionToLLVMPatterns(typeConverter, axisInfoAnalysis,
+                                                patterns, benefit);
+    }
   }
 
 private:

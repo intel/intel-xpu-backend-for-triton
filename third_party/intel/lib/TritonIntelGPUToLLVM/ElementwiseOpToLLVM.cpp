@@ -899,6 +899,167 @@ typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
     ConverterT;
 
 // Attempts to use vectorized conversions via inline PTX when possible.
+
+Value convertFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v) {
+  return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
+}
+
+Value convertFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
+                        const Value &v, const triton::RoundingMode rounding) {
+  MLIRContext *ctx = rewriter.getContext();
+  return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+      loc, f16_ty, v,
+      LLVM::RoundingModeAttr::get(
+          ctx, LLVM::intel::convertTritonRoundingModeToLLVM(rounding)),
+      arith::getLLVMDefaultFPExceptionBehavior(*ctx));
+}
+
+std::pair<ConverterT, size_t>
+getConversionFunc(Type srcTy, Type dstTy,
+                  std::optional<RoundingMode> roundingMode) {
+  auto F8E4M3B15TyID = TypeID::get<Float8E4M3FNUZType>();
+  auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
+  auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
+  auto F16TyID = TypeID::get<Float16Type>();
+  auto BF16TyID = TypeID::get<BFloat16Type>();
+  auto F32TyID = TypeID::get<Float32Type>();
+  auto F64TyID = TypeID::get<Float64Type>();
+
+  if (srcTy.getTypeID() == dstTy.getTypeID()) {
+    constexpr auto identityFn = [](Location,
+                                   ConversionPatternRewriter &rewriter,
+                                   const SmallVector<Value> &v) { return v; };
+    return {identityFn,
+            (srcTy.getTypeID() == F8E4M3TyID || dstTy.getTypeID() == F8E4M3TyID)
+                ? 2
+                : 4};
+  }
+
+  auto undefRounding = static_cast<RoundingMode>(-1);
+  static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>,
+                  std::pair<ConverterT, size_t>>
+      srcMap = {
+          // F8 -> F16
+          {{F8E4M3B15TyID, F16TyID, undefRounding}, {Fp8E4M3B15_to_Fp16, 4}},
+          {{F8E4M3TyID, F16TyID, undefRounding}, {Fp8E4M3Nv_to_Fp16, 2}},
+          {{F8E5M2TyID, F16TyID, undefRounding}, {Fp8E5M2_to_Fp16, 4}},
+          // F16 -> F8
+          {{F16TyID, F8E4M3B15TyID, RoundingMode::RTZ},
+           {Fp16_to_Fp8E4M3B15, 4}},
+          {{F16TyID, F8E4M3B15TyID, RoundingMode::RTNE},
+           // TODO: provide proper implementation for RTNE rounding.
+           {Fp16_to_Fp8E4M3B15, 4}},
+          {{F16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Fp16_to_Fp8E4M3Nv, 2}},
+          {{F16TyID, F8E4M3TyID, RoundingMode::RTNE},
+           {Fp16_to_Fp8E4M3Nv_RTNE, 1}},
+          {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, {Fp16_to_Fp8E5M2_RTZ, 4}},
+          {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
+           {Fp16_to_Fp8E5M2_RTNE, 1}},
+          // F8 -> BF16
+          {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16, 4}},
+          {{F8E4M3TyID, BF16TyID, undefRounding}, {Fp8E4M3Nv_to_Bf16, 4}},
+          // BF16 -> F8
+          {{BF16TyID, F8E5M2TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E5M2, 4}},
+          {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
+           {Bf16_to_Fp8E5M2_RTNE, 1}},
+          {{BF16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E4M3Nv, 4}},
+          {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE},
+           {Bf16_to_Fp8E4M3Nv_RTNE, 1}},
+          // BF16 -> F16
+          {{BF16TyID, F16TyID, undefRounding}, {Bf16_to_Fp16, 2}},
+      };
+
+  std::tuple<TypeID, TypeID, RoundingMode> key = {
+      srcTy.getTypeID(), dstTy.getTypeID(),
+      roundingMode.value_or(undefRounding)};
+  if (srcMap.count(key) == 0) {
+    llvm::errs() << "Unsupported conversion from " << srcTy << " to " << dstTy;
+    if (roundingMode.has_value())
+      llvm::errs() << " with rounding mode "
+                   << stringifyRoundingMode(roundingMode.value());
+    llvm::errs() << "\n";
+    llvm_unreachable("");
+  }
+  return srcMap.lookup(key);
+}
+
+} // namespace
+
+namespace mlir::triton::intel {
+
+SmallVector<Value>
+genericFpToFpToLLVM(FpToFpOp op, ConversionPatternRewriter &rewriter,
+                    const TypeConverter *typeConverter, Type elemTy,
+                    MultipleOperandsRange operands, Location loc) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto srcElementType = getElementType(op.getSrc());
+  auto dstElementType = getElementType(op.getResult());
+  auto roundingMode = op.getRounding();
+
+  if (isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
+    assert(roundingMode.has_value() &&
+           "Rounding mode must be specified for conversions to fp8");
+
+    // For now only RTNE is supported for conversions from fp16 to fp8
+    if (!srcElementType.isF32() && roundingMode.value() != RoundingMode::RTNE) {
+      llvm::errs() << "Unsupported rounding mode for conversion to fp8: "
+                   << stringifyRoundingMode(roundingMode.value()) << "\n";
+      llvm_unreachable("");
+    }
+  }
+
+  if (srcElementType.isF32() && dstElementType.isF16()) {
+    assert(roundingMode.has_value() &&
+           "rounding mode must be specified for fp32->fp16 conversion");
+    SmallVector<Value> outVals;
+    for (Value v : operands[0]) {
+      outVals.push_back(
+          convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+    }
+    return outVals;
+  }
+
+  if (srcElementType.isF32() && dstElementType.isBF16()) {
+    assert(roundingMode.has_value() &&
+           "rounding mode must be specified for fp32->bf16 conversion");
+    SmallVector<Value> outVals;
+    for (Value v : operands[0]) {
+      outVals.push_back(
+          convertFp32ToBf16(loc, rewriter, v, roundingMode.value()));
+    }
+    return outVals;
+  }
+
+  bool useFP16IntermediateSrc = srcElementType.isF32();
+  bool isDstFP32 = dstElementType.isF32();
+  Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
+  Type dstType = isDstFP32 ? f16_ty : dstElementType;
+  auto [cvtFunc, numElements] =
+      getConversionFunc(srcType, dstType, roundingMode);
+  SmallVector<Value> inVals;
+  inVals.reserve(std::min(numElements, operands.size()));
+  for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
+    inVals.push_back(operands[i][0]);
+  }
+  if (useFP16IntermediateSrc)
+    for (Value &v : inVals)
+      v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
+  inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
+  SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
+  assert(outVals.size() == inVals.size());
+  outVals.resize(std::min(numElements, operands.size()));
+  if (isDstFP32)
+    for (Value &v : outVals)
+      v = convertFp16ToFp32(loc, rewriter, v);
+  // Pack values
+  return outVals;
+}
+
+} // namespace mlir::triton::intel
+
+namespace {
+
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<FpToFpOp, FpToFpOpConversion> {
   using ElementwiseOpConversionBase<
@@ -909,178 +1070,12 @@ struct FpToFpOpConversion
                               PatternBenefit benefit = 1)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit) {}
 
-  static Value convertFp16ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
-    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
-  }
-
-  static LLVM::RoundingMode
-  convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
-    LLVM::RoundingMode roundingMode;
-    switch (rounding) {
-    case triton::RoundingMode::RTNE:
-      return LLVM::RoundingMode::NearestTiesToEven;
-    case triton::RoundingMode::RTZ:
-      return LLVM::RoundingMode::TowardZero;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
-    }
-  }
-
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v,
-                                 const triton::RoundingMode rounding) {
-    MLIRContext *ctx = rewriter.getContext();
-    return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
-        loc, f16_ty, v,
-        LLVM::RoundingModeAttr::get(ctx,
-                                    convertTritonRoundingModeToLLVM(rounding)),
-        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
-  }
-
-  std::pair<ConverterT, size_t>
-  getConversionFunc(Type srcTy, Type dstTy,
-                    std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3B15TyID = TypeID::get<Float8E4M3FNUZType>();
-    auto F8E4M3TyID = TypeID::get<Float8E4M3FNType>();
-    auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
-    auto F16TyID = TypeID::get<Float16Type>();
-    auto BF16TyID = TypeID::get<BFloat16Type>();
-    auto F32TyID = TypeID::get<Float32Type>();
-    auto F64TyID = TypeID::get<Float64Type>();
-
-    if (srcTy.getTypeID() == dstTy.getTypeID()) {
-      constexpr auto identityFn = [](Location,
-                                     ConversionPatternRewriter &rewriter,
-                                     const SmallVector<Value> &v) { return v; };
-      return {identityFn, (srcTy.getTypeID() == F8E4M3TyID ||
-                           dstTy.getTypeID() == F8E4M3TyID)
-                              ? 2
-                              : 4};
-    }
-
-    auto undefRounding = static_cast<RoundingMode>(-1);
-    static DenseMap<std::tuple<TypeID, TypeID, RoundingMode>,
-                    std::pair<ConverterT, size_t>>
-        srcMap = {
-            // F8 -> F16
-            {{F8E4M3B15TyID, F16TyID, undefRounding}, {Fp8E4M3B15_to_Fp16, 4}},
-            {{F8E4M3TyID, F16TyID, undefRounding}, {Fp8E4M3Nv_to_Fp16, 2}},
-            {{F8E5M2TyID, F16TyID, undefRounding}, {Fp8E5M2_to_Fp16, 4}},
-            // F16 -> F8
-            {{F16TyID, F8E4M3B15TyID, RoundingMode::RTZ},
-             {Fp16_to_Fp8E4M3B15, 4}},
-            {{F16TyID, F8E4M3B15TyID, RoundingMode::RTNE},
-             // TODO: provide proper implementation for RTNE rounding.
-             {Fp16_to_Fp8E4M3B15, 4}},
-            {{F16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Fp16_to_Fp8E4M3Nv, 2}},
-            {{F16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Fp16_to_Fp8E4M3Nv_RTNE, 1}},
-            {{F16TyID, F8E5M2TyID, RoundingMode::RTZ},
-             {Fp16_to_Fp8E5M2_RTZ, 4}},
-            {{F16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Fp16_to_Fp8E5M2_RTNE, 1}},
-            // F8 -> BF16
-            {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16, 4}},
-            {{F8E4M3TyID, BF16TyID, undefRounding}, {Fp8E4M3Nv_to_Bf16, 4}},
-            // BF16 -> F8
-            {{BF16TyID, F8E5M2TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E5M2, 4}},
-            {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             {Bf16_to_Fp8E5M2_RTNE, 1}},
-            {{BF16TyID, F8E4M3TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E4M3Nv, 4}},
-            {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE},
-             {Bf16_to_Fp8E4M3Nv_RTNE, 1}},
-            // BF16 -> F16
-            {{BF16TyID, F16TyID, undefRounding}, {Bf16_to_Fp16, 2}},
-        };
-
-    std::tuple<TypeID, TypeID, RoundingMode> key = {
-        srcTy.getTypeID(), dstTy.getTypeID(),
-        roundingMode.value_or(undefRounding)};
-    if (srcMap.count(key) == 0) {
-      llvm::errs() << "Unsupported conversion from " << srcTy << " to "
-                   << dstTy;
-      if (roundingMode.has_value())
-        llvm::errs() << " with rounding mode "
-                     << stringifyRoundingMode(roundingMode.value());
-      llvm::errs() << "\n";
-      llvm_unreachable("");
-    }
-    return srcMap.lookup(key);
-  }
-
   SmallVector<Value> createDestOps(FpToFpOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcElementType = getElementType(op.getSrc());
-    auto dstElementType = getElementType(op.getResult());
-    auto roundingMode = op.getRounding();
-
-    if (isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
-      assert(roundingMode.has_value() &&
-             "Rounding mode must be specified for conversions to fp8");
-
-      // For now only RTNE is supported for conversions from fp16 to fp8
-      if (!srcElementType.isF32() &&
-          roundingMode.value() != RoundingMode::RTNE) {
-        llvm::errs() << "Unsupported rounding mode for conversion to fp8: "
-                     << stringifyRoundingMode(roundingMode.value()) << "\n";
-        llvm_unreachable("");
-      }
-    }
-
-    if (srcElementType.isF32() && dstElementType.isF16()) {
-      assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->fp16 conversion");
-      SmallVector<Value> outVals;
-      for (Value v : operands[0]) {
-        outVals.push_back(
-            convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
-      }
-      return outVals;
-    }
-
-    if (srcElementType.isF32() && dstElementType.isBF16()) {
-      assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->bf16 conversion");
-      SmallVector<Value> outVals;
-      for (Value v : operands[0]) {
-        outVals.push_back(
-            intel::convertFp32ToBf16(loc, rewriter, v, roundingMode.value()));
-      }
-      return outVals;
-    }
-
-    bool useFP16IntermediateSrc = srcElementType.isF32();
-    bool isDstFP32 = dstElementType.isF32();
-    Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
-    Type dstType = isDstFP32 ? f16_ty : dstElementType;
-    auto [cvtFunc, numElements] =
-        getConversionFunc(srcType, dstType, roundingMode);
-    SmallVector<Value> inVals;
-    inVals.reserve(std::min(numElements, operands.size()));
-    for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
-      inVals.push_back(operands[i][0]);
-    }
-    if (useFP16IntermediateSrc)
-      for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v, roundingMode.value());
-    inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
-    SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
-    assert(outVals.size() == inVals.size());
-    outVals.resize(std::min(numElements, operands.size()));
-    if (isDstFP32)
-      for (Value &v : outVals)
-        v = convertFp16ToFp32(loc, rewriter, v);
-    // Pack values
-    return outVals;
+    return triton::intel::genericFpToFpToLLVM(op, rewriter, typeConverter,
+                                              elemTy, operands, loc);
   }
 };
 
@@ -1355,7 +1350,6 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
@@ -1372,6 +1366,12 @@ void populateElementwiseOpToLLVMPatterns(
       /*hwNanPropagationSupported=*/false, benefitForPropNan);
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+}
+
+void populateSPIRVFpConversionToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 }
 
 } // namespace mlir::triton::intel
