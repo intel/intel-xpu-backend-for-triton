@@ -15,6 +15,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import cutlass_kernel
 
 
 @triton.autotune(
@@ -232,8 +233,9 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
     [4, 32768, 128, 4096],
     [4, 32768, 4096, 128],
     [32, 4096, 128, 4096],
-    [4096, 8, 128, 16384],
-    [4096, 8, 16384, 128],
+    # FIXME: Re-enabled them when https://github.com/codeplaysoftware/cutlass-fork/pull/313 is merged
+    # [4096, 8, 128, 16384], # KO ; CUTLASS disabled them in their own benchmark
+    # [4096, 8, 16384, 128], # KO ; CUTLASS disabled them in their own benchmark
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -273,6 +275,10 @@ def get_benchmark(
     use_xetla = not (transpose_a or transpose_b)
     if use_xetla:
         supported_providers['xetla'] = 'XeTLA'
+    use_cutlass = not (transpose_a or transpose_b)
+    if use_cutlass:
+        supported_providers['cutlass'] = 'CUTLASS'
+
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
@@ -320,6 +326,7 @@ def get_benchmark(
                 n_repeat=10,
                 quantiles=quantiles,
             )
+
         elif provider == 'triton':
             if len(a.shape) != len(b.shape):
                 raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
@@ -339,6 +346,7 @@ def get_benchmark(
                 n_repeat=10,
                 quantiles=quantiles,
             )
+
         elif provider == 'xetla':
             if B == 1:
                 c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
@@ -372,6 +380,31 @@ def get_benchmark(
                 n_repeat=10,
                 quantiles=quantiles,
             )
+
+        elif provider == 'cutlass':
+            name = 'gemm'
+            func = getattr(cutlass_kernel, name)
+
+            def cutlass_invoker():
+                if B == 1:
+                    c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                else:
+                    c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                func(a, b, c, M, N, K, B)
+                return c
+
+            cutlass_fn = cutlass_invoker
+            torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
+
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suite.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                cutlass_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 

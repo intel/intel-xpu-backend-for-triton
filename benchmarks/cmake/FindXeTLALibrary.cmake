@@ -1,5 +1,5 @@
 # Try to find XeTLA library.
-#
+
 include(FetchContent)
 
 if (NOT XeTLALibrary_FOUND)
