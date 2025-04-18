@@ -913,7 +913,37 @@ struct TritonIntelGPUInferLayoutInterface
   inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
                          Attribute &outEnc, bool fwdInference,
                          std::optional<Location> loc) const override {
-    // Not required to support Fp4ToFpOp on DPAS layout.
+    auto *ctx = getContext();
+
+    if (getOrder(cast<DistributedEncodingTrait>(inEnc), shape)[axis] == 0) {
+      // Dot operand: double kWidth if kDim == axis.
+      if (auto dotEnc = mlir::dyn_cast<DotOperandEncodingAttr>(inEnc)) {
+        auto dpasEnc = mlir::dyn_cast<DpasEncodingAttr>(dotEnc.getParent());
+        int opsPerChan = dpasEnc.getOpsPerChannel();
+        auto kWidth = dotEnc.getKWidth();
+        if (fwdInference) {
+          kWidth *= 2;
+          opsPerChan *= 2;
+        } else {
+          if (kWidth > 1) {
+            // bwd inference
+            kWidth /= 2;
+            opsPerChan /= 2;
+          } else {
+            return emitOptionalError(loc,
+                                     "Fp4ToFpOp requires at least 2 elements "
+                                     "per thread in the axis dimension");
+          }
+        }
+        auto newDpasEnc = DpasEncodingAttr::get(
+            ctx, dpasEnc.getRepeatCount(), dpasEnc.getSystolicDepth(),
+            dpasEnc.getExecutionSize(), opsPerChan, dpasEnc.getWarpsPerCTA(),
+            dpasEnc.getRepCluster(), dpasEnc.getThreadsPerWarp());
+        outEnc = DotOperandEncodingAttr::get(ctx, dotEnc.getOpIdx(), newDpasEnc,
+                                             kWidth);
+        return success();
+      }
+    }
     return failure();
   }
 };

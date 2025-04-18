@@ -89,6 +89,26 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     return encoding;
   if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
     return encoding;
+  // Dispatch DotEncoding + DPASEncoding to the
+  // TritonIntelGPUInferLayoutInterface
+  if (auto dotEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(encoding)) {
+    auto parentEnc = dyn_cast<ttgi::DpasEncodingAttr>(dotEncoding.getParent());
+    assert(
+        parentEnc &&
+        "Intel inferSrcEncoding requires DpasEncoding for DotOperandEncoding");
+    Attribute srcEnc;
+    if (auto fp4ToFpOp = dyn_cast<tt::gpu::Fp4ToFpOp>(op)) {
+      llvm::ArrayRef<int64_t> shape = fp4ToFpOp.getSrc().getType().getShape();
+      if (succeeded(
+              parentEnc.getDialect()
+                  .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+                  ->inferFp4ToFpOpEncoding(
+                      shape, fp4ToFpOp.getAxis(), parentEnc, srcEnc,
+                      /*fwdInference*/ false, std::nullopt)))
+        return srcEnc;
+      return {};
+    }
+  }
 
   return mlir::inferSrcEncoding(op, encoding);
 }
