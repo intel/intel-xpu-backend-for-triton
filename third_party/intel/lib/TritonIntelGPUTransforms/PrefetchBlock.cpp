@@ -369,9 +369,7 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
     b.setInsertionPoint(loop);
     Type smemPtrTy = LLVM::LLVMPointerType::get(b.getContext(), 3);
     bData = b.create<tt::TritonGEN::SplitBarrierInitOp>(loc, smemPtrTy, 32, 32);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(loc, bData);
     b.setInsertionPoint(loop->getNextNode());
-    b.create<tt::TritonGEN::SplitBarrierWaitOp>(loc, bData);
     b.create<mlir::gpu::BarrierOp>(loc);
     b.create<tt::TritonGEN::SplitBarrierReleaseOp>(loc, bData);
   }
@@ -453,9 +451,10 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   // FIXME: try to use a named barrier to increase performance.
   if (injectSplitBarriers) {
     Location loc = newLoop.getLoc();
+    b.setInsertionPointToStart(newLoop.getBody());
+    b.create<tt::TritonGEN::SplitBarrierSignalOp>(loc, bData);
     b.setInsertionPoint(yield);
     b.create<tt::TritonGEN::SplitBarrierWaitOp>(loc, bData);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(loc, bData);
   }
 
   yield.getResultsMutable().append(advances);
