@@ -65,17 +65,13 @@ pipelineLoop(scf::ForOp forOp, int numStages, bool supportRegularPtr,
                "The barrier scope must be SubGroup or Workgroup");
     OpBuilder b(loop);
     Location loc = loop.getLoc();
-    b.setInsertionPoint(loop);
-    Type smemPtrTy = LLVM::LLVMPointerType::get(b.getContext(), 3);
-    auto bData = b.create<mlir::triton::TritonGEN::SplitBarrierInitOp>(loc, smemPtrTy, 32, 32);
     b.setInsertionPointToStart(loop.getBody());
-    b.create<mlir::triton::TritonGEN::SplitBarrierSignalOp>(loc, bData);
+    b.create<spirv::INTELControlBarrierArriveOp>(
+        loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
-    b.create<mlir::triton::TritonGEN::SplitBarrierWaitOp>(loc, bData);
-    b.setInsertionPoint(loop->getNextNode());
-    b.create<mlir::gpu::BarrierOp>(loc);
-    b.create<mlir::triton::TritonGEN::SplitBarrierReleaseOp>(loc, bData);
+    b.create<spirv::INTELControlBarrierWaitOp>(
+        loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
   }
 }
 
