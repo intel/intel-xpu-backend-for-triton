@@ -95,7 +95,7 @@ class XPUBackend(BaseBackend):
             pm.enable_debug()
 
             intel.passes.ttir.add_convert_to_ttgpuir_warp(pm, opt.num_warps)
-            inject_split_barriers = False
+            inject_split_barriers = True
             intel.passes.ttgpuir.add_prefetch_block(pm, opt.num_stages, inject_split_barriers)
             intel.passes.ttgpuir.add_distribute_to_warps(pm)
             passes.common.add_canonicalizer(pm)
@@ -231,6 +231,7 @@ class XPUBackend(BaseBackend):
             split_barriers_scope = intel.SplitBarrierScope.Workgroup
         elif opt.split_barriers_scope == 'Subgroup':
             split_barriers_scope = intel.SplitBarrierScope.Subgroup
+        split_barriers_scope = intel.SplitBarrierScope.Workgroup
         return split_barriers_scope
 
     @staticmethod
