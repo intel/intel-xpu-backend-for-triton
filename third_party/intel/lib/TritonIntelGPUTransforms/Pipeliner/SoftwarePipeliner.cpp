@@ -91,7 +91,6 @@ struct IntelGPUPipelinePass
       return;
 
     std::optional<spirv::Scope> barrierScope = std::nullopt;
-
     switch (static_cast<ttgi::BarrierScope>(int(splitBarrierScope))) {
     case ttgi::BarrierScope::Workgroup:
       barrierScope = spirv::Scope::Workgroup;
@@ -99,8 +98,6 @@ struct IntelGPUPipelinePass
     case ttgi::BarrierScope::Subgroup:
       barrierScope = spirv::Scope::Subgroup;
       break;
-    default:
-      llvm_unreachable("unknown barrier scope");
     }
 
     SmallVector<scf::ForOp> loops;
