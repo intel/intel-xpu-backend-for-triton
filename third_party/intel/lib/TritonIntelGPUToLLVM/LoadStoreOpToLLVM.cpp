@@ -67,7 +67,7 @@ unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
 
-std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
+inline LLVM::AtomicBinOp matchAtomicOp(RMWOp atomicOp) {
   switch (atomicOp) {
   case RMWOp::AND:
     return LLVM::AtomicBinOp::_and;
@@ -89,9 +89,11 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
     return LLVM::AtomicBinOp::umin;
   case RMWOp::XCHG:
     return LLVM::AtomicBinOp::xchg;
-  default:
-    return {};
   }
+  // Note that we should never hit this because all cases are covered above.
+  // However, something is necessary after the switch in the function body to
+  // avoid a compiler error.
+  llvm_unreachable("Unhandled RMWOp in case statement");
 }
 
 /// Holds the values related to a block pointer.
@@ -2536,12 +2538,7 @@ struct AtomicRMWOpConversion
                   spirv::MemorySemantics::CrossWorkgroupMemory);
 
         auto createAtomicBinOpInstruction = [&]() -> SmallVector<Value, 1> {
-          std::optional<mlir::LLVM::AtomicBinOp> rmwKindOpt =
-              matchAtomicOp(atomicRmwAttr);
-          // TODO: should we fail on unsupported ops instead of asserting? See
-          // AMD/LoadStoreOpToLLVM.cpp
-          assert(rmwKindOpt);
-          auto rmwKind = *rmwKindOpt;
+          mlir::LLVM::AtomicBinOp rmwKind = matchAtomicOp(atomicRmwAttr);
 
           rmwVal = b.bitcast(rmwVal, valueElemTy);
           auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(

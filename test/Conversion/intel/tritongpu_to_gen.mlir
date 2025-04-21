@@ -685,7 +685,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT:   llvm.store [[IE2]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK-NEXT:   llvm.br ^bb2
     // CHECK-NEXT: ^bb2:
-    // CHECK:   [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
+    // CHECK:        [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[IE3:%.*]] = llvm.insertelement {{.*}}, [[VEC3]][[[ZERO]] : i32] : vector<1xi32>
     // CHECK:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
@@ -1324,7 +1324,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[ZERO2:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:      [[STORE_VEC_IE:%.*]] = llvm.insertelement [[BCAST_STORE_VEC]], [[UNDEF1]][[[ZERO2]] : i32] : vector<1xi32>
     // CHECK-NEXT: [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NEXT: llvm.store [[STORE_VEC_IE]], [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK-NOT: llvm.cond_br
     // CHECK:     [[IE1:%.*]] = llvm.insertelement {{.*}}, {{.*}}[{{.*}} : i32] : vector<1xi32>
     // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
