@@ -41,14 +41,13 @@ public:
 class CanonicalMaskValidator final : public MaskValidatorBase {
 public:
   // This structure is used to store the information about a mask in canonical
-  // form (N + END - 1 / END).
+  // form (N + END - 1) / END.
   struct MaskInfo {
     Value N;
     unsigned END;
   };
 
   // Check whether the mask is equivalent to the form: `END < N-i*END`.
-  // Returns a structure containing `N` and `END`.
   virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
     assert(mask && "Expecting a valid mask");
 
@@ -116,7 +115,7 @@ public:
     if (isa<arith::ConstantIntOp>(defOp)) {
       int64_t valN =
           cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
-      bool cond1 = (valN + maskInfo.END - 1) % maskInfo.END > 0;
+      bool cond1 = ((valN + maskInfo.END - 1) % maskInfo.END) > 0;
       bool cond2 = valN > maskInfo.END;
       return builder.create<arith::ConstantIntOp>(
           forOp.getLoc(), cond1 && cond2, builder.getI1Type());
@@ -177,22 +176,16 @@ public:
   }
 
 private:
-  // Assuming the mask is equivalent to the form: `END < N-i*END`, returns `N`.
+  // Assuming the mask is equivalent to the form: `END < N-i*END`, returns a
+  // structure containing `N` and `END`.
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask) && "Expecting a valid mask");
 
     auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
     Operation *lhs = tt::intel::getFinalValue(cmpOp.getLhs()).getDefiningOp();
     Operation *rhs = tt::intel::getFinalValue(cmpOp.getRhs()).getDefiningOp();
-    auto rangeOp = cast<tt::MakeRangeOp>(lhs);
-    unsigned end = rangeOp.getEnd();
-
-    auto subOp = cast<arith::SubIOp>(rhs);
-    Operation *subLhs = subOp.getLhs().getDefiningOp();
-    if (!subLhs)
-      return MaskInfo{subOp.getLhs(), end};
-
-    return MaskInfo{cast<arith::ConstantIntOp>(subLhs), end};
+    return MaskInfo{cast<arith::SubIOp>(rhs).getLhs(),
+                    cast<tt::MakeRangeOp>(lhs).getEnd()};
   }
 };
 
