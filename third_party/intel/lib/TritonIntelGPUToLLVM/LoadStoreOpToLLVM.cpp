@@ -1462,9 +1462,6 @@ struct LoadOpConversion
     std::vector<std::vector<int32_t>> newLoadBases;
 
     SmallVector<std::pair<StringAttr, int32_t>> outDims;
-    // Copy the existing dimensions first. This allows us to re-use the existing
-    // dim names as well as the sizes should the bases vector be empty (one
-    // load).
     for (auto [name, size] :
          llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
       outDims.push_back(std::make_pair(name, size));
