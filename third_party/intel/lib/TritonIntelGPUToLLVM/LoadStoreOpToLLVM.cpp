@@ -558,7 +558,7 @@ struct LoadOpToBlockIOConversion
     unsigned elemsPerLanePerDPASInst =
         product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
     LLVMTypeConverter *typeConverter = getTypeConverter();
-    Type unpackedDPASOperandType = LLVM::getFixedVectorType(
+    Type unpackedDPASOperandType = LLVM::getVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
     // By default, use the unpacked type for the 2D load result type.
@@ -605,8 +605,8 @@ struct LoadOpToBlockIOConversion
       }
     }
 
-    Type packedDPASOperandType = LLVM::getFixedVectorType(
-        loadResultElemType, packedElemsPerLanePerDPASInst);
+    Type packedDPASOperandType =
+        LLVM::getVectorType(loadResultElemType, packedElemsPerLanePerDPASInst);
 
     // Outer dim: Dim M or N. Inner dim: Dim K.
     // Round the warp id fit into the tensor shape.
@@ -772,7 +772,7 @@ struct LoadOpToBlockIOConversion
                                 numOperandsOuterDimPerLoad *
                                 numOperandsInnerDimPerLoad;
     Type load2DGenXType =
-        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
+        LLVM::getVectorType(loadResultElemType, numValuesPerLoad);
 
     // The stride for the replicates.
     unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
@@ -1073,8 +1073,8 @@ struct LoadOpConversion
       SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
       int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
       Type load2DGenXType =
-          LLVM::getFixedVectorType(IntegerType::get(ctx, elemSizeInBits),
-                                   elemsPerLane); // make it opaque type.
+          LLVM::getVectorType(IntegerType::get(ctx, elemSizeInBits),
+                              elemsPerLane); // make it opaque type.
 
       auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
             offsetBaseY] =
@@ -1148,8 +1148,8 @@ struct LoadOpConversion
                 return failure();
               }
 
-              Value ret = b.bitcast(
-                  load2dOp, LLVM::getFixedVectorType(eltTy, elemsPerLane));
+              Value ret =
+                  b.bitcast(load2dOp, LLVM::getVectorType(eltTy, elemsPerLane));
 
               for (size_t i = 0; i < elemsPerLane; i++) {
                 Value loaded = b.extract_element(eltTy, ret, b.i32_val(i));
@@ -1181,7 +1181,7 @@ struct LoadOpConversion
     unsigned elemsPerLanePerDPASInst =
         product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
     LLVMTypeConverter *typeConverter = getTypeConverter();
-    Type unpackedDPASOperandType = LLVM::getFixedVectorType(
+    Type unpackedDPASOperandType = LLVM::getVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
     // By default, use the unpacked type for the 2D load result type.
@@ -1213,8 +1213,8 @@ struct LoadOpConversion
       usePackedType = true;
     }
 
-    Type packedDPASOperandType = LLVM::getFixedVectorType(
-        loadResultElemType, packedElemsPerLanePerDPASInst);
+    Type packedDPASOperandType =
+        LLVM::getVectorType(loadResultElemType, packedElemsPerLanePerDPASInst);
 
     // Outer dim: Dim M or N. Inner dim: Dim K.
     auto repCluster = dpasLayout.getRepCluster();
@@ -1431,7 +1431,7 @@ struct LoadOpConversion
                                 numOperandsOuterDimPerLoad *
                                 numOperandsInnerDimPerLoad;
     Type load2DGenXType =
-        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
+        LLVM::getVectorType(loadResultElemType, numValuesPerLoad);
 
     // The stride for the replicates.
     unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
@@ -1917,8 +1917,8 @@ struct LoadOpConversion
         } else {
           curr = ret;
         }
-        curr = b.bitcast(curr, LLVM::getFixedVectorType(
-                                   valueElemTy, width / valueElemNBits));
+        curr = b.bitcast(
+            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
       int tmp = width / valueElemNBits;
@@ -1994,8 +1994,8 @@ struct StoreOpConversion
 
     int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
     Type store2DGenXType =
-        LLVM::getFixedVectorType(IntegerType::get(ctx, elemSizeInBits),
-                                 elemsPerLane); // make it opaque type.
+        LLVM::getVectorType(IntegerType::get(ctx, elemSizeInBits),
+                            elemsPerLane); // make it opaque type.
 
     Value blockPtr = adaptor.getPtr();
     auto [base, width, height, rowStride, colStride, offsetBaseX, offsetBaseY] =
@@ -2051,8 +2051,8 @@ struct StoreOpConversion
                 b.add(warpId1Offset, b.i32_val(n * replicaStride[1] +
                                                repN * elemsPerInstr[1]));
             Value storeVal = rewriter.create<LLVM::UndefOp>(
-                loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
-                                              elemsPerLane));
+                loc, LLVM::getVectorType(typeConverter->convertType(eltTy),
+                                         elemsPerLane));
             for (size_t i = 0; i < elemsPerLane; ++i) {
               storeVal =
                   b.insert_element(storeVal, vals[valOffset], b.i32_val(i));

@@ -24,7 +24,7 @@ benchmarks/**/*.so
 inductor_log/
 
 # Backends copied from submodules
-python/triton/backends/
+python/triton/backends/*
 !python/triton/backends/__init__.py
 !python/triton/backends/compiler.py
 !python/triton/backends/driver.py

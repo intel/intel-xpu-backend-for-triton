@@ -163,9 +163,11 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # for correct registration of kernels.
     # For details: https://github.com/pytorch/pytorch/issues/144778
     kernels = [kernel for kernel in kernels if kernel != []]
-    assert len(kernels) == n_repeat, (
-        f"the profiling number not match; {n_repeat=}, {kernels=}, \n" +
-        f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
+    relax_profiling_data_check = os.getenv("TRITON_RELAX_PROFILING_CHECK", "0") == "1"
+    if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
+        raise AssertionError(
+            f"the profiling number not match; {n_repeat=}, {kernels=}, "
+            f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
@@ -188,11 +190,12 @@ def filter_providers(
     supported_providers: dict[str, str],
     providers_filter: Optional[list[str]],
 ) -> dict[str, str]:
-    providers = {}
     if providers_filter:
-        for provider_key, provider_label in supported_providers.items():
-            if provider_key in providers_filter:
-                providers[provider_key] = provider_label
+        if missing_keys := providers_filter - supported_providers.keys():
+            raise AssertionError(f"Unsupported providers are provided in filter {missing_keys}")
+        providers = {name: label for name, label in supported_providers.items() if name in providers_filter}
+        if not providers:
+            raise AssertionError(f"No providers are selected from {supported_providers} for {providers_filter} filter.")
         return providers
     return supported_providers
 
@@ -214,7 +217,7 @@ class MarkArgs:
     n_runs: int = 1
 
     @classmethod
-    def _parse_common_args(cls) -> tuple[argparse.Namespace, list[str]]:
+    def parse_common_args(cls) -> tuple[argparse.Namespace, list[str]]:
         """Parses arguments via CLI, allows save_path overloading to `reports`."""
         parser = argparse.ArgumentParser()
         parser.add_argument(
@@ -233,7 +236,7 @@ class MarkArgs:
 
     @classmethod
     def from_args(cls) -> "MarkArgs":
-        args, _ = cls._parse_common_args()
+        args, _ = cls.parse_common_args()
         return MarkArgs(args.reports, args.n_runs)
 
 

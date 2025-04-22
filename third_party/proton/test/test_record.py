@@ -29,8 +29,8 @@ def test_proton_record(tmp_path: pathlib.Path):
 
     torch.manual_seed(0)
     size = 2**12
-    x = torch.rand(size, device='cuda')
-    y = torch.rand(size, device='cuda')
+    x = torch.rand(size, device='xpu')
+    y = torch.rand(size, device='xpu')
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)

@@ -274,14 +274,6 @@ jobs:
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
-      # Install Pytorch with FlexAttention XPU support enabled
-      - name: Setup PyTorch
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: ./.github/actions/setup-pytorch
-        with:
-          repository: liangan1/pytorch
-          ref: liangan1/flex_attention
-
       - name: Run Triton FlexAttention Causal Mask fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flex_attention_benchmark_causal_mask.py') }}
         run: |
