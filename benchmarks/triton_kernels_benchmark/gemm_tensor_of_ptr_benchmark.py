@@ -136,7 +136,7 @@ def get_benchmark(
 
 
 if __name__ == '__main__':
-    _benchmark = gemm_benchmark.get_benchmark(
+    _benchmark = get_benchmark(
         transpose_a=(os.getenv('TRANSPOSE_A', '0') == '1'),
         transpose_b=(os.getenv('TRANSPOSE_B', '0') == '1'),
     )
