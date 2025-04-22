@@ -96,36 +96,14 @@ jobs:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
 
-  prepare:
-    name: Prepare
-    runs-on: Linux
-
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-
-    steps:
-      - name: Inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Matrix
-        id: matrix
-        run: |
-          if [[ -n "${{ inputs.runner_label }}" ]]; then
-            matrix='{"python": ["3.9"]}'
-          else
-            matrix='{"python": ["3.9"], "driver": ["rolling", "lts"]}'
-          fi
-          echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
-
   integration-tests:
     name: Integration tests matrix
-    needs: prepare
 
     strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix:
+        python:
+          - "3.9"
+        driver: ${{ fromJson((inputs.runner_label || '') == '' && '["rolling", "lts"]' || '["rolling"]') }}
 
     uses: ./.github/workflows/build-test-reusable.yml
     with:

@@ -21,6 +21,26 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     FetchContent_GetProperties(spirv-llvm-translator)
     if(NOT spirv-llvm-translator_POPULATED)
             FetchContent_Populate(spirv-llvm-translator)
+
+            # FIXME: Don't apply patch when Agama driver is updated.
+            execute_process(
+                COMMAND curl -sSL https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3122.diff
+                OUTPUT_FILE ${CMAKE_BINARY_DIR}/3122.diff
+                RESULT_VARIABLE CURL_RESULT
+            )
+            if(NOT CURL_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to download patch from https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3122.diff")
+            endif()
+
+            execute_process(
+                COMMAND git apply ${CMAKE_BINARY_DIR}/3122.diff
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                RESULT_VARIABLE PATCH_RESULT
+            )
+            if(NOT PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to apply patch to SPIRV-LLVM-Translator")
+            endif()
+
             set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
             set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
             set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)

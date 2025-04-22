@@ -21,6 +21,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonOpsToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp
+    XeAsmFormat.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen
@@ -33,4 +34,5 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGENToLLVM
     TritonIntelGPUIR
     TritonIntelUtils
+    TritonProtonToLLVM
 )

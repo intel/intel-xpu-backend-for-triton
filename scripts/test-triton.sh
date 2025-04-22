@@ -221,7 +221,7 @@ run_core_tests() {
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    run_pytest_command -k "not test_disam_cubin" --verbose tools
+    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
@@ -238,7 +238,7 @@ run_regression_tests() {
   cd $TRITON_PROJ/python/test/regression
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-    run_pytest_command -vvv -s --device xpu . --ignore=test_performance.py
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} -s --device xpu . --ignore=test_performance.py
 }
 
 run_interpreter_tests() {
