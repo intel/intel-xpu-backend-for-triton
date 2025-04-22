@@ -1,6 +1,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "Utils/LLVMIntr.h"
 #include "Utils/Mangling.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -82,14 +83,21 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
     auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
     if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                               getSupportBF16ConversionAttrName())) {
-      constexpr StringLiteral baseName = "__spirv_ConvertBF16ToFINTEL";
+      constexpr StringLiteral funcName = "_Z27__spirv_ConvertBF16ToFINTEL";
       Type inTy = getTypeWithSameShape(v.getType(), i16_ty);
       Type outTy = getTypeWithSameShape(inTy, f32_ty);
-      std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
-      auto ext_func = triton::gpu::intel::lookupOrCreateSPIRVFn(moduleOp, name,
-                                                                inTy, outTy);
-      auto call = triton::gpu::intel::createSPIRVBuiltinCall(
-          loc, rewriter, ext_func, b.bitcast(v, inTy).getResult());
+
+      auto bitcastValue = b.bitcast(v, inTy).getResult();
+
+      auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+          /*other=*/LLVM::ModRefInfo::NoModRef,
+          /*argMem=*/LLVM::ModRefInfo::NoModRef,
+          /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+      auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
+      funcAttrs.memEffectsAttr = memAttr;
+
+      auto call = gpu::intel::createDeviceFunctionCall(
+          rewriter, funcName, outTy, {inTy}, {bitcastValue}, {}, funcAttrs);
       return call.getResult();
     }
   }
@@ -109,15 +117,20 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                               getSupportBF16ConversionAttrName()) &&
         rounding == RoundingMode::RTNE) {
       // Intel SPIR-V extension only supports round-to-nearest-even
-      constexpr StringLiteral baseName = "__spirv_ConvertFToBF16INTEL";
+      constexpr StringLiteral funcName = "_Z27__spirv_ConvertFToBF16INTEL";
       Type inTy = v.getType();
       Type funcOutTy = getTypeWithSameShape(inTy, i16_ty);
       Type outTy = getTypeWithSameShape(inTy, bf16_ty);
-      std::string name = mlir::triton::gpu::intel::mangle(baseName, inTy);
-      auto trunc_func = triton::gpu::intel::lookupOrCreateSPIRVFn(
-          moduleOp, name, inTy, funcOutTy);
-      auto call = triton::gpu::intel::createSPIRVBuiltinCall(loc, rewriter,
-                                                             trunc_func, v);
+
+      auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+          /*other=*/LLVM::ModRefInfo::NoModRef,
+          /*argMem=*/LLVM::ModRefInfo::NoModRef,
+          /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+      auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
+      funcAttrs.memEffectsAttr = memAttr;
+
+      auto call = gpu::intel::createDeviceFunctionCall(
+          rewriter, funcName, funcOutTy, {inTy}, {v}, {}, funcAttrs);
       return b.bitcast(call.getResult(), outTy);
     }
   }
