@@ -1566,9 +1566,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "triton_
   // CHECK-LABEL: test_s8_to_bf16_vectorized_conversion
   tt.func @test_s8_to_bf16_vectorized_conversion(%in: tensor<16x16xi8, #dpas>) {
      // CHECK: %[[F32:.+]] = llvm.sitofp %{{.*}} : i8 to f32
-     // CHECK: %[[I16:.+]] = llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) : (f32) -> i16
+     // CHECK: %[[I16:.+]] = llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTEL(%{{.*}}) {{.*}} : (f32) -> i16
      // CHECK: llvm.bitcast %[[I16]] : i16 to bf16
-     // CHECK-COUNT-15: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) : (f32) -> i16
+     // CHECK-COUNT-15: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTEL(%{{.*}}) {{.*}} : (f32) -> i16
     %out = arith.sitofp %in : tensor<16x16xi8, #dpas> to tensor<16x16xbf16, #dpas>
     tt.return
   }
@@ -2046,7 +2046,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "triton_
   tt.func @int32_to_bf16(%arg0: tensor<256xi32, #blocked>) {
     // CHECK-LABEL: @int32_to_bf16
     // CHECK: llvm.sitofp %{{.*}} : i32 to f32
-    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) : (f32) -> i16
+    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTEL(%{{.*}}) {{.*}} : (f32) -> i16
     // CHECK-NEXT: llvm.bitcast %{{.*}} : i16 to bf16
     %a = arith.sitofp %arg0 : tensor<256xi32, #blocked> to tensor<256xbf16, #blocked>
     tt.return
@@ -2060,7 +2060,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, triton_i
   tt.func @bf16_to_int32(%arg0: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: @bf16_to_int32
     // CHECK: llvm.bitcast %{{.*}} : bf16 to i16
-    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}}) : (i16) -> f32
+    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTEL(%{{.*}}) {{.*}} : (i16) -> f32
     // CHECK-NEXT: llvm.fptosi %{{.*}} : f32 to i32
     %a = arith.fptosi %arg0 : tensor<256xbf16, #blocked> to tensor<256xi32, #blocked>
     tt.return
