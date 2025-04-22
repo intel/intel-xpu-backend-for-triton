@@ -1460,25 +1460,6 @@ struct LoadOpConversion
     // layout.
     auto bases = tileLayout.getBases();
     std::vector<std::vector<int32_t>> newLoadBases;
-    for (size_t i = 0;
-         i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
-      newLoadBases.push_back({0, static_cast<int>((1 << i) * repKStride *
-                                                  numOperandsInnerDimPerLoad)});
-    }
-    for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
-      newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
-    }
-    for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
-      newLoadBases.push_back({static_cast<int>((1 << i) * repOuterStride), 0});
-    }
-
-    LLVM_DEBUG({
-      llvm::dbgs() << "Created Load Bases:\n";
-      for (auto &base : newLoadBases) {
-        assert(base.size() == 2);
-        llvm::dbgs() << base[0] << ", " << base[1] << "\n";
-      }
-    });
 
     SmallVector<std::pair<StringAttr, int32_t>> outDims;
     // Copy the existing dimensions first. This allows us to re-use the existing
@@ -1488,14 +1469,31 @@ struct LoadOpConversion
          llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
       outDims.push_back(std::make_pair(name, size));
     }
-    if (newLoadBases.size() > 0) {
-      outDims[0] = std::make_pair(outDims[0].first, tensorShape[dimOuter]);
-      outDims[1] = std::make_pair(
-          outDims[1].first,
-          std::max(warpShape[dimInner],
-                   static_cast<unsigned int>(tensorShape[dimInner] *
-                                             repCluster[dimInner])));
+    assert(outDims[0].first == S("dim0"));
+    assert(outDims[1].first == S("dim1"));
+
+    for (size_t i = 0;
+         i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
+      newLoadBases.push_back({0, static_cast<int>((1 << i) * repKStride *
+                                                  numOperandsInnerDimPerLoad)});
+      outDims[1].second *= repKStride * numOperandsInnerDimPerLoad;
     }
+    for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
+      newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
+      outDims[0].second *= repStride;
+    }
+    for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
+      newLoadBases.push_back({static_cast<int>((1 << i) * repOuterStride), 0});
+      outDims[0].second *= repOuterStride;
+    }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "Created Load Bases:\n";
+      for (auto &base : newLoadBases) {
+        assert(base.size() == 2);
+        llvm::dbgs() << base[0] << ", " << base[1] << "\n";
+      }
+    });
 
     LLVM_DEBUG({
       llvm::dbgs() << "New tile layout dimensions after adding load bases:\n";
