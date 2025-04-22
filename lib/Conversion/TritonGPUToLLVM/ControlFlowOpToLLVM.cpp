@@ -1,4 +1,3 @@
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -101,19 +100,8 @@ private:
       opOffsetVal = b.i32_val(opOffset);
     }
 
-    Value globalScatchPtr = LLVM::getGlobalScratchPtr(loc, rewriter, targetInfo,
-                                                      caller, opOffsetVal);
-    auto callee = cast<FunctionOpInterface>(callOp.resolveCallable());
-    auto lastArgType =
-        callee.getArguments()[callee.getNumArguments() - 1].getType();
-
-    if (lastArgType != globalScatchPtr.getType()) {
-      auto zeroOp = rewriter.create<LLVM::ZeroOp>(loc, lastArgType);
-      promotedOperands.push_back(zeroOp);
-      return promotedOperands;
-    }
-
-    promotedOperands.push_back(globalScatchPtr);
+    promotedOperands.push_back(LLVM::getGlobalScratchPtr(
+        loc, rewriter, targetInfo, caller, opOffsetVal));
     return promotedOperands;
   }
 
