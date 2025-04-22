@@ -1765,13 +1765,6 @@ struct LoadOpConversion
                 // Save the decomposed vals to the map;
                 switch (opIdx) {
                 case DpasEncodingAttr::OpIdx::OperandA: {
-                  llvm::errs()
-                      << "outer: "
-                      << outer * packedRowNum * numLoadPerOutRepCluster << "\n";
-                  llvm::errs() << "rep: " << rep * packedRowNum << "\n";
-                  llvm::errs()
-                      << "repOuterStride / packedElemsPerLanePerDPASInst = "
-                      << repOuterStride / packedElemsPerLanePerDPASInst << "\n";
                   const auto loadX = outer * numLoadPerOutRepCluster *
                                          repOuterStride /
                                          packedElemsPerLanePerDPASInst +
@@ -1787,15 +1780,8 @@ struct LoadOpConversion
                   }
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
-                  llvm::errs() << "outer: " << outer << "\n";
-                  llvm::errs() << "packedColNum: " << packedColNum << "\n";
-                  llvm::errs() << "rep: " << rep * packedColNum << "\n";
-                  llvm::errs()
-                      << "repOuterStride / packedElemsPerLanePerDPASInst = "
-                      << repOuterStride / packedElemsPerLanePerDPASInst << "\n";
                   const auto loadX =
-                      outer * numLoadPerOutRepCluster * repOuterStride /
-                          packedElemsPerLanePerDPASInst +
+                      outer * repOuterStride / packedElemsPerLanePerDPASInst +
                       rep * packedColNum + vblk * packedColNumPerVBlock + col;
                   const auto loadY = k + row;
                   LLVM_DEBUG({
