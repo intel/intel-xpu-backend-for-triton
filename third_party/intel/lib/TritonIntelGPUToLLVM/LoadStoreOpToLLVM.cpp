@@ -1562,6 +1562,10 @@ struct LoadOpConversion
     }
     Value elemSizeInBytes = b.i32_val(originalElemBits / 8);
 
+    auto dpasLayoutToRegister = llEncoding->pseudoinvert();
+    LLVM_DEBUG(llvm::dbgs() << "DPAS layout to warp/lane/register: "
+                            << dpasLayoutToRegister << "\n");
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
@@ -1674,7 +1678,62 @@ struct LoadOpConversion
                                       ? numOperandsInnerDimPerLoad
                                       : numOperandsOuterDimPerLoad;
 
-          // Decompose the return value to multiple operands.
+          if (useTileLoadLinearLayout) {
+            for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "Processing DPAS tile iteration " << i << "\n");
+              auto loadValsIndex = tileLayout.apply(
+                  {{kOffset, 0}, {kIteration, i}, {kLoad, loadIdx}});
+              assert(loadValsIndex.size() == 2);
+              LLVM_DEBUG(llvm::dbgs() << "Load vals index from layout: "
+                                      << loadValsIndex[0].second << ", "
+                                      << loadValsIndex[1].second << "\n");
+
+              auto loadValX =
+                  loadValsIndex[0].second / packedElemsPerLanePerDPASInst;
+              auto loadValY = loadValsIndex[1].second / elemsPerDPASInst[1];
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "Load vals index adjusting for tile dimensions: "
+                         << loadValX << ", " << loadValY << "\n");
+
+              SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
+              for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
+                   ++elemIdx) {
+
+                auto loadValsIndex =
+                    tileLayout.apply({{kOffset, elemIdx * tileWidth},
+                                      {kIteration, i},
+                                      {kLoad, loadIdx}});
+                assert(loadValsIndex.size() == 2);
+                LLVM_DEBUG(llvm::dbgs() << "Load vals index from layout: "
+                                        << loadValsIndex[0].second << ", "
+                                        << loadValsIndex[1].second << "\n");
+
+                auto dpasHwIndex = dpasLayoutToRegister.apply(loadValsIndex);
+                assert(dpasHwIndex.size() == 4);
+                for (size_t i = 0; i < dpasHwIndex.size(); i++) {
+                  llvm::errs() << dpasHwIndex[i].first << " = "
+                               << dpasHwIndex[i].second << "\n";
+                }
+
+                assert(dpasHwIndex[0].first == S("register"));
+
+                indices[elemIdx] = dpasHwIndex[0].second;
+                LLVM_DEBUG({
+                  llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                               << indices[elemIdx] << "\n";
+                });
+              }
+              DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+              Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
+                  loc, packedDPASOperandType, load2dOp, load2dOp, attr);
+
+              loadVals[{loadValX, loadValY}] =
+                  b.bitcast(loadVal, unpackedDPASOperandType);
+            }
+          }
+
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
           for (int vblk = 0; vblk < vBlocks; ++vblk)
             for (int row = 0; row < packedRowNum; ++row)
@@ -1694,43 +1753,59 @@ struct LoadOpConversion
                                  << indices[elemIdx] << "\n";
                   });
                 }
-                DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
-                Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
-                    loc, packedDPASOperandType, load2dOp, load2dOp, attr);
+
+                Value loadVal;
+                if (!useTileLoadLinearLayout) {
+                  DenseI32ArrayAttr attr =
+                      rewriter.getDenseI32ArrayAttr(indices);
+                  loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
+                      loc, packedDPASOperandType, load2dOp, load2dOp, attr);
+                }
 
                 // Save the decomposed vals to the map;
                 switch (opIdx) {
                 case DpasEncodingAttr::OpIdx::OperandA: {
+                  llvm::errs()
+                      << "outer: "
+                      << outer * packedRowNum * numLoadPerOutRepCluster << "\n";
+                  llvm::errs() << "rep: " << rep * packedRowNum << "\n";
+                  llvm::errs()
+                      << "repOuterStride / packedElemsPerLanePerDPASInst = "
+                      << repOuterStride / packedElemsPerLanePerDPASInst << "\n";
+                  const auto loadX = outer * numLoadPerOutRepCluster *
+                                         repOuterStride /
+                                         packedElemsPerLanePerDPASInst +
+                                     rep * packedRowNum + row;
+                  const auto loadY = k + vblk * packedColNumPerVBlock + col;
                   LLVM_DEBUG({
-                    llvm::dbgs() << "load vals index: "
-                                 << std::to_string(outer * packedRowNum *
-                                                       numLoadPerOutRepCluster +
-                                                   rep * packedRowNum + row)
-                                 << ", "
-                                 << std::to_string(
-                                        k + vblk * packedColNumPerVBlock + col)
-                                 << "\n";
+                    llvm::dbgs() << "load vals index: " << loadX << ", "
+                                 << loadY << "\n";
                   });
-                  loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
-                                rep * packedRowNum + row,
-                            k + vblk * packedColNumPerVBlock + col}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
+                  if (!useTileLoadLinearLayout) {
+                    loadVals[{loadX, loadY}] =
+                        b.bitcast(loadVal, unpackedDPASOperandType);
+                  }
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
+                  llvm::errs() << "outer: " << outer << "\n";
+                  llvm::errs() << "packedColNum: " << packedColNum << "\n";
+                  llvm::errs() << "rep: " << rep * packedColNum << "\n";
+                  llvm::errs()
+                      << "repOuterStride / packedElemsPerLanePerDPASInst = "
+                      << repOuterStride / packedElemsPerLanePerDPASInst << "\n";
+                  const auto loadX =
+                      outer * numLoadPerOutRepCluster * repOuterStride /
+                          packedElemsPerLanePerDPASInst +
+                      rep * packedColNum + vblk * packedColNumPerVBlock + col;
+                  const auto loadY = k + row;
                   LLVM_DEBUG({
-                    llvm::dbgs()
-                        << "load vals index: "
-                        << std::to_string(outer * packedColNum *
-                                              numLoadPerOutRepCluster +
-                                          rep * packedColNum +
-                                          vblk * packedColNumPerVBlock + col)
-                        << ", " << std::to_string(k + row) << "\n";
+                    llvm::dbgs() << "load vals index: " << loadX << ", "
+                                 << loadY << "\n";
                   });
-                  loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
-                                rep * packedColNum +
-                                vblk * packedColNumPerVBlock + col,
-                            k + row}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
+                  if (!useTileLoadLinearLayout) {
+                    loadVals[{loadX, loadY}] =
+                        b.bitcast(loadVal, unpackedDPASOperandType);
+                  }
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandC: {
                   llvm_unreachable("unexpected OpIdx::OperandC");
@@ -1747,16 +1822,19 @@ struct LoadOpConversion
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int k = 0; k < numRepInner; ++k) {
         for (int rep = 0; rep < repCluster[unsigned(opIdx)]; ++rep) {
-          if (loadVals.find({outer * repCluster[unsigned(opIdx)] + rep, k}) ==
-              loadVals.end()) {
+          llvm::errs() << "outer, k, rep = " << outer << ", " << k << ", "
+                       << rep << "\n";
+          const auto loadValX =
+              (outer * repOuterStride) / packedElemsPerLanePerDPASInst + rep;
+          const auto loadValY = k;
+          llvm::errs() << "load = " << loadValX << ", " << loadValY << "\n";
+          if (loadVals.find({loadValX, loadValY}) == loadVals.end()) {
             // generate a nice error message before the throw below aborts our
             // pipeline
-            llvm::errs() << "Failed to find key at "
-                         << outer * repCluster[unsigned(opIdx)] + rep << ", "
-                         << k << "\n";
+            llvm::errs() << "Failed to find key at " << loadValX << ", "
+                         << loadValY << "\n";
           }
-          Value loadVal =
-              loadVals.at({outer * repCluster[unsigned(opIdx)] + rep, k});
+          Value loadVal = loadVals.at({loadValX, loadValY});
           VectorType loadTy = cast<VectorType>(loadVal.getType());
           for (int i = 0; i < loadTy.getNumElements(); ++i) {
             auto val = b.extract_element(loadVal, b.i32_val(i));
