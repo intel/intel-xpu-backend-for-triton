@@ -1,11 +1,5 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3921
-test/unit/intel/test_block_load.py::test_block_load_dpas_layout[False-float16-128-32]
-test/unit/intel/test_block_load.py::test_block_load_dpas_layout[False-int8-128-32]
-test/unit/intel/test_block_load.py::test_block_load_dpas_layout[False-int8-64-64]
-test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_store[8-16-int8]
-test/unit/intel/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul[128-128-16-1]
-test/unit/intel/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul[256-128-32-1]
-test/unit/intel/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul[256-64-32-2]
-test/unit/intel/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul[64-512-32-4]
-test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul[bfloat16]
-test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul[float16]
+test/unit/intel/test_block_load.py::test_block_load_dpas_layout
+test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_store
+test/unit/intel/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
+test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul
