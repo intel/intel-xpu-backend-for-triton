@@ -7,7 +7,7 @@ import argparse
 import time
 
 from triton_kernels_benchmark.benchmark_testing import BenchmarkConfig, BenchmarkCategory, MarkArgs
-from triton_kernels_benchmark.becnhmark_config_templates import CONFIGS
+from triton_kernels_benchmark.benchmark_config_templates import CONFIGS
 
 
 @dataclass
