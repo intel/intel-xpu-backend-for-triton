@@ -21,8 +21,8 @@ ALL_CATEGORIES = {cat.value for cat in BenchmarkCategory}
     ),
     (
         [True, set(), True, ALL_CATEGORIES, [], None, lambda x: x > 1, lambda x: x > 1],
-        [True, {"sofmax", "gemm"}, True, ALL_CATEGORIES, [], None, lambda x: x > 1, lambda x: x > 1],
-        [True, {"sofmax", "gemm"}, True, {"core", "gemm", "softmax"}, [], None, lambda x: x > 1, lambda x: x > 1],
+        [True, {"softmax", "gemm"}, True, ALL_CATEGORIES, [], None, lambda x: x > 1, lambda x: x > 1],
+        [True, {"softmax", "gemm"}, True, {"core", "gemm", "softmax"}, [], None, lambda x: x > 1, lambda x: x > 1],
         [False, {"softmax"}, False, {"optional"}, ["triton"], AssertionError, None, None],
         [False, {"softmax"}, False, ALL_CATEGORIES, ["triton"], None, lambda x: x == 1, lambda x: x == 1],
         [False, {"softmax"}, False, ALL_CATEGORIES, ["onednn"], AssertionError, None, None],

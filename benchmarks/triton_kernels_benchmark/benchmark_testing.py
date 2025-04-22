@@ -462,7 +462,7 @@ class BenchmarkConfig:
             f"Config: {self.key}",
             f"Config categories: {[category.value for category in self.categories]}",
             f"Run options: {self.run_opts}",
-            f"Supported providers {self.config_summary.supported_providers}",
+            f"Supported providers: {self.config_summary.supported_providers}",
             f"Selected providers: {self.config_summary.selected_providers}",
             str(self.config_summary),
         ]
