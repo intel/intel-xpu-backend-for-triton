@@ -230,7 +230,6 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_combine(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
@@ -238,9 +237,9 @@ class XPUBackend(BaseBackend):
             ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False
             intel.passes.ttir.add_raise_block_pointer(pm, ignore_masks)
         passes.common.add_canonicalizer(pm)
+        passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
@@ -262,12 +261,11 @@ class XPUBackend(BaseBackend):
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        target_arch = "spir64"
         intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
                                                         properties["has_subgroup_2d_block_io"],
                                                         properties["has_subgroup_matrix_multiply_accumulate"],
                                                         properties["has_bfloat16_conversions"], opt.threads_per_warp,
-                                                        target_arch)
+                                                        "spir64")
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
