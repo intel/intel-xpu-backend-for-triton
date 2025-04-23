@@ -93,11 +93,11 @@ struct IntelGPUPipelinePass
       return;
 
     std::optional<spirv::Scope> barrierScope = std::nullopt;
-    switch (static_cast<ttgi::BarrierScope>(unsigned(splitBarrierScope))) {
-    case ttgi::BarrierScope::Workgroup:
+    switch (splitBarrierScope) {
+    case ttgi::SplitBarrierScope::Workgroup:
       barrierScope = spirv::Scope::Workgroup;
       break;
-    case ttgi::BarrierScope::Subgroup:
+    case ttgi::SplitBarrierScope::Subgroup:
       barrierScope = spirv::Scope::Subgroup;
       break;
     }

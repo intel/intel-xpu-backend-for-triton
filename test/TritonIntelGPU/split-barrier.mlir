@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 support-regular-ptr=true split-barriers-scope=1" | FileCheck %s --check-prefixes=CHECK,WORKGROUP_SCOPE
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 support-regular-ptr=true split-barriers-scope=2" | FileCheck %s --check-prefixes=CHECK,SUBGROUP_SCOPE
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 support-regular-ptr=true split-barriers-scope=workgroup" | FileCheck %s --check-prefixes=CHECK,WORKGROUP_SCOPE
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 support-regular-ptr=true split-barriers-scope=subgroup" | FileCheck %s --check-prefixes=CHECK,SUBGROUP_SCOPE
 
 // CHECK: #[[$BLOCK:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
 // CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>

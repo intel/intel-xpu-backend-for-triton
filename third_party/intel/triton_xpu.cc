@@ -88,8 +88,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_WRAPPER_OPT_3(
-      "add_pipeline", gpu::intel::createTritonIntelGPUPipeline, int, bool, int);
+  ADD_PASS_WRAPPER_OPT_3("add_pipeline",
+                         gpu::intel::createTritonIntelGPUPipeline, int, bool,
+                         enum gpu::intel::SplitBarrierScope);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);

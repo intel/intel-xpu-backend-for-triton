@@ -126,8 +126,12 @@ def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
            "bool", /*default*/"false",
            "Enable support for prefetching non-block pointers">,
     Option<"splitBarrierScope", "split-barriers-scope",
-           "int32_t", /*default*/"0",
-           "Insert split barriers in the main loop as follow: 0:No barrier / 1:Workgroup scope / 2:Subgroup scope">,
+           "enum SplitBarrierScope", "SplitBarrierScope::None",
+           "insert split barriers in a loop",
+           "llvm::cl::values("
+           "clEnumValN(SplitBarrierScope::None, \"none\", \"No scope\"), "
+           "clEnumValN(SplitBarrierScope::Workgroup, \"workgroup\", \"Workgroup scope\"), "
+           "clEnumValN(SplitBarrierScope::Subgroup, \"subgroup\", \"Subgroup scope\"))">,
   ];
 }
 
