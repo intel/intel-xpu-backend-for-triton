@@ -184,6 +184,6 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
             if tl.max(val) > 0:
                 k += 1
 
-    i = torch.empty(64 * 64, dtype=torch.float32).xpu()
-    o = torch.empty(64 * 64, dtype=torch.float32).xpu()
+    i = torch.empty(64 * 64, dtype=torch.float32, device=device)
+    o = torch.empty(64 * 64, dtype=torch.float32, device=device)
     kernel_pipe_error[(1, )](i, o)
