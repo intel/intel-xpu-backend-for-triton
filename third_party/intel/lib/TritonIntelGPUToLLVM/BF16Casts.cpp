@@ -93,7 +93,7 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
           /*other=*/LLVM::ModRefInfo::NoModRef,
           /*argMem=*/LLVM::ModRefInfo::NoModRef,
           /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-      auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
+      auto funcAttrs = gpu::intel::convergentNoUnwindWillReturnAttrs;
       funcAttrs.memEffectsAttr = memAttr;
 
       auto call = gpu::intel::createDeviceFunctionCall(
@@ -126,7 +126,7 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
           /*other=*/LLVM::ModRefInfo::NoModRef,
           /*argMem=*/LLVM::ModRefInfo::NoModRef,
           /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-      auto funcAttrs = gpu::intel::noUnwindWillReturnAttrs;
+      auto funcAttrs = gpu::intel::convergentNoUnwindWillReturnAttrs;
       funcAttrs.memEffectsAttr = memAttr;
 
       auto call = gpu::intel::createDeviceFunctionCall(
