@@ -6,11 +6,14 @@ HELP="\
 Example usage: ./test-triton.sh [TEST]... [OPTION]...
 
 TEST:
-    --unit
-    --core
+    --unit          default
+    --core          default
+    --tutorial      default
+    --microbench    default
+    --minicore      part of core
+    --mxfp          part of core
+    --scaled-dot    part of core
     --interpreter
-    --tutorial
-    --microbench
     --benchmarks
     --softmax
     --gemm
@@ -42,6 +45,9 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 TEST_DEFAULT=true
 TEST_UNIT=false
 TEST_CORE=false
+TEST_MINICORE=false
+TEST_MXFP=false
+TEST_SCALED_DOT=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
@@ -72,6 +78,21 @@ while (( $# != 0 )); do
       ;;
     --core)
       TEST_CORE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --minicore)
+      TEST_MINICORE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --mxfp)
+      TEST_MXFP=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --scaled-dot)
+      TEST_SCALED_DOT=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -237,15 +258,26 @@ run_pytest_command() {
   fi
 }
 
-run_core_tests() {
+run_regression_tests() {
   echo "***************************************************"
-  echo "******      Running Triton Core tests        ******"
+  echo "******   Running Triton Regression tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/regression
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} -s --device xpu . --ignore=test_performance.py
+}
+
+run_minicore_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton mini core tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "not test_mxfp and not test_scaled_dot"
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
@@ -272,17 +304,40 @@ run_core_tests() {
 
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-  run_pytest_command --device xpu .
+    run_pytest_command --device xpu .
+
+  run_regression_tests
 }
 
-run_regression_tests() {
+run_mxfp_tests() {
   echo "***************************************************"
-  echo "******   Running Triton Regression tests     ******"
+  echo "******    Running Triton matmul mxfp tests   ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/test/regression
+  cd $TRITON_PROJ/python/test/unit
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} -s --device xpu . --ignore=test_performance.py
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "test_mxfp"
+}
+
+run_scaled_dot_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton scaled_dot tests    ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "test_scaled_dot"
+}
+
+run_core_tests() {
+  echo "***************************************************"
+  echo "******      Running Triton Core tests        ******"
+  echo "***************************************************"
+  run_minicore_tests
+  run_mxfp_tests
+  run_scaled_dot_tests
 }
 
 run_interpreter_tests() {
@@ -423,10 +478,22 @@ test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
+
+  # core suite consists of minicore, mxfp, scaled_dot
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
-    run_regression_tests
+  else
+    if [ "$TEST_MINICORE" = true]; then
+        run_minicore_tests
+    fi
+    if [ "$TEST_MXFP" = true]; then
+        run_mxfp_tests
+    fi
+    if [ "$TEST_SCALED_DOT" = true]; then
+        run_scaled_dot_tests
+    fi
   fi
+
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
   fi
