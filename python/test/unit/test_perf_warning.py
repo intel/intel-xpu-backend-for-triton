@@ -168,7 +168,7 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
     assert "note: diagnostic emitted with trace:" in err
 
 
-def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
+def test_remark_swp_op_before_operands(capfd, fresh_triton_cache, device):
 
     @triton.jit
     def kernel_pipe_error(in_ptr, out_ptr):
