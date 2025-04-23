@@ -1392,13 +1392,38 @@ struct LoadOpConversion
       llvm::dbgs() << "vBlocks = " << vBlocks << "\n";
     });
 
-    tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
-                                           kIteration, dimOuterStr);
-    tileLayout *=
-        LinearLayout::identity1D(isTransposeRequired && oneMatrixPerLoadForBT
-                                     ? 1
-                                     : numOperandsInnerDimPerLoad,
-                                 kIteration, dimInnerStr);
+    if (isTransposeRequired) {
+      // TODO: need to find a way to interleave this data, this didn't quite
+      // work
+      // NOTE: currently the num operands outer dim will always be 1
+      tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
+                                             kIteration, dimOuterStr);
+#if 0
+                                             tileLayout *=
+          LinearLayout::zeros1D(isTransposeRequired && oneMatrixPerLoadForBT
+                                    ? 1
+                                    : numOperandsInnerDimPerLoad,
+                                kOffset, dimInnerStr);
+#endif
+
+#if 0
+      
+#else
+      tileLayout *=
+          LinearLayout::identity1D(isTransposeRequired && oneMatrixPerLoadForBT
+                                       ? 1
+                                       : numOperandsInnerDimPerLoad,
+                                   kIteration, dimInnerStr);
+#endif 
+    } else {
+      tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
+                                             kIteration, dimOuterStr);
+      tileLayout *=
+          LinearLayout::identity1D(isTransposeRequired && oneMatrixPerLoadForBT
+                                       ? 1
+                                       : numOperandsInnerDimPerLoad,
+                                   kIteration, dimInnerStr);
+    }
 
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding iterations: "
@@ -1691,29 +1716,37 @@ struct LoadOpConversion
 
               auto loadValX =
                   loadValsIndex[0].second / packedElemsPerLanePerDPASInst;
+#if 1
               auto loadValY = loadValsIndex[1].second / elemsPerDPASInst[1];
-
+#else
+              auto loadValY =
+                  loadValsIndex[1].second /
+                  (isTransposeRequired ? tileWidth : elemsPerDPASInst[1]);
+#endif
               LLVM_DEBUG(llvm::dbgs()
                          << "Load vals index adjusting for tile dimensions: "
                          << loadValX << ", " << loadValY << "\n");
+
+              // TODO: Can we do this in the reverse? 
 
               SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
               for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
                    ++elemIdx) {
 
-                auto loadValsIndex =
-                    tileLayout.apply({{kOffset, elemIdx * tileWidth},
-                                      {kIteration, i},
-                                      {kLoad, loadIdx}});
+                const auto offset =
+                    elemIdx * tileWidth * dpasTileToPackedIndicesRatio;
+                llvm::errs() << "Offset = " << offset << "\n";
+                auto loadValsIndex = tileLayout.apply(
+                    {{kOffset, offset}, {kIteration, i}, {kLoad, 0}});
                 assert(loadValsIndex.size() == 2);
-                LLVM_DEBUG(llvm::dbgs() << "Load vals index from layout: "
+                LLVM_DEBUG(llvm::dbgs() << "Element index from tile layout: "
                                         << loadValsIndex[0].second << ", "
                                         << loadValsIndex[1].second << "\n");
 
                 auto dpasHwIndex = dpasLayoutToRegister.apply(loadValsIndex);
                 assert(dpasHwIndex.size() == 4);
                 for (size_t i = 0; i < dpasHwIndex.size(); i++) {
-                  llvm::errs() << dpasHwIndex[i].first << " = "
+                  llvm::errs() << "\t" << dpasHwIndex[i].first << " = "
                                << dpasHwIndex[i].second << "\n";
                 }
 
