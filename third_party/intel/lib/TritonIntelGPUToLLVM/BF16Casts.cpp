@@ -83,9 +83,10 @@ Value convertBf16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
     auto moduleOp = definingOp->getParentWithTrait<OpTrait::SymbolTable>();
     if (moduleOp->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                               getSupportBF16ConversionAttrName())) {
-      constexpr StringLiteral funcName = "_Z27__spirv_ConvertBF16ToFINTEL";
+      constexpr StringLiteral baseName = "__spirv_ConvertBF16ToFINTEL";
       Type inTy = getTypeWithSameShape(v.getType(), i16_ty);
       Type outTy = getTypeWithSameShape(inTy, f32_ty);
+      std::string funcName = mlir::triton::gpu::intel::mangle(baseName, inTy);
 
       auto bitcastValue = b.bitcast(v, inTy).getResult();
 
@@ -117,10 +118,11 @@ Value convertFp32ToBf16(Location loc, ConversionPatternRewriter &rewriter,
                               getSupportBF16ConversionAttrName()) &&
         rounding == RoundingMode::RTNE) {
       // Intel SPIR-V extension only supports round-to-nearest-even
-      constexpr StringLiteral funcName = "_Z27__spirv_ConvertFToBF16INTEL";
+      constexpr StringLiteral baseName = "__spirv_ConvertFToBF16INTEL";
       Type inTy = v.getType();
       Type funcOutTy = getTypeWithSameShape(inTy, i16_ty);
       Type outTy = getTypeWithSameShape(inTy, bf16_ty);
+      std::string funcName = mlir::triton::gpu::intel::mangle(baseName, inTy);
 
       auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
           /*other=*/LLVM::ModRefInfo::NoModRef,
