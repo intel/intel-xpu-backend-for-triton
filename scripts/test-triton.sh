@@ -348,13 +348,6 @@ run_benchmarks() {
 }
 
 run_instrumentation_tests() {
-  # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
-  # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
-  # run pytest at all. This must be changed when there is more than one instrumentation test.
-  if [[ $TEST_UNSKIP = false && -s $TRITON_TEST_SKIPLIST_DIR/instrumentation.txt ]]; then
-    return
-  fi
-
   INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
   INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
