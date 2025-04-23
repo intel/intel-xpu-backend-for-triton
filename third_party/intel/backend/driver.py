@@ -707,11 +707,11 @@ class XPULauncher(object):
         self.signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(self.constants, self.signature)
         self.mod = compile_module_from_src(src, "__triton_launcher")
+        # Serialize KernelArguments for SPIR-V Runner
+        self.serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
 
     def __call__(self, *args, **kwargs):
-        # Serialize KernelArguments for SPIR-V Runner
-        serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
-        if serialize_kernel_args:
+        if self.serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
         self.mod.launch(args)
 
