@@ -55,8 +55,11 @@ pipelineLoop(scf::ForOp forOp, int numStages, bool supportRegularPtr,
   FailureOr<scf::ForOp> newForOp =
       mlir::scf::pipelineForLoop(rewriter, forOp, options);
 
+  if (failed(newForOp))
+    return;
+
   scf::ForOp loop = (*newForOp);
-  if (!isa<scf::ForOp>(loop->getBlock()->getParentOp()) && (barrierScope)) {
+  if (barrierScope) {
     assert((*barrierScope == spirv::Scope::Subgroup) ||
            (*barrierScope == spirv::Scope::Workgroup) &&
                "The barrier scope must be SubGroup or Workgroup");
@@ -69,8 +72,7 @@ pipelineLoop(scf::ForOp forOp, int numStages, bool supportRegularPtr,
     b.setInsertionPoint(yield);
     b.create<spirv::INTELControlBarrierWaitOp>(
         loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
-  } else if (isa<scf::ForOp>(loop->getBlock()->getParentOp()) && (barrierScope))
-    loop->emitWarning("Split barrier are not added to nested loop.");
+  }
 }
 
 namespace {
@@ -91,7 +93,7 @@ struct IntelGPUPipelinePass
       return;
 
     std::optional<spirv::Scope> barrierScope = std::nullopt;
-    switch (static_cast<ttgi::BarrierScope>(int(splitBarrierScope))) {
+    switch (static_cast<ttgi::BarrierScope>(unsigned(splitBarrierScope))) {
     case ttgi::BarrierScope::Workgroup:
       barrierScope = spirv::Scope::Workgroup;
       break;

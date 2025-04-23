@@ -19,7 +19,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Ops.h.inc"
 
 namespace mlir::triton::gpu::intel {
-enum BarrierScope : int { None = 0, Workgroup = 1, Subgroup = 2 };
+enum class BarrierScope : unsigned { None = 0, Workgroup = 1, Subgroup = 2 };
 }
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H
