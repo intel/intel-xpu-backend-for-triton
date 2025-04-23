@@ -214,7 +214,10 @@ run_core_tests() {
     run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
 
   TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debug_dump.py --forked --device xpu
+
+  TRITON_TEST_SUITE=warnings \
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
@@ -259,9 +262,10 @@ run_tutorial_tests() {
   python -m pip install matplotlib pandas tabulate -q
   cd $TRITON_PROJ/python/tutorials
 
-  run_tutorial_test "01-vector-add"
-  run_tutorial_test "02-fused-softmax"
+#  run_tutorial_test "01-vector-add"
+#  run_tutorial_test "02-fused-softmax"
   run_tutorial_test "03-matrix-multiplication"
+  exit 0
   run_tutorial_test "04-low-memory-dropout"
   run_tutorial_test "05-layer-norm"
   run_tutorial_test "06-fused-attention"

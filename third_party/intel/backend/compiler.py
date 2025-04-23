@@ -253,11 +253,6 @@ class XPUBackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
 
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
@@ -330,15 +325,12 @@ class XPUBackend(BaseBackend):
             metadata["num_warps"] *= num_warp_groups
         threads_per_warp = intel.get_threads_per_warp(src)
         metadata["threads_per_warp"] = threads_per_warp
+
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
+
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky
