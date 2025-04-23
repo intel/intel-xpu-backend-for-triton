@@ -96,7 +96,6 @@ target_link_libraries(proton PRIVATE Python3::Module)
 find_library(SYCL_LIB
   NAMES sycl
   HINTS "/opt/intel/oneapi/compiler/latest/lib"
-  PATHS "${CMAKE_PREFIX_PATH}/lib"
 )
 find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
 find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
