@@ -1690,12 +1690,12 @@ struct LoadOpConversion
               /*vnni_transform*/
               (usePackedType && !isOperandA && !isTransposeRequired &&
                originalElemBits != 32));
+          LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
           if (failed(load2dOp.verify())) {
             // Explicitly invoke verifier because `triton_gen` ops are
             // immediately lowered further to a builtin call.
             return failure();
           }
-          LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
 
           unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsOuterDimPerLoad
