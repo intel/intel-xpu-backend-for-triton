@@ -19,6 +19,8 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
+#define USE_STRIDED_LOAD_INDICES 1
+
 #define S(v) StringAttr::get(ctx, (v))
 
 namespace {
@@ -1729,35 +1731,42 @@ struct LoadOpConversion
                 // Save the decomposed vals to the map;
                 switch (opIdx) {
                 case DpasEncodingAttr::OpIdx::OperandA: {
+#ifndef USE_STRIDED_LOAD_INDICES
+                  const auto loadX =
+                      outer * packedRowNum * numLoadPerOutRepCluster +
+                      rep * packedRowNum + row;
+                  const auto loadY = k + vblk * packedColNumPerVBlock + col;
+#else
+                  const auto loadX = outer * numLoadPerOutRepCluster *
+                                         repOuterStride /
+                                         packedElemsPerLanePerDPASInst +
+                                     rep * packedRowNum + row;
+                  const auto loadY = k + vblk * packedColNumPerVBlock + col;
+#endif
                   LLVM_DEBUG({
-                    llvm::dbgs() << "load vals index: "
-                                 << std::to_string(outer * packedRowNum *
-                                                       numLoadPerOutRepCluster +
-                                                   rep * packedRowNum + row)
-                                 << ", "
-                                 << std::to_string(
-                                        k + vblk * packedColNumPerVBlock + col)
-                                 << "\n";
+                    llvm::dbgs() << "load vals index: " << loadX << ", "
+                                 << loadY << "\n";
                   });
-                  loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
-                                rep * packedRowNum + row,
-                            k + vblk * packedColNumPerVBlock + col}] =
+                  loadVals[{loadX, loadY}] =
                       b.bitcast(loadVal, unpackedDPASOperandType);
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
+#ifndef USE_STRIDED_LOAD_INDICES
+                  const auto loadX =
+                      outer * packedColNum * numLoadPerOutRepCluster +
+                      rep * packedColNum + vblk * packedColNumPerVBlock + col;
+                  const auto loadY = k + row;
+#else
+                  const auto loadX =
+                      outer * repOuterStride / packedElemsPerLanePerDPASInst +
+                      rep * packedColNum + vblk * packedColNumPerVBlock + col;
+                  const auto loadY = k + row;
+#endif
                   LLVM_DEBUG({
-                    llvm::dbgs()
-                        << "load vals index: "
-                        << std::to_string(outer * packedColNum *
-                                              numLoadPerOutRepCluster +
-                                          rep * packedColNum +
-                                          vblk * packedColNumPerVBlock + col)
-                        << ", " << std::to_string(k + row) << "\n";
+                    llvm::dbgs() << "load vals index: " << loadX << ", "
+                                 << loadY << "\n";
                   });
-                  loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
-                                rep * packedColNum +
-                                vblk * packedColNumPerVBlock + col,
-                            k + row}] =
+                  loadVals[{loadX, loadY}] =
                       b.bitcast(loadVal, unpackedDPASOperandType);
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandC: {
@@ -1775,16 +1784,24 @@ struct LoadOpConversion
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int k = 0; k < numRepInner; ++k) {
         for (int rep = 0; rep < repCluster[unsigned(opIdx)]; ++rep) {
-          if (loadVals.find({outer * repCluster[unsigned(opIdx)] + rep, k}) ==
-              loadVals.end()) {
+
+#ifndef USE_STRIDED_LOAD_INDICES
+          const auto loadValX = outer * repCluster[unsigned(opIdx)] + rep;
+          const auto loadValY = k;
+#else
+          const auto loadValX =
+              (outer * repOuterStride) / packedElemsPerLanePerDPASInst + rep;
+          const auto loadValY = k;
+#endif
+
+          if (loadVals.find({loadValX, loadValY}) == loadVals.end()) {
             // generate a nice error message before the throw below aborts our
             // pipeline
             llvm::errs() << "Failed to find key at "
                          << outer * repCluster[unsigned(opIdx)] + rep << ", "
                          << k << "\n";
           }
-          Value loadVal =
-              loadVals.at({outer * repCluster[unsigned(opIdx)] + rep, k});
+          Value loadVal = loadVals.at({loadValX, loadValY});
           VectorType loadTy = cast<VectorType>(loadVal.getType());
           for (int i = 0; i < loadTy.getNumElements(); ++i) {
             auto val = b.extract_element(loadVal, b.i32_val(i));
