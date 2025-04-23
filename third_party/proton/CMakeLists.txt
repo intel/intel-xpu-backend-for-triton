@@ -18,7 +18,6 @@ else()
   find_path(SYCL_INCLUDE_DIR
     NAMES "sycl/sycl.hpp"
     HINTS "/opt/intel/oneapi/compiler/latest/include"
-    PATHS ${CMAKE_PREFIX_PATH}
   )
 
   if(SYCL_INCLUDE_DIR)
