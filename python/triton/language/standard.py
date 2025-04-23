@@ -50,10 +50,12 @@ def sigmoid(x):
 @core._tensor_member_fn
 @jit
 @math._add_math_1arg_docstr("softmax")
-def softmax(x, ieee_rounding=False):
-    z = x - max(x, 0)
+def softmax(x, dim=None, ieee_rounding=False):
+    if dim is None:
+        dim: core.constexpr = x.shape[-1]
+    z = x - max(x, dim, keep_dims=True)
     num = math.exp(z)
-    den = sum(num, 0)
+    den = sum(num, dim, keep_dims=True)
     return math.fdiv(num, den, ieee_rounding)
 
 
@@ -302,6 +304,22 @@ def xor_sum(input, axis=None, keep_dims=False):
     return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims)
 
 
+# or reduction
+
+
+@jit
+def _or_combine(x, y):
+    return x | y
+
+
+@core._tensor_member_fn
+@jit
+@core._add_reduction_docstr("reduce_of")
+def reduce_or(input, axis, keep_dims=False):
+    core.static_assert(input.type.scalar.is_int(), "reduce_of only supported for integers")
+    return core.reduce(input, axis, _or_combine, keep_dims=keep_dims)
+
+
 # cumsum
 
 
@@ -439,6 +457,15 @@ def sort(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTE
 @jit
 def topk(x, k: core.constexpr, dim: core.constexpr = None):
     return sort_impl(x, k=k, dim=dim, descending=True)
+
+
+@jit
+def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = core.CONSTEXPR_0):
+    # handle default dimension or check that it is the most minor dim
+    _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
+    core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
+    n_dims: core.constexpr = _log2(x.shape[-1])
+    return _bitonic_merge(x, n_dims, descending, n_dims)
 
 
 def _get_flip_dim(dim, shape):

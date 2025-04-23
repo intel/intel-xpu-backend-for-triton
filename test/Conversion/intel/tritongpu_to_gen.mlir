@@ -676,22 +676,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[CST_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: [[IE1:%.*]] = llvm.insertelement [[BCAST0]], [[VEC1]][[[CST_0]] : i32] : vector<1xf32>
     // CHECK-NEXT: [[BCAST1:%.*]] = llvm.bitcast [[IE1]] : vector<1xf32> to i32
-    // CHECK-NEXT: [[TRUE1:%.*]] = llvm.mlir.constant(true) : i1
-    // CHECK-NEXT: [[AND1:%.*]] = llvm.and {{.*}}, [[ARG2_0]] : i1
     // CHECK-NEXT: [[VEC2:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: [[IE2:%.*]] = llvm.insertelement [[BCAST1]], [[VEC2]][[[ZERO]] : i32] : vector<1xi32>
-    // CHECK-NEXT: llvm.cond_br [[AND1]], ^bb1, ^bb2
+    // CHECK-NEXT: llvm.cond_br [[ARG2_0]], ^bb1, ^bb2
     // CHECK-NEXT: ^bb1:
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT:   llvm.store [[IE2]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK-NEXT:   llvm.br ^bb2
     // CHECK-NEXT: ^bb2:
-    // CHECK:        [[AND2:%.*]] = llvm.and {{.*}}, [[ARG2_1]] : i1
-    // CHECK-NEXT:   [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
+    // CHECK:        [[VEC3:%.*]] = llvm.mlir.undef : vector<1xi32>
     // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT:   [[IE3:%.*]] = llvm.insertelement {{.*}}, [[VEC3]][[[ZERO]] : i32] : vector<1xi32>
-    // CHECK:        llvm.cond_br [[AND2]], ^bb3, ^bb4
+    // CHECK:        llvm.cond_br [[ARG2_1]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
     // CHECK-NEXT:   [[BCAST2:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT:   llvm.store [[IE3]], [[BCAST2]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
@@ -1315,23 +1312,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<1>, ptr<1>)>
     // CHECK-NEXT: [[ARG1_0:%.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(f32, f32)>
     // CHECK-NEXT: [[ARG1_1:%.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(f32, f32)>
+    // CHECK:      {{.*}} = llvm.mlir.constant(0 : i32) : i32
     // CHECK:      [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:      [[ZERO1:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK-NEXT: llvm.call spir_funccc @_Z12get_local_idj([[ZERO1]]) {{.*}} : (i32) -> i64
-    // CHECK:      [[PRED:%.*]]  = llvm.mlir.constant(true) : i1
-    // CHECK:      llvm.cond_br [[PRED]], ^bb1, ^bb2
-    // CHECK-NEXT: ^bb1:
-    // CHECK-NEXT:   [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.store {{.*}}, [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    // CHECK-NEXT:   llvm.br ^bb2
-    // CHECK-NEXT: ^bb2:
-    // CHECK:        llvm.mlir.undef : vector<1xf32>
-    // CHECK:        [[PRED2:%.*]] = llvm.mlir.constant(true) : i1
-    // CHECK:        [[VEC:%.*]] = llvm.mlir.undef : vector<1xi32>
-    // CHECK-NEXT:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK-NEXT:   [[IE1:%.*]] = llvm.insertelement {{.*}}, [[VEC]][[[ZERO]] : i32] : vector<1xi32>
-    // CHECK:        llvm.cond_br [[PRED2]], ^bb3, ^bb4
-    // CHECK-NEXT: ^bb3:
+    // CHECK: llvm.call spir_funccc @_Z12get_local_idj([[ZERO]]) {{.*}} : (i32) -> i64
+    // CHECK:      [[UNDEF:%.*]] = llvm.mlir.undef : vector<1xf32>
+    // CHECK-NEXT: [[BCAST_STORE:%.*]] = llvm.bitcast [[ARG1_0]] : f32 to f32
+    // CHECK-NEXT: [[ZERO1:%.*]] =  llvm.mlir.constant(0 : i32) : i32
+    // CHECK-NEXT: [[STORE_VEC:%.*]] = llvm.insertelement [[BCAST_STORE]], [[UNDEF]][[[ZERO1]] : i32] : vector<1xf32>
+    // CHECK-NEXT: [[BCAST_STORE_VEC:%.*]] = llvm.bitcast [[STORE_VEC]] : vector<1xf32> to i32
+    // CHECK-NEXT: [[UNDEF1:%.*]] = llvm.mlir.undef : vector<1xi32>
+    // CHECK-NEXT: [[ZERO2:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:      [[STORE_VEC_IE:%.*]] = llvm.insertelement [[BCAST_STORE_VEC]], [[UNDEF1]][[[ZERO2]] : i32] : vector<1xi32>
+    // CHECK-NEXT: [[BCAST:%.*]] = llvm.bitcast [[ARG0_0]] : !llvm.ptr<1> to !llvm.ptr<1>
+    // CHECK-NEXT: llvm.store [[STORE_VEC_IE]], [[BCAST]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
+    // CHECK-NOT: llvm.cond_br
+    // CHECK:     [[IE1:%.*]] = llvm.insertelement {{.*}}, {{.*}}[{{.*}} : i32] : vector<1xi32>
     // CHECK-NEXT:   [[BCAST1:%.*]] = llvm.bitcast [[ARG0_1]] : !llvm.ptr<1> to !llvm.ptr<1>
     // CHECK-NEXT:   llvm.store [[IE1]], [[BCAST1]] {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
 

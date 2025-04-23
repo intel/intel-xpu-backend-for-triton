@@ -15,17 +15,16 @@ else()
   option(ENABLE_XPUTPI_PROFILER "Enable Xpupti Profiler" ON)
   set(ENABLE_XPUTPI_PROFILER ${ENABLE_XPUTPI_PROFILER} CACHE BOOL "Enable Xpupti Profiler" FORCE)
 
-  if(EXISTS "/opt/intel/oneapi/compiler/latest/include")
-    list(APPEND XPUPTI_INCLUDE_DIR "/opt/intel/oneapi/compiler/latest/include")
-  else()
-    message(WARNING "SYCL FOLDER /opt/intel/oneapi/compiler/latest/include not found")
-    set(ENABLE_XPUTPI_PROFILER, OFF)
-  endif()
+  find_path(SYCL_INCLUDE_DIR
+    NAMES "sycl/sycl.hpp"
+    HINTS "/opt/intel/oneapi/compiler/latest/include"
+  )
 
-  if(EXISTS "/opt/intel/oneapi/compiler/latest/include/sycl")
-    list(APPEND XPUPTI_INCLUDE_DIR "/opt/intel/oneapi/compiler/latest/include/sycl")
+  if(SYCL_INCLUDE_DIR)
+    list(APPEND XPUPTI_INCLUDE_DIR "${SYCL_INCLUDE_DIR}")
+    list(APPEND XPUPTI_INCLUDE_DIR "${SYCL_INCLUDE_DIR}/sycl")
   else()
-    message(WARNING "SYCL FOLDER /opt/intel/oneapi/compiler/latest/include/sycl not found")
+    message(WARNING "SYCL FOLDER not found")
     set(ENABLE_XPUTPI_PROFILER, OFF)
   endif()
 endif()
@@ -93,7 +92,10 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module)
-find_library(SYCL_LIB NAMES sycl PATHS /opt/intel/oneapi/compiler/latest/lib)
+find_library(SYCL_LIB
+  NAMES sycl
+  HINTS "/opt/intel/oneapi/compiler/latest/lib"
+)
 find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
 find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
 
