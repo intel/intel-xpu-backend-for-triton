@@ -2,6 +2,35 @@
 
 set -euo pipefail
 
+HELP="\
+Example usage: ./test-triton.sh [TEST]... [OPTION]...
+
+TEST:
+    --unit
+    --core
+    --interpreter
+    --tutorial
+    --microbench
+    --benchmarks
+    --softmax
+    --gemm
+    --attention
+    --instrumentation
+    --inductor
+
+OPTION:
+    --unskip
+    --venv
+    --skip-pip-install
+    --skip-pytorch-install
+    --reports
+    --reports-dir DIR
+    --warning-reports
+    --ignore-errors
+    --skip-list SKIPLIST
+    --select-from-file SELECTFILE
+"
+
 err() {
     echo $@
     exit 1
@@ -10,6 +39,7 @@ err() {
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Select which tests to run.
+TEST_DEFAULT=true
 TEST_UNIT=false
 TEST_CORE=false
 TEST_INTERPRETER=false
@@ -28,7 +58,8 @@ TRITON_TEST_IGNORE_ERRORS=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
-while [ -v 1 ]; do
+
+while (( $# != 0 )); do
   case "$1" in
     --unskip)
       TEST_UNSKIP=true
@@ -36,46 +67,57 @@ while [ -v 1 ]; do
       ;;
     --unit)
       TEST_UNIT=true
+      TEST_DEFAULT=false
       shift
       ;;
     --core)
       TEST_CORE=true
+      TEST_DEFAULT=false
       shift
       ;;
     --interpreter)
       TEST_INTERPRETER=true
+      TEST_DEFAULT=false
       shift
       ;;
     --tutorial)
       TEST_TUTORIAL=true
+      TEST_DEFAULT=false
       shift
       ;;
     --microbench)
       TEST_MICRO_BENCHMARKS=true
+      TEST_DEFAULT=false
       shift
       ;;
     --benchmarks)
       TEST_BENCHMARKS=true
+      TEST_DEFAULT=false
       shift
       ;;
     --softmax)
       TEST_BENCHMARK_SOFTMAX=true
+      TEST_DEFAULT=false
       shift
       ;;
     --gemm)
       TEST_BENCHMARK_GEMM=true
+      TEST_DEFAULT=false
       shift
       ;;
     --attention)
       TEST_BENCHMARK_ATTENTION=true
+      TEST_DEFAULT=false
       shift
       ;;
     --instrumentation)
       TEST_INSTRUMENTATION=true
+      TEST_DEFAULT=false
       shift
       ;;
     --inductor)
       TEST_INDUCTOR=true
+      TEST_DEFAULT=false
       shift
       ;;
     --venv)
@@ -119,7 +161,8 @@ while [ -v 1 ]; do
       shift 2
       ;;
     --help)
-      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --skip-pip-install | --skip-pytorch-install | --reports | --reports-dir DIR | --warning-reports | --ignore-errors | --skip-list SKIPLIST | --select-from-file SELECTFILE"
+      echo "$HELP"
+      exit 0
       ;;
     *)
       err "Unknown argument: $1."
@@ -127,8 +170,7 @@ while [ -v 1 ]; do
   esac
 done
 
-# Only run interpreter test when $TEST_INTERPRETER is true
-if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ] && [ "$TEST_INDUCTOR" = false ]; then
+if [ "$TEST_DEFAULT" = true ]; then
   TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -142,7 +184,6 @@ if [ "$VENV" = true ]; then
     source .venv/bin/activate
   fi
 fi
-
 
 TRITON_PROJ="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && cd .. && pwd )"
 SCRIPTS_DIR="$TRITON_PROJ/scripts"
