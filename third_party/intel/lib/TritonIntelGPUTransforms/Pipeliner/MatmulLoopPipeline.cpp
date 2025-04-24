@@ -84,11 +84,11 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp, Value ptr) {
+static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), ptr, loadOp.getCache(), loadOp.getEvict(),
+      loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
@@ -102,7 +102,7 @@ static void createPrefetchOps(scf::ForOp &forOp,
   assert(!loads.empty() && "Expecting at least one load operation");
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
-    createPrefetchOp(forOp, loadOp, loadOp.getPtr());
+    createPrefetchOp(forOp, loadOp);
   }
 }
 
