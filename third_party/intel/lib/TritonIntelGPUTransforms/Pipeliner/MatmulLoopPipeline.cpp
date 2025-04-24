@@ -133,16 +133,12 @@ static void collectOpsToPipeline(scf::ForOp forOp,
         continue;
 
       // Check if the memory is structed densely. If not, we do not prefetch it
-      // to avoid pollute cache.
+      // to avoid polluting the cache.
       Attribute blockIOAttr =
           loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
                               getBlockIOAttrName());
       if (!blockIOAttr) {
-        LLVM_DEBUG({
-          DBGS() << "skip the Load op to pipeline because the memory is not "
-                    "structured densely: ";
-          DBGS() << "  " << loadOp << "\n";
-        });
+        LDBG("Skipping LoadOp without block_io attribute" << *loadOp);
         continue;
       }
 
