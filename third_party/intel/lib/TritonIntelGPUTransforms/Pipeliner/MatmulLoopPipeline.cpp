@@ -132,6 +132,20 @@ static void collectOpsToPipeline(scf::ForOp forOp,
       if (!isBlockPtr && !supportRegularPtr)
         continue;
 
+      // Check if the memory is structed densely. If not, we do not prefetch it
+      // to avoid pollute cache.
+      Attribute blockIOAttr =
+          loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                              getBlockIOAttrName());
+      if (!blockIOAttr) {
+        LLVM_DEBUG({
+          DBGS() << "skip the Load op to pipeline because the memory is not "
+                    "structured densely: ";
+          DBGS() << "  " << loadOp << "\n";
+        });
+        continue;
+      }
+
       std::optional<LoadDotOperand> loadWithDotOperand = loadDotOperand(loadOp);
       if (loadWithDotOperand.has_value())
         loadOps.push_back(loadWithDotOperand.value());
