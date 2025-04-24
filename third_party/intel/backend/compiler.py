@@ -52,7 +52,7 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: tuple = ('small', 'large', 'auto', 'default')
-    split_barriers_scope: str = 'None'    
+    split_barriers_scope: str = 'None'
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -223,7 +223,6 @@ class XPUBackend(BaseBackend):
                 raise_block_ptr_flags['ignore-masks'] = True
         return raise_block_ptr_flags
 
-
     @staticmethod
     def validate_options(opt, properties):
         # Check threads_per_warp and num_threads are within limits.
@@ -238,8 +237,7 @@ class XPUBackend(BaseBackend):
         if opt.threads_per_warp * opt.num_warps > properties['max_work_group_size']:
             raise ValueError(f"Kernel threads number exceeds the limit ({properties['max_work_group_size']})")
 
-
-    @staticmethod 
+    @staticmethod
     def annotate_module(mod, properties, opt, target_arch):
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
@@ -251,7 +249,6 @@ class XPUBackend(BaseBackend):
                                                         target_arch)
         pm.run(mod)
 
-
     @staticmethod
     def get_split_barrier_scope(opt):
         split_barriers_scope = intel.SplitBarrierScope.none
@@ -260,7 +257,6 @@ class XPUBackend(BaseBackend):
         elif opt.split_barriers_scope == 'Subgroup':
             split_barriers_scope = intel.SplitBarrierScope.Subgroup
         return split_barriers_scope
-
 
     @staticmethod
     def make_ttir(mod, metadata, opt):
@@ -284,7 +280,6 @@ class XPUBackend(BaseBackend):
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
         return mod
-
 
     @staticmethod
     def make_ttgir(mod, metadata, opt, properties):
