@@ -270,7 +270,6 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_combine(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
@@ -278,9 +277,9 @@ class XPUBackend(BaseBackend):
             ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False
             intel.passes.ttir.add_raise_block_pointer(pm, ignore_masks)
         passes.common.add_canonicalizer(pm)
+        passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
