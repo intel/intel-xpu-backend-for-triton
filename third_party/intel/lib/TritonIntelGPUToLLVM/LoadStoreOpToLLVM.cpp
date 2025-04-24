@@ -518,7 +518,7 @@ struct PrefetchOpConversion
 
     auto encoding = getDotEncoding(tensorOfPointers).value();
     auto dpasLayout = cast<DpasEncodingAttr>(encoding.getParent());
-    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    SmallVector<unsigned> warpsPerCTA(dpasLayout.getWarpsPerCTA());
     auto cluster = dpasLayout.getRepCluster();
     SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
     auto tensorShape = tensorOfPointers.getShape();
