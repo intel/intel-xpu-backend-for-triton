@@ -255,11 +255,11 @@ class XPUBackend(BaseBackend):
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         # 0:No barrier / 1:Workgroup scope / 2:Subgroup scope
-        split_barriers_scope_int: int = 0
+        split_barriers_scope = intel.SplitBarrierScope.none
         if opt.split_barriers_scope == 'Workgroup':
-            split_barriers_scope_int = 1
+            split_barriers_scope = intel.SplitBarrierScope.Workgroup
         elif opt.split_barriers_scope == 'Subgroup':
-            split_barriers_scope_int = 2
+            split_barriers_scope = intel.SplitBarrierScope.Subgroup
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
@@ -308,7 +308,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False, split_barriers_scope_int)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False, split_barriers_scope)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)

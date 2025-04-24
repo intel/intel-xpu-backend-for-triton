@@ -145,6 +145,12 @@ void init_triton_intel(py::module &&m) {
         return oss.str();
       });
 
+  // Split barrier scope enum
+  py::enum_<gpu::intel::SplitBarrierScope>(m, "SplitBarrierScope")
+      .value("none", gpu::intel::SplitBarrierScope::None)
+      .value("Workgroup", gpu::intel::SplitBarrierScope::Workgroup)
+      .value("Subgroup", gpu::intel::SplitBarrierScope::Subgroup);
+
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {
     if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
