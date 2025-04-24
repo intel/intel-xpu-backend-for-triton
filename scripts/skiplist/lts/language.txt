@@ -284,7 +284,6 @@ test/unit/language/test_core.py::test_dot3d[8-8-64-64-64-32-32-int8-int8]
 test/unit/language/test_core.py::test_dot3d[8-2-32-32-32-8-16-float16-float16]
 test/unit/language/test_core.py::test_dot3d[8-1-32-32-32-8-16-float16-float16]
 test/unit/language/test_core.py::test_dot3d[8-4-32-32-32-8-16-float16-float16]
-test/unit/language/test_core.py::test_scaled_dot
 test/unit/language/test_core.py::test_trans_reshape
 test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
 test/unit/language/test_matmul.py::test_simple_matmul[True-4-1-128-128-16-4-float16-float16]
@@ -333,5 +332,4 @@ test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-128-128]
 test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-128-64]
 test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-64-128]
 test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-256-256]
-test/unit/language/test_matmul.py::test_mxfp
 test/unit/language/test_matmul.py::test_lhs_in_tmem
