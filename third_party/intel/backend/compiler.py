@@ -311,7 +311,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, True, XPUBackend.get_split_barrier_scope(opt))
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, XPUBackend.get_split_barrier_scope(opt))
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
