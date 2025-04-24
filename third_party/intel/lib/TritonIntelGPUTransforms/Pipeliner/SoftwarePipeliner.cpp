@@ -94,6 +94,8 @@ struct IntelGPUPipelinePass
 
     std::optional<spirv::Scope> barrierScope = std::nullopt;
     switch (splitBarrierScope) {
+    case ttgi::SplitBarrierScope::None:
+      break;
     case ttgi::SplitBarrierScope::Workgroup:
       barrierScope = spirv::Scope::Workgroup;
       break;
