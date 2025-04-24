@@ -1,7 +1,8 @@
 //===----------------------------------------------------------------------===//
 //
-// This pass tries to reduce the register pressure by reducing the distance
-// between load ops and the operation using the variable.
+// This pass tries to reduce the liveness of variable.
+// For e.g: by reducing the distance between load ops and
+// the operation using the variable.
 //===----------------------------------------------------------------------===//
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
 
+#include "mlir/Analysis/Liveness.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -25,7 +27,7 @@
 #include <optional>
 
 namespace mlir::triton::gpu::intel {
-#define GEN_PASS_DEF_TRITONINTELGPUREDUCEREGISTERPRESSURE
+#define GEN_PASS_DEF_TRITONINTELGPUREDUCEVARIABLELIVENESS
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
@@ -36,25 +38,16 @@ namespace ttgi = mlir::triton::gpu::intel;
 
 using TensorValue = TypedValue<RankedTensorType>;
 
-#define DEBUG_TYPE "tritonintelgpu-reduce-register-pressure"
+#define DEBUG_TYPE "tritonintelgpu-reduce-variable-liveness"
 
 namespace {
 
 /// Return true if the lifespan of the V value is considered long.
-static bool isLongLifeSpanVariable(Value v, Block *useBlock) {
-  // Case 1: Variable used in a block - loaded in another block
-  Operation *op = v.getDefiningOp();
-  while (op) {
-    if (op->getNumOperands() != 1)
-      break;
-    if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
-      if (useBlock != op->getBlock())
-        return true;
-      return false;
-    }
-    op = op->getOperand(0).getDefiningOp();
-  }
-  return false;
+static bool isLongLifeSpanVariable(Value v,
+                                   const LivenessBlockInfo *livenessBlockInfo) {
+  // Case 1: Variable liveness expend before the dot block.
+  //         e.g. used in a block - loaded in another block
+  return livenessBlockInfo->isLiveIn(v);
 }
 
 /// Create a prefetch operation for the given load operation.
@@ -76,7 +69,8 @@ static void createPrefetchOp(tt::LoadOp loadOp) {
 /// Investigate opportunities for the reducing register pressure by moving DotOp
 /// operands.
 static bool optimizeDotOperands(scf::ForOp forOp,
-                                SmallVector<Value> &prefetchedValue) {
+                                SmallVector<Value> &prefetchedValue,
+                                Liveness &livenessAnalysis) {
   Block *loop = forOp.getBody();
 
   auto getEncoding = [](Value v) {
@@ -144,13 +138,13 @@ static bool optimizeDotOperands(scf::ForOp forOp,
   for (triton::DotOp dot : dotsInFor) {
     auto aVals = getLoad(dot.getA());
     auto bVals = getLoad(dot.getB());
-    Block *dotBlock = dot->getBlock();
+    auto livenessBlockInfo = livenessAnalysis.getLiveness(dot->getBlock());
 
-    if (isLongLifeSpanVariable(dot.getA(), dotBlock) && aVals) {
+    if (isLongLifeSpanVariable(dot.getA(), livenessBlockInfo) && aVals) {
       tt::LoadOp loadOp = aVals.value();
       moveOperand(0, dot, loadOp);
     }
-    if (isLongLifeSpanVariable(dot.getB(), dotBlock) && bVals) {
+    if (isLongLifeSpanVariable(dot.getB(), livenessBlockInfo) && bVals) {
       tt::LoadOp loadOp = bVals.value();
       moveOperand(1, dot, loadOp);
     }
@@ -158,12 +152,12 @@ static bool optimizeDotOperands(scf::ForOp forOp,
   return true;
 }
 
-class ReduceRegisterPressurePass
-    : public triton::gpu::intel::impl::TritonIntelGPUReduceRegisterPressureBase<
-          ReduceRegisterPressurePass> {
+class ReduceVariableLivenessPass
+    : public triton::gpu::intel::impl::TritonIntelGPUReduceVariableLivenessBase<
+          ReduceVariableLivenessPass> {
 public:
-  using triton::gpu::intel::impl::TritonIntelGPUReduceRegisterPressureBase<
-      ReduceRegisterPressurePass>::TritonIntelGPUReduceRegisterPressureBase;
+  using triton::gpu::intel::impl::TritonIntelGPUReduceVariableLivenessBase<
+      ReduceVariableLivenessPass>::TritonIntelGPUReduceVariableLivenessBase;
 
   void runOnOperation() override {
 
@@ -176,8 +170,11 @@ public:
             .failed()) {
       signalPassFailure();
     }
-    getOperation()->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedValue))
+
+    Operation *rootOperation = getOperation();
+    Liveness livenessAnalysis(rootOperation);
+    rootOperation->walk([&](scf::ForOp forOp) {
+      if (optimizeDotOperands(forOp, prefetchedValue, livenessAnalysis))
         return;
     });
   }

@@ -378,15 +378,13 @@ def TritonIntelGPURewriteStackPtr
   ];
 }
 
-
-def TritonIntelGPUReduceRegisterPressure
-    : Pass<"tritonintelgpu-reduce-register-pressure", "mlir::ModuleOp"> {
-  let summary = "Attempt to reduce the register pressure";
+def TritonIntelGPUReduceVariableLiveness
+    : Pass<"tritonintelgpu-reduce-variable-liveness", "mlir::ModuleOp"> {
+  let summary = "Attempt to reduce the variable liveness";
 
   let description = [{
-    This pass attempts to reduce the register pressure
-    by reducing the distance between loads and usage
-    (reduce variable liveness).
+    This pass attempts to reduce the variable liveness
+    by reducing the distance between loads and usage.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
