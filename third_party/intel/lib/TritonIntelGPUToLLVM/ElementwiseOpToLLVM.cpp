@@ -2,6 +2,7 @@
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
+#include "third_party/intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "third_party/intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -1266,9 +1267,10 @@ struct PreciseSqrtOpConversion
     Type funcType = LLVM::LLVMFunctionType::get(f64_ty, {f64_ty});
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, "__imf_sqrt_rn", funcType);
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
     LLVM::CallOp callOp =
         LLVM::createLLVMCallOp(rewriter, loc, funcOp, {input});
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    callOp.setCConv(funcOp.getCConv());
     Value result = callOp.getResult();
     if (!origTy.isF64())
       result = rewriter.create<LLVM::FPTruncOp>(loc, origTy, result);
@@ -1300,13 +1302,78 @@ struct OpToExternCallConversion
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
     auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(LLVM::cconv::CConv::SPIR_FUNC);
+    callOp.setCConv(funcOp.getCConv());
     return {callOp.getResult()};
   }
 
 private:
   StringRef funcName;
+};
+
+// Following two patterns are copied from the common part to fix-up calling
+// convention for created function declaration.
+// TODO: propose changes in the common part to use CC provided by target.
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
+                               ModuleAxisInfoAnalysis &axisAnalysisPass,
+                               const TargetInfoBase &targetInfo,
+                               PatternBenefit benefit = 1)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        targetInfo(targetInfo) {}
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+
+    auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
+    callOp.setCConv(funcOp.getCConv());
+    return {callOp.getResult()};
+  }
+
+protected:
+  const TargetInfoBase &targetInfo;
+};
+
+struct ExternElementwiseOpConversion
+    : public ElementwiseOpConversionBase<ExternElementwiseOp,
+                                         ExternElementwiseOpConversion> {
+  using Base = ElementwiseOpConversionBase<ExternElementwiseOp,
+                                           ExternElementwiseOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+  typedef typename Base::OpAdaptor OpAdaptor;
+
+  SmallVector<Value> createDestOps(ExternElementwiseOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    StringRef funcName = op.getSymbol();
+    if (funcName.empty())
+      llvm::errs() << "ExternElementwiseOpConversion";
+
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
+        rewriter, op, funcName, funcType, op.getLibname(), op.getLibpath());
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
+    callOp.setCConv(funcOp.getCConv());
+    return {callOp.getResult()};
+  }
 };
 
 } // namespace
@@ -1321,9 +1388,16 @@ void populateElementwiseOpToLLVMPatterns(
                                         benefit);
   patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "__imf_fdiv_rn", benefit);
+  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
+                                    benefit);
+  patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
+                                              benefit);
 
+  // Use lower benefit for common patterns to prioritize our versions.
+  assert(benefit > 0);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+      typeConverter, patterns, axisInfoAnalysis, targetInfo,
+      benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(

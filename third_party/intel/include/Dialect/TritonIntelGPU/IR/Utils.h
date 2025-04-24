@@ -58,15 +58,18 @@ inline bool hasSpirvTargetArch(Operation *op) {
   return !arch || arch.str().substr(0, 4) == "spir";
 }
 
+inline LLVM::cconv::CConv getDefaultCConv(Operation *op) {
+  if (hasSpirvTargetArch(op))
+    return LLVM::cconv::CConv::SPIR_FUNC;
+  llvm_unreachable("Unexpected target architecture");
+}
+
 inline LLVM::cconv::CConv getRequiredCConv(CallOpInterface callOp) {
   // If we call a function, return its calling convention.
   auto callable = callOp.resolveCallable();
   if (auto funcOp = dyn_cast<LLVM::LLVMFuncOp>(callable))
     return funcOp.getCConv();
-  // Otherwise, use the default target calling convention.
-  if (hasSpirvTargetArch(callOp))
-    return LLVM::cconv::CConv::SPIR_FUNC;
-  llvm_unreachable("Unexpected target architecture");
+  return getDefaultCConv(callOp);
 }
 } // namespace mlir::triton::gpu::intel
 
