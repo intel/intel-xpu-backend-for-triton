@@ -915,22 +915,6 @@ struct FpToFpOpConversion
     return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
-  static LLVM::RoundingMode
-  convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding) {
-    LLVM::RoundingMode roundingMode;
-    switch (rounding) {
-    case triton::RoundingMode::RTNE:
-      return LLVM::RoundingMode::NearestTiesToEven;
-    case triton::RoundingMode::RTZ:
-      return LLVM::RoundingMode::TowardZero;
-    default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
-    }
-  }
-
   static Value convertFp32ToFp16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v,
@@ -938,8 +922,8 @@ struct FpToFpOpConversion
     MLIRContext *ctx = rewriter.getContext();
     return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
         loc, f16_ty, v,
-        LLVM::RoundingModeAttr::get(ctx,
-                                    convertTritonRoundingModeToLLVM(rounding)),
+        LLVM::RoundingModeAttr::get(
+            ctx, LLVM::intel::convertTritonRoundingModeToLLVM(rounding)),
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
   }
 
