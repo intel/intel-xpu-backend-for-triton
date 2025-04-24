@@ -483,13 +483,13 @@ test_triton() {
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
   else
-    if [ "$TEST_MINICORE" = true]; then
+    if [ "$TEST_MINICORE" = true ]; then
         run_minicore_tests
     fi
-    if [ "$TEST_MXFP" = true]; then
+    if [ "$TEST_MXFP" = true ]; then
         run_mxfp_tests
     fi
-    if [ "$TEST_SCALED_DOT" = true]; then
+    if [ "$TEST_SCALED_DOT" = true ]; then
         run_scaled_dot_tests
     fi
   fi
