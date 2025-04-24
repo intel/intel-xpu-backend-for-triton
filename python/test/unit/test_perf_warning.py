@@ -5,7 +5,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_cuda, is_xpu
 
 
 @contextmanager
@@ -18,6 +18,8 @@ def enable_diagnostics_context(value):
 
 
 def test_mma_remark(capfd, fresh_triton_cache):
+    if is_xpu():
+        pytest.xfail("Not designed for XPU")
     if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] != 9:
@@ -104,6 +106,8 @@ def test_mma_remark(capfd, fresh_triton_cache):
 
 
 def test_remark_vectorization(capfd, fresh_triton_cache):
+    if is_xpu():
+        pytest.xfail("Not designed for XPU")
 
     @triton.jit
     def ldst_vec(in_ptr0, in_ptr1, in_ptr2, in_ptr3, out_ptr0, XBLOCK: tl.constexpr):
@@ -164,7 +168,7 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
     assert "note: diagnostic emitted with trace:" in err
 
 
-def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
+def test_remark_swp_op_before_operands(capfd, fresh_triton_cache, device):
 
     @triton.jit
     def kernel_pipe_error(in_ptr, out_ptr):
@@ -180,6 +184,6 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
             if tl.max(val) > 0:
                 k += 1
 
-    i = torch.empty(64 * 64, dtype=torch.float32).cuda()
-    o = torch.empty(64 * 64, dtype=torch.float32).cuda()
+    i = torch.empty(64 * 64, dtype=torch.float32, device=device)
+    o = torch.empty(64 * 64, dtype=torch.float32, device=device)
     kernel_pipe_error[(1, )](i, o)

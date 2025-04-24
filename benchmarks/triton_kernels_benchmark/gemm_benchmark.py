@@ -6,7 +6,7 @@ This benchmark is come from the Triton tutorial 10-experimental-block-pointer.py
 To compare the performance to XeTLA kernel.
 
 """
-from typing import Optional
+from typing import Callable, List, Optional
 import os
 
 import torch
@@ -16,29 +16,28 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 
-SMALL_GRF = os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0'
 
-
-@triton.autotune(
-    configs=[
+def get_matmul_autotune_configs() -> List[triton.Config]:
+    configs = [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=s, num_warps=32) for s in [1, 2, 3]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w)
-        for s in [2, 3, 4]
-        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
+                      num_stages=s, num_warps=w) for s in [2, 3, 4] for (m, w) in ([('large', 32), ('small', 64)])
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=s, num_warps=32) for s in [2]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 512, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': m},
-                      num_stages=s, num_warps=w)
-        for s in [2, 3]
-        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
-    ],
+                      num_stages=s, num_warps=w) for s in [2, 3] for (m, w) in ([('large', 32), ('small', 64)])
+    ]
+    return configs
+
+
+@triton.autotune(
+    configs=get_matmul_autotune_configs(),
     key=['M', 'N', 'K'],
 )
 @triton.jit
@@ -85,17 +84,14 @@ def matmul_kernel_with_block_pointers(
     tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
-# pylint: disable=unused-argument
-@triton.autotune(
-    configs=[
+def get_matmul_batched_autotune_configs() -> List[triton.Config]:
+    configs = [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
             num_stages=s, num_warps=32) for s in [2, 3]
     ] + [
         triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': m},
-                      num_stages=s, num_warps=w)
-        for s in [2]
-        for (m, w) in ([('large', 32), ('small', 64)] if SMALL_GRF else [('large', 32)])
+                      num_stages=s, num_warps=w) for s in [2] for (m, w) in ([('large', 32), ('small', 64)])
     ] + [
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 1024, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'grf_mode': 'large'},
@@ -112,7 +108,13 @@ def matmul_kernel_with_block_pointers(
         triton.Config(
             {'BLOCK_SIZE_M': 8, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 1, 'grf_mode': 'large'},
             num_stages=s, num_warps=4) for s in [2]
-    ],
+    ]
+    return configs
+
+
+# pylint: disable=unused-argument
+@triton.autotune(
+    configs=get_matmul_batched_autotune_configs(),
     key=['M', 'N', 'K'],
 )
 @triton.jit
@@ -166,7 +168,15 @@ def matmul_kernel_with_block_pointers_batched(
 
 # We can now create a convenience wrapper function that only takes two input tensors,
 # and (1) checks any shape constraint; (2) launches the above kernel.
-def matmul(a, b, c, transpose_a=False, transpose_b=False):
+def matmul(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    c: torch.Tensor,
+    matmul_kernel: Callable,
+    matmul_kernel_batched: Callable,
+    transpose_a=False,
+    transpose_b=False,
+):
     a_major, a_minor = -2, -1
     if transpose_a:
         a_major, a_minor = a_minor, a_major
@@ -187,7 +197,7 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False):
             triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
             B,
         )
-        matmul_kernel_with_block_pointers_batched[grid](
+        matmul_kernel_batched[grid](
             a, b, c,  #
             B, M, N, K,  #
             a.stride(0), a.stride(a_major), a.stride(a_minor),  #
@@ -195,7 +205,7 @@ def matmul(a, b, c, transpose_a=False, transpose_b=False):
             c.stride(0), c.stride(1), c.stride(2))
     elif len(a.shape) == 2 and len(b.shape) == 2:
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-        matmul_kernel_with_block_pointers[grid](
+        matmul_kernel[grid](
             a, b, c,  #
             M, N, K,  #
             a.stride(a_major), a.stride(a_minor),  #
@@ -269,6 +279,9 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     transpose_a=False,
     transpose_b=False,
+    matmul_kernel=matmul_kernel_with_block_pointers,
+    matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
+    plot_name='matmul-performance',
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -278,8 +291,8 @@ def get_benchmark(
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
-    use_xetla = not (transpose_a or transpose_b)
-    if use_xetla:
+    # use_xetla
+    if not (transpose_a or transpose_b):
         supported_providers['xetla'] = 'XeTLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -300,7 +313,7 @@ def get_benchmark(
             # line styles
             styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
             ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-            plot_name='matmul-performance',
+            plot_name=plot_name,
             # name for the plot. Used also as a file name for saving the plot.
             args={},
         ))
@@ -337,7 +350,15 @@ def get_benchmark(
                 c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
             else:
                 raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
-            triton_fn = lambda: matmul(a, b, c, transpose_a=transpose_a, transpose_b=transpose_b)
+            triton_fn = lambda: matmul(
+                a,
+                b,
+                c,
+                matmul_kernel=matmul_kernel_with_block_pointers,
+                matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
+                transpose_a=transpose_a,
+                transpose_b=transpose_b,
+            )
             torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')

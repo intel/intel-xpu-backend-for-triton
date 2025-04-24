@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <iostream>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -24,8 +23,6 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
 #include <numpy/arrayobject.h>
-
-static SyclQueueMap g_sycl_queue_map;
 
 static std::vector<ze_device_handle_t> g_devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
@@ -295,27 +292,6 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     PyGILState_Release(gil_state);
     return NULL;
   }
-}
-
-extern "C" EXPORT_FUNC PyObject *init_context(PyObject *cap) {
-  void *queue = NULL;
-  if (!(queue = PyLong_AsVoidPtr(cap)))
-    return NULL;
-  sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
-  if (g_sycl_queue_map.find(*sycl_queue) == g_sycl_queue_map.end()) {
-    const auto updated_sycl_devices = update(*sycl_queue, g_sycl_queue_map);
-    if (!updated_sycl_devices.empty()) {
-      // Update global data
-      const uint32_t deviceCount =
-          std::min(updated_sycl_devices.size(), g_devices.size());
-      for (uint32_t i = 0; i < deviceCount; ++i) {
-        g_devices[i] = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-            updated_sycl_devices[i]);
-      }
-    }
-  }
-  auto context = g_sycl_queue_map[*sycl_queue].context;
-  return Py_BuildValue("(K)", (uint64_t)context);
 }
 
 extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {

@@ -186,7 +186,7 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_context", "init_devices", "load_binary", "wait_on_sycl_queue")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
@@ -194,7 +194,7 @@ class SpirvUtils:
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_context", "init_devices", "wait_on_sycl_queue"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -306,13 +306,12 @@ class XPUUtils(object):
         self.mod = compile_module_from_src(Path(os.path.join(dirname, "driver.c")).read_text(), "spirv_utils")
         self.load_binary = self.mod.load_binary
         self.get_device_properties = self.mod.get_device_properties
-        self.context = self.mod.init_context(self.get_sycl_queue())
         self.device_count = self.mod.init_devices(self.get_sycl_queue())
-        self.current_device = 0 if self.device_count[0] > 0 else -1
         self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
 
     def get_current_device(self):
-        return self.current_device
+        import torch
+        return torch.xpu.current_device()
 
     def get_sycl_queue(self):
         import torch
@@ -708,11 +707,11 @@ class XPULauncher(object):
         self.signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(self.constants, self.signature)
         self.mod = compile_module_from_src(src, "__triton_launcher")
+        # Serialize KernelArguments for SPIR-V Runner
+        self.serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
 
     def __call__(self, *args, **kwargs):
-        # Serialize KernelArguments for SPIR-V Runner
-        serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
-        if serialize_kernel_args:
+        if self.serialize_kernel_args:
             serialize_args(args, self.constants, self.signature)
         self.mod.launch(args)
 
