@@ -1592,6 +1592,12 @@ struct LoadOpConversion
     }
     Value elemSizeInBytes = b.i32_val(originalElemBits / 8);
 
+    LLVM_DEBUG(llvm::dbgs() << "DPAS layout: " << llEncoding->toString() << "\n");
+
+    auto dpasLayoutToRegister = llEncoding->pseudoinvert();
+    LLVM_DEBUG(llvm::dbgs() << "DPAS layout to warp/lane/register: "
+                            << dpasLayoutToRegister << "\n");
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
@@ -1703,6 +1709,50 @@ struct LoadOpConversion
           unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsInnerDimPerLoad
                                       : numOperandsOuterDimPerLoad;
+
+          // get the base tensor index for this load
+          auto loadBaseIndex = tileLayout.apply(
+              {{kOffset, 0}, {kIteration, 0}, {kLoad, loadIdx}});
+          assert(loadBaseIndex.size() == 2);
+          LLVM_DEBUG(llvm::dbgs() << "Load vals index from layout: "
+                                  << loadBaseIndex[0].second << ", "
+                                  << loadBaseIndex[1].second << "\n");
+
+          // convert the base index into hardware params 
+          auto dpasHwBaseIndex = dpasLayoutToRegister.apply(loadBaseIndex);
+          assert(dpasHwBaseIndex.size() == 4);
+          for (size_t i = 0; i < dpasHwBaseIndex.size(); i++) {
+            llvm::errs() << "\t" << dpasHwBaseIndex[i].first << " = "
+                         << dpasHwBaseIndex[i].second << "\n";
+          }
+
+          for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "Processing DPAS tile iteration " << i << "\n");
+            
+            // get the index for this iteration
+            auto loadValsIndex = tileLayout.apply(
+                {{kOffset, 0}, {kIteration, i}, {kLoad, loadIdx}});
+            assert(loadValsIndex.size() == 2);
+            LLVM_DEBUG(llvm::dbgs() << "Iteration index from layout: "
+                                    << loadValsIndex[0].second << ", "
+                                    << loadValsIndex[1].second << "\n");
+
+            auto loadValX =
+                loadValsIndex[0].second / packedElemsPerLanePerDPASInst;
+            auto loadValY = loadValsIndex[1].second / elemsPerDPASInst[1];
+
+            LLVM_DEBUG(llvm::dbgs()
+                       << "Load vals index adjusting for tile dimensions: "
+                       << loadValX << ", " << loadValY << "\n");
+
+            auto dpasHwIndex = dpasLayoutToRegister.apply(loadValsIndex);
+            assert(dpasHwIndex.size() == 4);
+            for (size_t i = 0; i < dpasHwIndex.size(); i++) {
+              llvm::errs() << "\t" << dpasHwIndex[i].first << " = "
+                           << dpasHwIndex[i].second << "\n";
+            }
+          }
 
           // Decompose the return value to multiple operands.
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
