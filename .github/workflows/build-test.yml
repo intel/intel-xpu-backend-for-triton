@@ -100,6 +100,7 @@ jobs:
     name: Integration tests matrix
 
     strategy:
+      fail-fast: false
       matrix:
         python:
           - "3.9"
