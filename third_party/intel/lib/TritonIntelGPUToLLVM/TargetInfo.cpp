@@ -280,7 +280,7 @@ bool TargetInfo::warpBatchReduce(
     }
   }
 
-  return false;
+  return true;
 }
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
