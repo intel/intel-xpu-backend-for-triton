@@ -2232,7 +2232,7 @@ struct StoreOpConversion
       }
 
       Value maskVal = threadPred;
-      if (llMask) {
+      if (maskElems.size() > 0) {
         auto mask = maskElems[vecStart];
         maskVal = maybeAnd(rewriter, loc, threadPred, mask);
       }
