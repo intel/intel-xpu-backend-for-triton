@@ -150,9 +150,10 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   }
 }
 
-/// Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Type typeLike,
-                         Value currentMask, Value pred) {
+/// Return a new mask of type of shape \p typeLike, and value combining the
+/// current mask \p currentMask with the given predicate \p pred.
+static Value computeNewMask(RewriterBase &rewriter, Type typeLike,
+                            Value currentMask, Value pred) {
   Location loc = pred.getLoc();
   Value mask = pred;
   Type maskType = tt::getI1SameShape(tt::getPointeeType(typeLike));
@@ -175,7 +176,7 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
       .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
         rewriter.setInsertionPoint(op);
         Value mask =
-            getPredMask(rewriter, op.getPtr().getType(), op.getMask(), pred);
+            computeNewMask(rewriter, op.getPtr().getType(), op.getMask(), pred);
         op.getMaskMutable().assign(mask);
         return op;
       });
