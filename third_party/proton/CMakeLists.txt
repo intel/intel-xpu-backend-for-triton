@@ -14,15 +14,6 @@ if (NOT XPUPTI_INCLUDE_DIR)
 else()
   option(ENABLE_XPUTPI_PROFILER "Enable Xpupti Profiler" ON)
   set(ENABLE_XPUTPI_PROFILER ${ENABLE_XPUTPI_PROFILER} CACHE BOOL "Enable Xpupti Profiler" FORCE)
-
-  if(SYCL_INCLUDE_DIRS_FOR_PROTON)
-    foreach(dir ${SYCL_INCLUDE_DIRS_FOR_PROTON})
-      list(APPEND XPUPTI_INCLUDE_DIR ${dir})
-    endforeach()
-  else()
-    message(WARNING "SYCL FOLDER not found")
-    set(ENABLE_XPUTPI_PROFILER OFF)
-  endif()
 endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
@@ -88,16 +79,9 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module)
-find_library(SYCL_LIB
-  NAMES sycl
-  HINTS ${SYCL_LIB_DIRS_FOR_PROTON}
-)
 find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
 find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
 
-if(SYCL_LIB)
-    target_link_libraries(proton PRIVATE ${SYCL_LIB})
-endif()
 if(ZE_TRACING_LIB)
     target_link_libraries(proton PRIVATE ${ZE_TRACING_LIB})
 endif()
