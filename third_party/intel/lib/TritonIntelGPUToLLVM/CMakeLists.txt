@@ -22,7 +22,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
     XeAsmFormat.cpp
-
+    
     DEPENDS
     TritonIntelGPUConversionPassIncGen
 

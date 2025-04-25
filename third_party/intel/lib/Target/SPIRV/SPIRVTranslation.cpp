@@ -122,7 +122,8 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
       SPIRV::ExtensionID::SPV_INTEL_vector_compute,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
-      SPIRV::ExtensionID::SPV_KHR_non_semantic_info};
+      SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
+      SPIRV::ExtensionID::SPV_INTEL_inline_assembly};
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
