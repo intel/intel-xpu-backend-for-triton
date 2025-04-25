@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
@@ -154,7 +155,7 @@ static Value getPredMask(RewriterBase &rewriter, Type typeLike,
                          Value currentMask, Value pred) {
   Location loc = pred.getLoc();
   Value mask = pred;
-  Type maskType = tt::getI1SameShape(typeLike);
+  Type maskType = tt::getI1SameShape(tt::getPointeeType(typeLike));
 
   if (isa<RankedTensorType>(maskType))
     mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
@@ -167,18 +168,17 @@ static Value getPredMask(RewriterBase &rewriter, Type typeLike,
 static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                               Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isMemoryEffectFree(op) || isa<ttgi::PrefetchOp>(op))
+  if (mlir::isMemoryEffectFree(op))
     return op;
 
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
-                             loadOp.getMask(), pred);
-    loadOp.getMaskMutable().assign(mask);
-    return loadOp;
-  }
-
-  llvm_unreachable("don't know how to predicate this operation");
+  return TypeSwitch<Operation *, Operation *>(op)
+      .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
+        rewriter.setInsertionPoint(op);
+        Value mask =
+            getPredMask(rewriter, op.getPtr().getType(), op.getMask(), pred);
+        op.getMaskMutable().assign(mask);
+        return op;
+      });
 }
 
 /// Helper to get the defining operation of a value.
