@@ -84,11 +84,11 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp, Value ptr) {
+static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), ptr, loadOp.getCache(), loadOp.getEvict(),
+      loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
@@ -102,7 +102,7 @@ static void createPrefetchOps(scf::ForOp &forOp,
   assert(!loads.empty() && "Expecting at least one load operation");
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
-    createPrefetchOp(forOp, loadOp, loadOp.getPtr());
+    createPrefetchOp(forOp, loadOp);
   }
 }
 
@@ -131,6 +131,16 @@ static void collectOpsToPipeline(scf::ForOp forOp,
       bool isBlockPtr = mlir::triton::isTensorPointerType(ptr.getType());
       if (!isBlockPtr && !supportRegularPtr)
         continue;
+
+      // Check if the memory is structed densely. If not, we do not prefetch it
+      // to avoid polluting the cache.
+      Attribute blockIOAttr =
+          loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                              getBlockIOAttrName());
+      if (!blockIOAttr) {
+        LDBG("Skipping LoadOp without block_io attribute" << *loadOp);
+        continue;
+      }
 
       std::optional<LoadDotOperand> loadWithDotOperand = loadDotOperand(loadOp);
       if (loadWithDotOperand.has_value())

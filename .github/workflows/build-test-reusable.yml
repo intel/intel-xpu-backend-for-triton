@@ -74,6 +74,12 @@ env:
 jobs:
   integration-tests:
     name: Integration tests
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - core
+          - rest
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
@@ -111,20 +117,11 @@ jobs:
         with:
           python-version: ${{ inputs.python_version }}
 
-      - name: Identify Python version
-        run: |
-          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
-          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
-
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
-
-      - name: Install pass_rate dependencies
-        run: |
-          pip install defusedxml setproctitle==1.3.5
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
@@ -133,9 +130,10 @@ jobs:
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
 
       - name: Report environment details
+        if: matrix.suite == 'core'
         run: |
-          source ./scripts/capture-hw-details.sh --quiet
-          cat <<EOF | tee .env
+          mkdir -p reports
+          cat <<EOF | tee reports/.env
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
@@ -145,11 +143,8 @@ jobs:
           PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
           PYTORCH_VERSION=$PYTORCH_VERSION
           TRITON_REPO=$GITHUB_REPOSITORY
-          LIBIGC1_VERSION=$LIBIGC1_VERSION
-          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
-          GPU_DEVICE=$GPU_DEVICE
-          AGAMA_VERSION=$AGAMA_VERSION
           EOF
+          ./scripts/capture-hw-details.sh | tee -a reports/.env
 
       - name: Create test-triton command line
         run: |
@@ -169,43 +164,54 @@ jobs:
 
           {
             echo SKIPLIST="$skiplist"
-            echo TRITON_TEST_CMD="bash -x scripts/test-triton.sh --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
+            echo TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
           } | tee -a $GITHUB_ENV
 
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+
       - name: Run Proton tests
-        if: ${{ inputs.driver_version == 'rolling' && inputs.device == 'max1100' }}
+        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
           cd third_party/proton/test
           pytest test_api.py test_lib.py test_profile.py test_viewer.py test_record.py -s -v
           cd ..
 
       - name: Run unit tests
+        if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
+        if: matrix.suite == 'core'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --core --skip-pip-install
+          ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run interpreter tests
+        if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --interpreter --skip-pip-install
+          ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run Tutorials
+        if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial --skip-pip-install
+          ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Run instrumentation tests
+        if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --instrumentation --skip-pip-install
+          ${{ env.TRITON_TEST_CMD }} --instrumentation
 
       - name: Get transformers version
+        if: matrix.suite == 'rest'
         run: |
           cd pytorch
           TRANSFORMERS_VERSION="$(<.ci/docker/ci_commit_pins/huggingface.txt)"
           echo "TRANSFORMERS_VERSION=$TRANSFORMERS_VERSION" | tee -a $GITHUB_ENV
 
       - name: Install transformers
+        if: matrix.suite == 'rest'
         uses: ./.github/actions/install-dependency
         with:
           package: transformers
@@ -214,8 +220,9 @@ jobs:
           try-tag-prefix: v
 
       - name: Run E2E test
+        if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --inductor --skip-pip-install
+          ${{ env.TRITON_TEST_CMD }} --inductor
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
@@ -224,9 +231,52 @@ jobs:
           path: ${{ steps.pip-cache.outputs.path }}
           dest: ${{ steps.pip-cache.outputs.dest }}
 
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports
+
+  reports:
+    name: Reports
+    runs-on:
+      - linux
+    needs: integration-tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        env:
+          # Increase this value to reset cache
+          CACHE_NUMBER: 1
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+
+      - name: Download test reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-reports-*-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: reports
+          merge-multiple: true
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install pass_rate dependencies
+        run: |
+          pip install defusedxml
+
       - name: Pass rate
         run: |
-          source ./scripts/capture-hw-details.sh
+          ls -la reports
+          source ./reports/.env
           python scripts/pass_rate.py --reports reports
           python scripts/pass_rate.py --reports reports --json > pass_rate.json
           python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
@@ -247,11 +297,4 @@ jobs:
           include-hidden-files: true
           path: |
             reports/*/*.csv
-            .env
-
-      - name: Upload test reports
-        if: inputs.upload_test_reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-reports-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
-          path: reports
+            reports/.env
