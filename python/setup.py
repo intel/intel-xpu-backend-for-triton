@@ -421,19 +421,28 @@ class CMakeBuild(build_ext):
             pybind11_include_dir = pybind11.get_include()
         return [f"-Dpybind11_INCLUDE_DIR='{pybind11_include_dir}'", f"-Dpybind11_DIR='{pybind11.get_cmake_dir()}'"]
 
-    def find_sycl_headers(self) -> Optional[list[str]]:
+    def find_sycl(self) -> tuple[list[str], list[str]]:
         """
         Looks for the sycl headers in known places.
 
         Returns:
-            enriched include_dir
+            enriched include_dir and libsycl.so location.
         """
-        include_dirs = []
         icpx_path = shutil.which("icpx")
         if icpx_path:
             compiler_root = os.path.abspath(f"{icpx_path}/../..")
-            include_dirs += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
-        return include_dirs
+            include_dirs = [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+            sycl_dir = os.path.join(compiler_root, "lib")
+            return include_dirs, [sycl_dir]
+        oneapi_root = os.getenv("ONEAPI_ROOT")
+        if oneapi_root:
+            include_dirs = [
+                os.path.join(oneapi_root, "compiler/latest/include"),
+                os.path.join(oneapi_root, "compiler/latest/include/sycl")
+            ]
+            sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
+            return include_dirs, [sycl_dir]
+        return [], []
 
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info()])
@@ -450,10 +459,12 @@ class CMakeBuild(build_ext):
         if xpupti_include_dir == "":
             xpupti_include_dir = os.path.join(get_base_dir(), "third_party", "intel", "backend", "proton", "include")
         cmake_args += ["-DXPUPTI_INCLUDE_DIR=" + xpupti_include_dir]
-        include_dirs = self.find_sycl_headers()
+        include_dirs, sycl_lib_dirs = self.find_sycl()
         if include_dirs != []:
             include_dirs = ";".join(include_dirs)
             cmake_args += [f"-DSYCL_INCLUDE_DIRS_FOR_PROTON={include_dirs}"]
+            sycl_lib_dirs = ";".join(sycl_lib_dirs)
+            cmake_args += [f"-DSYCL_LIB_DIRS_FOR_PROTON={sycl_lib_dirs}"]
         return cmake_args
 
     def build_extension(self, ext):

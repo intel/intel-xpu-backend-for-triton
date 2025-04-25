@@ -21,7 +21,7 @@ else()
     endforeach()
   else()
     message(WARNING "SYCL FOLDER not found")
-    set(ENABLE_XPUTPI_PROFILER, OFF)
+    set(ENABLE_XPUTPI_PROFILER OFF)
   endif()
 endif()
 if(NOT JSON_INCLUDE_DIR)
@@ -90,7 +90,7 @@ add_library(proton SHARED ${_proton_obj_sources})
 target_link_libraries(proton PRIVATE Python3::Module)
 find_library(SYCL_LIB
   NAMES sycl
-  HINTS "/opt/intel/oneapi/compiler/latest/lib"
+  HINTS ${SYCL_LIB_DIRS_FOR_PROTON}
 )
 find_library(ZE_TRACING_LIB NAMES ze_tracing_layer PATHS /usr/lib/x86_64-linux-gnu)
 find_library(ZE_LOADER_LIB NAMES ze_loader PATHS /usr/lib/x86_64-linux-gnu)
