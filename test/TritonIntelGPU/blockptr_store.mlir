@@ -364,20 +364,31 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       %c1_i64 = arith.constant 1 : i64
       %c0_i32 = arith.constant 0 : i32
       %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #blocked>>
+      // CHECK: llvm.call spir_funccc @_Z12get_local_idj
       // CHECK-NOT: llvm.icmp "slt"
-      // CHECK-COUNT-32: llvm.store
+      // CHECK: %[[threadID:.*]] = llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: %[[VAL_583:.*]] = llvm.trunc %[[threadID]] : i64 to i32
+      // CHECK: %[[VAL_584:.*]] = llvm.mlir.constant(16 : i32) : i32
+      // CHECK: %[[VAL_586:.*]] = llvm.udiv %[[VAL_583]], %[[VAL_584]] : i32
+      // CHECK: %[[VAL_587:.*]] = llvm.mlir.constant(3 : i32) : i32
+      // CHECK: %[[VAL_588:.*]] = llvm.and %[[VAL_586]], %[[VAL_587]] : i32
+      // CHECK: %[[threadPred:.*]] = llvm.icmp "eq" %[[VAL_588]], {{.*}} : i32
+      // CHECK-COUNT-32: llvm.cond_br %[[threadPred]]
       tt.store %0, %cst : !tt.ptr<tensor<64x16xf16, #blocked>>
 
       // CHECK-COUNT-16: llvm.icmp "slt"
-      // CHECK-COUNT-32: llvm.store
+      // CHECK: %[[threadPred_0:.*]] = llvm.icmp "eq"
+      // CHECK-COUNT-32: llvm.and %[[threadPred_0]], {{.*}} : i1
       tt.store %0, %cst {boundaryCheck = array<i32: 0>} : !tt.ptr<tensor<64x16xf16, #blocked>>
 
       // CHECK-COUNT-16: llvm.icmp "slt"
-      // CHECK-COUNT-32: llvm.store
+      // CHECK: %[[threadPred_1:.*]] = llvm.icmp "eq"
+      // CHECK-COUNT-32: llvm.and %[[threadPred_1]], {{.*}} : i1
       tt.store %0, %cst {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x16xf16, #blocked>>
 
       // CHECK-COUNT-32: llvm.icmp "slt"
-      // CHECK-COUNT-32: llvm.store
+      // CHECK: %[[threadPred_2:.*]] = llvm.icmp "eq"
+      // CHECK-COUNT-32: llvm.and %[[threadPred_2]], {{.*}} : i1
       tt.store %0, %cst {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x16xf16, #blocked>>
 
       tt.return
