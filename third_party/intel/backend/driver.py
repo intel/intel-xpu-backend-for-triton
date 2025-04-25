@@ -750,7 +750,7 @@ class XPUDriver(DriverBase):
         from triton.backends.intel.driver import compile_module_from_src
 
         dirname = os.path.dirname(os.path.realpath(__file__))
-        return compile_module_from_src(Path(os.path.join(dirname, "proton_utils.cpp")).read_text(), "proton_utils")
+        return compile_module_from_src(Path(dirname).joinpath("proton_utils.cpp").read_text(), "proton_utils")
 
     def get_active_torch_device(self):
         import torch

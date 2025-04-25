@@ -331,7 +331,7 @@ zel_tracer_handle_t tracer = nullptr;
 
 typedef void (*EnumDeviceUUIDsFunc)(std::vector<std::array<uint8_t, 16>>);
 
-int call_enumDeviceUUIDs(const std::string &utils_cache_path) {
+int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   void *handle = dlopen(utils_cache_path.data(), RTLD_LAZY);
   if (!handle) {
     std::cerr << "Failed to load library: " << dlerror() << std::endl;
@@ -356,7 +356,7 @@ int call_enumDeviceUUIDs(const std::string &utils_cache_path) {
 
 typedef void (*WaitOnSyclQueueFunc)(void *);
 
-int call_waitOnSyclQueue(const std::string &utils_cache_path, void *syclQueue) {
+int callWaitOnSyclQueue(const std::string &utils_cache_path, void *syclQueue) {
   void *handle = dlopen(utils_cache_path.data(), RTLD_LAZY);
   if (!handle) {
     std::cerr << "Failed to load library: " << dlerror() << std::endl;
@@ -384,7 +384,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   // should be call to shared lib
   XpuptiProfiler &profiler = threadState.profiler;
   if (profiler.utils_cache_path != "") {
-    call_enumDeviceUUIDs(profiler.utils_cache_path);
+    callEnumDeviceUUIDs(profiler.utils_cache_path);
   }
   // auto res = ptiViewPushExternalCorrelationId(
   //     pti_view_external_kind::PTI_VIEW_EXTERNAL_KIND_CUSTOM_1, 42);
@@ -435,7 +435,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
   std::cout << "flush\n" << std::flush;
   XpuptiProfiler &profiler = threadState.profiler;
   if (profiler.syclQueue != nullptr) {
-    call_waitOnSyclQueue(profiler.utils_cache_path, profiler.syclQueue);
+    callWaitOnSyclQueue(profiler.utils_cache_path, profiler.syclQueue);
   }
 
   profiler.correlation.flush(
