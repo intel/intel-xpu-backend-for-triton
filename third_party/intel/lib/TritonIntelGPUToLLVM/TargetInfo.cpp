@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TargetInfo.h"
-#include "intel/include/TritonIntelGPUToLLVM/vISAAsmFormat.h"
+#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
 
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
@@ -169,7 +169,7 @@ bool TargetInfo::warpBatchReduce(
       batchedReduceVal = b.insert_element(reduceTy, batchedReduceVal,
                                           grouped_accs[i], b.i32_val(i));
     }
-    VISABuilder vISABuilder;
+    XeBuilder vISABuilder;
     std::string batchedHorizontalReduce;
     if (isa<arith::AddFOp>(reduceOp)) {
       batchedHorizontalReduce =
@@ -324,7 +324,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       batchedReduceVal =
           b.insert_element(reduceTy, batchedReduceVal, acc[i], b.i32_val(i));
     }
-    VISABuilder vISABuilder;
+    XeBuilder vISABuilder;
     std::string batchedHorizontalReduce;
     if (isa<arith::AddFOp>(reduceOp)) {
       batchedHorizontalReduce =
