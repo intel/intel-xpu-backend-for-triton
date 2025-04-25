@@ -15,14 +15,10 @@ else()
   option(ENABLE_XPUTPI_PROFILER "Enable Xpupti Profiler" ON)
   set(ENABLE_XPUTPI_PROFILER ${ENABLE_XPUTPI_PROFILER} CACHE BOOL "Enable Xpupti Profiler" FORCE)
 
-  find_path(SYCL_INCLUDE_DIR
-    NAMES "sycl/sycl.hpp"
-    HINTS "/opt/intel/oneapi/compiler/latest/include"
-  )
-
-  if(SYCL_INCLUDE_DIR)
-    list(APPEND XPUPTI_INCLUDE_DIR "${SYCL_INCLUDE_DIR}")
-    list(APPEND XPUPTI_INCLUDE_DIR "${SYCL_INCLUDE_DIR}/sycl")
+  if(SYCL_INCLUDE_DIRS_FOR_PROTON)
+    foreach(dir ${SYCL_INCLUDE_DIRS_FOR_PROTON})
+      list(APPEND XPUPTI_INCLUDE_DIR ${dir})
+    endforeach()
   else()
     message(WARNING "SYCL FOLDER not found")
     set(ENABLE_XPUTPI_PROFILER, OFF)

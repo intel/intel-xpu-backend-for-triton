@@ -421,6 +421,20 @@ class CMakeBuild(build_ext):
             pybind11_include_dir = pybind11.get_include()
         return [f"-Dpybind11_INCLUDE_DIR='{pybind11_include_dir}'", f"-Dpybind11_DIR='{pybind11.get_cmake_dir()}'"]
 
+    def find_sycl_headers(self) -> Optional[list[str]]:
+        """
+        Looks for the sycl headers in known places.
+
+        Returns:
+            enriched include_dir
+        """
+        include_dirs = []
+        icpx_path = shutil.which("icpx")
+        if icpx_path:
+            compiler_root = os.path.abspath(f"{icpx_path}/../..")
+            include_dirs += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        return include_dirs
+
     def get_proton_cmake_args(self):
         cmake_args = get_thirdparty_packages([get_json_package_info()])
         cmake_args += self.get_pybind11_cmake_args()
@@ -436,6 +450,10 @@ class CMakeBuild(build_ext):
         if xpupti_include_dir == "":
             xpupti_include_dir = os.path.join(get_base_dir(), "third_party", "intel", "backend", "proton", "include")
         cmake_args += ["-DXPUPTI_INCLUDE_DIR=" + xpupti_include_dir]
+        include_dirs = self.find_sycl_headers()
+        if include_dirs != []:
+            include_dirs = ";".join(include_dirs)
+            cmake_args += [f"-DSYCL_INCLUDE_DIRS_FOR_PROTON={include_dirs}"]
         return cmake_args
 
     def build_extension(self, ext):
