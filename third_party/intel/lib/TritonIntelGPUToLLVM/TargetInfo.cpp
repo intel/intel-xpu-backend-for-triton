@@ -278,9 +278,10 @@ bool TargetInfo::warpBatchReduce(
       SmallVector<Value> &val = it.second;
       val[0] = grouped_accs[grouped_iter++];
     }
+    return true;
   }
 
-  return true;
+  return false;
 }
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
