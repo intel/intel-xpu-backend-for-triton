@@ -19,10 +19,8 @@ def _select_backend() -> str:
     elif backend == "hip":
         return "roctracer"
     elif backend == "xpu":
-        dirname = os.path.dirname(os.path.realpath(__file__))
-        path = pathlib.Path(os.path.join(dirname, "..", "csrc", "lib", "Profiler", "Xpupti", "utils.cpp")).resolve()
         global UTILS_CACHE_PATH
-        UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib(path)
+        UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
         return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")
