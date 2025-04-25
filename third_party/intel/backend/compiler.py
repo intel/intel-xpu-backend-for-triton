@@ -40,6 +40,7 @@ class XPUOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 2
+    split_barriers_scope: str = 'None'
     cluster_dims: tuple = (1, 1, 1)
     threads_per_warp: int = 32
     optimize_epilogue: bool = False
@@ -231,7 +232,6 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
-        passes.ttir.add_combine(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
@@ -239,9 +239,9 @@ class XPUBackend(BaseBackend):
             ignore_masks = True if raise_block_ptr_flags['ignore-masks'] else False
             intel.passes.ttir.add_raise_block_pointer(pm, ignore_masks)
         passes.common.add_canonicalizer(pm)
+        passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
@@ -254,21 +254,21 @@ class XPUBackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
 
+        # 0:No barrier / 1:Workgroup scope / 2:Subgroup scope
+        split_barriers_scope = intel.SplitBarrierScope.none
+        if opt.split_barriers_scope == 'Workgroup':
+            split_barriers_scope = intel.SplitBarrierScope.Workgroup
+        elif opt.split_barriers_scope == 'Subgroup':
+            split_barriers_scope = intel.SplitBarrierScope.Subgroup
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        target_arch = "spir64"
         intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
                                                         properties["has_subgroup_2d_block_io"],
                                                         properties["has_subgroup_matrix_multiply_accumulate"],
                                                         properties["has_bfloat16_conversions"], opt.threads_per_warp,
-                                                        target_arch)
+                                                        "spir64")
         pm.run(mod)
 
         # Overwrite the threads_per_warp option with the module annotation.
@@ -302,7 +302,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False, split_barriers_scope)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
@@ -334,15 +334,12 @@ class XPUBackend(BaseBackend):
             metadata["num_warps"] *= num_warp_groups
         threads_per_warp = intel.get_threads_per_warp(src)
         metadata["threads_per_warp"] = threads_per_warp
+
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
+
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         # FIXME: Advanced path uses custom type conversion and needs hacky

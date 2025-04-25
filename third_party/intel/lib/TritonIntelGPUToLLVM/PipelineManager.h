@@ -138,6 +138,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (LLVM::isKernel(funcOp)) {
       newFuncOp.setCConv(LLVM::CConv::SPIR_KERNEL);
       newFuncOp.setLinkage(LLVM::Linkage::External);
+    } else {
+      newFuncOp.setCConv(LLVM::CConv::SPIR_FUNC);
     }
 
     newFuncOp->setAttr(
