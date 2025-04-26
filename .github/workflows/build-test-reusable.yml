@@ -278,13 +278,12 @@ jobs:
         run: |
           pip install defusedxml
 
+      - name: Load environment details
+        run: |
+          cat ./reports/.env | tee -a $GITHUB_ENV
+
       - name: Pass rate
         run: |
-          ls -la reports
-          cat ./reports/.env
-          # All environment variables in .env need to be exported, so pass_rate.py can see them.
-          set set -o allexport
-          source ./reports/.env
           python scripts/pass_rate.py --reports reports
           python scripts/pass_rate.py --reports reports --json > pass_rate.json
           python scripts/pass_rate.py --reports reports --suite tutorials --json > pass_rate_tutorials.json
