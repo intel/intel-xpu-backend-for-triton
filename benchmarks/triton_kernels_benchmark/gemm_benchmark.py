@@ -354,8 +354,8 @@ def get_benchmark(
                 a,
                 b,
                 c,
-                matmul_kernel=matmul_kernel_with_block_pointers,
-                matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
+                matmul_kernel=matmul_kernel,
+                matmul_kernel_batched=matmul_kernel_batched,
                 transpose_a=transpose_a,
                 transpose_b=transpose_b,
             )
