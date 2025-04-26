@@ -123,6 +123,11 @@ jobs:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
+      - name: Build Proton with XPU support
+        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        run: |
+          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
+
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
         with:

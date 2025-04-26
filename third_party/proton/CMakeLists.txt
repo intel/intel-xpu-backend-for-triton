@@ -2,6 +2,8 @@ project(Proton LANGUAGES CXX)
 
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
 
+option(TRITON_BUILD_PROTON_XPU "Build Proton with XPU support" OFF)
+
 # ============ Check for includes =============
 if(NOT CUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "CUPTI include directory not defined")
@@ -11,9 +13,6 @@ if(NOT ROCTRACER_INCLUDE_DIR)
 endif()
 if (NOT XPUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "XPUPTI include directory not defined")
-else()
-  option(ENABLE_XPUTPI_PROFILER "Enable Xpupti Profiler" ON)
-  set(ENABLE_XPUTPI_PROFILER ${ENABLE_XPUTPI_PROFILER} CACHE BOOL "Enable Xpupti Profiler" FORCE)
 endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
