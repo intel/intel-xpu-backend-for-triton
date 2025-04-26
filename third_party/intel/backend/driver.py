@@ -279,6 +279,8 @@ def compile_module_from_src(src, name):
         return SpirvUtils(cache_path)
     elif name == '__triton_launcher':
         return TritonLauncher(cache_path)
+    elif name == 'proton_utils':
+        return cache_path
 
     import importlib.util
     spec = importlib.util.spec_from_file_location(name, cache_path)
@@ -743,6 +745,12 @@ class XPUDriver(DriverBase):
         dev_property = torch.xpu.get_device_capability(device)
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
+
+    def build_proton_help_lib(self):
+        from triton.backends.intel.driver import compile_module_from_src
+
+        dirname = os.path.dirname(os.path.realpath(__file__))
+        return compile_module_from_src(Path(dirname).joinpath("proton_utils.cpp").read_text(), "proton_utils")
 
     def get_active_torch_device(self):
         import torch
