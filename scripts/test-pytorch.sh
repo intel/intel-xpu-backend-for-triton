@@ -7,7 +7,7 @@ pip install -r .ci/docker/requirements-ci.txt
 
 export
 
-test_cmd="python test/run_test.py --keep-going --include "
+test_cmd="python test/run_test.py --keep-going --pipe-logs --include "
 if [[ "${1:-all}" = "all" ]]; then
     for test in $(ls test/inductor | grep test); do
         test_cmd="${test_cmd} inductor/$test"
