@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
@@ -84,11 +85,11 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp, Value ptr) {
+static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), ptr, loadOp.getCache(), loadOp.getEvict(),
+      loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
@@ -102,7 +103,7 @@ static void createPrefetchOps(scf::ForOp &forOp,
   assert(!loads.empty() && "Expecting at least one load operation");
   for (const LoadDotOperand &loadOperand : loads) {
     tt::LoadOp loadOp = loadOperand.load;
-    createPrefetchOp(forOp, loadOp, loadOp.getPtr());
+    createPrefetchOp(forOp, loadOp);
   }
 }
 
@@ -132,6 +133,16 @@ static void collectOpsToPipeline(scf::ForOp forOp,
       if (!isBlockPtr && !supportRegularPtr)
         continue;
 
+      // Check if the memory is structed densely. If not, we do not prefetch it
+      // to avoid polluting the cache.
+      Attribute blockIOAttr =
+          loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                              getBlockIOAttrName());
+      if (!blockIOAttr) {
+        LDBG("Skipping LoadOp without block_io attribute" << *loadOp);
+        continue;
+      }
+
       std::optional<LoadDotOperand> loadWithDotOperand = loadDotOperand(loadOp);
       if (loadWithDotOperand.has_value())
         loadOps.push_back(loadWithDotOperand.value());
@@ -139,12 +150,13 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   }
 }
 
-/// Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Type typeLike,
-                         Value currentMask, Value pred) {
+/// Return a new mask of type of shape \p typeLike, and value combining the
+/// current mask \p currentMask with the given predicate \p pred.
+static Value computeNewMask(RewriterBase &rewriter, Type typeLike,
+                            Value currentMask, Value pred) {
   Location loc = pred.getLoc();
   Value mask = pred;
-  Type maskType = tt::getI1SameShape(typeLike);
+  Type maskType = tt::getI1SameShape(tt::getPointeeType(typeLike));
 
   if (isa<RankedTensorType>(maskType))
     mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
@@ -157,18 +169,17 @@ static Value getPredMask(RewriterBase &rewriter, Type typeLike,
 static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                               Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isMemoryEffectFree(op) || isa<ttgi::PrefetchOp>(op))
+  if (mlir::isMemoryEffectFree(op))
     return op;
 
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    rewriter.setInsertionPoint(loadOp);
-    Value mask = getPredMask(rewriter, loadOp.getPtr().getType(),
-                             loadOp.getMask(), pred);
-    loadOp.getMaskMutable().assign(mask);
-    return loadOp;
-  }
-
-  llvm_unreachable("don't know how to predicate this operation");
+  return TypeSwitch<Operation *, Operation *>(op)
+      .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
+        rewriter.setInsertionPoint(op);
+        Value mask =
+            computeNewMask(rewriter, op.getPtr().getType(), op.getMask(), pred);
+        op.getMaskMutable().assign(mask);
+        return op;
+      });
 }
 
 /// Helper to get the defining operation of a value.

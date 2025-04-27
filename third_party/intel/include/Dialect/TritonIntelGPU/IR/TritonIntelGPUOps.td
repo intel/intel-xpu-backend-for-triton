@@ -107,7 +107,10 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
   let hasFolder = 1;
 }
 
-def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
+def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
+]> {
   let summary = "Tensor prefetch operation";
   let description = [{
     The `prefetch` operation prefetches an input tensor.
@@ -117,11 +120,20 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch"> {
           : !tt.ptr<tensor<256x32xf16>
       ```
   }];
-  let arguments = (ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr, TT_CacheModifierAttr:$cache,
-                       TT_EvictionPolicyAttr:$evict, BoolAttr:$isVolatile);
+  let arguments = (
+    ins AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+    Optional<TT_BoolLike>:$mask,
+    TT_CacheModifierAttr:$cache,
+    TT_EvictionPolicyAttr:$evict,
+    BoolAttr:$isVolatile
+  );
   let results = (outs);
+  let builders = [
+    OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
+                   "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+  ];
   let assemblyFormat = [{
-    operands attr-dict `:` type($ptr)
+    $ptr (`,` $mask^)? attr-dict `:` type($ptr)
   }];
 }
 

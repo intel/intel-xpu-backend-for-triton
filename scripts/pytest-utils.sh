@@ -16,7 +16,9 @@ fi
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 
 pytest() {
-    pytest_extra_args=()
+    pytest_extra_args=(
+        "--dist=worksteal"
+    )
 
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"

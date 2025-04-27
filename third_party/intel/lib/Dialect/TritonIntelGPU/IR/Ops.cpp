@@ -197,6 +197,12 @@ OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+void PrefetchOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                       CacheModifier cache, EvictionPolicy evict,
+                       bool isVolatile) {
+  PrefetchOp::build(builder, state, ptr, /*mask=*/{}, cache, evict, isVolatile);
+}
+
 LogicalResult SubGroupTransposeOp::verify() {
   RankedTensorType srcType = getSrc().getType();
   auto mod = getOperation()->getParentOfType<mlir::ModuleOp>();
