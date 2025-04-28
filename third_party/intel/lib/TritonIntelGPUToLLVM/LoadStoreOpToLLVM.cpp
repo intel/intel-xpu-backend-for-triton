@@ -530,30 +530,38 @@ struct PrefetchOpConversion
     };
     opIdx = getOpIdx();
 
-    auto repetitions = dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    // getDPASRepetitions always return rank 3 size.
+    SmallVector<int64_t> repetitions =
+        dpasLayout.getDPASRepetitions(tensorShape, opIdx);
+    assert(repetitions.size() == 3 &&
+           "getDPASRepetitions always return rank 3 size");
     SmallVector<unsigned> numReps{repetitions.begin() + 1, repetitions.end()};
     SmallVector<int64_t, 2> shardTensorShape;
-    if (opIdx == DpasEncodingAttr::OpIdx::OperandA) {
+    switch (opIdx) {
+    case DpasEncodingAttr::OpIdx::OperandA: {
       auto opAShape = dpasLayout.getShapeA();
       shardTensorShape = {std::min<unsigned>(tensorShape[0], opAShape[0]),
                           tensorShape[1]};
       warpsPerCTA[1] = 1;
       repCluster[1] = 1;
       numReps[1] = 1;
-    } else {
+    } break;
+    case DpasEncodingAttr::OpIdx::OperandB: {
       auto opBShape = dpasLayout.getShapeB();
       shardTensorShape = {tensorShape[0],
                           std::min<unsigned>(tensorShape[1], opBShape[1])};
       warpsPerCTA[0] = 1;
       repCluster[0] = 1;
       numReps[0] = 1;
+    } break;
+    case DpasEncodingAttr::OpIdx::OperandC: {
+      llvm_unreachable("unexpected OpIdx::OperandC");
+    } break;
     }
 
     auto ptrType = cast<PointerType>(tensorOfPointers.getElementType());
     Type elementType = ptrType.getPointeeType();
-    RankedTensorType tensorType = RankedTensorType::get(
-        shardTensorShape, elementType, tensorOfPointers.getEncoding());
+    auto tensorType = RankedTensorType::get(shardTensorShape, elementType,
+                                            tensorOfPointers.getEncoding());
 
     SmallVector<unsigned, 2> prefetchShape =
         get2DPrefetchShapePerWarp(tensorType);
@@ -562,6 +570,7 @@ struct PrefetchOpConversion
     unsigned maskConstancyHor = std::numeric_limits<unsigned>::max(),
              maskConstancyVer = std::numeric_limits<unsigned>::max();
     if (mask) {
+      // No need to check the constancy of scalar mask.
       if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
         auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
                             axisAnalysisPass)
@@ -574,9 +583,6 @@ struct PrefetchOpConversion
           maskConstancyVer = 1;
         }
       }
-      /*else {
-        // scalar mask. No need to check the constancy.
-      }*/
     }
     prefetchShape = {std::min<unsigned>(prefetchShape[0], maskConstancyVer),
                      std::min<unsigned>(prefetchShape[1], maskConstancyHor)};
