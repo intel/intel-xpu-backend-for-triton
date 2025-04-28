@@ -89,8 +89,8 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
-      loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
-      loadOp.getIsVolatile());
+      loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(), loadOp.getCache(),
+      loadOp.getEvict(), loadOp.getIsVolatile());
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
