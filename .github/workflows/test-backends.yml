@@ -66,7 +66,6 @@ jobs:
           source ${HOME}/miniconda3/bin/activate
           conda activate triton-xpu-ci
           git submodule update --init --recursive
-          cd python
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
           export TRITON_CODEGEN_INTEL_XPU_BACKEND=1

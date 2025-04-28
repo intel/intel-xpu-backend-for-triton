@@ -163,7 +163,6 @@ pip install -U wheel pybind11 cython cmake
 Build and install Triton:
 
 ```
-cd python
 pip install -v '.[build,tests,tutorials]'
 cd ..
 ```

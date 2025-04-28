@@ -1,1 +1,1 @@
-test/unit/instrumentation/test_gpuhello
+python/test/unit/instrumentation/test_gpuhello

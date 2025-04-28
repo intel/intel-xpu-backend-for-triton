@@ -44,7 +44,7 @@ jobs:
           CACHE_NUMBER: 1
         with:
           path: $HOME/.cache/pip
-          key: pip-3.9-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+          key: pip-3.9-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python 3.9
         if: ${{ env.TARGET_PRID == null }}
