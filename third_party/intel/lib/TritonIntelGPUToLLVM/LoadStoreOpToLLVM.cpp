@@ -63,6 +63,39 @@ Value emitRedundantThreadPredicate(
   return pred;
 }
 
+unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return index & ~freeVarMask;
+}
+
+inline LLVM::AtomicBinOp matchAtomicOp(RMWOp atomicOp) {
+  switch (atomicOp) {
+  case RMWOp::AND:
+    return LLVM::AtomicBinOp::_and;
+  case RMWOp::OR:
+    return LLVM::AtomicBinOp::_or;
+  case RMWOp::XOR:
+    return LLVM::AtomicBinOp::_xor;
+  case RMWOp::ADD:
+    return LLVM::AtomicBinOp::add;
+  case RMWOp::FADD:
+    return LLVM::AtomicBinOp::fadd;
+  case RMWOp::MAX:
+    return LLVM::AtomicBinOp::max;
+  case RMWOp::MIN:
+    return LLVM::AtomicBinOp::min;
+  case RMWOp::UMAX:
+    return LLVM::AtomicBinOp::umax;
+  case RMWOp::UMIN:
+    return LLVM::AtomicBinOp::umin;
+  case RMWOp::XCHG:
+    return LLVM::AtomicBinOp::xchg;
+  }
+  // Note that we should never hit this because all cases are covered above.
+  // However, something is necessary after the switch in the function body to
+  // avoid a compiler error.
+  llvm_unreachable("Unhandled RMWOp in case statement");
+}
+
 /// Holds the values related to a block pointer.
 /// It includes the base pointer, base width and height, row and column
 /// stride, and offset base for X and Y.
@@ -558,7 +591,7 @@ struct LoadOpToBlockIOConversion
     unsigned elemsPerLanePerDPASInst =
         product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
     LLVMTypeConverter *typeConverter = getTypeConverter();
-    Type unpackedDPASOperandType = LLVM::getFixedVectorType(
+    Type unpackedDPASOperandType = LLVM::getVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
     // By default, use the unpacked type for the 2D load result type.
@@ -605,8 +638,8 @@ struct LoadOpToBlockIOConversion
       }
     }
 
-    Type packedDPASOperandType = LLVM::getFixedVectorType(
-        loadResultElemType, packedElemsPerLanePerDPASInst);
+    Type packedDPASOperandType =
+        LLVM::getVectorType(loadResultElemType, packedElemsPerLanePerDPASInst);
 
     // Outer dim: Dim M or N. Inner dim: Dim K.
     // Round the warp id fit into the tensor shape.
@@ -772,7 +805,7 @@ struct LoadOpToBlockIOConversion
                                 numOperandsOuterDimPerLoad *
                                 numOperandsInnerDimPerLoad;
     Type load2DGenXType =
-        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
+        LLVM::getVectorType(loadResultElemType, numValuesPerLoad);
 
     // The stride for the replicates.
     unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
@@ -1073,8 +1106,8 @@ struct LoadOpConversion
       SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
       int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
       Type load2DGenXType =
-          LLVM::getFixedVectorType(IntegerType::get(ctx, elemSizeInBits),
-                                   elemsPerLane); // make it opaque type.
+          LLVM::getVectorType(IntegerType::get(ctx, elemSizeInBits),
+                              elemsPerLane); // make it opaque type.
 
       auto [base, baseWidth, baseHeight, rowStride, colStride, offsetBaseX,
             offsetBaseY] =
@@ -1148,8 +1181,8 @@ struct LoadOpConversion
                 return failure();
               }
 
-              Value ret = b.bitcast(
-                  load2dOp, LLVM::getFixedVectorType(eltTy, elemsPerLane));
+              Value ret =
+                  b.bitcast(load2dOp, LLVM::getVectorType(eltTy, elemsPerLane));
 
               for (size_t i = 0; i < elemsPerLane; i++) {
                 Value loaded = b.extract_element(eltTy, ret, b.i32_val(i));
@@ -1181,7 +1214,7 @@ struct LoadOpConversion
     unsigned elemsPerLanePerDPASInst =
         product<unsigned>(elemsPerDPASInst) / threadsPerWarp;
     LLVMTypeConverter *typeConverter = getTypeConverter();
-    Type unpackedDPASOperandType = LLVM::getFixedVectorType(
+    Type unpackedDPASOperandType = LLVM::getVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
 
     // By default, use the unpacked type for the 2D load result type.
@@ -1213,8 +1246,8 @@ struct LoadOpConversion
       usePackedType = true;
     }
 
-    Type packedDPASOperandType = LLVM::getFixedVectorType(
-        loadResultElemType, packedElemsPerLanePerDPASInst);
+    Type packedDPASOperandType =
+        LLVM::getVectorType(loadResultElemType, packedElemsPerLanePerDPASInst);
 
     // Outer dim: Dim M or N. Inner dim: Dim K.
     auto repCluster = dpasLayout.getRepCluster();
@@ -1431,7 +1464,7 @@ struct LoadOpConversion
                                 numOperandsOuterDimPerLoad *
                                 numOperandsInnerDimPerLoad;
     Type load2DGenXType =
-        LLVM::getFixedVectorType(loadResultElemType, numValuesPerLoad);
+        LLVM::getVectorType(loadResultElemType, numValuesPerLoad);
 
     // The stride for the replicates.
     unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
@@ -1460,16 +1493,28 @@ struct LoadOpConversion
     // layout.
     auto bases = tileLayout.getBases();
     std::vector<std::vector<int32_t>> newLoadBases;
+
+    SmallVector<std::pair<StringAttr, int32_t>> outDims;
+    for (auto [name, size] :
+         llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
+      outDims.push_back(std::make_pair(name, size));
+    }
+    assert(outDims[0].first == S("dim0"));
+    assert(outDims[1].first == S("dim1"));
+
     for (size_t i = 0;
          i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
       newLoadBases.push_back({0, static_cast<int>((1 << i) * repKStride *
                                                   numOperandsInnerDimPerLoad)});
+      outDims[1].second *= repKStride * numOperandsInnerDimPerLoad;
     }
     for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
       newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
+      outDims[0].second *= repStride;
     }
     for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
       newLoadBases.push_back({static_cast<int>((1 << i) * repOuterStride), 0});
+      outDims[0].second *= repOuterStride;
     }
 
     LLVM_DEBUG({
@@ -1479,23 +1524,6 @@ struct LoadOpConversion
         llvm::dbgs() << base[0] << ", " << base[1] << "\n";
       }
     });
-
-    SmallVector<std::pair<StringAttr, int32_t>> outDims;
-    // Copy the existing dimensions first. This allows us to re-use the existing
-    // dim names as well as the sizes should the bases vector be empty (one
-    // load).
-    for (auto [name, size] :
-         llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
-      outDims.push_back(std::make_pair(name, size));
-    }
-    if (newLoadBases.size() > 0) {
-      outDims[0] = std::make_pair(outDims[0].first, tensorShape[dimOuter]);
-      outDims[1] = std::make_pair(
-          outDims[1].first,
-          std::max(warpShape[dimInner],
-                   static_cast<unsigned int>(tensorShape[dimInner] *
-                                             repCluster[dimInner])));
-    }
 
     LLVM_DEBUG({
       llvm::dbgs() << "New tile layout dimensions after adding load bases:\n";
@@ -1842,8 +1870,21 @@ struct LoadOpConversion
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    // Load redundantly in all dims except reg
+    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    uint32_t regMask = freeVarMasks[str_attr("register")];
+
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      if (auto canonicalVecStart = getCanonicalIndex(vecStart, regMask);
+          vecStart != canonicalVecStart) {
+        // For redundant registers, refer back to the canonical load
+        for (auto iVec = 0; iVec < vec; ++iVec) {
+          loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
+        }
+        continue;
+      }
+
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
@@ -1855,7 +1896,7 @@ struct LoadOpConversion
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      Value pred = maskElems.size() ? maskElems[vecStart] : b.int_val(1, 1);
+      Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
 
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
       Type retTy = retTys.size() > 1
@@ -1896,16 +1937,24 @@ struct LoadOpConversion
                                                    rewriter.getZeroAttr(retTy));
       }
 
+      auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
+        Value addrElem =
+            b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
+        uint32_t alignment = nWords * width / 8;
+        Value ret = b.load(retTy, addrElem, alignment);
+        return {ret};
+      };
+
+      Value ret;
       // Create a predicated load operation.
-      Block &endBlock = LLVM::intel::createPredicatedBlock(
-          rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-            Value addrElem =
-                b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
-            uint32_t alignment = nWords * width / 8;
-            Value ret = b.load(retTy, addrElem, alignment);
-            return SmallVector<Value, 1>{ret};
-          });
-      Value ret = *endBlock.args_begin();
+      if (pred) {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, SmallVector<Value, 1>{other_},
+            createLoadInstruction);
+        ret = *endBlock.args_begin();
+      } else {
+        ret = createLoadInstruction()[0];
+      }
 
       // Extract and store return values
       SmallVector<Value> rets;
@@ -1917,8 +1966,8 @@ struct LoadOpConversion
         } else {
           curr = ret;
         }
-        curr = b.bitcast(curr, LLVM::getFixedVectorType(
-                                   valueElemTy, width / valueElemNBits));
+        curr = b.bitcast(
+            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
       int tmp = width / valueElemNBits;
@@ -1994,8 +2043,8 @@ struct StoreOpConversion
 
     int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
     Type store2DGenXType =
-        LLVM::getFixedVectorType(IntegerType::get(ctx, elemSizeInBits),
-                                 elemsPerLane); // make it opaque type.
+        LLVM::getVectorType(IntegerType::get(ctx, elemSizeInBits),
+                            elemsPerLane); // make it opaque type.
 
     Value blockPtr = adaptor.getPtr();
     auto [base, width, height, rowStride, colStride, offsetBaseX, offsetBaseY] =
@@ -2051,8 +2100,8 @@ struct StoreOpConversion
                 b.add(warpId1Offset, b.i32_val(n * replicaStride[1] +
                                                repN * elemsPerInstr[1]));
             Value storeVal = rewriter.create<LLVM::UndefOp>(
-                loc, LLVM::getFixedVectorType(typeConverter->convertType(eltTy),
-                                              elemsPerLane));
+                loc, LLVM::getVectorType(typeConverter->convertType(eltTy),
+                                         elemsPerLane));
             for (size_t i = 0; i < elemsPerLane; ++i) {
               storeVal =
                   b.insert_element(storeVal, vals[valOffset], b.i32_val(i));
@@ -2182,10 +2231,10 @@ struct StoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      Value maskVal = threadPred ? threadPred : b.true_val();
-      if (llMask) {
+      Value maskVal = threadPred;
+      if (maskElems.size() > 0) {
         auto mask = maskElems[vecStart];
-        maskVal = maybeAnd(rewriter, loc, maskVal, mask);
+        maskVal = maybeAnd(rewriter, loc, threadPred, mask);
       }
 
       auto vecTy = vec_ty(valArgTy, nWords);
@@ -2195,14 +2244,21 @@ struct StoreOpConversion
         vecWord = b.insert_element(vecTy, vecWord, llWord, b.i32_val(index));
       }
 
-      // Create a predicated store operation.
-      LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, [&] {
+      auto createStore = [&]() -> ArrayRef<Value> {
         Value addrElem =
             b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
         b.store(vecWord, addrElem, alignment);
         return ArrayRef<Value>();
-      });
+      };
+
+      if (maskVal) {
+        // Create a predicated store operation.
+        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal, createStore);
+      } else {
+        auto _ = createStore();
+      }
+
     } // for
     rewriter.eraseOp(op);
     return success();
@@ -2309,32 +2365,26 @@ struct AtomicCASOpConversion
             loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
             spirv::MemorySemantics::SequentiallyConsistent |
                 spirv::MemorySemantics::CrossWorkgroupMemory);
-      Value ret;
-      // TODO: de-duplicate
-      if (mask) {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, mask, {zero}, [&] {
-              // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
-              casCmp = b.bitcast(casCmp, zero.getType());
-              casVal = b.bitcast(casVal, zero.getType());
 
-              auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-                  loc, casPtr, casCmp, casVal, successOrdering,
-                  failureOrdering);
-              Value newLoaded =
-                  rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
-              return SmallVector<Value, 1>{newLoaded};
-            });
-
-        ret = endBlock.getArgument(0);
-      } else {
+      auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
         // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
         casCmp = b.bitcast(casCmp, zero.getType());
         casVal = b.bitcast(casVal, zero.getType());
 
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering);
-        ret = rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+        Value newLoaded =
+            rewriter.create<LLVM::ExtractValueOp>(loc, cmpxchg, 0);
+        return SmallVector<Value, 1>{newLoaded};
+      };
+
+      Value ret;
+      if (mask) {
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, mask, {zero}, createAtomicCASInstruction);
+        ret = endBlock.getArgument(0);
+      } else {
+        ret = createAtomicCASInstruction()[0];
       }
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
@@ -2463,19 +2513,18 @@ struct AtomicRMWOpConversion
           .Case<mlir::Float32Type>([&](auto ty) { zero = b.f32_val(0); })
           .Case<mlir::Float64Type>([&](auto ty) { zero = b.f64_val(0); });
 
-      Block *endBlock = nullptr;
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-
       if (valueElemNBits == 16) {
         op.emitWarning(
             "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "
             "risk)");
-        endBlock = emulateFp16AtomicRmw(
+        Block *endBlock = emulateFp16AtomicRmw(
             rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
+        ret = endBlock->getArgument(0);
       } else {
         if (!atomicNeedsSharedMemory(op.getResult()))
           rewriter.create<spirv::ControlBarrierOp>(
@@ -2483,92 +2532,23 @@ struct AtomicRMWOpConversion
               spirv::MemorySemantics::SequentiallyConsistent |
                   spirv::MemorySemantics::CrossWorkgroupMemory);
 
-        // TODO: de-duplicate
-        if (rmwMask) {
-          endBlock = &LLVM::intel::createPredicatedBlock(
-              rewriter, loc, rmwMask, {zero}, [&] {
-                mlir::LLVM::AtomicBinOp rmwKind;
-                switch (atomicRmwAttr) {
-                case RMWOp::AND:
-                  rmwKind = LLVM::AtomicBinOp::_and;
-                  break;
-                case RMWOp::OR:
-                  rmwKind = LLVM::AtomicBinOp::_or;
-                  break;
-                case RMWOp::XOR:
-                  rmwKind = LLVM::AtomicBinOp::_xor;
-                  break;
-                case RMWOp::ADD:
-                  rmwKind = LLVM::AtomicBinOp::add;
-                  break;
-                case RMWOp::FADD:
-                  rmwKind = LLVM::AtomicBinOp::fadd;
-                  break;
-                case RMWOp::MAX:
-                  rmwKind = LLVM::AtomicBinOp::max;
-                  break;
-                case RMWOp::UMAX:
-                  rmwKind = LLVM::AtomicBinOp::umax;
-                  break;
-                case RMWOp::MIN:
-                  rmwKind = LLVM::AtomicBinOp::min;
-                  break;
-                case RMWOp::UMIN:
-                  rmwKind = LLVM::AtomicBinOp::umin;
-                  break;
-                case RMWOp::XCHG:
-                  rmwKind = LLVM::AtomicBinOp::xchg;
-                  break;
-                }
-
-                rmwVal = b.bitcast(rmwVal, valueElemTy);
-                auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
-                    loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
-                return SmallVector<Value, 1>{atomRMW.getRes()};
-              });
-        } else {
-          mlir::LLVM::AtomicBinOp rmwKind;
-          switch (atomicRmwAttr) {
-          case RMWOp::AND:
-            rmwKind = LLVM::AtomicBinOp::_and;
-            break;
-          case RMWOp::OR:
-            rmwKind = LLVM::AtomicBinOp::_or;
-            break;
-          case RMWOp::XOR:
-            rmwKind = LLVM::AtomicBinOp::_xor;
-            break;
-          case RMWOp::ADD:
-            rmwKind = LLVM::AtomicBinOp::add;
-            break;
-          case RMWOp::FADD:
-            rmwKind = LLVM::AtomicBinOp::fadd;
-            break;
-          case RMWOp::MAX:
-            rmwKind = LLVM::AtomicBinOp::max;
-            break;
-          case RMWOp::UMAX:
-            rmwKind = LLVM::AtomicBinOp::umax;
-            break;
-          case RMWOp::MIN:
-            rmwKind = LLVM::AtomicBinOp::min;
-            break;
-          case RMWOp::UMIN:
-            rmwKind = LLVM::AtomicBinOp::umin;
-            break;
-          case RMWOp::XCHG:
-            rmwKind = LLVM::AtomicBinOp::xchg;
-            break;
-          }
+        auto createAtomicBinOpInstruction = [&]() -> SmallVector<Value, 1> {
+          mlir::LLVM::AtomicBinOp rmwKind = matchAtomicOp(atomicRmwAttr);
 
           rmwVal = b.bitcast(rmwVal, valueElemTy);
           auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
               loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
-          ret = atomRMW.getResult();
+          return {atomRMW.getRes()};
+        };
+
+        if (rmwMask) {
+          Block *endBlock = &LLVM::intel::createPredicatedBlock(
+              rewriter, loc, rmwMask, {zero}, createAtomicBinOpInstruction);
+          ret = endBlock->getArgument(0);
+        } else {
+          ret = createAtomicBinOpInstruction()[0];
         }
       }
-
-      ret = endBlock ? endBlock->getArgument(0) : ret;
       assert(ret);
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
@@ -2605,6 +2585,7 @@ struct AtomicRMWOpConversion
   }
 
   // Emulate 16-bit atomicrmw through a loop with 32-bit cmpxchg.
+  // TODO: optimize for the case when rmwMask is a true constant?
   Block *emulateFp16AtomicRmw(ConversionPatternRewriter &rewriter, Location loc,
                               mlir::triton::RMWOp atomicOp, Type valueElemTy,
                               Value rmwPtr, Value rmwVal, Value rmwMask,

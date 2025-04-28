@@ -88,8 +88,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_WRAPPER_OPT_2("add_pipeline",
-                         gpu::intel::createTritonIntelGPUPipeline, int, bool);
+  ADD_PASS_WRAPPER_OPT_3("add_pipeline",
+                         gpu::intel::createTritonIntelGPUPipeline, int, bool,
+                         enum gpu::intel::SplitBarrierScope);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
@@ -143,6 +144,12 @@ void init_triton_intel(py::module &&m) {
             << self.clusterDimZ << ")";
         return oss.str();
       });
+
+  // Split barrier scope enum
+  py::enum_<gpu::intel::SplitBarrierScope>(m, "SplitBarrierScope")
+      .value("none", gpu::intel::SplitBarrierScope::None)
+      .value("Workgroup", gpu::intel::SplitBarrierScope::Workgroup)
+      .value("Subgroup", gpu::intel::SplitBarrierScope::Subgroup);
 
   m.def("optimize_module", [](llvm::Module *mod,
                               const llvm::OptimizationLevel &opt) {

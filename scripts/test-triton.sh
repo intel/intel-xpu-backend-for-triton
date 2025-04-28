@@ -2,6 +2,38 @@
 
 set -euo pipefail
 
+HELP="\
+Example usage: ./test-triton.sh [TEST]... [OPTION]...
+
+TEST:
+    --unit          default
+    --core          default
+    --tutorial      default
+    --microbench    default
+    --minicore      part of core
+    --mxfp          part of core
+    --scaled-dot    part of core
+    --interpreter
+    --benchmarks
+    --softmax
+    --gemm
+    --attention
+    --instrumentation
+    --inductor
+
+OPTION:
+    --unskip
+    --venv
+    --skip-pip-install
+    --skip-pytorch-install
+    --reports
+    --reports-dir DIR
+    --warning-reports
+    --ignore-errors
+    --skip-list SKIPLIST
+    --select-from-file SELECTFILE
+"
+
 err() {
     echo $@
     exit 1
@@ -10,8 +42,12 @@ err() {
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Select which tests to run.
+TEST_DEFAULT=true
 TEST_UNIT=false
 TEST_CORE=false
+TEST_MINICORE=false
+TEST_MXFP=false
+TEST_SCALED_DOT=false
 TEST_INTERPRETER=false
 TEST_TUTORIAL=false
 TEST_MICRO_BENCHMARKS=false
@@ -28,7 +64,8 @@ TRITON_TEST_IGNORE_ERRORS=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
-while [ -v 1 ]; do
+
+while (( $# != 0 )); do
   case "$1" in
     --unskip)
       TEST_UNSKIP=true
@@ -36,46 +73,72 @@ while [ -v 1 ]; do
       ;;
     --unit)
       TEST_UNIT=true
+      TEST_DEFAULT=false
       shift
       ;;
     --core)
       TEST_CORE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --minicore)
+      TEST_MINICORE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --mxfp)
+      TEST_MXFP=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --scaled-dot)
+      TEST_SCALED_DOT=true
+      TEST_DEFAULT=false
       shift
       ;;
     --interpreter)
       TEST_INTERPRETER=true
+      TEST_DEFAULT=false
       shift
       ;;
     --tutorial)
       TEST_TUTORIAL=true
+      TEST_DEFAULT=false
       shift
       ;;
     --microbench)
       TEST_MICRO_BENCHMARKS=true
+      TEST_DEFAULT=false
       shift
       ;;
     --benchmarks)
       TEST_BENCHMARKS=true
+      TEST_DEFAULT=false
       shift
       ;;
     --softmax)
       TEST_BENCHMARK_SOFTMAX=true
+      TEST_DEFAULT=false
       shift
       ;;
     --gemm)
       TEST_BENCHMARK_GEMM=true
+      TEST_DEFAULT=false
       shift
       ;;
     --attention)
       TEST_BENCHMARK_ATTENTION=true
+      TEST_DEFAULT=false
       shift
       ;;
     --instrumentation)
       TEST_INSTRUMENTATION=true
+      TEST_DEFAULT=false
       shift
       ;;
     --inductor)
       TEST_INDUCTOR=true
+      TEST_DEFAULT=false
       shift
       ;;
     --venv)
@@ -119,7 +182,8 @@ while [ -v 1 ]; do
       shift 2
       ;;
     --help)
-      err "Example usage: ./test-triton.sh [--core | --tutorial | --unit | --microbench | --softmax | --gemm | --attention | --venv | --skip-pip-install | --skip-pytorch-install | --reports | --reports-dir DIR | --warning-reports | --ignore-errors | --skip-list SKIPLIST | --select-from-file SELECTFILE"
+      echo "$HELP"
+      exit 0
       ;;
     *)
       err "Unknown argument: $1."
@@ -127,8 +191,7 @@ while [ -v 1 ]; do
   esac
 done
 
-# Only run interpreter test when $TEST_INTERPRETER is true
-if [ "$TEST_UNIT" = false ] && [ "$TEST_CORE" = false ] && [ "$TEST_INTERPRETER" = false ] && [ "$TEST_TUTORIAL" = false ] && [ "$TEST_MICRO_BENCHMARKS" = false ] && [ "$TEST_BENCHMARKS" = false ] && [ "$TEST_BENCHMARK_SOFTMAX" = false ] && [ "$TEST_BENCHMARK_GEMM" = false ] && [ "$TEST_BENCHMARK_ATTENTION" = false ] && [ "$TEST_INSTRUMENTATION" = false ] && [ "$TEST_INDUCTOR" = false ]; then
+if [ "$TEST_DEFAULT" = true ]; then
   TEST_UNIT=true
   TEST_CORE=true
   TEST_TUTORIAL=true
@@ -142,7 +205,6 @@ if [ "$VENV" = true ]; then
     source .venv/bin/activate
   fi
 fi
-
 
 TRITON_PROJ="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && cd .. && pwd )"
 SCRIPTS_DIR="$TRITON_PROJ/scripts"
@@ -196,15 +258,26 @@ run_pytest_command() {
   fi
 }
 
-run_core_tests() {
+run_regression_tests() {
   echo "***************************************************"
-  echo "******      Running Triton Core tests        ******"
+  echo "******   Running Triton Regression tests     ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/regression
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} -s --device xpu . --ignore=test_performance.py
+}
+
+run_minicore_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton mini core tests     ******"
   echo "***************************************************"
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "not test_mxfp and not test_scaled_dot"
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/test_subprocess.py
@@ -214,31 +287,57 @@ run_core_tests() {
     run_pytest_command -k "not test_within_2gb" --verbose --device xpu runtime/ --ignore=runtime/test_cublas.py
 
   TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py --forked --device xpu
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debug_dump.py --forked --device xpu
+
+  TRITON_TEST_SUITE=warnings \
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_perf_warning.py --device xpu
 
   # run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
   TRITON_DISABLE_LINE_INFO=0 TRITON_TEST_SUITE=line_info \
     run_pytest_command -k "not test_line_info_interpreter" --verbose --device xpu language/test_line_info.py
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    run_pytest_command -k "not test_disam_cubin" --verbose tools
+    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
 
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
-  run_pytest_command --device xpu .
+    run_pytest_command --device xpu .
+
+  run_regression_tests
 }
 
-run_regression_tests() {
+run_mxfp_tests() {
   echo "***************************************************"
-  echo "******   Running Triton Regression tests     ******"
+  echo "******    Running Triton matmul mxfp tests   ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/test/regression
+  cd $TRITON_PROJ/python/test/unit
 
-  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=regression \
-    run_pytest_command -vvv -s --device xpu . --ignore=test_performance.py
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "test_mxfp"
+}
+
+run_scaled_dot_tests() {
+  echo "***************************************************"
+  echo "******    Running Triton scaled_dot tests    ******"
+  echo "***************************************************"
+  cd $TRITON_PROJ/python/test/unit
+
+  TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    -k "test_scaled_dot"
+}
+
+run_core_tests() {
+  echo "***************************************************"
+  echo "******      Running Triton Core tests        ******"
+  echo "***************************************************"
+  run_minicore_tests
+  run_mxfp_tests
+  run_scaled_dot_tests
 }
 
 run_interpreter_tests() {
@@ -348,13 +447,6 @@ run_benchmarks() {
 }
 
 run_instrumentation_tests() {
-  # FIXME: the "instrumentation" test suite currently contains only one test, when all tests
-  # are skipped pytest reports an error. If the only test is the skip list, then we shouldn't
-  # run pytest at all. This must be changed when there is more than one instrumentation test.
-  if [[ $TEST_UNSKIP = false && -s $TRITON_TEST_SKIPLIST_DIR/instrumentation.txt ]]; then
-    return
-  fi
-
   INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
   INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
@@ -386,10 +478,22 @@ test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
   fi
+
+  # core suite consists of minicore, mxfp, scaled_dot
   if [ "$TEST_CORE" = true ]; then
     run_core_tests
-    run_regression_tests
+  else
+    if [ "$TEST_MINICORE" = true ]; then
+        run_minicore_tests
+    fi
+    if [ "$TEST_MXFP" = true ]; then
+        run_mxfp_tests
+    fi
+    if [ "$TEST_SCALED_DOT" = true ]; then
+        run_scaled_dot_tests
+    fi
   fi
+
   if [ "$TEST_INTERPRETER" = true ]; then
     run_interpreter_tests
   fi

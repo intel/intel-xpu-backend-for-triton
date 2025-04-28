@@ -3,7 +3,6 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 from test_mxfp import MXFP4Tensor, MXScaleTensor
 import re
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_xpu
@@ -339,7 +338,12 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if is_xpu():
-        if (BLOCK_M, BLOCK_N, BLOCK_K) in {(128, 128, 64), (128, 64, 128)}:
+        if (nonKDim == 0 and NUM_WARPS == 4 and (M, N, K, BLOCK_M, BLOCK_N, BLOCK_K) in {
+            (1024, 512, 256, 128, 64, 128),
+            (1024, 512, 256, 128, 128, 64),
+            (128, 256, 256, 128, 128, 64),
+            (128, 128, 128, 128, 128, 64),
+        }):
             pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
         elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
                 triton.runtime.driver.active.utils.get_device_properties(
@@ -395,9 +399,10 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     if not is_cuda():
         return
 
-    # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
-    # requires the scales to be in the blocked layout in global memory.
-    assert out.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
+    if is_cuda():
+        # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
+        # requires the scales to be in the blocked layout in global memory.
+        assert out.asm["ttgir"].count("ttng.tc_gen5_mma") == 1
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):

@@ -6,14 +6,16 @@ module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
-    // CHECK: llvm.mlir.poison : !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @noinline_simple_fn(%8, %17, %arg2, %18, %arg2)
-    tt.call @noinline_simple_fn(%0, %1, %arg2) : (f32, f32, !tt.ptr<f32>) -> ()
+    // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[POISON:%.*]] = llvm.mlir.poison : !llvm.ptr<3>
+    // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[POISON]], %arg2)
+    tt.call @noinline_simple_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
-  // CHECK-LABEL: llvm.func internal @noinline_simple_fn(%arg0: f32, %arg1: f32, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<3>, %arg4: !llvm.ptr<1>)
-  tt.func private @noinline_simple_fn(%arg0: f32, %arg1: f32, %arg2: !tt.ptr<f32>) attributes {noinline = true} {
-    %0 = arith.addf %arg0, %arg1 : f32
+  // CHECK:   llvm.func internal spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__(%arg0: f32, %arg1: f32, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<3>, %arg4: !llvm.ptr<1>)
+  tt.func private @noinline_simple_fn__fp32_fp32_Pfp32__(%arg0: f32 {tt.constancy = 1 : i64, tt.contiguity = 1 : i64, tt.divisibility = 1 : i64}, %arg1: f32 {tt.constancy = 1 : i64, tt.contiguity = 1 : i64, tt.divisibility = 1 : i64}, %arg2: !tt.ptr<f32> {tt.constancy = 1 : i64, tt.contiguity = 1 : i64, tt.divisibility = 16 : i64})  attributes {noinline = true} {
+    %0 = arith.addf %arg0, %arg1 fastmath<fast> : f32
     tt.store %arg2, %0 : !tt.ptr<f32>
     tt.return
   }
@@ -31,11 +33,13 @@ module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-warps" = 1 
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
-    // CHECK: llvm.call spir_funccc @noinline_shared_fn(%8, %17, %arg2, %arg3, %arg2)
-    tt.call @noinline_shared_fn(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
+    // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
+    // CHECK: llvm.call spir_funccc @noinline_shared_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, %arg3, %arg2)
+    tt.call @noinline_shared_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
-  // CHECK: llvm.func internal @noinline_shared_fn(%arg0: f32, %arg1: f32, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<3>, %arg4: !llvm.ptr<1>)
+  // CHECK: llvm.func internal spir_funccc @noinline_shared_fn__fp32_fp32_Pfp32__(%arg0: f32, %arg1: f32, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<3>, %arg4: !llvm.ptr<1>)
   // CHECK: llvm.getelementptr %arg3[{{.*}}]
   tt.func private @noinline_shared_fn(%arg0: f32, %arg1: f32, %arg2: !tt.ptr<f32>) attributes {noinline = true} {
     %cst = arith.constant dense<16> : tensor<16x1xi32, #blocked>
