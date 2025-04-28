@@ -37,6 +37,7 @@ pytest() {
     if [[ -f $TRITON_TEST_SELECTFILE ]]; then
         pytest_extra_args+=(
             "--select-from-file=$TRITON_TEST_SELECTFILE"
+            "--select-fail-on-missing"
         )
     fi
 
