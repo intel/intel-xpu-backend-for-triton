@@ -3,6 +3,9 @@ project(Proton LANGUAGES CXX)
 set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
 
 option(TRITON_BUILD_PROTON_XPU "Build Proton with XPU support" OFF)
+if(TRITON_BUILD_PROTON_XPU)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRITON_BUILD_PROTON_XPU")
+endif()
 
 # ============ Check for includes =============
 if(NOT CUPTI_INCLUDE_DIR)
