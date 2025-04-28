@@ -1,14 +1,9 @@
 import importlib
 import inspect
-import sys
+import os
 from dataclasses import dataclass
 from .driver import DriverBase
 from .compiler import BaseBackend
-
-if sys.version_info >= (3, 10):
-    from importlib.metadata import entry_points
-else:
-    from importlib_metadata import entry_points
 
 
 def _find_concrete_subclasses(module, base_class):
@@ -32,11 +27,16 @@ class Backend:
 
 def _discover_backends():
     backends = dict()
-    for ep in entry_points().select(group="triton.backends"):
-        compiler = importlib.import_module(f"{ep.value}.compiler")
-        driver = importlib.import_module(f"{ep.value}.driver")
-        backends[ep.name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),
-                                    _find_concrete_subclasses(driver, DriverBase))
+    root = os.path.dirname(__file__)
+    for name in os.listdir(root):
+        if not os.path.isdir(os.path.join(root, name)):
+            continue
+        if name.startswith('__'):
+            continue
+        compiler = importlib.import_module(f"triton.backends.{name}.compiler")
+        driver = importlib.import_module(f"triton.backends.{name}.driver")
+        backends[name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),
+                                 _find_concrete_subclasses(driver, DriverBase))
     return backends
 
 
