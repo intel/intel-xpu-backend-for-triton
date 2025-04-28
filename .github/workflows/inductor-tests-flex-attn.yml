@@ -1,7 +1,9 @@
-name: PyTorch inductor tests on Linux
+name: PyTorch FlexAttention inductor tests on Linux
 run-name: ${{ inputs.run_name }}
 
 on:
+  schedule:
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       pytorch_ref:
@@ -12,14 +14,8 @@ on:
         description: Space separated lists of test suites or "all"
         type: string
         default: >-
-          inductor/test_kernel_benchmark.py
-          inductor/test_codegen_triton.py
-          inductor/test_triton_extension_backend.py
-          inductor/test_triton_heuristics.py
-          inductor/test_triton_wrapper.py
-          inductor/test_triton_kernels.py
-          inductor/test_gpu_cpp_wrapper.py
-          inductor/test_aot_inductor.py
+          inductor/test_flex_attention.py
+          inductor/test_flex_decoding.py
       runner_label:
         description: Runner label, keep empty for default
         type: string
