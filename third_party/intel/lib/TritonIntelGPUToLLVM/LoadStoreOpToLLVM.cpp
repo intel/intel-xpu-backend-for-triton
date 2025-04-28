@@ -325,10 +325,18 @@ struct PrefetchOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    Value ptr = op.getPtr();
-    if (isTensorPointerType(ptr.getType()))
-      return rewriteTensorPointerPrefetch(op, adaptor, rewriter);
-    return rewriteRegularPointerPrefetch(op, adaptor, rewriter);
+    LogicalResult res =
+        isTensorPointerType(op.getPtr().getType())
+            ? rewriteTensorPointerPrefetch(op, adaptor, rewriter)
+            : rewriteRegularPointerPrefetch(op, adaptor, rewriter);
+
+    // FIXME: the prefetch lowering code should never fail. Currently it does in
+    // some cases. We should address those cases instead of removing the
+    // prefetch operation.
+    if (failed(res))
+      rewriter.eraseOp(op);
+
+    return success();
   }
 
   LogicalResult
@@ -640,6 +648,11 @@ struct PrefetchOpConversion
       if (llMask && maskElems.size() > 1)
         masks[offset] = maskElems[i];
     }
+
+    // baseAddrs[{0, 0}] and baseAddrs[{1, 0}] are currently used to calculate
+    // the pitch.
+    if (baseAddrs.count({0, 0}) == 0 || baseAddrs.count({1, 0}) == 0)
+      return failure();
 
     Value base, baseWidth, baseHeight, rowStrideInBytes, colStride, offsetBaseX,
         offsetBaseY;
