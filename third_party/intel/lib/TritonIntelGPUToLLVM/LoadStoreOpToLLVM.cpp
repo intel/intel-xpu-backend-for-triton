@@ -19,8 +19,6 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
-#define S(v) StringAttr::get(ctx, (v))
-
 namespace {
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
@@ -1499,8 +1497,8 @@ struct LoadOpConversion
     unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
 
     MLIRContext *ctx = rewriter.getContext();
-    const StringAttr dimOuterStr = S("dim" + std::to_string(dimOuter));
-    const StringAttr dimInnerStr = S("dim" + std::to_string(dimInner));
+    const StringAttr dimOuterStr = str_attr("dim" + std::to_string(dimOuter));
+    const StringAttr dimInnerStr = str_attr("dim" + std::to_string(dimInner));
     LLVM_DEBUG({
       llvm::dbgs() << "dimOuterStr: " << dimOuterStr << "\n";
       llvm::dbgs() << "dimInnerStr: " << dimInnerStr << "\n";
@@ -1519,9 +1517,9 @@ struct LoadOpConversion
     // the DPAS instruction across all threads/work-items in a sub-group. The
     // layout will later be expanded to cover multiple DPAS invocations
     // (iteration) and multiple loads (load).
-    StringAttr kOffset = S("offset");
-    StringAttr kIteration = S("iteration");
-    StringAttr kLoad = S("load");
+    StringAttr kOffset = str_attr("offset");
+    StringAttr kIteration = str_attr("iteration");
+    StringAttr kLoad = str_attr("load");
 
     auto createTileLayout = [&](const SmallVectorImpl<unsigned> &threadOrder,
                                 SmallVector<unsigned> tileShape) {
@@ -1539,7 +1537,7 @@ struct LoadOpConversion
 
       for (int i = 0; i < tileShape.size(); i++) {
         int dim = threadOrder[i];
-        StringAttr kOffset = S("offset" + std::to_string(dim));
+        StringAttr kOffset = str_attr("offset" + std::to_string(dim));
 
         kOffsetDims.push_back(kOffset);
 
@@ -1566,7 +1564,7 @@ struct LoadOpConversion
       llvm::dbgs() << "Block load tile layout: " << tileLayout << "\n";
       for (size_t i = 0; i < tileLayout.getOutDimSize(dimOuterStr) *
                                  tileLayout.getOutDimSize(dimInnerStr);
-           i += tileLayout.getOutDimSize(S("dim1"))) {
+           i += tileLayout.getOutDimSize(str_attr("dim1"))) {
         auto tensorVals = tileLayout.apply({{kOffset, i}});
         assert(tensorVals.size() == 2);
         llvm::dbgs() << i << " : " << tensorVals[0].second << ", "
@@ -1710,8 +1708,8 @@ struct LoadOpConversion
          llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
       outDims.push_back(std::make_pair(name, size));
     }
-    assert(outDims[0].first == S("dim0"));
-    assert(outDims[1].first == S("dim1"));
+    assert(outDims[0].first == str_attr("dim0"));
+    assert(outDims[1].first == str_attr("dim1"));
 
     for (size_t i = 0;
          i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
