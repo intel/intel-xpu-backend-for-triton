@@ -147,6 +147,11 @@ private:
 
     LDBG("Considering tensor of pointer load op: " << loadOp);
 
+    if (!ttgi::isDivisible(ptr, 4)) {
+      LDBG("Load op has non 4 byte aligned ptr, skip block IO attribute");
+      return;
+    }
+
     if (loadOp.getMask()) {
       LDBG("Load op has mask, skip block IO attribute");
       return;
