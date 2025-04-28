@@ -4,7 +4,7 @@ set(SOURCE_FILES
     RocTracer/RoctracerProfiler.cpp
 )
 
-if(ENABLE_XPUTPI_PROFILER)
+if(TRITON_BUILD_PROTON_XPU)
     list(APPEND SOURCE_FILES Xpupti/XpuptiProfiler.cpp)
 endif()
 
