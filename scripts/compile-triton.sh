@@ -183,7 +183,6 @@ build_triton() {
     export TRITON_BUILD_WITH_CCACHE=true
   fi
 
-  cd python
   # Install triton and its dependencies.
   pip install -v -e '.[build,tests]'
 

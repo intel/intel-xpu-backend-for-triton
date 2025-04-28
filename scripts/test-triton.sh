@@ -238,13 +238,13 @@ run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/cmake* || err "****** ERROR: Build Triton first ******"
+  cd $TRITON_PROJ/build/cmake* || err "****** ERROR: Build Triton first ******"
   ctest .
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/cmake*/test
+  cd $TRITON_PROJ/build/cmake*/test
   lit -v . || $TRITON_TEST_IGNORE_ERRORS
 }
 
@@ -447,7 +447,7 @@ run_benchmarks() {
 }
 
 run_instrumentation_tests() {
-  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
+  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/build/*lib*/triton/instrumentation, build Triton first"
   INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
   cd $TRITON_PROJ/python/test/unit

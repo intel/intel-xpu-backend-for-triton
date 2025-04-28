@@ -104,7 +104,7 @@ capture_runtime_env() {
 
     # Exit script execution as long as one of those components is not found.
     local TRITON_COMMIT=""
-    WHEELS=($SCRIPTS_DIR/../python/dist/*.whl)
+    WHEELS=($SCRIPTS_DIR/../dist/*.whl)
     # This covers cases when multiple whls are found, it will get the commit id only when they have the same commit id
     # otherwise this script fail to execute
     if [[ "${#WHEELS[@]}" -gt 1 ]]; then
