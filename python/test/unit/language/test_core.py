@@ -3985,8 +3985,17 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         tl.store(out_ptr, c.to(tl.bfloat16))
 
     @triton.jit
-    def mxfp_upcast_kernel(x_ptr, scale_ptr, mxfp_ptr, N, e_bits: tl.constexpr, m_bits: tl.constexpr,
-                           to_type: tl.constexpr, BLOCK_SIZE: tl.constexpr, is_xpu: tl.constexpr):
+    def mxfp_upcast_kernel(
+        x_ptr,
+        scale_ptr,
+        mxfp_ptr,
+        N,
+        e_bits: tl.constexpr,
+        m_bits: tl.constexpr,
+        to_type: tl.constexpr,
+        BLOCK_SIZE: tl.constexpr,
+        is_xpu: tl.constexpr,
+    ):
         # x.shape ==     (N, 32) for fp8 or (N, 16) for fp4
         # scale.shape == (N,)
         # out.shape   == (N, 32)
