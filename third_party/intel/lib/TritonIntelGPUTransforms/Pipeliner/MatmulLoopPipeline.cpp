@@ -127,13 +127,18 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   // operations in the loop body block.
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
-      // Check if the memory is structed densely. If not, we do not prefetch it
-      // to avoid polluting the cache.
+      // Check if the memory is structured densely. If not, we do not prefetch
+      // it to avoid polluting the cache.
       Attribute blockIOAttr =
           loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
                               getBlockIOAttrName());
       if (!blockIOAttr) {
         LDBG("Skipping LoadOp without block_io attribute" << *loadOp);
+        continue;
+      }
+
+      if (cast<RankedTensorType>(loadOp.getType()).getRank() != 2) {
+        LDBG("Skipping LoadOp with non 2D tensor type" << *loadOp);
         continue;
       }
 
