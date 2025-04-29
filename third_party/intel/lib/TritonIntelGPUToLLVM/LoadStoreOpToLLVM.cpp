@@ -1322,11 +1322,13 @@ struct LoadOpConversion
       const unsigned widthDim = threadOrder[rank - 2];
       const unsigned heightDim = threadOrder[rank - 1];
 
+#if 0
       if (isTransposeRequired && opIdx == DpasEncodingAttr::OpIdx::OperandB) {
 
         const unsigned origTileWidth = tileShape[widthDim];
         tileShape[widthDim] = origTileWidth / (32 / elemSizeInBits);
       }
+#endif
 
       // the DPAS tile width specifies the number of lanes/work-items
       basisT laneBase;
@@ -1424,13 +1426,71 @@ struct LoadOpConversion
       llvm::dbgs() << "vBlocks = " << vBlocks << "\n";
     });
 
-    tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
-                                           kIteration, dimOuterStr);
-    tileLayout *=
-        LinearLayout::identity1D(isTransposeRequired && oneMatrixPerLoadForBT
-                                     ? 1
-                                     : numOperandsInnerDimPerLoad,
-                                 kIteration, dimInnerStr);
+    if (isTransposeRequired) {
+      // for transpose the iterations will actually interleave. rewrite the
+      // register/lane bases and add iteration as a size 1 dimension actually
+      // maybe we just short circuit here...
+      if (!oneMatrixPerLoadForBT) {
+
+        const unsigned basisIndexForInterleave =
+            llvm::Log2_32(numOperandsInnerDimPerLoad);
+        LLVM_DEBUG(llvm::dbgs() << "Basis index for transpose interleave = "
+                                << basisIndexForInterleave << "\n");
+
+        // de-dupe?
+        const unsigned heightDim = threadOrder[rank - 1];
+
+#if 1
+        auto bases = tileLayout.getBases();
+        const auto &regBases = bases[kRegister];
+
+        basisT newRegBases;
+        for (size_t i = 0; i < regBases.size(); i++) {
+          if (i == basisIndexForInterleave) {
+            newRegBases.push_back(
+                {static_cast<int>(elemsPerDPASInst[heightDim]), 0});
+          }
+          newRegBases.push_back(regBases[i]);
+        }
+        bases[kRegister] = newRegBases;
+
+        tileLayout = LinearLayout(
+            bases, llvm::to_vector<2>(tileLayout.getOutDimNames()));
+
+        // TODO: macro to print the reg/lane part of the layout
+        LLVM_DEBUG({
+          llvm::dbgs() << "Block load tile layout: " << tileLayout << "\n";
+          llvm::dbgs() << "reg : lane\n";
+          for (size_t r = 0; r < tileLayout.getInDimSize(kRegister); r++) {
+            llvm::dbgs() << r << " :";
+            for (size_t l = 0; l < tileLayout.getInDimSize(kLane); l++) {
+              auto tensorValsLane = tileLayout.apply({{kRegister, r},
+                                                      { kLane,
+                                                        l }});
+              assert(tensorValsLane.size() == 2);
+
+              llvm::dbgs() << " \t " << tensorValsLane[0].second << ", "
+                           << tensorValsLane[1].second;
+            }
+            llvm::dbgs() << "\n";
+          }
+
+          llvm::dbgs() << "tile layout done\n";
+        });
+      }
+
+      // add size 1 iteration dimension
+      tileLayout *= LinearLayout::identity1D(1, kIteration, dimInnerStr);
+#else
+        tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
+                                               kIteration, dimInnerStr);
+#endif
+    } else {
+      tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
+                                             kIteration, dimOuterStr);
+      tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
+                                             kIteration, dimInnerStr);
+    }
 
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding iterations: "
