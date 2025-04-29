@@ -63,7 +63,7 @@ export PACKAGES_DIR=$BASE/packages
 export LLVM_PROJ=$BASE/llvm
 export LLVM_PROJ_BUILD=$LLVM_PROJ/build
 export TRITON_PROJ=$BASE/$TRITON_PROJ_NAME
-export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
+export TRITON_PROJ_BUILD=$TRITON_PROJ/build
 
 if [ "$CLEAN" = true ]; then
   echo "**** Cleaning $PACKAGES_DIR, $LLVM_PROJ, and $TRITON_PROJ_BUILD before build ****"
