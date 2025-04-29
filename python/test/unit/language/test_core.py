@@ -4027,14 +4027,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             if e_bits == 5 and m_bits == 2:
                 x_f8 = x.to(tl.float8e5, bitcast=True)
                 upcasted_x = x_f8.to(to_type)
-                # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
-                non_finite_mask: tl.constexpr = ((1 << e_bits) - 1) << m_bits
-                non_finite_mask_16bit: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
-                upcasted_x = tl.where(
-                    x & non_finite_mask == non_finite_mask,
-                    (upcasted_x.to(tl.uint16, bitcast=True) | non_finite_mask_16bit).to(to_type, bitcast=True),
-                    upcasted_x,
-                )
             else:
                 tl.static_assert(e_bits == 4 and m_bits == 3)
                 x_f8 = x.to(tl.float8e4nv, bitcast=True)
