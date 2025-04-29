@@ -1331,8 +1331,6 @@ struct LoadOpConversion
         tileShape[widthDim] = origTileWidth / (32 / elemSizeInBits);
       }
 
-#if 1
-
       // the DPAS tile width specifies the number of lanes/work-items
       basisT laneBase;
       for (int i = 1; i < tileShape[widthDim]; i = i << 1) {
@@ -1345,49 +1343,18 @@ struct LoadOpConversion
         regBase.push_back({i, 0});
       }
 
-      return LinearLayout({{kRegister, regBase},
-                           { kLane,
-                             laneBase }},
+      return LinearLayout({{kRegister, regBase}, {kLane, laneBase}},
                           {outDimNames[0], outDimNames[1]});
-#else
-      for (int i = 0; i < tileShape.size(); i++) {
-        int dim = threadOrder[i];
-        llvm::errs() << "dim = " << dim << "\n";
-        StringAttr kOffset = str_attr("offset" + std::to_string(dim));
-
-        kOffsetDims.push_back(kOffset);
-
-        assert(llvm::isPowerOf2_32(tileShape[dim]));
-        // reduce the offset dimension size by the number of elements packed in
-        // a single slot for the row wise dimension
-        const unsigned offsetDimSize =
-            (!isTransposeRequired && dim == 0)
-                ? tileShape[dim] / dpasTileToPackedIndicesRatio
-                : tileShape[dim];
-        layout *=
-            LinearLayout::identity1D(offsetDimSize, kOffset, outDimNames[dim]);
-        totalOffsets *= offsetDimSize;
-      }
-
-      SmallVector<StringAttr> newDims;
-      newDims.append(kOffsetDims.begin(), kOffsetDims.end());
-      auto ret = layout.transposeIns(newDims);
-      ret = ret.transposeOuts(outDimNames);
-      return ret.reshapeIns({{kOffset, totalOffsets}});
-#endif
     };
     auto tileLayout = createTileLayout(threadOrder, elemsPerDPASInst);
 
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout: " << tileLayout << "\n";
-#if 1
       llvm::dbgs() << "reg : lane\n";
       for (size_t r = 0; r < tileLayout.getInDimSize(kRegister); r++) {
         llvm::dbgs() << r << " :";
         for (size_t l = 0; l < tileLayout.getInDimSize(kLane); l++) {
-          auto tensorValsLane = tileLayout.apply({{kRegister, r},
-                                                  { kLane,
-                                                    l }});
+          auto tensorValsLane = tileLayout.apply({{kRegister, r}, {kLane, l}});
           assert(tensorValsLane.size() == 2);
 
           llvm::dbgs() << " \t " << tensorValsLane[0].second << ", "
@@ -1395,16 +1362,7 @@ struct LoadOpConversion
         }
         llvm::dbgs() << "\n";
       }
-#else
-      for (size_t i = 0; i < tileLayout.getOutDimSize(dimOuterStr) *
-                                 tileLayout.getOutDimSize(dimInnerStr);
-           i += tileLayout.getOutDimSize(str_attr("dim1"))) {
-        auto tensorVals = tileLayout.apply({{kOffset, i}});
-        assert(tensorVals.size() == 2);
-        llvm::dbgs() << i << " : " << tensorVals[0].second << ", "
-                     << tensorVals[1].second << "\n";
-      }
-#endif
+
       llvm::dbgs() << "tile layout done\n";
     });
 
@@ -1480,13 +1438,10 @@ struct LoadOpConversion
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding iterations: "
                    << tileLayout << "\n";
-#if 1
       auto printTileLayoutVals = [&](const size_t r, const size_t l,
                                      const size_t itr) {
-        auto tensorValsLane = tileLayout.apply({{kRegister, r},
-                                                {kLane, l},
-                                                { kIteration,
-                                                  itr }});
+        auto tensorValsLane =
+            tileLayout.apply({{kRegister, r}, {kLane, l}, {kIteration, itr}});
         assert(tensorValsLane.size() == 2);
 
         llvm::dbgs() << "[" << r << ", " << l << "] "
@@ -1502,20 +1457,6 @@ struct LoadOpConversion
         printTileLayoutVals(tileLayout.getInDimSize(kRegister) - 1,
                             tileLayout.getInDimSize(kLane) - 1, itr);
       }
-#else
-      for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
-        auto printTileLayoutVals = [&](const size_t offset) {
-          auto tensorVals =
-              tileLayout.apply({{kOffset, offset}, {kIteration, itr}});
-          assert(tensorVals.size() == 2);
-          llvm::dbgs() << itr << ", " << offset << " : " << tensorVals[0].second
-                       << ", " << tensorVals[1].second << "\n";
-        };
-
-        printTileLayoutVals(0);
-        printTileLayoutVals(tileLayout.getInDimSize(kOffset) - 1);
-      }
-#endif
       llvm::dbgs() << "\n";
     });
 
@@ -1618,15 +1559,11 @@ struct LoadOpConversion
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
                    << tileLayout << "\n";
-#if 1
 
       auto printTileLayoutVals = [&](const size_t r, const size_t l,
                                      const size_t itr, const size_t load) {
-        auto tensorValsLane = tileLayout.apply({{kRegister, r},
-                                                {kLane, l},
-                                                {kIteration, itr},
-                                                { kLoad,
-                                                  load }});
+        auto tensorValsLane = tileLayout.apply(
+            {{kRegister, r}, {kLane, l}, {kIteration, itr}, {kLoad, load}});
         assert(tensorValsLane.size() == 2);
 
         llvm::dbgs() << "[" << r << ", " << l << "] "
@@ -1645,24 +1582,6 @@ struct LoadOpConversion
                               tileLayout.getInDimSize(kLane) - 1, itr, load);
         }
       }
-#else
-      for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
-        for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
-          auto printTileLayoutVals = [&](const size_t offset) {
-            auto tensorVals = tileLayout.apply(
-                {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
-            assert(tensorVals.size() == 2);
-            llvm::dbgs() << load << ", " << itr << ", " << offset << " : "
-                         << tensorVals[0].second << ", " << tensorVals[1].second
-                         << "\n";
-          };
-
-          printTileLayoutVals(0);
-          printTileLayoutVals(tileLayout.getInDimSize(kOffset) - 1);
-        }
-        llvm::dbgs() << "\n";
-      }
-#endif
     });
 
     Value pitch;
