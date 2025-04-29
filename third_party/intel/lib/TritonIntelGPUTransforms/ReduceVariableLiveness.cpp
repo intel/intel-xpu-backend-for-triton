@@ -43,7 +43,7 @@ using TensorValue = TypedValue<RankedTensorType>;
 
 namespace {
 
-#define OVERLAPPING_VARIABLE_THRESHOLD 20
+#define OVERLAPPING_VARIABLE_THRESHOLD 10
 #define LARGE_TENSOR_SIZE_IN_BYTES 16384
 
 /// Return true if the lifespan of the V value is considered long.
