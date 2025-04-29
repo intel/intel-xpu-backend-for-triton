@@ -3994,6 +3994,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         m_bits: tl.constexpr,
         to_type: tl.constexpr,
         BLOCK_SIZE: tl.constexpr,
+        is_xpu: tl.constexpr,
     ):
         # x.shape ==     (N, 32) for fp8 or (N, 16) for fp4
         # scale.shape == (N,)
@@ -4027,6 +4028,15 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             if e_bits == 5 and m_bits == 2:
                 x_f8 = x.to(tl.float8e5, bitcast=True)
                 upcasted_x = x_f8.to(to_type)
+                if not is_xpu:
+                    # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
+                    non_finite_mask: tl.constexpr = ((1 << e_bits) - 1) << m_bits
+                    non_finite_mask_16bit: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
+                    upcasted_x = tl.where(
+                        x & non_finite_mask == non_finite_mask,
+                        (upcasted_x.to(tl.uint16, bitcast=True) | non_finite_mask_16bit).to(to_type, bitcast=True),
+                        upcasted_x,
+                    )
             else:
                 tl.static_assert(e_bits == 4 and m_bits == 3)
                 x_f8 = x.to(tl.float8e4nv, bitcast=True)
@@ -4078,7 +4088,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE, )
             comp_dtype = tl.float16 if comp_dtype == torch.float16 else tl.bfloat16
             mxfp_upcast_kernel[grid](v, scale, v_upcast, scale.numel(), e_bits, m_bits, comp_dtype, BLOCK_SIZE,
-                                     num_warps=num_warps)
+                                     num_warps=num_warps, is_xpu=is_xpu())
             assert v_upcast.isfinite().all()
             if transposed:
                 v_upcast = v_upcast.mT
