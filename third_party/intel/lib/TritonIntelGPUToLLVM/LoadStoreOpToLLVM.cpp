@@ -1317,9 +1317,6 @@ struct LoadOpConversion
                                 SmallVector<unsigned> tileShape) {
       SmallVector<StringAttr> outDimNames =
           standardOutDimNames(ctx, tensorShape.size());
-      LinearLayout layout = LinearLayout::empty();
-      SmallVector<StringAttr> kOffsetDims;
-      unsigned totalOffsets = 1;
       assert(tileShape.size() == 2); // only support 2D layouts for now
 
       const unsigned widthDim = threadOrder[rank - 2];
