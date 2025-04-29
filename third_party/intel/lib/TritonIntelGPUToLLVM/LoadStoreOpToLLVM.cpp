@@ -141,7 +141,8 @@ SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
   unsigned elemSizeInBytes = elemSizeInBits / 8;
   unsigned maxBytesPerCol = 64;
   unsigned numRows = std::min<unsigned>(tensorShape[0], 32);
-  unsigned numCols = maxBytesPerCol / elemSizeInBytes;
+  unsigned numCols =
+      std::min<unsigned>(tensorShape[1], maxBytesPerCol / elemSizeInBytes);
   return {numRows, numCols};
 }
 
@@ -173,15 +174,11 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getVectorSize(Value ptr) const {
-    auto tensorTy = getRankedTensorType(ptr.getType());
-    if (!tensorTy)
+    if (!isTensorOrTensorPointerType(ptr.getType()))
       return 1;
 
     unsigned contiguity = getContiguity(ptr);
-    unsigned pointeeBitWidth =
-        isTensorPointerType(ptr.getType())
-            ? tensorTy.getElementType().getIntOrFloatBitWidth()
-            : triton::getPointeeBitWidth(tensorTy);
+    unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
     // The maximum vector size is 128 bits.
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
@@ -1005,9 +1002,12 @@ struct LoadOpConversion
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
+    Value ptr = op.getPtr();
+    assert(isTensorPointerType(ptr.getType()) &&
+           "Expecting tensor of pointer type");
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
     Type resultType = op.getType();
