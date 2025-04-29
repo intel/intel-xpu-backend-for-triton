@@ -133,13 +133,19 @@ static void collectOpsToPipeline(scf::ForOp forOp,
       if (!isBlockPtr && !supportRegularPtr)
         continue;
 
-      // Check if the memory is structed densely. If not, we do not prefetch it
-      // to avoid polluting the cache.
+      // In order to avoid polluting the cache, do not prefetch loads unless the
+      // memory they reference is densely structured.
       Attribute blockIOAttr =
           loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
                               getBlockIOAttrName());
       if (!blockIOAttr) {
         LDBG("Skipping LoadOp without block_io attribute" << *loadOp);
+        continue;
+      }
+
+      // Currently we can only prefetch 2D loads.
+      if (cast<RankedTensorType>(loadOp.getType()).getRank() != 2) {
+        LDBG("Skipping LoadOp with non 2D tensor type" << *loadOp);
         continue;
       }
 
