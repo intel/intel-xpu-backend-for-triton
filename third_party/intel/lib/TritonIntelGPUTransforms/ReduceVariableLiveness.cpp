@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
 
+#include "intel/include/Analysis/Liveness.h"
 #include "mlir/Analysis/Liveness.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -42,20 +43,42 @@ using TensorValue = TypedValue<RankedTensorType>;
 
 namespace {
 
+#define OVERLAPPING_VARIABLE_THRESHOLD 20
+#define LARGE_TENSOR_SIZE_IN_BYTES 16384
+
 /// Return true if the lifespan of the V value is considered long.
 static bool isLongLifeSpanVariable(Value v,
-                                   const LivenessBlockInfo *livenessBlockInfo) {
-  // Case 1: Variable liveness expend before the dot block.
+                                   const LivenessBlockInfo *livenessBlockInfo,
+                                   unsigned parentOpNumOverlapping) {
+  auto getSizeInBytes = [](RankedTensorType &tensorType) {
+    unsigned elTypeBitWidth =
+        tensorType.getElementType().getIntOrFloatBitWidth();
+    unsigned totalNumElement = 1;
+    for (int64_t dim : tensorType.getShape()) {
+      totalNumElement *= dim;
+    }
+    return totalNumElement * (elTypeBitWidth / 8);
+  };
+
+  // Case 1: The ParentOp has a high number of overlapping variables and
+  //         The variable defiend by `v` is a large tensor and
+  //         The variable liveness of `v` expends before the dot block.
   //         e.g. used in a block - loaded in another block
-  return livenessBlockInfo->isLiveIn(v);
+  if (TensorValue tensorV = dyn_cast<TensorValue>(v)) {
+    auto tensorType = cast<RankedTensorType>(tensorV.getType());
+    return ((parentOpNumOverlapping > OVERLAPPING_VARIABLE_THRESHOLD) &&
+            (getSizeInBytes(tensorType) > LARGE_TENSOR_SIZE_IN_BYTES) &&
+            livenessBlockInfo->isLiveIn(v));
+  }
+  return false;
 }
 
 /// Create a prefetch operation for the given load operation.
 static void createPrefetchOp(tt::LoadOp loadOp) {
   Operation *op = loadOp.getPtr().getDefiningOp();
   OpBuilder builder(op);
-  // TODO: Add prefetchOp after last dependency (between ptr and mask when PR
-  // #3634 is merged)
+  // TODO: Add prefetchOp after last dependency between ptr and mask,
+  // if this support is extended to tensor of pointers.
   builder.setInsertionPointAfter(op);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
       loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
@@ -70,7 +93,7 @@ static void createPrefetchOp(tt::LoadOp loadOp) {
 /// operands.
 static bool optimizeDotOperands(scf::ForOp forOp,
                                 SmallVector<Value> &prefetchedValue,
-                                Liveness &livenessAnalysis) {
+                                Operation *rootOperation) {
   Block *loop = forOp.getBody();
 
   auto getEncoding = [](Value v) {
@@ -135,16 +158,26 @@ static bool optimizeDotOperands(scf::ForOp forOp,
   if (dotsInFor.empty())
     return false;
 
+  Liveness livenessAnalysis(rootOperation);
+  auto intelLivenessRoot = triton::gpu::intel::LivenessAnalysis(rootOperation);
+  const LivenessBlockInfo *livenessInfo =
+      livenessAnalysis.getLiveness(forOp->getBlock());
+  unsigned forOpNumOverlapping =
+      intelLivenessRoot.numOverlappingLiveIntervals(forOp, *livenessInfo);
   for (triton::DotOp dot : dotsInFor) {
     auto aVals = getLoad(dot.getA());
     auto bVals = getLoad(dot.getB());
     auto livenessBlockInfo = livenessAnalysis.getLiveness(dot->getBlock());
 
-    if (isLongLifeSpanVariable(dot.getA(), livenessBlockInfo) && aVals) {
+    if (isLongLifeSpanVariable(dot.getA(), livenessBlockInfo,
+                               forOpNumOverlapping) &&
+        aVals) {
       tt::LoadOp loadOp = aVals.value();
       moveOperand(0, dot, loadOp);
     }
-    if (isLongLifeSpanVariable(dot.getB(), livenessBlockInfo) && bVals) {
+    if (isLongLifeSpanVariable(dot.getB(), livenessBlockInfo,
+                               forOpNumOverlapping) &&
+        bVals) {
       tt::LoadOp loadOp = bVals.value();
       moveOperand(1, dot, loadOp);
     }
@@ -172,9 +205,8 @@ public:
     }
 
     Operation *rootOperation = getOperation();
-    Liveness livenessAnalysis(rootOperation);
     rootOperation->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedValue, livenessAnalysis))
+      if (optimizeDotOperands(forOp, prefetchedValue, rootOperation))
         return;
     });
   }
