@@ -1,4 +1,3 @@
-import os
 import subprocess
 import tempfile
 
@@ -299,6 +298,7 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
         file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if status == "ttir":
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=False)
+        import os
         if os.name != "nt":
             path = str(temp_file)
         else:
