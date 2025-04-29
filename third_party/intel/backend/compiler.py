@@ -40,7 +40,6 @@ class XPUOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 2
-    split_barriers_scope: str = 'None'
     cluster_dims: tuple = (1, 1, 1)
     threads_per_warp: int = 32
     optimize_epilogue: bool = False
@@ -54,6 +53,7 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: tuple = ('small', 'large', 'auto', 'default')
+    split_barriers_scope: str = 'None'
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
     debug: bool = False
@@ -225,6 +225,41 @@ class XPUBackend(BaseBackend):
         return raise_block_ptr_flags
 
     @staticmethod
+    def validate_options(opt, properties):
+        # Check threads_per_warp and num_threads are within limits.
+        if opt.threads_per_warp not in properties['sub_group_sizes']:
+            raise ValueError(
+                f"threads_per_warp={opt.threads_per_warp} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
+            )
+        if opt.num_warps > properties['max_num_sub_groups']:
+            raise ValueError(
+                f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
+            )
+        if opt.threads_per_warp * opt.num_warps > properties['max_work_group_size']:
+            raise ValueError(f"Kernel threads number exceeds the limit ({properties['max_work_group_size']})")
+
+    @staticmethod
+    def annotate_module(mod, properties, opt, target_arch):
+        # Annotate module with information required by subsequent transformations.
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
+                                                        properties["has_subgroup_2d_block_io"],
+                                                        properties["has_subgroup_matrix_multiply_accumulate"],
+                                                        properties["has_bfloat16_conversions"], opt.threads_per_warp,
+                                                        target_arch)
+        pm.run(mod)
+
+    @staticmethod
+    def get_split_barrier_scope(opt):
+        split_barriers_scope = intel.SplitBarrierScope.none
+        if opt.split_barriers_scope == 'Workgroup':
+            split_barriers_scope = intel.SplitBarrierScope.Workgroup
+        elif opt.split_barriers_scope == 'Subgroup':
+            split_barriers_scope = intel.SplitBarrierScope.Subgroup
+        return split_barriers_scope
+
+    @staticmethod
     def make_ttir(mod, metadata, opt):
         raise_block_ptr_flags = XPUBackend.parse_raise_block_pointer_flags()
 
@@ -255,45 +290,19 @@ class XPUBackend(BaseBackend):
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
 
-        # 0:No barrier / 1:Workgroup scope / 2:Subgroup scope
-        split_barriers_scope = intel.SplitBarrierScope.none
-        if opt.split_barriers_scope == 'Workgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Workgroup
-        elif opt.split_barriers_scope == 'Subgroup':
-            split_barriers_scope = intel.SplitBarrierScope.Subgroup
         # Annotate module with information required by subsequent transformations.
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
-        intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
-                                                        properties["has_subgroup_2d_block_io"],
-                                                        properties["has_subgroup_matrix_multiply_accumulate"],
-                                                        properties["has_bfloat16_conversions"], opt.threads_per_warp,
-                                                        "spir64")
-        pm.run(mod)
+        XPUBackend.annotate_module(mod, properties, opt, "spir64")
 
         # Overwrite the threads_per_warp option with the module annotation.
         opt.threads_per_warp = intel.get_threads_per_warp(mod)
-
-        # Check threads_per_warp and num_threads are within limits.
-        if opt.threads_per_warp not in properties['sub_group_sizes']:
-            raise ValueError(
-                f"threads_per_warp={opt.threads_per_warp} is unsupported for the target (supported values are {properties['sub_group_sizes']})"
-            )
-        if opt.num_warps > properties['max_num_sub_groups']:
-            raise ValueError(
-                f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
-            )
-        if opt.threads_per_warp * opt.num_warps > properties['max_work_group_size']:
-            raise ValueError(f"Kernel threads number exceeds the limit ({properties['max_work_group_size']})")
-
-        # Run the TTIR -> TTGIR pass pipeline.
-        pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        XPUBackend.validate_options(opt, properties)
 
         if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
                 and (os.getenv("TRITON_INTEL_ADVANCED_PATH", "0") == "1" or opt.advanced_path)):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.threads_per_warp, opt.num_ctas)
         # optimize TTGIR
         intel.passes.ttgpuir.add_coalesce(pm)
@@ -302,7 +311,7 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
-        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False, split_barriers_scope)
+        intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, False, XPUBackend.get_split_barrier_scope(opt))
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
@@ -328,13 +337,6 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def make_llir(src, metadata, options):
-        # warp-specialization mutates num_warps
-        num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
-        if num_warp_groups is not None:
-            metadata["num_warps"] *= num_warp_groups
-        threads_per_warp = intel.get_threads_per_warp(src)
-        metadata["threads_per_warp"] = threads_per_warp
-
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
@@ -347,9 +349,12 @@ class XPUBackend(BaseBackend):
         # being used, e.g., convert_layout.
         if os.getenv("TRITON_INTEL_REDUCE_TRANSPOSE", "0") != "1":
             passes.ttgpuir.add_allocate_shared_memory(pm)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
                                            options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -362,16 +367,22 @@ class XPUBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         intel.set_spv_target_triple(llvm_mod)
-        if os.getenv("TRITON_INTEL_FAST_MATH", "0") == "1":
-            intel.set_fast_math(llvm_mod)
+        intel.set_fast_math(llvm_mod)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+
         intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
+        total_num_warps = src.get_int_attr("ttg.total-num-warps")
+        if total_num_warps is not None:
+            metadata["num_warps"] = total_num_warps
+        metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         ret = str(llvm_mod)
         del llvm_mod
         del context

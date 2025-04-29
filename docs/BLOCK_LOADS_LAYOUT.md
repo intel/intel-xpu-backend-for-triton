@@ -22,7 +22,7 @@ Note that the tensor type describes the expected data layout going into and out 
 
 We can use the `triton-tensor-layout` utility to print the DPAS layout with a hardware centric view (i.e. register/lane/warp mapping to tensor coordinates) using the following command:
 ```
-./python/build/cmake.linux-x86_64-cpython-3.10/bin/triton-tensor-layout -l "#ttg.dot_op<{opIdx = 0, parent = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>, kWidth = 1}>" -t "tensor<256x32xf16>" -use-hw-view |& tee A_hw_view
+./build/cmake.linux-x86_64-cpython-3.10/bin/triton-tensor-layout -l "#ttg.dot_op<{opIdx = 0, parent = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>, kWidth = 1}>" -t "tensor<256x32xf16>" -use-hw-view |& tee A_hw_view
 ```
 which produces the following layout
 

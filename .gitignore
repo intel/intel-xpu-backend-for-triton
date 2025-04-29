@@ -3,10 +3,9 @@ build/
 build-*/
 
 # Triton Python module builds
-python/build/
-python/dist/
-python/triton*.egg-info/
-python/*.whl
+dist/
+triton*.egg-info/
+*.whl
 
 python/triton/_C/*.pyd
 python/triton/_C/*.so

@@ -9,6 +9,7 @@ from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
 
 DEFAULT_PROFILE_NAME = "proton"
+UTILS_CACHE_PATH = None
 
 
 def _select_backend() -> str:
@@ -18,6 +19,8 @@ def _select_backend() -> str:
     elif backend == "hip":
         return "roctracer"
     elif backend == "xpu":
+        global UTILS_CACHE_PATH
+        UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
         return "xpupti"
     else:
         raise ValueError("No backend is available for the current target.")
@@ -101,9 +104,11 @@ def start(
         register_triton_hook()
 
     sycl_queue = 0
+    utils_cache_path = ""
     if hasattr(triton.runtime.driver.active.utils, "get_sycl_queue"):
         sycl_queue = triton.runtime.driver.active.utils.get_sycl_queue()
-    return libproton.start(name, context, data, backend, backend_path, sycl_queue)
+        utils_cache_path = UTILS_CACHE_PATH
+    return libproton.start(name, context, data, backend, backend_path, sycl_queue, utils_cache_path)
 
 
 def activate(session: Optional[int] = None) -> None:

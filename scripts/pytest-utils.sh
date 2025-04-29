@@ -16,7 +16,9 @@ fi
 TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 
 pytest() {
-    pytest_extra_args=()
+    pytest_extra_args=(
+        "--dist=worksteal"
+    )
 
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
         mkdir -p "$TRITON_TEST_REPORTS_DIR"
@@ -102,7 +104,7 @@ capture_runtime_env() {
 
     # Exit script execution as long as one of those components is not found.
     local TRITON_COMMIT=""
-    WHEELS=($SCRIPTS_DIR/../python/dist/*.whl)
+    WHEELS=($SCRIPTS_DIR/../dist/*.whl)
     # This covers cases when multiple whls are found, it will get the commit id only when they have the same commit id
     # otherwise this script fail to execute
     if [[ "${#WHEELS[@]}" -gt 1 ]]; then

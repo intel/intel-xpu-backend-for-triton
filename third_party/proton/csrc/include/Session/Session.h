@@ -76,7 +76,8 @@ public:
   size_t addSession(const std::string &path, const std::string &profilerName,
                     const std::string &profilerPath,
                     const std::string &contextSourceName,
-                    const std::string &dataName, void *sycl_queue);
+                    const std::string &dataName, void *sycl_queue,
+                    const std::string &utils_cache_path);
 
   void finalizeSession(size_t sessionId, OutputFormat outputFormat);
 
@@ -106,12 +107,11 @@ public:
   void setState(std::optional<Context> context);
 
 private:
-  std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
-                                       const std::string &profilerName,
-                                       const std::string &profilerPath,
-                                       const std::string &contextSourceName,
-                                       const std::string &dataName,
-                                       void *sycl_queue);
+  std::unique_ptr<Session>
+  makeSession(size_t id, const std::string &path,
+              const std::string &profilerName, const std::string &profilerPath,
+              const std::string &contextSourceName, const std::string &dataName,
+              void *sycl_queue, const std::string &utils_cache_path);
 
   void activateSessionImpl(size_t sessionId);
 
