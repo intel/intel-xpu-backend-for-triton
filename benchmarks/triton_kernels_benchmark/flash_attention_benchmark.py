@@ -14,7 +14,7 @@ import numpy as np
 
 # pylint: disable=unused-argument
 @triton.jit
-def _attn_fwd_inner(acc, l_i, m_i, q,  #
+def _attn_fwd_inner(off_warp, acc, l_i, m_i, q,  #
                     K_block_ptr, V_block_ptr,  #
                     start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
@@ -74,12 +74,14 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_DMODEL: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
+              num_warps: tl.constexpr,
               STAGE: tl.constexpr  #
               ):  # pylint: disable=unused-argument
 
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
     off_h = tl.program_id(1)
+    off_warp = tl.warp_id()*tl.cdiv(BLOCK_M,num_warps)
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
     if N_CTX <= 512:
         start_m = tl.program_id(0)
@@ -135,14 +137,14 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
+        acc, l_i, m_i = _attn_fwd_inner(off_warp, acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
+        acc, l_i, m_i = _attn_fwd_inner(off_warp, acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX  #
@@ -557,7 +559,7 @@ def get_benchmark(
         'triton': 'Triton',
         'xetla': 'XeTLA',
     }
-    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+    providers = supported_providers #benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -717,7 +719,7 @@ def get_benchmark(
 if __name__ == '__main__':
     _benchmark = get_benchmark(
         fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
-        xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+        xetla_assert_result=False,#(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
+        xetla_warn_mismatch=False,#(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)

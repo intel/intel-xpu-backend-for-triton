@@ -35,6 +35,9 @@ def num_programs(axis: int, builder: ir.builder) -> tl.tensor:
         raise ValueError(f"num_programs axis must be 0, 1, or 2 but got {axis}")
     return tl.tensor(builder.create_get_num_programs(axis), tl.int32)
 
+def warp_id(builder: ir.builder) -> tl.tensor:
+    return tl.tensor(builder.create_get_warp_id(), tl.int32)
+
 
 # ===----------------------------------------------------------------------===//
 #                               Implicit Casting Utilities

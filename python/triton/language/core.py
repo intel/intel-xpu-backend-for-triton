@@ -1517,6 +1517,14 @@ def num_programs(axis, _builder=None):
     return semantic.num_programs(axis, _builder)
 
 
+@builtin
+def warp_id(_builder=None):
+    """
+    Returns the id of the current warp.
+    """
+    return semantic.warp_id(_builder)
+
+
 # -----------------------
 # Block Initialization
 # -----------------------

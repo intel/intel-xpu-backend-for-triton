@@ -36,6 +36,8 @@
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
+#include <iostream>
+
 namespace {
 
 namespace py = pybind11;
@@ -1615,6 +1617,10 @@ void init_triton_ir(py::module &&m) {
              if (axis < 0 || axis > 3)
                throw pybind11::index_error("program_id must be in [0,3]");
              return self.create<GetProgramIdOp>(axis);
+           })
+      .def("create_get_warp_id",
+           [](TritonOpBuilder &self) -> Value {
+	     return getWarpId(self.getBuilder(), self.getLastLoc());
            })
       .def("create_get_num_programs",
            [](TritonOpBuilder &self, int axis) -> Value {

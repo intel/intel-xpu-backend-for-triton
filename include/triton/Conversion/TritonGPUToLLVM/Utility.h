@@ -611,6 +611,9 @@ Value getThreadId(OpBuilder &rewriter, Location loc);
 // Get the lane ID, which is index of the thread within its warp.
 Value getLaneId(OpBuilder &rewriter, Location loc);
 
+// Get the warp ID, which is index of the warp within its block.
+Value getWarpId(OpBuilder &rewriter, Location loc);
+
 // Get the lane ID and warp ID.
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc);
 

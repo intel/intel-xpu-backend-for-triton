@@ -113,6 +113,7 @@ from .core import (
     uint8,
     view,
     void,
+    warp_id,
     where,
 )
 from .math import (umulhi, exp, exp2, fma, log, log2, cos, rsqrt, sin, sqrt, sqrt_rn, abs, fdiv, div_rn, erf, floor,
@@ -262,6 +263,7 @@ __all__ = [
     "umulhi",
     "view",
     "void",
+    "warp_id",
     "where",
     "xor_sum",
     "zeros",
