@@ -314,6 +314,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
+  // Determine whether the given LoadOp can be lowered to using block IO
+  // instructions.
   bool isLoadCandidate(triton::LoadOp op) const {
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
@@ -322,10 +324,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     // Only lower loadOp with dpas layout encoding.
     auto tensorTy = cast<RankedTensorType>(op.getType());
-    if (!hasDpasEncoding(tensorTy) && !hasDotDpasEncoding(tensorTy))
-      return false;
-
-    return true;
+    return hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
   }
 
   template <
@@ -357,7 +356,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   }
 
   DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) const {
-    auto encoding = tensorTy.getEncoding();
+    Attribute encoding = tensorTy.getEncoding();
     return cast<DpasEncodingAttr>(
         hasDpasEncoding(tensorTy)
             ? encoding
@@ -565,7 +564,7 @@ struct LoadOpToBlockIOConversion
     const bool memoryRowMajor = isMemoryRowMajor(op);
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
-    auto encoding = tensorType.getEncoding();
+    Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
@@ -582,7 +581,7 @@ struct LoadOpToBlockIOConversion
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    auto dpasLayout = getDpasLayout(tensorType);
+    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
@@ -1038,12 +1037,12 @@ struct LoadOpConversion
     auto tensorType = cast<RankedTensorType>(resultType);
 
     const bool memoryRowMajor = isMemoryRowMajor(op);
-    auto opIdx = getOpIdx(tensorType);
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
     LLVM_DEBUG(llvm::dbgs() << "Tensor type for op " << int(opIdx) << ": "
                             << tensorType << "\n");
 
-    auto encoding = tensorType.getEncoding();
+    Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
@@ -1061,7 +1060,7 @@ struct LoadOpConversion
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    auto dpasLayout = getDpasLayout(tensorType);
+    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
