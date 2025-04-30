@@ -1553,6 +1553,8 @@ struct LoadOpConversion
       llvm::dbgs() << "numRepInner = " << numRepInner << "\n";
     });
 
+    auto tileLayoutPreLoads = tileLayout; // TODO: adding loads make the layout non-surjective which means we cannot invert it 
+
     // For the kLoad dimension we create the basis vector directly, which allows
     // us to control the stride between loads and create a non-surjective
     // layout.
@@ -1662,6 +1664,31 @@ struct LoadOpConversion
     }
     Value elemSizeInBytes = b.i32_val(originalElemBits / 8);
 
+    auto dpasLinearLayout = *llEncoding;
+    LLVM_DEBUG(llvm::dbgs()
+               << "DPAS layout: " << dpasLinearLayout << "\n");
+
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
+
+
+    auto tileLayoutToRegister = tileLayoutPreLoads.pseudoinvert();
+    LLVM_DEBUG(llvm::dbgs() << "Inverse tile layout: " << tileLayoutToRegister << "\n");
+#if 0
+    for (size_t r = 0; r < dpasLinearLayout.getInDimSize(kRegister); r++) {
+      auto tensorCoord = dpasLinearLayout.apply({{kRegister, r}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+      assert(tensorCoord.size() == 2);
+      auto tileHw = tileLayoutToRegister.apply(tensorCoord);
+      for(auto coord : tileHw) {
+        llvm::errs() << coord.first << " = " << coord.second << "\n";
+      }
+    }
+#endif
+    auto dpasLayoutToRegister = dpasLinearLayout.pseudoinvert();
+    LLVM_DEBUG(llvm::dbgs() << "DPAS layout to warp/lane/register: "
+                            << dpasLayoutToRegister << "\n");
+
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
@@ -1680,6 +1707,9 @@ struct LoadOpConversion
           const auto offset = tileLayout.apply(
               {{kRegister, 0}, {kLane, 0}, {kIteration, 0}, {kLoad, loadIdx}});
           assert(offset.size() == 2);
+
+          llvm::errs() << "offset[0] = " << offset[0].second << "\n";
+          llvm::errs() << "offset[1] = " << offset[1].second << "\n";
 
           const auto layoutOffsetX = offset[dimInner].second;
           const auto layoutOffsetY = offset[dimOuter].second;
@@ -1773,6 +1803,47 @@ struct LoadOpConversion
           unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsInnerDimPerLoad
                                       : numOperandsOuterDimPerLoad;
+
+#if 1
+          // get the register value for DPAS corresponding to this load
+          auto dpasHwStart = dpasLayoutToRegister.apply(offset);
+          assert(dpasHwStart.size() > 0 && dpasHwStart[0].first == kRegister);
+          for (const auto& coord : dpasHwStart) {
+            llvm::errs() << coord.first << " = " << coord.second << "\n";
+          }
+
+          for (size_t i = 0; i < elemsPerDPASInst[0]; i+=dpasTileToPackedIndicesRatio) {
+            auto localDpasHwStart = dpasHwStart;
+            localDpasHwStart[0].second += i; // hack for prototyping
+            auto dpasRegCoord = dpasLinearLayout.apply(localDpasHwStart);
+            auto tileHw = tileLayoutToRegister.apply(dpasRegCoord);
+            llvm::errs() << "DPAS index " << i << "\n";
+            for(auto coord : tileHw) {
+              llvm::errs() << "\t" << coord.first << " = " << coord.second << "\n";
+            }
+          }
+
+
+#else
+          for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
+            llvm::errs() << "iteration " << i << "\n";
+
+            auto loadVals = tileLayout.apply({{kRegister, 0},
+                                              {kLane, 0},
+                                              {kIteration, i},
+                                              {kLoad, loadIdx}});
+            assert(loadVals.size() == 2);
+            llvm::errs() << "first register = " << loadVals[0].second << ", "
+                         << loadVals[1].second << "\n";
+
+            auto dpasHwIndex = dpasLayoutToRegister.apply(loadVals);
+            assert(dpasHwIndex.size() == 4);
+            for (size_t i = 0; i < dpasHwIndex.size(); i++) {
+              llvm::errs() << "\t" << dpasHwIndex[i].first << " = "
+                           << dpasHwIndex[i].second << "\n";
+            }
+          }
+#endif 
 
           // Decompose the return value to multiple operands.
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
