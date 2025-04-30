@@ -337,7 +337,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     assert(blockIOAttr && "Expecting block IO attribute");
 
-    // TODO: To support more layouts on memory.
+    // TODO: To support more layouts on memory:
+    // https://github.com/intel/intel-xpu-backend-for-triton/issues/4057.
     // Only support rank 2 dot layout, either row major or column major.
     StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
     assert((memoryLayoutInfo == "row_major" ||
