@@ -42,7 +42,10 @@ namespace {
 #define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 8192
 
 static unsigned getSizeInBytes(RankedTensorType &tensorType) {
-  unsigned elTypeBitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
+  Type elType = tensorType.getElementType();
+  if (!elType.isIntOrFloat())
+    return 0;
+  unsigned elTypeBitWidth = elType.getIntOrFloatBitWidth();
   unsigned totalNumElement = 1;
   for (int64_t dim : tensorType.getShape()) {
     totalNumElement *= dim;
@@ -54,11 +57,12 @@ static unsigned
 getBlockLiveInSizeInBytes(const LivenessBlockInfo *livenessBlockInfo) {
   unsigned blockInSize = 0;
   for (Value liveVal : livenessBlockInfo->in()) {
-    // Only tensors are taken into account as other variables do not count much
-    // in the total number of registers required.
+    Type liveValTy = liveVal.getType();
     if (TensorValue tensorV = dyn_cast<TensorValue>(liveVal)) {
       auto tensorType = dyn_cast<RankedTensorType>(tensorV.getType());
       blockInSize += getSizeInBytes(tensorType);
+    } else if (liveValTy.isIntOrFloat()) {
+      blockInSize += liveValTy.getIntOrFloatBitWidth() / 8;
     }
   }
   return blockInSize;
