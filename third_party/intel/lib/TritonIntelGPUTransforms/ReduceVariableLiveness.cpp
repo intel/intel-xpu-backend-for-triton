@@ -25,6 +25,8 @@ namespace mlir::triton::gpu::intel {
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
+#include <iostream>
+
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -37,7 +39,7 @@ using TensorValue = TypedValue<RankedTensorType>;
 namespace {
 
 #define TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES 32768
-#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 16384
+#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 8192
 
 static unsigned getSizeInBytes(RankedTensorType &tensorType) {
   unsigned elTypeBitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
@@ -56,7 +58,7 @@ getBlockLiveInSizeInBytes(const LivenessBlockInfo *livenessBlockInfo) {
     if (TensorValue tensorV = dyn_cast<TensorValue>(liveVal)) {
       auto tensorType = dyn_cast<RankedTensorType>(tensorV.getType());
       blockInSize += getSizeInBytes(tensorType);
-    } else if (liveValTy.isFloat() || liveValTy.isInteger()) {
+    } else if (liveValTy.isIntOrFloat()) {
       blockInSize += liveValTy.getIntOrFloatBitWidth() / 8;
     }
   }
@@ -140,11 +142,10 @@ static bool optimizeDotOperands(scf::ForOp forOp,
     // walk back to Load operation
     Operation *op = v.getDefiningOp();
     while (op) {
-      if ((op->getNumOperands() != 1) || isa<CallOpInterface>(op))
-        break;
-      if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
+      if (auto loadOp = dyn_cast<triton::LoadOp>(op))
         return loadOp;
-      }
+      if (!isa<ttg::ConvertLayoutOp>(op))
+        break;
       op = op->getOperand(0).getDefiningOp();
     }
     return std::nullopt;
@@ -190,16 +191,14 @@ static bool optimizeDotOperands(scf::ForOp forOp,
     auto livenessBlockInfo = livenessAnalysis.getLiveness(dot->getBlock());
     unsigned LiveInSizeInBytes = getBlockLiveInSizeInBytes(livenessBlockInfo);
 
-    if (isLongLifeSpanVariable(dot.getA(), livenessBlockInfo,
-                               LiveInSizeInBytes) &&
-        aVals) {
+    if (aVals && isLongLifeSpanVariable(aVals.value(), livenessBlockInfo,
+                                        LiveInSizeInBytes)) {
       tt::LoadOp loadOp = aVals.value();
       if (isLoadCandidate(loadOp, dot.getA(), forOp))
         moveOperand(0, dot, loadOp);
     }
-    if (isLongLifeSpanVariable(dot.getB(), livenessBlockInfo,
-                               LiveInSizeInBytes) &&
-        bVals) {
+    if (bVals && isLongLifeSpanVariable(bVals.value(), livenessBlockInfo,
+                                        LiveInSizeInBytes)) {
       tt::LoadOp loadOp = bVals.value();
       if (isLoadCandidate(loadOp, dot.getB(), forOp))
         moveOperand(1, dot, loadOp);
@@ -216,7 +215,6 @@ public:
       ReduceVariableLivenessPass>::TritonIntelGPUReduceVariableLivenessBase;
 
   void runOnOperation() override {
-
     // Canonicalize convert ops to make the pattern matching easier.
     SmallVector<Value> prefetchedValue;
     RewritePatternSet cleanUpPatterns(&getContext());
