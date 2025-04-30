@@ -1642,16 +1642,98 @@ struct LoadOpConversion
       // register/lane bases and add iteration as a size 1 dimension actually
       // maybe we just short circuit here...
       if (!oneMatrixPerLoadForBT) {
+        // de-dupe?
+        const unsigned heightDim = threadOrder[rank - 1];
 
+#if 0
+        // this creates a layout with tensor values that look like the shuffle vector vlaues, but that's not qutie what we want 
+        SmallVector<std::pair<StringAttr, int32_t>> outDims;
+        for (auto [name, size] :
+            llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
+          outDims.push_back(std::make_pair(name, size));
+        }
+        assert(outDims[0].first == str_attr("dim0"));
+        assert(outDims[1].first == str_attr("dim1"));
+
+        auto bases = tileLayout.getBases();
+
+        const unsigned basisIndexForInterleave =
+        llvm::Log2_32(numOperandsInnerDimPerLoad);
+    LLVM_DEBUG(llvm::dbgs() << "Basis index for transpose interleave = "
+                            << basisIndexForInterleave << "\n");
+
+        const auto &regBases = bases[kRegister];
+#if 1
+        basisT newRegBases{{2,0}, {4,0}, {8,0}};
+#else
+        basisT newRegBases;
+        newRegBases.push_back({0, 0});
+        for (size_t i = 0; i < regBases.size() - 1; i++) {
+#if 0
+          if (i == basisIndexForInterleave) {
+            /*newRegBases.push_back(
+                {static_cast<int>(elemsPerDPASInst[heightDim]), 0});*/
+            // newRegBases.push_back({0, 0});
+            continue;
+          }
+#endif
+          newRegBases.push_back(regBases[i]);
+        }
+#endif
+        bases[kRegister] = newRegBases;
+
+        basisT iterationBases;
+#if 1
+        iterationBases.push_back({1, 0});
+#else
+        iterationBases.push_back(
+            {static_cast<int>(elemsPerDPASInst[heightDim]), 0});
+#endif 
+        bases[kIteration] = iterationBases;
+
+        outDims[0].second = 32;
+        outDims[1].second = 16;
+#if 1
+        tileLayout = LinearLayout(
+  bases, llvm::to_vector<2>(tileLayout.getOutDimNames()));
+#else
+        tileLayout = LinearLayout(
+            bases, outDims,
+            /*requiredSurjective=*/false);
+#endif 
+
+        // TODO: macro to print the reg/lane part of the layout
+        LLVM_DEBUG({
+          llvm::dbgs() << "Block load tile layout w/ interleave: " << tileLayout
+                       << "\n";
+          for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
+            llvm::dbgs() << "reg : lane [itr = " << i << "]\n";
+            for (size_t r = 0; r < tileLayout.getInDimSize(kRegister); r++) {
+              llvm::dbgs() << r << " :";
+              for (size_t l = 0; l < tileLayout.getInDimSize(kLane); l++) {
+                auto tensorValsLane = tileLayout.apply({{kRegister, r},
+                                                        {kLane, l},
+                                                        { kIteration,
+                                                          i }});
+                assert(tensorValsLane.size() == 2);
+
+                llvm::dbgs() << " \t " << tensorValsLane[0].second << ", "
+                             << tensorValsLane[1].second;
+              }
+              llvm::dbgs() << "\n";
+            }
+          }
+          llvm::dbgs() << "tile layout done\n";
+        });
+#else
+        // this is the layout we want, interleaving the values from both "vblock" loads - but we lose the notion of the vblock 
+        // maybe we need two layouts. one layout is register / lane -> tensor value. the other is dpas, load -> register / lane? 
+        // or maybe we just go back to offset, but properly swizzle it (see sharedToLinearLayoutNoLeadingOffset). we could also try building the offset layout in column major order so we didn't have to try and jump across all the lanes. then we could iterate the column and get the corresponding DPAS register values which we might be able to use directly as shuffle vector values?
         const unsigned basisIndexForInterleave =
             llvm::Log2_32(numOperandsInnerDimPerLoad);
         LLVM_DEBUG(llvm::dbgs() << "Basis index for transpose interleave = "
                                 << basisIndexForInterleave << "\n");
 
-        // de-dupe?
-        const unsigned heightDim = threadOrder[rank - 1];
-
-#if 1
         auto bases = tileLayout.getBases();
         const auto &regBases = bases[kRegister];
 
@@ -1675,9 +1757,8 @@ struct LoadOpConversion
           for (size_t r = 0; r < tileLayout.getInDimSize(kRegister); r++) {
             llvm::dbgs() << r << " :";
             for (size_t l = 0; l < tileLayout.getInDimSize(kLane); l++) {
-              auto tensorValsLane = tileLayout.apply({{kRegister, r},
-                                                      { kLane,
-                                                        l }});
+              auto tensorValsLane =
+                  tileLayout.apply({{kRegister, r}, {kLane, l}});
               assert(tensorValsLane.size() == 2);
 
               llvm::dbgs() << " \t " << tensorValsLane[0].second << ", "
@@ -1688,14 +1769,11 @@ struct LoadOpConversion
 
           llvm::dbgs() << "tile layout done\n";
         });
+#endif
       }
 
       // add size 1 iteration dimension
       tileLayout *= LinearLayout::identity1D(1, kIteration, dimInnerStr);
-#else
-        tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
-                                               kIteration, dimInnerStr);
-#endif
     } else {
       tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
                                              kIteration, dimOuterStr);
