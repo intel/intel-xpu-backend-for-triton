@@ -1,10 +1,3 @@
-//===----------------------------------------------------------------------===//
-//
-// This pass tries to reduce the liveness of variable.
-// For e.g: by reducing the distance between load ops and
-// the operation using the variable.
-//===----------------------------------------------------------------------===//
-
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Analysis/DPAS.h"
@@ -43,34 +36,76 @@ using TensorValue = TypedValue<RankedTensorType>;
 
 namespace {
 
-#define OVERLAPPING_VARIABLE_THRESHOLD 10
-#define LARGE_TENSOR_SIZE_IN_BYTES 16384
+#define TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES 32768
+#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 16384
 
-/// Return true if the lifespan of the V value is considered long.
+static unsigned getSizeInBytes(RankedTensorType &tensorType) {
+  unsigned elTypeBitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
+  unsigned totalNumElement = 1;
+  for (int64_t dim : tensorType.getShape()) {
+    totalNumElement *= dim;
+  }
+  return totalNumElement * (elTypeBitWidth / 8);
+}
+
+static unsigned
+getBlockLiveInSizeInBytes(const LivenessBlockInfo *livenessBlockInfo) {
+  unsigned blockInSize = 0;
+  for (Value liveVal : livenessBlockInfo->in()) {
+    Type liveValTy = liveVal.getType();
+    if (TensorValue tensorV = dyn_cast<TensorValue>(liveVal)) {
+      auto tensorType = dyn_cast<RankedTensorType>(tensorV.getType());
+      blockInSize += getSizeInBytes(tensorType);
+    } else if (liveValTy.isFloat() || liveValTy.isInteger()) {
+      blockInSize += liveValTy.getIntOrFloatBitWidth() / 8;
+    }
+  }
+  return blockInSize;
+}
+
+/// Return true if the lifespan of the \p v value is considered long.
 static bool isLongLifeSpanVariable(Value v,
                                    const LivenessBlockInfo *livenessBlockInfo,
-                                   unsigned parentOpNumOverlapping) {
-  auto getSizeInBytes = [](RankedTensorType &tensorType) {
-    unsigned elTypeBitWidth =
-        tensorType.getElementType().getIntOrFloatBitWidth();
-    unsigned totalNumElement = 1;
-    for (int64_t dim : tensorType.getShape()) {
-      totalNumElement *= dim;
-    }
-    return totalNumElement * (elTypeBitWidth / 8);
-  };
-
-  // Case 1: The ParentOp has a high number of overlapping variables and
-  //         The variable defiend by `v` is a large tensor and
-  //         The variable liveness of `v` expends before the dot block.
-  //         e.g. used in a block - loaded in another block
+                                   unsigned LiveInSizeInBytes) {
+  // The variable is considered as a long life span elected for being moved if:
+  // The live-in variables of the forOp consist in a large amount of bytes and
+  // The variable defined by `v` is a large tensor and
+  // The variable liveness of `v` expends before the dot block.
+  // i.e. used in a block - loaded in another block
   if (TensorValue tensorV = dyn_cast<TensorValue>(v)) {
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
-    return ((parentOpNumOverlapping > OVERLAPPING_VARIABLE_THRESHOLD) &&
-            (getSizeInBytes(tensorType) > LARGE_TENSOR_SIZE_IN_BYTES) &&
-            livenessBlockInfo->isLiveIn(v));
+    return (
+        (LiveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
+        (getSizeInBytes(tensorType) > LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
+        livenessBlockInfo->isLiveIn(v));
   }
   return false;
+}
+
+static bool isLoadCandidate(tt::LoadOp loadOp, TensorValue tensorV,
+                            Operation *forOp) {
+  // Only pointer to tensor are considered to be moved
+  if (!mlir::triton::isTensorPointerType(loadOp.getPtr().getType()))
+    return false;
+  auto tensorType = cast<RankedTensorType>(tensorV.getType());
+  Type elType = tensorType.getElementType();
+  Type loadElType =
+      cast<RankedTensorType>(loadOp.getResult().getType()).getElementType();
+  // Types mismatch => Skip this case to avoid inserting too
+  // many addtional operations in the loop.
+  if (elType != loadElType)
+    return false;
+  Attribute blockIOAttr = loadOp->getAttr(
+      mlir::triton::gpu::intel::TritonIntelGPUDialect::getBlockIOAttrName());
+  if (!blockIOAttr)
+    return false;
+  // Only tensor with rank = 2 are considered to be moved
+  if (tensorType.getShape().size() != 2)
+    return false;
+  // Only loadOp out of the for loop body are considered to be moved
+  if (loadOp->getParentOp() == forOp)
+    return false;
+  return true;
 }
 
 /// Create a prefetch operation for the given load operation.
@@ -93,7 +128,7 @@ static void createPrefetchOp(tt::LoadOp loadOp) {
 /// operands.
 static bool optimizeDotOperands(scf::ForOp forOp,
                                 SmallVector<Value> &prefetchedValue,
-                                Operation *rootOperation) {
+                                Liveness &livenessAnalysis) {
   Block *loop = forOp.getBody();
 
   auto getEncoding = [](Value v) {
@@ -105,7 +140,7 @@ static bool optimizeDotOperands(scf::ForOp forOp,
     // walk back to Load operation
     Operation *op = v.getDefiningOp();
     while (op) {
-      if (op->getNumOperands() != 1)
+      if ((op->getNumOperands() != 1) || isa<CallOpInterface>(op))
         break;
       if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
         return loadOp;
@@ -121,16 +156,6 @@ static bool optimizeDotOperands(scf::ForOp forOp,
     OpBuilder b(dotOp);
     TensorValue tensorV = opId == 0 ? dotOp.getA() : dotOp.getB();
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
-    Type elType = tensorType.getElementType();
-    Type loadType =
-        cast<RankedTensorType>(loadOp.getResult().getType()).getElementType();
-    // Types mismatch => Skip this case to avoid inserting to
-    // many addtional operations in the loop.
-    if (elType != loadType)
-      return;
-    // Only pointer to tensor are moved
-    if (!mlir::triton::isTensorPointerType(loadOp.getPtr().getType()))
-      return;
     if (std::find(prefetchedValue.begin(), prefetchedValue.end(),
                   loadOp.getPtr()) == prefetchedValue.end()) {
       createPrefetchOp(loadOp);
@@ -158,28 +183,26 @@ static bool optimizeDotOperands(scf::ForOp forOp,
   if (dotsInFor.empty())
     return false;
 
-  Liveness livenessAnalysis(rootOperation);
-  auto intelLivenessRoot = triton::gpu::intel::LivenessAnalysis(rootOperation);
-  const LivenessBlockInfo *livenessInfo =
-      livenessAnalysis.getLiveness(forOp->getBlock());
-  unsigned forOpNumOverlapping =
-      intelLivenessRoot.numOverlappingLiveIntervals(forOp, *livenessInfo);
   for (triton::DotOp dot : dotsInFor) {
     auto aVals = getLoad(dot.getA());
     auto bVals = getLoad(dot.getB());
+
     auto livenessBlockInfo = livenessAnalysis.getLiveness(dot->getBlock());
+    unsigned LiveInSizeInBytes = getBlockLiveInSizeInBytes(livenessBlockInfo);
 
     if (isLongLifeSpanVariable(dot.getA(), livenessBlockInfo,
-                               forOpNumOverlapping) &&
+                               LiveInSizeInBytes) &&
         aVals) {
       tt::LoadOp loadOp = aVals.value();
-      moveOperand(0, dot, loadOp);
+      if (isLoadCandidate(loadOp, dot.getA(), forOp))
+        moveOperand(0, dot, loadOp);
     }
     if (isLongLifeSpanVariable(dot.getB(), livenessBlockInfo,
-                               forOpNumOverlapping) &&
+                               LiveInSizeInBytes) &&
         bVals) {
       tt::LoadOp loadOp = bVals.value();
-      moveOperand(1, dot, loadOp);
+      if (isLoadCandidate(loadOp, dot.getB(), forOp))
+        moveOperand(1, dot, loadOp);
     }
   }
   return true;
@@ -205,8 +228,9 @@ public:
     }
 
     Operation *rootOperation = getOperation();
+    Liveness livenessAnalysis(rootOperation);
     rootOperation->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedValue, rootOperation))
+      if (optimizeDotOperands(forOp, prefetchedValue, livenessAnalysis))
         return;
     });
   }
