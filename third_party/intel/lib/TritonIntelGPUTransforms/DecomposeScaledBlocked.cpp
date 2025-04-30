@@ -211,8 +211,12 @@ private:
 
     // 0) Upcast value to computeType (fp16/bf16)
     if (isFp4) {
+      auto packDim = kDim;
+      if ((!scaledDotOp.getLhsKPack() && opIdx == 0) ||
+          (!scaledDotOp.getRhsKPack() && opIdx == 1))
+        packDim = (packDim + 1) % 2;
       // We always pack along the fastest moving dimension, kDim
-      v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, kDim);
+      v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, packDim);
     } else {
       auto vType16 = v.getType().clone(computeType);
       v = cast<TypedValue<RankedTensorType>>(
