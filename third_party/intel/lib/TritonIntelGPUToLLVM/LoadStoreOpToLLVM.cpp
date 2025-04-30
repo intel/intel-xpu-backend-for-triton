@@ -1411,6 +1411,10 @@ struct LoadOpConversion
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
     vBlocks = numOperandsPer2DloadN;
+    if (tileHeight == 32) {
+      numOperandsPer2DloadN = 1;
+      vBlocks = 1; 
+    }
 
     numOperandsOuterDimPerLoad =
         isOperandA ? numOperandsPer2DLoadM : numOperandsPer2DloadN;
