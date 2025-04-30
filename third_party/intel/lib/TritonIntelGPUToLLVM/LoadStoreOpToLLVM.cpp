@@ -1729,6 +1729,7 @@ struct LoadOpConversion
         // this is the layout we want, interleaving the values from both "vblock" loads - but we lose the notion of the vblock 
         // maybe we need two layouts. one layout is register / lane -> tensor value. the other is dpas, load -> register / lane? 
         // or maybe we just go back to offset, but properly swizzle it (see sharedToLinearLayoutNoLeadingOffset). we could also try building the offset layout in column major order so we didn't have to try and jump across all the lanes. then we could iterate the column and get the corresponding DPAS register values which we might be able to use directly as shuffle vector values?
+        // try taking the dpas layout, iterating registers in a single lane, and checking tensor values. maybe comparing them against the offset tile layout 
         const unsigned basisIndexForInterleave =
             llvm::Log2_32(numOperandsInnerDimPerLoad);
         LLVM_DEBUG(llvm::dbgs() << "Basis index for transpose interleave = "
@@ -1741,7 +1742,7 @@ struct LoadOpConversion
         for (size_t i = 0; i < regBases.size(); i++) {
           if (i == basisIndexForInterleave) {
             newRegBases.push_back(
-                {static_cast<int>(elemsPerDPASInst[heightDim]), 0});
+                {0, static_cast<int>(elemsPerDPASInst[heightDim])});
           }
           newRegBases.push_back(regBases[i]);
         }
@@ -1775,35 +1776,34 @@ struct LoadOpConversion
       // add size 1 iteration dimension
       tileLayout *= LinearLayout::identity1D(1, kIteration, dimInnerStr);
     } else {
+      // what if we do this in the reg dimension?? 
       tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
-                                             kIteration, dimOuterStr);
+                                             kRegister, dimOuterStr);
       tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
-                                             kIteration, dimInnerStr);
+                                             kRegister, dimInnerStr);
+
+      // add size 1 iteration dimension to prevent breakage
+      tileLayout *= LinearLayout::identity1D(1, kIteration, dimInnerStr);
     }
 
     LLVM_DEBUG({
-      llvm::dbgs() << "Block load tile layout after adding iterations: "
-                   << tileLayout << "\n";
-      auto printTileLayoutVals = [&](const size_t r, const size_t l,
-                                     const size_t itr) {
-        auto tensorValsLane =
-            tileLayout.apply({{kRegister, r}, {kLane, l}, {kIteration, itr}});
-        assert(tensorValsLane.size() == 2);
+      llvm::dbgs() << "block load tile layout after adding iterations: " << tileLayout << "\n";
+      for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
+        llvm::dbgs() << "iteration " << i << " reg : lane\n";
+        for (size_t r = 0; r < tileLayout.getInDimSize(kRegister); r++) {
+          llvm::dbgs() << r << " :";
+          for (size_t l = 0; l < tileLayout.getInDimSize(kLane); l++) {
+            auto tensorValsLane =
+                tileLayout.apply({{kRegister, r}, {kLane, l}, {kIteration, i}});
+            assert(tensorValsLane.size() == 2);
 
-        llvm::dbgs() << "[" << r << ", " << l << "] "
-                     << tensorValsLane[0].second << ", "
-                     << tensorValsLane[1].second << "\n";
-      };
-
-      for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
-        llvm::errs() << "itr = " << itr << "\n";
-        printTileLayoutVals(0, 0, itr);
-        printTileLayoutVals(0, tileLayout.getInDimSize(kLane) - 1, itr);
-        printTileLayoutVals(tileLayout.getInDimSize(kRegister) - 1, 0, itr);
-        printTileLayoutVals(tileLayout.getInDimSize(kRegister) - 1,
-                            tileLayout.getInDimSize(kLane) - 1, itr);
+            llvm::dbgs() << " \t " << tensorValsLane[0].second << ", "
+                        << tensorValsLane[1].second;
+          }
+          llvm::dbgs() << "\n";
+        }
+        llvm::dbgs() << "\n";
       }
-      llvm::dbgs() << "\n";
     });
 
     if (isTransposeRequired)
@@ -1886,6 +1886,8 @@ struct LoadOpConversion
       }
     });
 
+    auto tileLayoutPreLoads = tileLayout; // maintain a surjective layout 
+
     // Disable building the load layout if we are not going to use it. Building
     // the layout manually can cause an error which would abort the pass
     // pipeline and block us from getting debug info.
@@ -1950,6 +1952,15 @@ struct LoadOpConversion
       elemSizeInBits = 32;
     }
     Value elemSizeInBytes = b.i32_val(originalElemBits / 8);
+
+    auto kWarp = str_attr("warp");
+    auto kBlock = str_attr("block");
+
+    auto dpasLinearLayout = *llEncoding;
+    LLVM_DEBUG(llvm::dbgs() << "DPAS Linear Layout: " << dpasLinearLayout << "\n");
+
+    auto dpasCoordToRegLayout = dpasLinearLayout.pseudoinvert();
+    LLVM_DEBUG(llvm::dbgs() << "DPAS coord to reg layout: " << dpasCoordToRegLayout << "\n");
 
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
@@ -2062,6 +2073,56 @@ struct LoadOpConversion
           unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsInnerDimPerLoad
                                       : numOperandsOuterDimPerLoad;
+          
+#if 0
+          // this is basically always 0, not what we want 
+          auto dpasRegStart = dpasCoordToRegLayout.apply(offset);
+          assert(dpasRegStart.size() > 0 && dpasRegStart[0].first == kRegister);
+          for (const auto& coord : dpasRegStart) {
+            llvm::errs() << "\t" << coord.first << " = " << coord.second << "\n";
+          }
+          llvm::errs() << "dpas reg start = " << dpasRegStart[0].second << "\n";
+#endif 
+
+          auto inverseTileLayout = tileLayoutPreLoads.pseudoinvert();
+          llvm::errs() << "inverse tile layout = " << inverseTileLayout << "\n";
+
+          auto regStart = 0;
+          auto regEnd = regStart + tileLayoutPreLoads.getInDimSize(kRegister);
+          llvm::errs() << "reg start = " << regStart << "\n";
+          llvm::errs() << "reg end = " << regEnd << "\n";
+
+          // both layouts are unpacked. however, we want to generate packed shuffle vectors 
+          SmallVector<int32_t> indices;
+          for (int r = regStart; r < regEnd; r+= dpasTileToPackedIndicesRatio) {
+            assert(r < dpasLinearLayout.getInDimSize(kRegister));
+            auto dpasCoord = dpasLinearLayout.apply({{kRegister, r}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+            assert(dpasCoord.size() == 2);
+            llvm::errs() << "r " << r << " = " << dpasCoord[0].second << ", " << dpasCoord[1].second << "\n";
+
+            auto tileLayoutHwIndex = inverseTileLayout.apply(dpasCoord);
+            for (const auto& coord : tileLayoutHwIndex) {
+              llvm::errs() << "\t" << coord.first << " = " << coord.second << "\n";
+            }
+            assert(tileLayoutHwIndex.size() > 0 && tileLayoutHwIndex[0].first == kRegister);
+            auto reg = tileLayoutHwIndex[0].second / dpasTileToPackedIndicesRatio;
+            
+            indices.push_back(reg);
+            if (indices.size() == packedElemsPerLanePerDPASInst) {
+              // add to map  
+              for (size_t elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst; elemIdx++) {
+                LLVM_DEBUG({
+                  llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                              << indices[elemIdx] << "\n";
+                });
+              }
+              indices.clear();
+            }
+            
+            
+            llvm::errs() << "reg = " << reg << "\n";
+          }
+          assert(indices.size() == 0);
 
           // Decompose the return value to multiple operands.
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
