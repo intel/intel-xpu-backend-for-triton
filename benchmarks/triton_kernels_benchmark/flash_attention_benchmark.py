@@ -34,30 +34,31 @@ def _attn_fwd_inner(off_warp, acc, l_i, m_i, q,  #
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        # -- compute qk ----
-        k = tl.load(K_block_ptr)
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, k)
-        if STAGE == 2:
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
-        else:
-            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = qk * qk_scale - m_ij[:, None]
-        p = tl.math.exp2(qk)
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
-        alpha = tl.math.exp2(m_i - m_ij)
-        l_i = l_i * alpha + l_ij
-        # -- update output accumulator --
-        acc = acc * alpha[:, None]
-        # update acc
-        v = tl.load(V_block_ptr)
-        acc += tl.dot(p.to(tl.float16), v)
-        # update m_i and l_i
-        m_i = m_ij
+        if ((STAGE != 2) or ((STAGE == 2) and (start_n <= ((start_m * BLOCK_M) + off_warp)))):
+            # -- compute qk ----
+            k = tl.load(K_block_ptr)
+            qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+            qk += tl.dot(q, k)
+            if STAGE == 2:
+                mask = offs_m[:, None] >= (start_n + offs_n[None, :])
+                qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
+                m_ij = tl.maximum(m_i, tl.max(qk, 1))
+                qk -= m_ij[:, None]
+            else:
+                m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
+                qk = qk * qk_scale - m_ij[:, None]
+            p = tl.math.exp2(qk)
+            l_ij = tl.sum(p, 1)
+            # -- update m_i and l_i
+            alpha = tl.math.exp2(m_i - m_ij)
+            l_i = l_i * alpha + l_ij
+            # -- update output accumulator --
+            acc = acc * alpha[:, None]
+            # update acc
+            v = tl.load(V_block_ptr)
+            acc += tl.dot(p.to(tl.float16), v)
+            # update m_i and l_i
+            m_i = m_ij
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
         K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
     return acc, l_i, m_i
@@ -81,7 +82,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
     off_h = tl.program_id(1)
-    off_warp = tl.warp_id()*tl.cdiv(BLOCK_M,num_warps)
+    off_warp = (tl.warp_id()+1)*tl.cdiv(BLOCK_M,num_warps)
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
     if N_CTX <= 512:
         start_m = tl.program_id(0)
@@ -568,9 +569,9 @@ def get_benchmark(
             x_vals=[[z, h, 16384 // z, dhead, causal, mode]
                     for z in [1, 2, 4, 8, 16, 32]
                     for (h, dhead) in [(16, 128), (32, 64)]
-                    for causal in [False, True]
+                    for causal in [True]
                     for mode in [fa_kernel_mode]]  #
-            + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
+            + [[4, 48, 1024, 64, causal, mode] for causal in [True] for mode in [fa_kernel_mode]],
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
