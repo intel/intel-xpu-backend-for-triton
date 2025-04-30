@@ -452,9 +452,10 @@ run_instrumentation_tests() {
 
   cd $TRITON_PROJ/python/test/unit
 
+  # FIXME: `-n 1` is not required, but a workaround for pytest-skip, which does report a false positive skip list item not matching to any test.
   TRITON_TEST_SUITE=instrumentation \
     TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
-    run_pytest_command -vvv --device xpu instrumentation/test_gpuhello.py
+    run_pytest_command -vvv -n 1 --device xpu instrumentation/test_gpuhello.py
 }
 
 run_inductor_tests() {

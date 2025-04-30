@@ -298,6 +298,13 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
         file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if status == "ttir":
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=False)
-        assert check_file_lines(file_lines, str(temp_file), -1, should_contain=True)
+        import os
+        if os.name != "nt":
+            path = str(temp_file)
+        else:
+            # FIXME: use `str(temp_file)` instead of `temp_file.name`
+            # when https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/3126 is fixed.
+            path = temp_file.name
+        assert check_file_lines(file_lines, path, -1, should_contain=True)
     else:
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)
