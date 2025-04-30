@@ -2141,6 +2141,27 @@ struct LoadOpConversion
                              << indices[elemIdx] << "\n";
               });
             }
+
+            // compute the index for the load vals map
+            auto loadValsIndex = offset;
+            llvm::errs() << "loadValsIndex = " << loadValsIndex[0].second
+                         << ", " << loadValsIndex[1].second << "\n";
+            auto loadValsOffset = tileLayoutPreLoads.apply(
+                {{kRegister, indices[0]}, {kLane, 0}, {kIteration, 0}});
+            assert(loadValsOffset.size() == 2);
+            llvm::errs() << "loadValsOffset = " << loadValsOffset[0].second
+                         << ", " << loadValsOffset[1].second << "\n";
+
+            auto loadValsX =
+                loadValsIndex[0].second + (loadValsOffset[0].second) *
+                                              dpasTileToPackedIndicesRatio /
+                                              elemsPerDPASInst[0];
+            auto loadValsY = loadValsIndex[1].second +
+                             (loadValsOffset[1].second) / elemsPerDPASInst[1];
+            LLVM_DEBUG({
+              llvm::dbgs() << "new load vals index: " << loadValsX << ", "
+                           << loadValsY << "\n";
+            });
           }
 
           // Decompose the return value to multiple operands.
