@@ -54,7 +54,6 @@ static unsigned
 getBlockLiveInSizeInBytes(const LivenessBlockInfo *livenessBlockInfo) {
   unsigned blockInSize = 0;
   for (Value liveVal : livenessBlockInfo->in()) {
-    Type liveValTy = liveVal.getType();
     // Only tensors are taken into account as other variables do not count much
     // in the total number of registers required.
     if (TensorValue tensorV = dyn_cast<TensorValue>(liveVal)) {
