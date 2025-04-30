@@ -899,7 +899,7 @@ def mxfp8_mxfp4_matmul(  #
 @pytest.mark.parametrize("WITH_B_SCALE", [True, False])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, CONST_SCALE,
-                            A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
+                            A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device, request):
     if is_cuda():
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("Requires compute capability >= 10")
@@ -922,31 +922,10 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         pytest.xfail("Pack along K can only be False for float4")
 
     if is_xpu():
-        if A_DATA_TYPE == B_DATA_TYPE == "float4":
-            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3777")
-        elif not (WITH_B_SCALE or PACK_B_ALONG_K) and B_DATA_TYPE == "float4" and \
-                 A_DATA_TYPE in ("float8e5", "float8e4nv"):
-            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/4045")
-        elif WITH_B_SCALE and not PACK_B_ALONG_K and B_DATA_TYPE == "float4" and \
-                A_DATA_TYPE in ("float8e5", "float8e4nv"):
-            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3908")
-        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256):
-            if triton.runtime.driver.active.utils.get_device_properties(
-                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
-                pytest.xfail("Not enough shared memory")
-            else:
-                pass
-        elif (BLOCK_M, BLOCK_N, BLOCK_K) in ((128, 64, 128), (128, 128, 128)):
-            pass
-        elif (BLOCK_M, BLOCK_N, BLOCK_K) in (128, 128, 64):
-            if A_DATA_TYPE in ("float8e5", "float8e4nv") and B_DATA_TYPE in ("float8e5", "float8e4nv") \
-                    and WITH_B_SCALE == CONST_SCALE \
-                    and WITH_A_SCALE and B_TRANS and PACK_B_ALONG_K:
-                pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
-            pass
-        else:
-            # Some tests pass, but it's difficult to filter them out
-            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
+        required_sm = BLOCK_M * BLOCK_K * 2 + BLOCK_N * BLOCK_K * 2
+        if triton.runtime.driver.active.utils.get_device_properties(
+                triton.runtime.driver.active.get_current_device())["max_shared_mem"] < required_sm:
+            pytest.xfail("Not enough shared memory")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
