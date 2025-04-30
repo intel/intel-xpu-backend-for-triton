@@ -2093,36 +2093,34 @@ struct LoadOpConversion
           llvm::errs() << "reg end = " << regEnd << "\n";
 
           // both layouts are unpacked. however, we want to generate packed shuffle vectors 
-          SmallVector<int32_t> indices;
-          for (int r = regStart; r < regEnd; r+= dpasTileToPackedIndicesRatio) {
-            assert(r < dpasLinearLayout.getInDimSize(kRegister));
-            auto dpasCoord = dpasLinearLayout.apply({{kRegister, r}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-            assert(dpasCoord.size() == 2);
-            llvm::errs() << "r " << r << " = " << dpasCoord[0].second << ", " << dpasCoord[1].second << "\n";
+          for (int v = 0; v < regEnd; v+= packedElemsPerLanePerDPASInst * dpasTileToPackedIndicesRatio) {
+            llvm::errs() << "v = " << v << "\n";
+            SmallVector<int32_t> indices;
+            for (int r = v; r < v + (packedElemsPerLanePerDPASInst * dpasTileToPackedIndicesRatio); r+= dpasTileToPackedIndicesRatio) {
+              assert(r < dpasLinearLayout.getInDimSize(kRegister));
+              auto dpasCoord = dpasLinearLayout.apply({{kRegister, r}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+              assert(dpasCoord.size() == 2);
+              llvm::errs() << "r " << r << " = " << dpasCoord[0].second << ", " << dpasCoord[1].second << "\n";
 
-            auto tileLayoutHwIndex = inverseTileLayout.apply(dpasCoord);
-            for (const auto& coord : tileLayoutHwIndex) {
-              llvm::errs() << "\t" << coord.first << " = " << coord.second << "\n";
-            }
-            assert(tileLayoutHwIndex.size() > 0 && tileLayoutHwIndex[0].first == kRegister);
-            auto reg = tileLayoutHwIndex[0].second / dpasTileToPackedIndicesRatio;
-            
-            indices.push_back(reg);
-            if (indices.size() == packedElemsPerLanePerDPASInst) {
-              // add to map  
-              for (size_t elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst; elemIdx++) {
-                LLVM_DEBUG({
-                  llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
-                              << indices[elemIdx] << "\n";
-                });
+              auto tileLayoutHwIndex = inverseTileLayout.apply(dpasCoord);
+              for (const auto& coord : tileLayoutHwIndex) {
+                llvm::errs() << "\t" << coord.first << " = " << coord.second << "\n";
               }
-              indices.clear();
+              assert(tileLayoutHwIndex.size() > 0 && tileLayoutHwIndex[0].first == kRegister);
+              auto reg = tileLayoutHwIndex[0].second / dpasTileToPackedIndicesRatio;
+              
+              indices.push_back(reg);
+              llvm::errs() << "reg = " << reg << "\n";
             }
-            
-            
-            llvm::errs() << "reg = " << reg << "\n";
+            assert(indices.size() == packedElemsPerLanePerDPASInst);
+           
+            for (size_t elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst; elemIdx++) {
+              LLVM_DEBUG({
+                llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                            << indices[elemIdx] << "\n";
+              });
+            }
           }
-          assert(indices.size() == 0);
 
           // Decompose the return value to multiple operands.
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
