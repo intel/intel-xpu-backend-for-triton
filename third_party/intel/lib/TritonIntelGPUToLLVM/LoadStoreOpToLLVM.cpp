@@ -2158,7 +2158,9 @@ struct LoadOpConversion
                                               elemsPerDPASInst[0];
             auto loadValsY = loadValsIndex[1].second +
                              (loadValsOffset[1].second) / elemsPerDPASInst[1];
-            LLVM_DEBUG({
+            
+                             // TODO: this isn't right for the transpose case 
+                             LLVM_DEBUG({
               llvm::dbgs() << "new load vals index: " << loadValsX << ", "
                            << loadValsY << "\n";
             });
