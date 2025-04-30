@@ -19,8 +19,6 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
-#define USE_STRIDED_LOAD_INDICES 1
-
 namespace {
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
@@ -1940,17 +1938,10 @@ struct LoadOpConversion
                 // Save the decomposed vals to the map;
                 switch (opIdx) {
                 case DpasEncodingAttr::OpIdx::OperandA: {
-#ifndef USE_STRIDED_LOAD_INDICES
-                  const auto loadX =
-                      outer * packedRowNum * numLoadPerOutRepCluster +
-                      rep * packedRowNum + row;
-                  const auto loadY = k + vblk * packedColNumPerVBlock + col;
-#else
                   const auto loadX =
                       outer * numLoadPerOutRepCluster * repOuterStride +
                       rep * packedRowNum + row;
                   const auto loadY = k + vblk * packedColNumPerVBlock + col;
-#endif
                   LLVM_DEBUG({
                     llvm::dbgs() << "load vals index: " << loadX << ", "
                                  << loadY << "\n";
@@ -1959,17 +1950,10 @@ struct LoadOpConversion
                       b.bitcast(loadVal, unpackedDPASOperandType);
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
-#ifndef USE_STRIDED_LOAD_INDICES
-                  const auto loadX =
-                      outer * packedColNum * numLoadPerOutRepCluster +
-                      rep * packedColNum + vblk * packedColNumPerVBlock + col;
-                  const auto loadY = k + row;
-#else
                   const auto loadX = outer * repOuterStride +
                                      rep * packedColNum +
                                      vblk * packedColNumPerVBlock + col;
                   const auto loadY = k + row;
-#endif
                   LLVM_DEBUG({
                     llvm::dbgs() << "load vals index: " << loadX << ", "
                                  << loadY << "\n";
@@ -1992,14 +1976,8 @@ struct LoadOpConversion
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int k = 0; k < numRepInner; ++k) {
         for (int rep = 0; rep < repCluster[unsigned(opIdx)]; ++rep) {
-
-#ifndef USE_STRIDED_LOAD_INDICES
-          const auto loadValX = outer * repCluster[unsigned(opIdx)] + rep;
-          const auto loadValY = k;
-#else
           const auto loadValX = (outer * repOuterStride) + rep;
           const auto loadValY = k;
-#endif
 
           if (loadVals.find({loadValX, loadValY}) == loadVals.end()) {
             // generate a nice error message before the throw below aborts our
