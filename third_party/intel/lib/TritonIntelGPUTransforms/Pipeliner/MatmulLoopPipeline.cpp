@@ -127,8 +127,8 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   // operations in the loop body block.
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
-      // Check if the memory is structured densely. If not, we do not prefetch
-      // it to avoid polluting the cache.
+      // In order to avoid polluting the cache, do not prefetch loads unless the
+      // memory they reference is densely structured.
       Attribute blockIOAttr =
           loadOp->getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
                               getBlockIOAttrName());
@@ -137,6 +137,7 @@ static void collectOpsToPipeline(scf::ForOp forOp,
         continue;
       }
 
+      // Currently we can only prefetch 2D loads.
       if (cast<RankedTensorType>(loadOp.getType()).getRank() != 2) {
         LDBG("Skipping LoadOp with non 2D tensor type" << *loadOp);
         continue;

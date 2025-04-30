@@ -922,7 +922,31 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         pytest.xfail("Pack along K can only be False for float4")
 
     if is_xpu():
-        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
+        if A_DATA_TYPE == B_DATA_TYPE == "float4":
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3777")
+        elif not (WITH_B_SCALE or PACK_B_ALONG_K) and B_DATA_TYPE == "float4" and \
+                 A_DATA_TYPE in ("float8e5", "float8e4nv"):
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/4045")
+        elif WITH_B_SCALE and not PACK_B_ALONG_K and B_DATA_TYPE == "float4" and \
+                A_DATA_TYPE in ("float8e5", "float8e4nv"):
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3908")
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256):
+            if triton.runtime.driver.active.utils.get_device_properties(
+                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
+                pytest.xfail("Not enough shared memory")
+            else:
+                pass
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) in ((128, 64, 128), (128, 128, 128)):
+            pass
+        elif (BLOCK_M, BLOCK_N, BLOCK_K) in (128, 128, 64):
+            if A_DATA_TYPE in ("float8e5", "float8e4nv") and B_DATA_TYPE in ("float8e5", "float8e4nv") \
+                    and WITH_B_SCALE == CONST_SCALE \
+                    and WITH_A_SCALE and B_TRANS and PACK_B_ALONG_K:
+                pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
+            pass
+        else:
+            # Some tests pass, but it's difficult to filter them out
+            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
