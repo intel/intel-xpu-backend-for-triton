@@ -316,7 +316,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   // Determine whether the given LoadOp can be lowered to using block IO
   // instructions.
-  bool isLoadCandidate(triton::LoadOp op) const {
+  static bool isLoadCandidate(triton::LoadOp op) {
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr)
@@ -332,7 +332,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       std::enable_if_t<llvm::is_one_of<OpTy, triton::gpu::intel::PrefetchOp,
                                        triton::LoadOp>::value,
                        bool> = true>
-  bool isMemoryRowMajor(OpTy op) const {
+  static bool isMemoryRowMajor(OpTy op) {
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     assert(blockIOAttr && "Expecting block IO attribute");
@@ -347,7 +347,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return memoryLayoutInfo == "row_major";
   }
 
-  DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) const {
+  static DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) {
     if (hasDpasEncoding(tensorTy))
       return DpasEncodingAttr::OpIdx::OperandC;
 
@@ -356,7 +356,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
   }
 
-  DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) const {
+  static DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
     Attribute encoding = tensorTy.getEncoding();
     return cast<DpasEncodingAttr>(
         hasDpasEncoding(tensorTy)
@@ -544,14 +544,10 @@ struct PrefetchOpConversion
   rewriteRegularPointerPrefetch(triton::gpu::intel::PrefetchOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
-
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-    if (!blockIOAttr) {
-      llvm_unreachable("Unexpected prefetch operation on unstructured memory "
-                       "which may pollute the cache");
+    if (!blockIOAttr)
       return failure();
-    }
 
     // Only support rank 2 block pointer, either row major or column major.
     StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
@@ -562,50 +558,41 @@ struct PrefetchOpConversion
     const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
     // TODO: To support more layouts on memory.
-    if (!memoryRowMajor) {
-      return failure();
-    }
-
-    Value ptr = op.getPtr();
-    auto tensorOfPointers = cast<RankedTensorType>(ptr.getType());
-
-    // TODO: To support more layouts in register.
-    if (!hasDotDpasEncoding(tensorOfPointers))
+    if (!memoryRowMajor)
       return failure();
 
-    auto encoding = getDotEncoding(tensorOfPointers).value();
-    auto dpasLayout = cast<DpasEncodingAttr>(encoding.getParent());
+    auto tensorOfPointers = cast<RankedTensorType>(op.getPtr().getType());
+    std::optional<DotOperandEncodingAttr> encoding =
+        getDotEncoding(tensorOfPointers);
+    if (!encoding)
+      return failure();
+
+    auto dpasLayout = cast<DpasEncodingAttr>(encoding->getParent());
     SmallVector<unsigned> warpsPerCTA(dpasLayout.getWarpsPerCTA());
-    auto cluster = dpasLayout.getRepCluster();
+    ArrayRef<unsigned> cluster = dpasLayout.getRepCluster();
     SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
-    auto tensorShape = tensorOfPointers.getShape();
-
-    DpasEncodingAttr::OpIdx opIdx;
-    auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
-      auto dotLayout = getDotEncoding(tensorOfPointers).value();
-      return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
-    };
-    opIdx = getOpIdx();
-
+    ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorOfPointers);
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
     assert(repetitions.size() == 3 &&
            "getDPASRepetitions always return rank 3 size");
     SmallVector<unsigned> numReps{repetitions.begin() + 1, repetitions.end()};
+
     SmallVector<int64_t, 2> shardTensorShape;
     switch (opIdx) {
     case DpasEncodingAttr::OpIdx::OperandA: {
-      auto opAShape = dpasLayout.getShapeA();
-      shardTensorShape = {std::min<unsigned>(tensorShape[0], opAShape[0]),
-                          tensorShape[1]};
+      shardTensorShape = {
+          std::min<unsigned>(tensorShape[0], dpasLayout.getShapeA()[0]),
+          tensorShape[1]};
       warpsPerCTA[1] = 1;
       repCluster[1] = 1;
       numReps[1] = 1;
     } break;
     case DpasEncodingAttr::OpIdx::OperandB: {
-      auto opBShape = dpasLayout.getShapeB();
-      shardTensorShape = {tensorShape[0],
-                          std::min<unsigned>(tensorShape[1], opBShape[1])};
+      shardTensorShape = {
+          tensorShape[0],
+          std::min<unsigned>(tensorShape[1], dpasLayout.getShapeB()[1])};
       warpsPerCTA[0] = 1;
       repCluster[0] = 1;
       numReps[0] = 1;
@@ -620,27 +607,26 @@ struct PrefetchOpConversion
     auto tensorType = RankedTensorType::get(shardTensorShape, elementType,
                                             tensorOfPointers.getEncoding());
 
-    SmallVector<unsigned, 2> prefetchShape =
-        get2DPrefetchShapePerWarp(tensorType);
-
     Value mask = op.getMask();
     unsigned maskConstancyHor = std::numeric_limits<unsigned>::max(),
              maskConstancyVer = std::numeric_limits<unsigned>::max();
     if (mask) {
       // No need to check the constancy of scalar mask.
       if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
-        auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
-                            axisAnalysisPass)
-                            .getAxisInfo(mask);
+        maskConstancyHor = maskConstancyVer = 1;
+        AxisInfo *axisInfo =
+            const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                axisAnalysisPass)
+                .getAxisInfo(mask);
         if (axisInfo) {
           maskConstancyHor = axisInfo->getConstancy(1);
           maskConstancyVer = axisInfo->getConstancy(0);
-        } else {
-          maskConstancyHor = 1;
-          maskConstancyVer = 1;
         }
       }
     }
+
+    SmallVector<unsigned, 2> prefetchShape =
+        get2DPrefetchShapePerWarp(tensorType);
     prefetchShape = {std::min<unsigned>(prefetchShape[0], maskConstancyVer),
                      std::min<unsigned>(prefetchShape[1], maskConstancyHor)};
 
@@ -680,17 +666,16 @@ struct PrefetchOpConversion
     Value llPtr = adaptor.getPtr();
     Value llMask = adaptor.getMask();
 
-    SmallVector<Value> ptrElems, maskElems;
     // Get the LLVM values for pointers
-    ptrElems = unpackLLElements(loc, llPtr, rewriter);
-    if (llMask) {
+    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> maskElems;
+    if (llMask)
       maskElems = unpackLLElements(loc, llMask, rewriter);
-    }
 
     // re-arrange the baseAddrs and masks to for large 2D block IO.
     // Layout is unrelated to the scalar type.
     SmallVector<SmallVector<unsigned>> offsets =
-        mlir::emitOffsetForLayout(encoding, tensorOfPointers);
+        emitOffsetForLayout(*encoding, tensorOfPointers);
     for (size_t i = 0; i < ptrElems.size(); ++i) {
       SmallVector<unsigned> offset = offsets[i];
       baseAddrs[offset] = ptrElems[i];
@@ -703,15 +688,13 @@ struct PrefetchOpConversion
     if (baseAddrs.count({0, 0}) == 0 || baseAddrs.count({1, 0}) == 0)
       return failure();
 
-    Value base, baseWidth, baseHeight, rowStrideInBytes, colStride, offsetBaseX,
-        offsetBaseY;
-
-    baseWidth = b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
-    baseHeight = b.i32_val(tileHeightInElem);
-    offsetBaseX = b.i32_val(0);
-    offsetBaseY = b.i32_val(0);
-    rowStrideInBytes = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
-                             b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
+    Value baseWidth =
+        b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
+    Value baseHeight = b.i32_val(tileHeightInElem);
+    Value offsetBaseX = b.i32_val(0);
+    Value offsetBaseY = b.i32_val(0);
+    Value rowStrideInBytes = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
+                                   b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
     rowStrideInBytes =
         targetInfo.shuffleIdx(rewriter, loc, rowStrideInBytes, 0);
     rowStrideInBytes = b.umax(b.trunc(i32_ty, rowStrideInBytes), baseWidth);
@@ -727,19 +710,18 @@ struct PrefetchOpConversion
             unsigned offsetM = row * warpsPerCTA[0] * shardTensorShape[0] +
                                i * prefetchShape[0];
             Value pred;
-            if (llMask) {
-              if (maskElems.size() > 1) {
-                pred = targetInfo.shuffleIdx(rewriter, loc,
-                                             masks[{offsetM, offsetN}], 0);
-              } else {
-                pred = maskElems[0];
-              }
-            } else {
+            if (llMask)
+              pred = (maskElems.size() > 1)
+                         ? targetInfo.shuffleIdx(rewriter, loc,
+                                                 masks[{offsetM, offsetN}], 0)
+                         : maskElems[0];
+
+            else
               pred = b.int_val(1, 1);
-            }
+
             Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
-            auto addr = targetInfo.shuffleIdx(rewriter, loc,
-                                              baseAddrs[{offsetM, offsetN}], 0);
+            Value addr = targetInfo.shuffleIdx(
+                rewriter, loc, baseAddrs[{offsetM, offsetN}], 0);
 
             auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
                 loc,
