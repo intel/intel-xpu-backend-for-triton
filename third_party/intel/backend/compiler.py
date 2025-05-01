@@ -183,9 +183,6 @@ class XPUBackend(BaseBackend):
                 dev_prop.update(ocloc_dev_prop)
             except subprocess.CalledProcessError:
                 # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.
-                # FIXME: SPIRV extension SPV_INTEL_fp_fast_math_mode requires
-                # SPIR-V version 1.6, which is not supported by current LTS driver.
-                os.environ['DISABLE_SPV_INTEL_FP_FAST_MATH_MODE'] = '1'
                 pass
         return dev_prop
 
