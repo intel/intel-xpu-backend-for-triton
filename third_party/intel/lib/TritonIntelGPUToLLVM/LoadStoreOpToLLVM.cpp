@@ -425,8 +425,9 @@ struct PrefetchOpConversion
       // size base on row major shape.
       std::swap(tensorShape[0], tensorShape[1]);
 
-      tensorType = RankedTensorType::get(
-          tensorShape, tensorType.getElementType(), tensorType.getEncoding());
+      //      tensorType = RankedTensorType::get(
+      //          tensorShape, tensorType.getElementType(),
+      //          tensorType.getEncoding());
     }
 
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
