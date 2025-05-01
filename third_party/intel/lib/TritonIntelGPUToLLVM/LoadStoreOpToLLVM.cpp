@@ -390,8 +390,11 @@ struct PrefetchOpConversion
     // FIXME: the prefetch lowering code should never fail. Currently it does in
     // some cases. We should address those cases instead of removing the
     // prefetch operation.
-    if (failed(res))
+    if (failed(res)) {
+      op.emitWarning("Prefetch operation could not be converted to LLVM. "
+                     "The operation was erased.");
       rewriter.eraseOp(op);
+    }
 
     return success();
   }
