@@ -22,9 +22,12 @@ def _attn_fwd_inner(off_warp, acc, l_i, m_i, q,  #
                     N_CTX: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
-        lo, hi = 0, start_m * BLOCK_M + ((tl.cdiv(off_warp, BLOCK_N)-1)*BLOCK_N)
+        lo, hi = 0, start_m * BLOCK_M + ((tl.cdiv(off_warp, BLOCK_N) - 1) * BLOCK_N)
+        #lo, hi = 0, start_m * BLOCK_M
     elif STAGE == 2:
-        lo, hi = start_m * BLOCK_M + ((tl.cdiv(off_warp, BLOCK_N)-1)*BLOCK_N), start_m * BLOCK_M + ((tl.cdiv(off_warp, BLOCK_N))*BLOCK_N)
+        lo, hi = start_m * BLOCK_M + ((tl.cdiv(off_warp, BLOCK_N) - 1) * BLOCK_N), start_m * BLOCK_M + (
+            (tl.cdiv(off_warp, BLOCK_N)) * BLOCK_N)
+        #lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
         lo = tl.multiple_of(lo, BLOCK_N)
     # causal = False
     else:
@@ -74,14 +77,13 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_DMODEL: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
-              num_warps: tl.constexpr,
-              STAGE: tl.constexpr  #
+              num_warps: tl.constexpr, STAGE: tl.constexpr  #
               ):  # pylint: disable=unused-argument
 
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
     off_h = tl.program_id(1)
-    off_warp = (tl.warp_id()+1)*tl.cdiv(BLOCK_M,num_warps)
+    off_warp = (tl.warp_id() + 1) * tl.cdiv(BLOCK_M, num_warps)
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
     if N_CTX <= 512:
         start_m = tl.program_id(0)
@@ -559,7 +561,7 @@ def get_benchmark(
         'triton': 'Triton',
         'xetla': 'XeTLA',
     }
-    providers = supported_providers #benchmark_suite.filter_providers(supported_providers, providers_filter)
+    providers = supported_providers  #benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -568,9 +570,9 @@ def get_benchmark(
             x_vals=[[z, h, 16384 // z, dhead, causal, mode]
                     for z in [1, 2, 4, 8, 16, 32]
                     for (h, dhead) in [(16, 128), (32, 64)]
-                    for causal in [True]
+                    for causal in [False, True]
                     for mode in [fa_kernel_mode]]  #
-            + [[4, 48, 1024, 64, causal, mode] for causal in [True] for mode in [fa_kernel_mode]],
+            + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
@@ -621,6 +623,7 @@ def get_benchmark(
                 triton_do = torch.randn_like(triton_o)
                 triton_fn = lambda: triton_o.backward(triton_do, retain_graph=True)
             if MODE == 'fwd':
+                #print("No check")
                 benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
                 benchmark_suite.assert_close(
@@ -717,9 +720,8 @@ def get_benchmark(
 
 
 if __name__ == '__main__':
-    _benchmark = get_benchmark(
-        fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
-        xetla_assert_result=False,#(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=False,#(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
-    )
+    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
+                               xetla_assert_result=False,  #(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
+                               xetla_warn_mismatch=False,  #(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+                               )
     _benchmark.run(show_plots=False, print_data=True)

@@ -204,10 +204,10 @@ Value getLaneId(OpBuilder &rewriter, Location loc) {
 
 Value getWarpId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
-  Value tid = getThreadId(rewriter, loc);
-  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
-  Value warpSizeVal = b.i32_val(threadsPerWarp);
-  return b.udiv(tid, warpSizeVal);
+  Value warpId = rewriter.create<arith::IndexCastOp>(
+      loc, i32_ty,
+      rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
+  return warpId;
 }
 
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
