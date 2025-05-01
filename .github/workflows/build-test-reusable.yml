@@ -103,7 +103,7 @@ jobs:
           CACHE_NUMBER: 1
         with:
           path: $HOME/.cache/pip
-          key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+          key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
         if: ${{ !inputs.use_pyenv_python }}
@@ -260,7 +260,7 @@ jobs:
           CACHE_NUMBER: 1
         with:
           path: $HOME/.cache/pip
-          key: pip-${{ inputs.python_version }}-${{ hashFiles('python/pyproject.toml', 'python/setup.py') }}-${{ env.CACHE_NUMBER }}
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
 
       - name: Download test reports
         uses: actions/download-artifact@v4

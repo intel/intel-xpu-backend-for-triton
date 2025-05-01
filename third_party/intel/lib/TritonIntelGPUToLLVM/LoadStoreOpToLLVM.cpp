@@ -141,7 +141,8 @@ SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
   unsigned elemSizeInBytes = elemSizeInBits / 8;
   unsigned maxBytesPerCol = 64;
   unsigned numRows = std::min<unsigned>(tensorShape[0], 32);
-  unsigned numCols = maxBytesPerCol / elemSizeInBytes;
+  unsigned numCols =
+      std::min<unsigned>(tensorShape[1], maxBytesPerCol / elemSizeInBytes);
   return {numRows, numCols};
 }
 
@@ -173,15 +174,11 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getVectorSize(Value ptr) const {
-    auto tensorTy = getRankedTensorType(ptr.getType());
-    if (!tensorTy)
+    if (!isTensorOrTensorPointerType(ptr.getType()))
       return 1;
 
     unsigned contiguity = getContiguity(ptr);
-    unsigned pointeeBitWidth =
-        isTensorPointerType(ptr.getType())
-            ? tensorTy.getElementType().getIntOrFloatBitWidth()
-            : triton::getPointeeBitWidth(tensorTy);
+    unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
     // The maximum vector size is 128 bits.
     return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
   }
@@ -311,9 +308,66 @@ protected:
   const triton::intel::TargetInfo &targetInfo;
 };
 
+struct BlockIOConversionBase : public LoadStoreConversionBase {
+  explicit BlockIOConversionBase(
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
+      : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  // Determine whether the given LoadOp can be lowered to using block IO
+  // instructions.
+  bool isLoadCandidate(triton::LoadOp op) const {
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr)
+      return false;
+
+    // Only lower loadOp with dpas layout encoding.
+    auto tensorTy = cast<RankedTensorType>(op.getType());
+    return hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
+  }
+
+  template <
+      typename OpTy,
+      std::enable_if_t<llvm::is_one_of<OpTy, triton::gpu::intel::PrefetchOp,
+                                       triton::LoadOp>::value,
+                       bool> = true>
+  bool isMemoryRowMajor(OpTy op) const {
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    assert(blockIOAttr && "Expecting block IO attribute");
+
+    // TODO: To support more layouts on memory:
+    // https://github.com/intel/intel-xpu-backend-for-triton/issues/4057.
+    // Only support rank 2 dot layout, either row major or column major.
+    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
+    assert((memoryLayoutInfo == "row_major" ||
+            memoryLayoutInfo == "column_major") &&
+           "Only row_major or column_major is supported");
+    return memoryLayoutInfo == "row_major";
+  }
+
+  DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) const {
+    if (hasDpasEncoding(tensorTy))
+      return DpasEncodingAttr::OpIdx::OperandC;
+
+    assert(hasDotDpasEncoding(tensorTy) && "Expecting dot layout");
+    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorTy).value();
+    return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+  }
+
+  DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) const {
+    Attribute encoding = tensorTy.getEncoding();
+    return cast<DpasEncodingAttr>(
+        hasDpasEncoding(tensorTy)
+            ? encoding
+            : getDotEncoding(tensorTy).value().getParent());
+  }
+};
+
 struct PrefetchOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>,
-      public LoadStoreConversionBase {
+      public BlockIOConversionBase {
   using ConvertTritonGPUOpToLLVMPattern<
       triton::gpu::intel::PrefetchOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -323,7 +377,7 @@ struct PrefetchOpConversion
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
             converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
@@ -340,7 +394,6 @@ struct PrefetchOpConversion
   rewriteTensorPointerPrefetch(triton::gpu::intel::PrefetchOp op,
                                OpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter) const {
-
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr) {
@@ -349,14 +402,6 @@ struct PrefetchOpConversion
       rewriter.eraseOp(op);
       return success();
     }
-
-    // Only support rank 2 block pointer, either row major or column major.
-    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
-    assert((memoryLayoutInfo == "row_major" ||
-            memoryLayoutInfo == "column_major") &&
-           "Only row_major or column_major is supported");
-
-    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
 
     auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Location loc = op.getLoc();
@@ -368,6 +413,7 @@ struct PrefetchOpConversion
     const ArrayRef<int64_t> shapeRef = tensorType.getShape();
     SmallVector<int64_t> tensorShape{shapeRef.begin(), shapeRef.end()};
 
+    const bool memoryRowMajor = isMemoryRowMajor(op);
     if (!memoryRowMajor) {
       // Swap the shape to make it row major and then get the tiling
       // size base on row major shape.
@@ -488,7 +534,7 @@ struct PrefetchOpConversion
 
 struct LoadOpToBlockIOConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
-      public LoadStoreConversionBase {
+      public BlockIOConversionBase {
   using ConvertTritonGPUOpToLLVMPattern<
       triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -499,14 +545,12 @@ struct LoadOpToBlockIOConversion
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+        BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    Attribute blockIOAttr =
-        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-    if (!blockIOAttr)
+    if (!isLoadCandidate(op))
       return failure();
 
     Location loc = op.getLoc();
@@ -518,31 +562,10 @@ struct LoadOpToBlockIOConversion
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
-    const bool hasDpasLayout = hasDpasEncoding(tensorType);
-    if (!hasDpasLayout && !hasDotDpasEncoding(tensorType))
-      return failure();
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
-    // Only lower loadOp with dpas layout encoding.
-    auto encoding = tensorType.getEncoding();
-
-    // TODO: To support more layouts on memory.
-    // Only support rank 2 dot layout, either row major or column major.
-    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
-    assert((memoryLayoutInfo == "row_major" ||
-            memoryLayoutInfo == "column_major") &&
-           "Only row_major or column_major is supported");
-    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
-
-    auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
-      if (hasDpasLayout)
-        return DpasEncodingAttr::OpIdx::OperandC;
-
-      assert(hasDotDpasEncoding(tensorType) && "Expecting dot layout");
-      DotOperandEncodingAttr dotLayout = getDotEncoding(tensorType).value();
-      return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
-    };
-    DpasEncodingAttr::OpIdx opIdx = getOpIdx();
-
+    Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
@@ -559,12 +582,7 @@ struct LoadOpToBlockIOConversion
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-
-    auto dpasLayout = hasDpasLayout
-                          ? cast<DpasEncodingAttr>(encoding)
-                          : cast<DpasEncodingAttr>(
-                                getDotEncoding(tensorType).value().getParent());
-
+    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
@@ -986,7 +1004,7 @@ struct LoadOpToBlockIOConversion
 
 struct LoadOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
-      public LoadStoreConversionBase {
+      public BlockIOConversionBase {
   using ConvertTritonGPUOpToLLVMPattern<
       triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
@@ -998,52 +1016,34 @@ struct LoadOpConversion
       PatternBenefit benefit, bool oneMatrixPerLoadForBT,
       bool useTileLoadLinearLayout)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass),
+        BlockIOConversionBase(targetInfo, axisAnalysisPass),
         oneMatrixPerLoadForBT(oneMatrixPerLoadForBT),
         useTileLoadLinearLayout(useTileLoadLinearLayout) {}
 
   LogicalResult
   rewriteTensorPointerLoad(triton::LoadOp op, OpAdaptor adaptor,
                            ConversionPatternRewriter &rewriter) const {
+    Value ptr = op.getPtr();
+    assert(isTensorPointerType(ptr.getType()) &&
+           "Expecting tensor pointer type");
+
+    if (!isLoadCandidate(op))
+      return failure();
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
 
-    // Only lower loadOp with dpas layout encoding.
-    auto encoding = tensorType.getEncoding();
-    const bool hasDpasLayout = isa<DpasEncodingAttr>(encoding);
-    if (!hasDpasLayout && !hasDotDpasEncoding(tensorType))
-      return failure();
-
-    Attribute blockIOAttr =
-        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-    if (!blockIOAttr)
-      return failure();
-
-    // Only support rank 2 dot layout, either row major or column major.
-    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
-    assert((memoryLayoutInfo == "row_major" ||
-            memoryLayoutInfo == "column_major") &&
-           "Only row_major or column_major is supported");
-    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
-
-    auto getOpIdx = [&]() -> DpasEncodingAttr::OpIdx {
-      if (hasDpasLayout) {
-        return DpasEncodingAttr::OpIdx::OperandC;
-      } else {
-        auto dotLayout = getDotEncoding(tensorType).value();
-        return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
-      }
-    };
-    auto opIdx = getOpIdx();
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
 
     LLVM_DEBUG(llvm::dbgs() << "Tensor type for op " << int(opIdx) << ": "
                             << tensorType << "\n");
 
+    Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
@@ -1061,12 +1061,7 @@ struct LoadOpConversion
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-
-    auto dpasLayout = hasDpasLayout
-                          ? cast<DpasEncodingAttr>(encoding)
-                          : cast<DpasEncodingAttr>(
-                                getDotEncoding(tensorType).value().getParent());
-
+    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
@@ -1084,7 +1079,7 @@ struct LoadOpConversion
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
 
-    if (hasDpasLayout) {
+    if (opIdx == DpasEncodingAttr::OpIdx::OperandC) {
       // A block load with the DPAS layout but without the DotDpasLayout is
       // expected to follow the ordering of the DPAS output. For a 2D block
       // load, the rows are distributed across work items/SIMD lanes and the
