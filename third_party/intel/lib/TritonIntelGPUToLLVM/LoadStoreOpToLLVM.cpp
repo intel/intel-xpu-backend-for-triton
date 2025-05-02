@@ -2084,6 +2084,7 @@ struct LoadOpConversion
           unsigned packedColNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsInnerDimPerLoad
                                       : numOperandsOuterDimPerLoad;
+          unsigned packedColNumPerVBlock = packedColNum / vBlocks;
 
 #if 0
           // this is basically always 0, not what we want
@@ -2142,6 +2143,7 @@ struct LoadOpConversion
               });
             }
 
+#if 0
             // compute the index for the load vals map
             auto loadValsIndex = offset;
             llvm::errs() << "loadValsIndex = " << loadValsIndex[0].second
@@ -2152,22 +2154,106 @@ struct LoadOpConversion
             llvm::errs() << "loadValsOffset = " << loadValsOffset[0].second
                          << ", " << loadValsOffset[1].second << "\n";
 
-            auto loadValsX =
-                loadValsIndex[0].second + (loadValsOffset[0].second) *
-                                              dpasTileToPackedIndicesRatio /
-                                              elemsPerDPASInst[0];
+            auto loadValsX = loadValsIndex[0].second / repOuterStride +
+                             (loadValsOffset[0].second) *
+                                 dpasTileToPackedIndicesRatio /
+                                 elemsPerDPASInst[0];
             auto loadValsY = loadValsIndex[1].second +
                              (loadValsOffset[1].second) / elemsPerDPASInst[1];
-            
-                             // TODO: this isn't right for the transpose case 
-                             LLVM_DEBUG({
+
+            // TODO: this isn't right for the transpose case
+            LLVM_DEBUG({
               llvm::dbgs() << "new load vals index: " << loadValsX << ", "
                            << loadValsY << "\n";
             });
+#else
+            // TODO: can we replace the loop specific vars here like row and
+            // col? Save the decomposed vals to the map; need to replace row,
+            // col, vblk
+#if 1
+            const unsigned firstIndex =
+                isTransposeRequired ? indices[0] * dpasTileToPackedIndicesRatio
+                                    : indices[0];
+#endif
+            llvm::errs() << "first index = " << firstIndex << "\n";
+
+            auto loadValsOffset = tileLayoutPreLoads.apply(
+                {{kRegister, firstIndex}, {kLane, 0}, {kIteration, 0}});
+            assert(loadValsOffset.size() == 2);
+            llvm::errs() << "loadValsOffset = " << loadValsOffset[0].second
+                         << ", " << loadValsOffset[1].second << "\n";
+
+            // transpose interleaves coords at the row level
+            int row = isTransposeRequired ? loadValsOffset[0].second
+                                          : (loadValsOffset[0].second *
+                                             dpasTileToPackedIndicesRatio) /
+                                                elemsPerDPASInst[0];
+            int col = loadValsOffset[1].second / elemsPerDPASInst[1];
+            if (isTransposeRequired)
+              std::swap(row, col);
+            int vblk = 0;
+
+            llvm::errs() << "row = " << row << ", col = " << col
+                         << ", vblk = " << vblk << "\n";
+
+#if 1
+            // under transpose we need to increase the packed row num by the
+            // "interleave" factor - is this the same as the packed indices
+            // ratio? probably not, it is probably something like row size /
+            // tile size in the width dim? also this variable is a hack b/c we
+            // can't change packedRowNum here
+            unsigned loadXRowMultiplier = isTransposeRequired ? 2 : 1;
+            const auto loadX = outer * packedRowNum * numLoadPerOutRepCluster *
+                                   loadXRowMultiplier +
+                               rep * packedRowNum + row;
+            const auto loadY = k + vblk * packedColNumPerVBlock + col;
+            LLVM_DEBUG({
+              llvm::dbgs() << "layout load vals index: " << loadX << ", "
+                           << loadY << "\n";
+            });
+#if 0
+              loadVals[{loadX, loadY}] =
+              b.bitcast(loadVal, unpackedDPASOperandType);
+#endif
+#else
+            switch (opIdx) {
+            case DpasEncodingAttr::OpIdx::OperandA: {
+              const auto loadX =
+                  outer * packedRowNum * numLoadPerOutRepCluster +
+                  rep * packedRowNum + row;
+              const auto loadY = k + vblk * packedColNumPerVBlock + col;
+              LLVM_DEBUG({
+                llvm::dbgs() << "layout load vals index: " << loadX << ", "
+                             << loadY << "\n";
+              });
+#if 0
+                  loadVals[{loadX, loadY}] =
+                      b.bitcast(loadVal, unpackedDPASOperandType);
+#endif
+            } break;
+            case DpasEncodingAttr::OpIdx::OperandB: {
+              const auto loadX =
+                  outer * packedColNum * numLoadPerOutRepCluster +
+                  rep * packedColNum + vblk * packedColNumPerVBlock + col;
+              const auto loadY = k + row;
+              LLVM_DEBUG({
+                llvm::dbgs() << "layout load vals index: " << loadX << ", "
+                             << loadY << "\n";
+              });
+#if 0
+                  loadVals[{loadX, loadY}] =
+                      b.bitcast(loadVal, unpackedDPASOperandType);
+#endif
+            } break;
+            case DpasEncodingAttr::OpIdx::OperandC: {
+              llvm_unreachable("unexpected OpIdx::OperandC");
+            } break;
+            }
+#endif // CASE vs IF
+#endif
           }
 
           // Decompose the return value to multiple operands.
-          unsigned packedColNumPerVBlock = packedColNum / vBlocks;
           for (int vblk = 0; vblk < vBlocks; ++vblk)
             for (int row = 0; row < packedRowNum; ++row)
               for (int col = 0; col < packedColNumPerVBlock; ++col) {
@@ -2194,7 +2280,7 @@ struct LoadOpConversion
                 switch (opIdx) {
                 case DpasEncodingAttr::OpIdx::OperandA: {
                   const auto loadX =
-                      outer * numLoadPerOutRepCluster * repOuterStride +
+                      outer * packedRowNum * numLoadPerOutRepCluster +
                       rep * packedRowNum + row;
                   const auto loadY = k + vblk * packedColNumPerVBlock + col;
                   LLVM_DEBUG({
@@ -2205,9 +2291,9 @@ struct LoadOpConversion
                       b.bitcast(loadVal, unpackedDPASOperandType);
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
-                  const auto loadX = outer * repOuterStride +
-                                     rep * packedColNum +
-                                     vblk * packedColNumPerVBlock + col;
+                  const auto loadX =
+                      outer * packedColNum * numLoadPerOutRepCluster +
+                      rep * packedColNum + vblk * packedColNumPerVBlock + col;
                   const auto loadY = k + row;
                   LLVM_DEBUG({
                     llvm::dbgs() << "load vals index: " << loadX << ", "
@@ -2231,7 +2317,7 @@ struct LoadOpConversion
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int k = 0; k < numRepInner; ++k) {
         for (int rep = 0; rep < repCluster[unsigned(opIdx)]; ++rep) {
-          const auto loadValX = (outer * repOuterStride) + rep;
+          const auto loadValX = outer * repCluster[unsigned(opIdx)] + rep;
           const auto loadValY = k;
 
           if (loadVals.find({loadValX, loadValY}) == loadVals.end()) {
