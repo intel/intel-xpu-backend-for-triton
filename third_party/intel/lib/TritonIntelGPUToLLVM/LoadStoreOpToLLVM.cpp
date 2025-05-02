@@ -1540,8 +1540,21 @@ struct LoadOpConversion
 
       // the DPAS tile height specifies the number of registers per lane
       basisT regBase;
-      for (int i = 1; i < tileShape[heightDim]; i = i << 1) {
-        regBase.push_back({i, 0});
+
+      // fp32 packs even row data in the lower 8 work-items and odd row data in
+      // the upper 8 work-items
+      if (isOperandA && eltTy.isFloat() && elemSizeInBits == 32) {
+        assert(tileShape[widthDim] == 8 &&
+               "expected 8 wide DPAS tiles for FP32 datatype");
+        laneBase.push_back({1, 0});
+
+        for (int i = 1; i < tileShape[heightDim] / 2; i = i << 1) {
+          regBase.push_back({i * 2, 0});
+        }
+      } else {
+        for (int i = 1; i < tileShape[heightDim]; i = i << 1) {
+          regBase.push_back({i, 0});
+        }
       }
 
       return LinearLayout({{kRegister, regBase}, {kLane, laneBase}},
