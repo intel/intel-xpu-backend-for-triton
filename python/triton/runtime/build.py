@@ -3,6 +3,8 @@ import os
 import shutil
 import subprocess
 
+from .. import config
+
 
 def is_xpu():
     import torch
@@ -58,7 +60,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compi
     if scheme == 'posix_local':
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
-    custom_backend_dirs = set(os.getenv(var) for var in ('TRITON_CUDACRT_PATH', 'TRITON_CUDART_PATH'))
+    custom_backend_dirs = config.build.backend_dirs
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
 
     if is_xpu():
