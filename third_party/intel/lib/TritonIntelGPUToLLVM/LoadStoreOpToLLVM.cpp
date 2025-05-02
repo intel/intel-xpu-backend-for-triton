@@ -390,8 +390,11 @@ struct PrefetchOpConversion
     // FIXME: the prefetch lowering code should never fail. Currently it does in
     // some cases. We should address those cases instead of removing the
     // prefetch operation.
-    if (failed(res))
+    if (failed(res)) {
+      op.emitWarning("Prefetch operation could not be converted to LLVM. "
+                     "The operation was erased.");
       rewriter.eraseOp(op);
+    }
 
     return success();
   }
@@ -720,6 +723,10 @@ struct PrefetchOpConversion
             else
               pred = b.int_val(1, 1);
 
+            // If the mask exists and evaluates to false, we set offsetY to be
+            // equal to baseHeight, which causes the HW to ignore the generated
+            // prefetch operation (given that the block to be prefetched would
+            // be outside the baseWidth X baseHeight shape).
             Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
             Value addr = targetInfo.shuffleIdx(
                 rewriter, loc, baseAddrs[{offsetM, offsetN}], 0);
@@ -912,73 +919,73 @@ struct LoadOpToBlockIOConversion
     if (isTensorPointerType(ptr.getType())) {
       // TODO: move the tensor pointer rewrite code here.
       return failure();
-    } else {
-      Value llPtr = adaptor.getPtr();
-      Value llMask = adaptor.getMask();
-      Value llOther = adaptor.getOther();
-
-      SmallVector<Value> ptrElems, maskElems, otherElems;
-      // Get the LLVM values for pointers
-      ptrElems = unpackLLElements(loc, llPtr, rewriter);
-      assert(ptrElems.size() == numElems &&
-             "the number of pointer values is not matched with the number of "
-             "elements");
-
-      // Get the LLVM values for mask
-      if (llMask) {
-        maskElems = unpackLLElements(loc, llMask, rewriter);
-        assert(maskElems.size() == numElems &&
-               "the number of mask values is not matched with the number of "
-               "elements");
-        auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
-                            axisAnalysisPass)
-                            .getAxisInfo(mask);
-        if (axisInfo) {
-          maskConstancyHor = axisInfo->getConstancy(rank - 1);
-          maskConstancyVer = axisInfo->getConstancy(rank - 2);
-        } else {
-          maskConstancyHor = 1;
-          maskConstancyVer = 1;
-        }
-      } else {
-        // no mask
-        maskConstancyHor = std::numeric_limits<unsigned>::max();
-        maskConstancyVer = std::numeric_limits<unsigned>::max();
-      }
-
-      // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
-        return failure();
-
-      // Get the LLVM values for `other`
-      DenseElementsAttr constAttr;
-      if (other && isa<IntegerType>(eltTy) &&
-          matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-          isa<IntegerType>(constAttr.getElementType())) {
-        otherIsSplatConstInt = true;
-        splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-      }
-      if (other) {
-        otherElems = unpackLLElements(loc, llOther, rewriter);
-      }
-
-      // re-arrange the ptrs and masks to for large 2D block IO.
-      // Layout is unrelated to the scalar type.
-      SmallVector<SmallVector<unsigned>> offsets =
-          mlir::emitOffsetForLayout(encoding, tensorType);
-      for (size_t i = 0; i < ptrElems.size(); ++i) {
-        SmallVector<unsigned> offset = offsets[i];
-        ptrs[offset] = ptrElems[i];
-        if (llMask)
-          masks[offset] = maskElems[i];
-        if (otherElems.size())
-          others[offset] = otherElems[i];
-      }
-      // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
-      // pitch.
-      if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
-        return failure();
     }
+
+    Value llPtr = adaptor.getPtr();
+    Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
+
+    SmallVector<Value> ptrElems, maskElems, otherElems;
+    // Get the LLVM values for pointers
+    ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    assert(ptrElems.size() == numElems &&
+           "the number of pointer values is not matched with the number of "
+           "elements");
+
+    // Get the LLVM values for mask
+    if (llMask) {
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+      assert(maskElems.size() == numElems &&
+             "the number of mask values is not matched with the number of "
+             "elements");
+      auto axisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(mask);
+      if (axisInfo) {
+        maskConstancyHor = axisInfo->getConstancy(rank - 1);
+        maskConstancyVer = axisInfo->getConstancy(rank - 2);
+      } else {
+        maskConstancyHor = 1;
+        maskConstancyVer = 1;
+      }
+    } else {
+      // no mask
+      maskConstancyHor = std::numeric_limits<unsigned>::max();
+      maskConstancyVer = std::numeric_limits<unsigned>::max();
+    }
+
+    // Check the constancy of the mask support to load the memory in 2D block.
+    if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
+      return failure();
+
+    // Get the LLVM values for `other`
+    DenseElementsAttr constAttr;
+    if (other && isa<IntegerType>(eltTy) &&
+        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
+        isa<IntegerType>(constAttr.getElementType())) {
+      otherIsSplatConstInt = true;
+      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
+    }
+    if (other) {
+      otherElems = unpackLLElements(loc, llOther, rewriter);
+    }
+
+    // re-arrange the ptrs and masks to for large 2D block IO.
+    // Layout is unrelated to the scalar type.
+    SmallVector<SmallVector<unsigned>> offsets =
+        mlir::emitOffsetForLayout(encoding, tensorType);
+    for (size_t i = 0; i < ptrElems.size(); ++i) {
+      SmallVector<unsigned> offset = offsets[i];
+      ptrs[offset] = ptrElems[i];
+      if (llMask)
+        masks[offset] = maskElems[i];
+      if (otherElems.size())
+        others[offset] = otherElems[i];
+    }
+    // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
+    // pitch.
+    if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
+      return failure();
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
     if (!isTransposeRequired) {
