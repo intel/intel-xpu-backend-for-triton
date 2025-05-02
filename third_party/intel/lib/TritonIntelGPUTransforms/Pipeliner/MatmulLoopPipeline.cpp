@@ -117,8 +117,7 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp) {
 
 /// Collect loads to pipeline. Return success if we can pipeline this loop.
 static void collectOpsToPipeline(scf::ForOp forOp,
-                                 SmallVectorImpl<LoadDotOperand> &loadOps,
-                                 bool supportRegularPtr) {
+                                 SmallVectorImpl<LoadDotOperand> &loadOps) {
   assert(loadOps.empty() && "Expecting an empty list of load operations");
 
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
@@ -128,11 +127,6 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   // operations in the loop body block.
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
-      Value ptr = loadOp.getPtr();
-      bool isBlockPtr = mlir::triton::isTensorPointerType(ptr.getType());
-      if (!isBlockPtr && !supportRegularPtr)
-        continue;
-
       // In order to avoid polluting the cache, do not prefetch loads unless the
       // memory they reference is densely structured.
       Attribute blockIOAttr =
@@ -309,12 +303,11 @@ createSchedule(scf::ForOp forOp, int numStages) {
 }
 
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                        bool supportRegularPtr,
                                         mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<LoadDotOperand> loads;
-  collectOpsToPipeline(forOp, loads, supportRegularPtr);
+  collectOpsToPipeline(forOp, loads);
   if (loads.empty()) {
     LDBG("No loads to pipeline");
     return false;
