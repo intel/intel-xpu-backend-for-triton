@@ -427,10 +427,6 @@ struct PrefetchOpConversion
       // Swap the shape to make it row major and then get the tiling
       // size base on row major shape.
       std::swap(tensorShape[0], tensorShape[1]);
-
-      //      tensorType = RankedTensorType::get(
-      //          tensorShape, tensorType.getElementType(),
-      //          tensorType.getEncoding());
     }
 
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
@@ -713,6 +709,7 @@ struct PrefetchOpConversion
                                j * prefetchShape[1];
             unsigned offsetM = row * warpsPerCTA[0] * shardTensorShape[0] +
                                i * prefetchShape[0];
+
             Value pred;
             if (llMask)
               pred = (maskElems.size() > 1)
