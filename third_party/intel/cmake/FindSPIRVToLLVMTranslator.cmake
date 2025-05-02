@@ -31,9 +31,26 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             if(NOT CURL_RESULT EQUAL 0)
                 message(FATAL_ERROR "Failed to download patch from https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3122.diff")
             endif()
-
             execute_process(
                 COMMAND git apply ${CMAKE_BINARY_DIR}/3122.diff
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                RESULT_VARIABLE PATCH_RESULT
+            )
+            if(NOT PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to apply patch to SPIRV-LLVM-Translator")
+            endif()
+
+            # FIXME: Don't apply patch when Agama LTS driver is updated or https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/3137 is addressed.
+            execute_process(
+                COMMAND curl -sSL https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3138.diff
+                OUTPUT_FILE ${CMAKE_BINARY_DIR}/3138.diff
+                RESULT_VARIABLE CURL_RESULT
+            )
+            if(NOT CURL_RESULT EQUAL 0)
+                message(FATAL_ERROR "Failed to download patch from https://github.com/KhronosGroup/SPIRV-LLVM-Translator/pull/3138.diff")
+            endif()
+            execute_process(
+                COMMAND git apply ${CMAKE_BINARY_DIR}/3138.diff
                 WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
                 RESULT_VARIABLE PATCH_RESULT
             )
