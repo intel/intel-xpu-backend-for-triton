@@ -2,8 +2,6 @@ import importlib
 import inspect
 import sys
 from dataclasses import dataclass
-from typing import Type, TypeVar, Union
-from types import ModuleType
 from .driver import DriverBase
 from .compiler import BaseBackend
 
@@ -12,11 +10,9 @@ if sys.version_info >= (3, 10):
 else:
     from importlib_metadata import entry_points
 
-T = TypeVar("T", bound=Union[BaseBackend, DriverBase])
 
-
-def _find_concrete_subclasses(module: ModuleType, base_class: Type[T]) -> Type[T]:
-    ret: list[Type[T]] = []
+def _find_concrete_subclasses(module, base_class):
+    ret = []
     for attr_name in dir(module):
         attr = getattr(module, attr_name)
         if isinstance(attr, type) and issubclass(attr, base_class) and not inspect.isabstract(attr):
@@ -30,18 +26,18 @@ def _find_concrete_subclasses(module: ModuleType, base_class: Type[T]) -> Type[T
 
 @dataclass(frozen=True)
 class Backend:
-    compiler: Type[BaseBackend]
-    driver: Type[DriverBase]
+    compiler: BaseBackend = None
+    driver: DriverBase = None
 
 
-def _discover_backends() -> dict[str, Backend]:
+def _discover_backends():
     backends = dict()
     for ep in entry_points().select(group="triton.backends"):
         compiler = importlib.import_module(f"{ep.value}.compiler")
         driver = importlib.import_module(f"{ep.value}.driver")
-        backends[ep.name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),  # type: ignore
-                                    _find_concrete_subclasses(driver, DriverBase))  # type: ignore
+        backends[ep.name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),
+                                    _find_concrete_subclasses(driver, DriverBase))
     return backends
 
 
-backends: dict[str, Backend] = _discover_backends()
+backends = _discover_backends()

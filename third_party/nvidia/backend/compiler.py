@@ -1,6 +1,5 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, nvidia
-from triton import config
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ import signal
 import os
 import subprocess
 from pathlib import Path
+import sysconfig
 
 
 def min_dot_size(target: GPUTarget):
@@ -30,16 +30,36 @@ def min_dot_size(target: GPUTarget):
     return check_dot_compatibility
 
 
-def get_ptxas() -> config.NvidiaTool:
-    return config.nvidia.ptxas
+@functools.lru_cache()
+def _path_to_binary(binary: str):
+    binary += sysconfig.get_config_var("EXE")
+    paths = [
+        os.environ.get(f"TRITON_{binary.upper()}_PATH", ""),
+        os.path.join(os.path.dirname(__file__), "bin", binary),
+    ]
+
+    for path in paths:
+        if os.path.exists(path) and os.path.isfile(path):
+            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
+            if result is not None:
+                version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+                if version is not None:
+                    return path, version.group(1)
+    raise RuntimeError(f"Cannot find {binary}")
+
+
+@functools.lru_cache()
+def get_ptxas():
+    name = "ptxas"
+    return _path_to_binary(name)
 
 
 @functools.lru_cache()
 def get_ptxas_version():
-    mock_ver = config.nvidia.mock_ptx_version
+    mock_ver = os.environ.get('TRITON_MOCK_PTX_VERSION')
     if mock_ver is not None:
         return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
-    version = subprocess.check_output([get_ptxas().path, "--version"]).decode("utf-8")
+    version = subprocess.check_output([get_ptxas()[0], "--version"]).decode("utf-8")
     return version
 
 
@@ -65,7 +85,7 @@ def ptx_get_version(cuda_version) -> int:
 def get_ptx_version_from_options(options, arch: int):
     ptx_version = options.ptx_version
     if ptx_version is None:
-        cuda_version = get_ptxas().version
+        _, cuda_version = get_ptxas()
         ptx_version = ptx_get_version(cuda_version)
     return ptx_version
 
@@ -123,8 +143,7 @@ class CUDAOptions:
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
-            extern_libs['libdevice'] = config.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
-
+            extern_libs['libdevice'] = os.getenv("TRITON_LIBDEVICE_PATH", str(default_libdir / 'libdevice.10.bc'))
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
@@ -154,7 +173,7 @@ class CUDABackend(BaseBackend):
         self.binary_ext = "cubin"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': config.runtime.override_arch or f"sm{self.target.arch}"}
+        args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", f"sm{self.target.arch}")}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         capability = int(self._parse_arch(args["arch"]))
 
@@ -169,7 +188,7 @@ class CUDABackend(BaseBackend):
                 args["deprecated_fp8_dtypes"] = ("fp8e4b15", )
 
         if "enable_fp_fusion" not in args:
-            args["enable_fp_fusion"] = config.language.default_fp_fusion
+            args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
@@ -307,13 +326,13 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if not config.compilation.disable_line_info:
+        if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
-        if config.compilation.enable_asan:
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
             raise RuntimeError(
                 "Address Sanitizer Error: Address sanitizer is currently only supported on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
@@ -361,23 +380,24 @@ class CUDABackend(BaseBackend):
         ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
         # Remove the debug flag that prevents ptxas from optimizing the code
         ret = re.sub(r",\s*debug|debug,\s*", "", ret)
-        if config.nvidia.dump_nvptx:
+        if os.environ.get("NVPTX_ENABLE_DUMP", "0") == "1":
             print("// -----// NVPTX Dump //----- //")
             print(ret)
         return ret
 
     def make_cubin(self, src, metadata, opt, capability):
-        ptxas = get_ptxas().path
+        ptxas, _ = get_ptxas()
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
             fsrc.write(src)
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = ["-lineinfo", "-suppress-debug-info"] if config.compilation.disable_line_info else ["-lineinfo"]
+            line_info = ["-lineinfo", "-suppress-debug-info"] if os.environ.get("TRITON_DISABLE_LINE_INFO",
+                                                                                "0") == "1" else ["-lineinfo"]
             fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
             arch = sm_arch_from_capability(capability)
-            opt_level = ['--opt-level', '0'] if config.nvidia.disable_ptxas_opt else []
+            opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
             ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)

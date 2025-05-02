@@ -2,12 +2,13 @@ import ast
 import inspect
 import re
 import warnings
+import os
 import textwrap
 import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
-from .. import config, language
+from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
@@ -15,6 +16,7 @@ from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
+from . import config
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -356,8 +358,7 @@ class CodeGenerator(ast.NodeVisitor):
             # But actually a bunch of other things, such as module imports, are
             # technically Python globals. We have to allow these too!
             if any([
-                    val is absent,
-                    name in self.builtin_namespace,  #
+                    val is absent, name in self.builtin_namespace,  #
                     type(val) is ModuleType,  #
                     isinstance(val, JITFunction),  #
                     getattr(val, "__triton_builtin__", False),  #
@@ -369,7 +370,7 @@ class CodeGenerator(ast.NodeVisitor):
                     # because you should be able to do
                     #   @triton.jit def fn(x: tl.constexpr = GLOBAL): ...
                     self.visiting_arg_default_value,  #
-                    config.compilation.allow_non_constexpr_globals,
+                    os.environ.get("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "0") == "1"
             ]):
                 return val
             raise NameError(
@@ -1197,7 +1198,7 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
-                if config.compilation.front_end_debugging:
+                if config.front_end_debugging():
                     raise
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
@@ -1237,7 +1238,7 @@ class CodeGenerator(ast.NodeVisitor):
                     ret = language.tuple(ret)
                 return ret
             except Exception as e:
-                if config.compilation.front_end_debugging:
+                if config.front_end_debugging():
                     raise
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
@@ -1318,7 +1319,7 @@ class CodeGenerator(ast.NodeVisitor):
             except CompilationError:
                 raise
             except Exception as e:
-                if config.compilation.front_end_debugging:
+                if config.front_end_debugging():
                     raise
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
