@@ -2059,7 +2059,7 @@ struct LoadOpConversion
                                              dpasTileToPackedIndicesRatio) /
                                                 elemsPerDPASInst[0];
             int col = loadValsOffset[1].second / elemsPerDPASInst[1];
-            if (isTransposeRequired)
+            if (!isOperandA)
               std::swap(row, col);
             int vblk = 0;
 
@@ -2080,10 +2080,15 @@ struct LoadOpConversion
               llvm::dbgs() << "layout load vals index: " << loadX << ", "
                            << loadY << "\n";
             });
-#if 0
+
+            if (useTileLoadLinearLayout) {
+              DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+              Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
+                  loc, packedDPASOperandType, load2dOp, load2dOp, attr);
+
               loadVals[{loadX, loadY}] =
-              b.bitcast(loadVal, unpackedDPASOperandType);
-#endif
+                  b.bitcast(loadVal, unpackedDPASOperandType);
+            }
           }
 
           // Decompose the return value to multiple operands.
@@ -2105,9 +2110,15 @@ struct LoadOpConversion
                                  << indices[elemIdx] << "\n";
                   });
                 }
-                DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
-                Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
-                    loc, packedDPASOperandType, load2dOp, load2dOp, attr);
+
+                auto unpackIndices = [&](const auto loadX, const auto loadY) {
+                  DenseI32ArrayAttr attr =
+                      rewriter.getDenseI32ArrayAttr(indices);
+                  Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
+                      loc, packedDPASOperandType, load2dOp, load2dOp, attr);
+                  loadVals[{loadX, loadY}] =
+                      b.bitcast(loadVal, unpackedDPASOperandType);
+                };
 
                 // Save the decomposed vals to the map;
                 switch (opIdx) {
@@ -2120,8 +2131,9 @@ struct LoadOpConversion
                     llvm::dbgs() << "load vals index: " << loadX << ", "
                                  << loadY << "\n";
                   });
-                  loadVals[{loadX, loadY}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
+                  if (!useTileLoadLinearLayout) {
+                    unpackIndices(loadX, loadY);
+                  }
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandB: {
                   const auto loadX =
@@ -2132,8 +2144,9 @@ struct LoadOpConversion
                     llvm::dbgs() << "load vals index: " << loadX << ", "
                                  << loadY << "\n";
                   });
-                  loadVals[{loadX, loadY}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
+                  if (!useTileLoadLinearLayout) {
+                    unpackIndices(loadX, loadY);
+                  }
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandC: {
                   llvm_unreachable("unexpected OpIdx::OperandC");
