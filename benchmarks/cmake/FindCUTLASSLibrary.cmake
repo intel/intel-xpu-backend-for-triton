@@ -22,7 +22,7 @@ if (NOT CUTLASSLibrary_FOUND)
 
     FetchContent_GetProperties(cutlass-library)
     if(NOT cutlass-library_POPULATED)
-       FetchContent_Populate(cutlass-library)
+       FetchContent_MakeAvailable(cutlass-library)
     endif()
 
     set(CUTLASSLibrary_INCLUDE_DIR "${CUTLASSLibrary_SOURCE_DIR}/include" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")

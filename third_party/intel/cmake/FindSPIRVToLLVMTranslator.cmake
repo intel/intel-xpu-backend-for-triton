@@ -20,7 +20,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
 
     FetchContent_GetProperties(spirv-llvm-translator)
     if(NOT spirv-llvm-translator_POPULATED)
-            FetchContent_Populate(spirv-llvm-translator)
+            FetchContent_MakeAvailable(spirv-llvm-translator)
 
             # FIXME: Don't apply patch when Agama driver is updated.
             execute_process(
