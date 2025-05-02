@@ -1655,8 +1655,8 @@ struct LoadOpConversion
       // rewrite the register/lane bases and add iteration as a size 1 dimension
       // actually maybe we just short circuit here...
       if (!oneMatrixPerLoadForBT) {
-        // de-dupe?
-        const unsigned heightDim = threadOrder[rank - 1];
+        // TODO: de-dupe
+        const unsigned widthDim = threadOrder[rank - 2];
 
         // this is the layout we want, interleaving the values from both
         // "vblock" loads - but we lose the notion of the vblock maybe we need
@@ -1682,7 +1682,7 @@ struct LoadOpConversion
         for (size_t i = 0; i < regBases.size(); i++) {
           if (i == basisIndexForInterleave) {
             newRegBases.push_back(
-                {0, static_cast<int>(elemsPerDPASInst[heightDim])});
+                {0, static_cast<int>(elemsPerDPASInst[widthDim])});
           }
           newRegBases.push_back(regBases[i]);
         }
