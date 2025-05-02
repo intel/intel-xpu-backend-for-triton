@@ -12,7 +12,6 @@ add_triton_library(TritonTransforms
   DEPENDS
   TritonTransformsIncGen
   TritonCombineIncGen
-  TritonGPUTypeInterfacesIncGen
 
   LINK_LIBS PUBLIC
   MLIRPass
