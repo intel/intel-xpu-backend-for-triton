@@ -549,14 +549,7 @@ struct PrefetchOpConversion
     if (!blockIOAttr)
       return failure();
 
-    // Only support rank 2 block pointer, either row major or column major.
-    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
-    assert((memoryLayoutInfo == "row_major" ||
-            memoryLayoutInfo == "column_major") &&
-           "Only row_major or column_major is supported");
-
-    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
-
+    const bool memoryRowMajor = isMemoryRowMajor(op);
     // TODO: To support more layouts on memory.
     if (!memoryRowMajor)
       return failure();
