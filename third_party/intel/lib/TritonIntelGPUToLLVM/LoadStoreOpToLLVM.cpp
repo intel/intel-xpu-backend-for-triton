@@ -316,7 +316,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   // Determine whether the given LoadOp can be lowered to using block IO
   // instructions.
-  bool isLoadCandidate(triton::LoadOp op) const {
+  static bool isLoadCandidate(triton::LoadOp op) {
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr)
@@ -332,7 +332,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       std::enable_if_t<llvm::is_one_of<OpTy, triton::gpu::intel::PrefetchOp,
                                        triton::LoadOp>::value,
                        bool> = true>
-  bool isMemoryRowMajor(OpTy op) const {
+  static bool isMemoryRowMajor(OpTy op) {
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     assert(blockIOAttr && "Expecting block IO attribute");
@@ -347,7 +347,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return memoryLayoutInfo == "row_major";
   }
 
-  DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) const {
+  static DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) {
     if (hasDpasEncoding(tensorTy))
       return DpasEncodingAttr::OpIdx::OperandC;
 
@@ -356,7 +356,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
   }
 
-  DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) const {
+  static DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
     Attribute encoding = tensorTy.getEncoding();
     return cast<DpasEncodingAttr>(
         hasDpasEncoding(tensorTy)
@@ -382,12 +382,21 @@ struct PrefetchOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    Value ptr = op.getPtr();
-    if (isTensorPointerType(ptr.getType()))
-      return rewriteTensorPointerPrefetch(op, adaptor, rewriter);
+    LogicalResult res =
+        isTensorPointerType(op.getPtr().getType())
+            ? rewriteTensorPointerPrefetch(op, adaptor, rewriter)
+            : rewriteRegularPointerPrefetch(op, adaptor, rewriter);
 
-    llvm_unreachable("Unexpected prefetch operation on 'regular' ptr");
-    return failure();
+    // FIXME: the prefetch lowering code should never fail. Currently it does in
+    // some cases. We should address those cases instead of removing the
+    // prefetch operation.
+    if (failed(res)) {
+      op.emitWarning("Prefetch operation could not be converted to LLVM. "
+                     "The operation was erased.");
+      rewriter.eraseOp(op);
+    }
+
+    return success();
   }
 
   LogicalResult
@@ -524,6 +533,220 @@ struct PrefetchOpConversion
           // lowered further to a builtin call.
           return failure();
         }
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  LogicalResult
+  rewriteRegularPointerPrefetch(triton::gpu::intel::PrefetchOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr)
+      return failure();
+
+    // Only support rank 2 block pointer, either row major or column major.
+    StringRef memoryLayoutInfo = cast<StringAttr>(blockIOAttr).getValue();
+    assert((memoryLayoutInfo == "row_major" ||
+            memoryLayoutInfo == "column_major") &&
+           "Only row_major or column_major is supported");
+
+    const bool memoryRowMajor = (memoryLayoutInfo == "row_major");
+
+    // TODO: To support more layouts on memory.
+    if (!memoryRowMajor)
+      return failure();
+
+    auto tensorOfPointers = cast<RankedTensorType>(op.getPtr().getType());
+    std::optional<DotOperandEncodingAttr> encoding =
+        getDotEncoding(tensorOfPointers);
+    if (!encoding)
+      return failure();
+
+    auto dpasLayout = cast<DpasEncodingAttr>(encoding->getParent());
+    SmallVector<unsigned> warpsPerCTA(dpasLayout.getWarpsPerCTA());
+    ArrayRef<unsigned> cluster = dpasLayout.getRepCluster();
+    SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
+    ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorOfPointers);
+    SmallVector<int64_t> repetitions =
+        dpasLayout.getDPASRepetitions(tensorShape, opIdx);
+    assert(repetitions.size() == 3 &&
+           "getDPASRepetitions always return rank 3 size");
+    SmallVector<unsigned> numReps{repetitions.begin() + 1, repetitions.end()};
+
+    SmallVector<int64_t, 2> shardTensorShape;
+    switch (opIdx) {
+    case DpasEncodingAttr::OpIdx::OperandA: {
+      shardTensorShape = {
+          std::min<unsigned>(tensorShape[0], dpasLayout.getShapeA()[0]),
+          tensorShape[1]};
+      warpsPerCTA[1] = 1;
+      repCluster[1] = 1;
+      numReps[1] = 1;
+    } break;
+    case DpasEncodingAttr::OpIdx::OperandB: {
+      shardTensorShape = {
+          tensorShape[0],
+          std::min<unsigned>(tensorShape[1], dpasLayout.getShapeB()[1])};
+      warpsPerCTA[0] = 1;
+      repCluster[0] = 1;
+      numReps[0] = 1;
+    } break;
+    case DpasEncodingAttr::OpIdx::OperandC: {
+      llvm_unreachable("unexpected OpIdx::OperandC");
+    } break;
+    }
+
+    auto ptrType = cast<PointerType>(tensorOfPointers.getElementType());
+    Type elementType = ptrType.getPointeeType();
+    auto tensorType = RankedTensorType::get(shardTensorShape, elementType,
+                                            tensorOfPointers.getEncoding());
+
+    Value mask = op.getMask();
+    unsigned maskConstancyHor = std::numeric_limits<unsigned>::max(),
+             maskConstancyVer = std::numeric_limits<unsigned>::max();
+    if (mask) {
+      // No need to check the constancy of scalar mask.
+      if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
+        maskConstancyHor = maskConstancyVer = 1;
+        AxisInfo *axisInfo =
+            const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                axisAnalysisPass)
+                .getAxisInfo(mask);
+        if (axisInfo) {
+          maskConstancyHor = axisInfo->getConstancy(1);
+          maskConstancyVer = axisInfo->getConstancy(0);
+        }
+      }
+    }
+
+    SmallVector<unsigned, 2> prefetchShape =
+        get2DPrefetchShapePerWarp(tensorType);
+    prefetchShape = {std::min<unsigned>(prefetchShape[0], maskConstancyVer),
+                     std::min<unsigned>(prefetchShape[1], maskConstancyHor)};
+
+    SmallVector<int64_t> numPrefetchsPerRep = {
+        mlir::ceil<int64_t>(shardTensorShape[0], prefetchShape[0]),
+        mlir::ceil<int64_t>(shardTensorShape[1], prefetchShape[1])};
+
+    Type eltTy = tensorType.getElementType();
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    unsigned tileWidthInElem = prefetchShape[1];
+    unsigned tileHeightInElem = prefetchShape[0];
+    unsigned vBlocks = 1;
+    switch (elemSizeInBits) {
+    case 8:
+      if (tileWidthInElem == 64) {
+        // OCL interface supports 8b_?r32x2c for 64 bytes per row of 8 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 32;
+      }
+      break;
+    case 16:
+      if (tileWidthInElem == 32) {
+        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 16;
+      }
+      break;
+    }
+
+    auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    std::map<SmallVector<unsigned>, Value> baseAddrs, masks;
+    Value llPtr = adaptor.getPtr();
+    Value llMask = adaptor.getMask();
+
+    // Get the LLVM values for pointers
+    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> maskElems;
+    if (llMask)
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+
+    // re-arrange the baseAddrs and masks to for large 2D block IO.
+    // Layout is unrelated to the scalar type.
+    SmallVector<SmallVector<unsigned>> offsets =
+        emitOffsetForLayout(*encoding, tensorOfPointers);
+    for (size_t i = 0; i < ptrElems.size(); ++i) {
+      SmallVector<unsigned> offset = offsets[i];
+      baseAddrs[offset] = ptrElems[i];
+      if (llMask && maskElems.size() > 1)
+        masks[offset] = maskElems[i];
+    }
+
+    // baseAddrs[{0, 0}] and baseAddrs[{1, 0}] are currently used to calculate
+    // the pitch.
+    if (baseAddrs.count({0, 0}) == 0 || baseAddrs.count({1, 0}) == 0)
+      return failure();
+
+    Value baseWidth =
+        b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
+    Value baseHeight = b.i32_val(tileHeightInElem);
+    Value offsetBaseX = b.i32_val(0);
+    Value offsetBaseY = b.i32_val(0);
+    Value rowStrideInBytes = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
+                                   b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
+    rowStrideInBytes =
+        targetInfo.shuffleIdx(rewriter, loc, rowStrideInBytes, 0);
+    rowStrideInBytes = b.umax(b.trunc(i32_ty, rowStrideInBytes), baseWidth);
+    rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+
+    for (int row = 0; row < numReps[0]; ++row) {
+      for (int col = 0; col < numReps[1]; ++col) {
+        // Prefetch the data for each repetitions.
+        for (int i = 0; i < numPrefetchsPerRep[0]; ++i)
+          for (int j = 0; j < numPrefetchsPerRep[1]; ++j) {
+            unsigned offsetN = col * warpsPerCTA[1] * shardTensorShape[1] +
+                               j * prefetchShape[1];
+            unsigned offsetM = row * warpsPerCTA[0] * shardTensorShape[0] +
+                               i * prefetchShape[0];
+
+            Value pred;
+            if (llMask)
+              pred = (maskElems.size() > 1)
+                         ? targetInfo.shuffleIdx(rewriter, loc,
+                                                 masks[{offsetM, offsetN}], 0)
+                         : maskElems[0];
+
+            else
+              pred = b.int_val(1, 1);
+
+            // If the mask exists and evaluates to false, we set offsetY to be
+            // equal to baseHeight, which causes the HW to ignore the generated
+            // prefetch operation (given that the block to be prefetched would
+            // be outside the baseWidth X baseHeight shape).
+            Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
+            Value addr = targetInfo.shuffleIdx(
+                rewriter, loc, baseAddrs[{offsetM, offsetN}], 0);
+
+            auto newOp = rewriter.create<TritonGEN::Matrix2DBlockPrefetchOp>(
+                loc,
+                /*ptr*/ addr,
+                /*base_width*/ baseWidth,
+                /*base_height*/ baseHeight,
+                /*base_pitch*/ rowStrideInBytes,
+                /*x*/ offsetBaseX,
+                /*y*/ offsetY,
+                /*elem_size_in_bits*/ elemSizeInBits,
+                /*tile_width*/ tileWidthInElem,
+                /*tile_height*/ tileHeightInElem,
+                /*v_blocks*/ vBlocks,
+                /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+            if (failed(newOp.verify())) {
+              // Explicitly invoke verifier because `triton_gen` ops are
+              // immediately lowered further to a builtin call.
+              return failure();
+            }
+          }
       }
     }
 
@@ -693,73 +916,73 @@ struct LoadOpToBlockIOConversion
     if (isTensorPointerType(ptr.getType())) {
       // TODO: move the tensor pointer rewrite code here.
       return failure();
-    } else {
-      Value llPtr = adaptor.getPtr();
-      Value llMask = adaptor.getMask();
-      Value llOther = adaptor.getOther();
-
-      SmallVector<Value> ptrElems, maskElems, otherElems;
-      // Get the LLVM values for pointers
-      ptrElems = unpackLLElements(loc, llPtr, rewriter);
-      assert(ptrElems.size() == numElems &&
-             "the number of pointer values is not matched with the number of "
-             "elements");
-
-      // Get the LLVM values for mask
-      if (llMask) {
-        maskElems = unpackLLElements(loc, llMask, rewriter);
-        assert(maskElems.size() == numElems &&
-               "the number of mask values is not matched with the number of "
-               "elements");
-        auto axisInfo = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
-                            axisAnalysisPass)
-                            .getAxisInfo(mask);
-        if (axisInfo) {
-          maskConstancyHor = axisInfo->getConstancy(rank - 1);
-          maskConstancyVer = axisInfo->getConstancy(rank - 2);
-        } else {
-          maskConstancyHor = 1;
-          maskConstancyVer = 1;
-        }
-      } else {
-        // no mask
-        maskConstancyHor = std::numeric_limits<unsigned>::max();
-        maskConstancyVer = std::numeric_limits<unsigned>::max();
-      }
-
-      // Check the constancy of the mask support to load the memory in 2D block.
-      if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
-        return failure();
-
-      // Get the LLVM values for `other`
-      DenseElementsAttr constAttr;
-      if (other && isa<IntegerType>(eltTy) &&
-          matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-          isa<IntegerType>(constAttr.getElementType())) {
-        otherIsSplatConstInt = true;
-        splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-      }
-      if (other) {
-        otherElems = unpackLLElements(loc, llOther, rewriter);
-      }
-
-      // re-arrange the ptrs and masks to for large 2D block IO.
-      // Layout is unrelated to the scalar type.
-      SmallVector<SmallVector<unsigned>> offsets =
-          mlir::emitOffsetForLayout(encoding, tensorType);
-      for (size_t i = 0; i < ptrElems.size(); ++i) {
-        SmallVector<unsigned> offset = offsets[i];
-        ptrs[offset] = ptrElems[i];
-        if (llMask)
-          masks[offset] = maskElems[i];
-        if (otherElems.size())
-          others[offset] = otherElems[i];
-      }
-      // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
-      // pitch.
-      if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
-        return failure();
     }
+
+    Value llPtr = adaptor.getPtr();
+    Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
+
+    SmallVector<Value> ptrElems, maskElems, otherElems;
+    // Get the LLVM values for pointers
+    ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    assert(ptrElems.size() == numElems &&
+           "the number of pointer values is not matched with the number of "
+           "elements");
+
+    // Get the LLVM values for mask
+    if (llMask) {
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+      assert(maskElems.size() == numElems &&
+             "the number of mask values is not matched with the number of "
+             "elements");
+      auto axisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(mask);
+      if (axisInfo) {
+        maskConstancyHor = axisInfo->getConstancy(rank - 1);
+        maskConstancyVer = axisInfo->getConstancy(rank - 2);
+      } else {
+        maskConstancyHor = 1;
+        maskConstancyVer = 1;
+      }
+    } else {
+      // no mask
+      maskConstancyHor = std::numeric_limits<unsigned>::max();
+      maskConstancyVer = std::numeric_limits<unsigned>::max();
+    }
+
+    // Check the constancy of the mask support to load the memory in 2D block.
+    if (!(maskConstancyHor >= instWidth && maskConstancyVer >= instHeight))
+      return failure();
+
+    // Get the LLVM values for `other`
+    DenseElementsAttr constAttr;
+    if (other && isa<IntegerType>(eltTy) &&
+        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
+        isa<IntegerType>(constAttr.getElementType())) {
+      otherIsSplatConstInt = true;
+      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
+    }
+    if (other) {
+      otherElems = unpackLLElements(loc, llOther, rewriter);
+    }
+
+    // re-arrange the ptrs and masks to for large 2D block IO.
+    // Layout is unrelated to the scalar type.
+    SmallVector<SmallVector<unsigned>> offsets =
+        mlir::emitOffsetForLayout(encoding, tensorType);
+    for (size_t i = 0; i < ptrElems.size(); ++i) {
+      SmallVector<unsigned> offset = offsets[i];
+      ptrs[offset] = ptrElems[i];
+      if (llMask)
+        masks[offset] = maskElems[i];
+      if (otherElems.size())
+        others[offset] = otherElems[i];
+    }
+    // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
+    // pitch.
+    if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
+      return failure();
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
     if (!isTransposeRequired) {
