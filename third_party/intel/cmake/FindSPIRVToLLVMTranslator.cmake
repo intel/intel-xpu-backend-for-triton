@@ -29,7 +29,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
                 RESULT_VARIABLE PATCH_RESULT
             )
             if(NOT PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to apply patch to SPIRV-LLVM-Translator")
+                message(FATAL_ERROR "Failed to apply patch 3122 to SPIRV-LLVM-Translator")
             endif()
 
             # FIXME: Don't apply patch when Agama LTS driver is updated or https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/3137 is addressed.
@@ -39,7 +39,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
                 RESULT_VARIABLE PATCH_RESULT
             )
             if(NOT PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to apply patch to SPIRV-LLVM-Translator")
+                message(FATAL_ERROR "Failed to apply patch 3138 to SPIRV-LLVM-Translator")
             endif()
 
             set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
