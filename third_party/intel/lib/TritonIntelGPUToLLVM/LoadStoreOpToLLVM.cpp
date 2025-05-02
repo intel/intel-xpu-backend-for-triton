@@ -1521,7 +1521,6 @@ struct LoadOpConversion
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
 
-    StringAttr kIteration = str_attr("iteration");
     StringAttr kLoad = str_attr("load");
 
     auto createTileLayout = [&](const SmallVectorImpl<unsigned> &threadOrder,
@@ -1640,9 +1639,8 @@ struct LoadOpConversion
     });
 
     if (isTransposeRequired) {
-      // for transpose the iterations will actually interleave. rewrite the
-      // register/lane bases and add iteration as a size 1 dimension actually
-      // maybe we just short circuit here...
+      // rewrite the register/lane bases and add iteration as a size 1 dimension
+      // actually maybe we just short circuit here...
       if (!oneMatrixPerLoadForBT) {
         // de-dupe?
         const unsigned heightDim = threadOrder[rank - 1];
@@ -1680,26 +1678,18 @@ struct LoadOpConversion
         tileLayout = LinearLayout(
             bases, llvm::to_vector<2>(tileLayout.getOutDimNames()));
       }
-
-      // add size 1 iteration dimension
-      tileLayout *= LinearLayout::identity1D(1, kIteration, dimInnerStr);
     } else {
       // what if we do this in the reg dimension??
       tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
                                              kRegister, dimOuterStr);
       tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
                                              kRegister, dimInnerStr);
-
-      // add size 1 iteration dimension to prevent breakage
-      tileLayout *= LinearLayout::identity1D(1, kIteration, dimInnerStr);
     }
 
     LLVM_DEBUG({
-      llvm::dbgs() << "block load tile layout after adding iterations: "
+      llvm::dbgs() << "block load tile layout after expanding registers: "
                    << tileLayout << "\n";
-      assert(tileLayout.getInDimSize(kIteration) ==
-             1); // TODO: remove kIteration
-      printRegLaneTileLayout({{kIteration, 0}}, tileLayout);
+      printRegLaneTileLayout({}, tileLayout);
       llvm::dbgs() << "\n";
     });
 
@@ -1804,28 +1794,9 @@ struct LoadOpConversion
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
                    << tileLayout << "\n";
-
-      auto printTileLayoutVals = [&](const size_t r, const size_t l,
-                                     const size_t itr, const size_t load) {
-        auto tensorValsLane = tileLayout.apply(
-            {{kRegister, r}, {kLane, l}, {kIteration, itr}, {kLoad, load}});
-        assert(tensorValsLane.size() == 2);
-
-        llvm::dbgs() << "[" << r << ", " << l << "] "
-                     << tensorValsLane[0].second << ", "
-                     << tensorValsLane[1].second << "\n";
-      };
-
       for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
-        for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
-          llvm::errs() << "load = " << load << ", itr = " << itr << "\n";
-          printTileLayoutVals(0, 0, itr, load);
-          printTileLayoutVals(0, tileLayout.getInDimSize(kLane) - 1, itr, load);
-          printTileLayoutVals(tileLayout.getInDimSize(kRegister) - 1, 0, itr,
-                              load);
-          printTileLayoutVals(tileLayout.getInDimSize(kRegister) - 1,
-                              tileLayout.getInDimSize(kLane) - 1, itr, load);
-        }
+        llvm::errs() << "load = " << load << "\n";
+        printRegLaneTileLayout({{kLoad, load}}, tileLayout);
       }
     });
 
@@ -1876,8 +1847,8 @@ struct LoadOpConversion
                               k / numOperandsInnerDimPerLoad;
           LLVM_DEBUG(llvm::dbgs() << "loadIdx: " << loadIdx << "\n");
 
-          const auto offset = tileLayout.apply(
-              {{kRegister, 0}, {kLane, 0}, {kIteration, 0}, {kLoad, loadIdx}});
+          const auto offset =
+              tileLayout.apply({{kRegister, 0}, {kLane, 0}, {kLoad, loadIdx}});
           assert(offset.size() == 2);
 
           const auto layoutOffsetX = offset[dimInner].second;
@@ -2022,8 +1993,8 @@ struct LoadOpConversion
                                     : indices[0];
             llvm::errs() << "first index = " << firstIndex << "\n";
 
-            auto loadValsOffset = tileLayoutPreLoads.apply(
-                {{kRegister, firstIndex}, {kLane, 0}, {kIteration, 0}});
+            auto loadValsOffset =
+                tileLayoutPreLoads.apply({{kRegister, firstIndex}, {kLane, 0}});
             assert(loadValsOffset.size() == 2);
             llvm::errs() << "loadValsOffset = " << loadValsOffset[0].second
                          << ", " << loadValsOffset[1].second << "\n";
