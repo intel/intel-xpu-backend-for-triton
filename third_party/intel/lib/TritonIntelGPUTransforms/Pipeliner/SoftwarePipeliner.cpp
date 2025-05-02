@@ -107,9 +107,8 @@ struct IntelGPUPipelinePass
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
-    for (scf::ForOp forOp : loops) {
+    for (scf::ForOp forOp : loops)
       pipelineLoop(forOp, numStages, barrierScope);
-    }
   }
 };
 } // anonymous namespace
