@@ -1533,14 +1533,6 @@ struct LoadOpConversion
       const unsigned widthDim = threadOrder[rank - 2];
       const unsigned heightDim = threadOrder[rank - 1];
 
-#if 0
-      if (isTransposeRequired && opIdx == DpasEncodingAttr::OpIdx::OperandB) {
-
-        const unsigned origTileWidth = tileShape[widthDim];
-        tileShape[widthDim] = origTileWidth / (32 / elemSizeInBits);
-      }
-#endif
-
       // the DPAS tile width specifies the number of lanes/work-items
       basisT laneBase;
       for (int i = 1; i < tileShape[widthDim]; i = i << 1) {
@@ -1645,87 +1637,6 @@ struct LoadOpConversion
         // de-dupe?
         const unsigned heightDim = threadOrder[rank - 1];
 
-#if 0
-        // this creates a layout with tensor values that look like the shuffle vector vlaues, but that's not qutie what we want
-        SmallVector<std::pair<StringAttr, int32_t>> outDims;
-        for (auto [name, size] :
-            llvm::zip(tileLayout.getOutDimNames(), tileLayout.getOutDimSizes())) {
-          outDims.push_back(std::make_pair(name, size));
-        }
-        assert(outDims[0].first == str_attr("dim0"));
-        assert(outDims[1].first == str_attr("dim1"));
-
-        auto bases = tileLayout.getBases();
-
-        const unsigned basisIndexForInterleave =
-        llvm::Log2_32(numOperandsInnerDimPerLoad);
-    LLVM_DEBUG(llvm::dbgs() << "Basis index for transpose interleave = "
-                            << basisIndexForInterleave << "\n");
-
-        const auto &regBases = bases[kRegister];
-#if 1
-        basisT newRegBases{{2,0}, {4,0}, {8,0}};
-#else
-        basisT newRegBases;
-        newRegBases.push_back({0, 0});
-        for (size_t i = 0; i < regBases.size() - 1; i++) {
-#if 0
-          if (i == basisIndexForInterleave) {
-            /*newRegBases.push_back(
-                {static_cast<int>(elemsPerDPASInst[heightDim]), 0});*/
-            // newRegBases.push_back({0, 0});
-            continue;
-          }
-#endif
-          newRegBases.push_back(regBases[i]);
-        }
-#endif
-        bases[kRegister] = newRegBases;
-
-        basisT iterationBases;
-#if 1
-        iterationBases.push_back({1, 0});
-#else
-        iterationBases.push_back(
-            {static_cast<int>(elemsPerDPASInst[heightDim]), 0});
-#endif
-        bases[kIteration] = iterationBases;
-
-        outDims[0].second = 32;
-        outDims[1].second = 16;
-#if 1
-        tileLayout = LinearLayout(
-  bases, llvm::to_vector<2>(tileLayout.getOutDimNames()));
-#else
-        tileLayout = LinearLayout(
-            bases, outDims,
-            /*requiredSurjective=*/false);
-#endif
-
-        // TODO: macro to print the reg/lane part of the layout
-        LLVM_DEBUG({
-          llvm::dbgs() << "Block load tile layout w/ interleave: " << tileLayout
-                       << "\n";
-          for (size_t i = 0; i < tileLayout.getInDimSize(kIteration); i++) {
-            llvm::dbgs() << "reg : lane [itr = " << i << "]\n";
-            for (size_t r = 0; r < tileLayout.getInDimSize(kRegister); r++) {
-              llvm::dbgs() << r << " :";
-              for (size_t l = 0; l < tileLayout.getInDimSize(kLane); l++) {
-                auto tensorValsLane = tileLayout.apply({{kRegister, r},
-                                                        {kLane, l},
-                                                        { kIteration,
-                                                          i }});
-                assert(tensorValsLane.size() == 2);
-
-                llvm::dbgs() << " \t " << tensorValsLane[0].second << ", "
-                             << tensorValsLane[1].second;
-              }
-              llvm::dbgs() << "\n";
-            }
-          }
-          llvm::dbgs() << "tile layout done\n";
-        });
-#else
         // this is the layout we want, interleaving the values from both
         // "vblock" loads - but we lose the notion of the vblock maybe we need
         // two layouts. one layout is register / lane -> tensor value. the other
@@ -1778,7 +1689,6 @@ struct LoadOpConversion
 
           llvm::dbgs() << "tile layout done\n";
         });
-#endif
       }
 
       // add size 1 iteration dimension
@@ -2086,28 +1996,14 @@ struct LoadOpConversion
                                       : numOperandsOuterDimPerLoad;
           unsigned packedColNumPerVBlock = packedColNum / vBlocks;
 
-#if 0
-          // this is basically always 0, not what we want
-          auto dpasRegStart = dpasCoordToRegLayout.apply(offset);
-          assert(dpasRegStart.size() > 0 && dpasRegStart[0].first == kRegister);
-          for (const auto& coord : dpasRegStart) {
-            llvm::errs() << "\t" << coord.first << " = " << coord.second << "\n";
-          }
-          llvm::errs() << "dpas reg start = " << dpasRegStart[0].second << "\n";
-#endif
-
           auto inverseTileLayout = tileLayoutPreLoads.pseudoinvert();
           llvm::errs() << "inverse tile layout = " << inverseTileLayout << "\n";
 
-          auto regStart = 0;
-          auto regEnd = regStart + tileLayoutPreLoads.getInDimSize(kRegister);
-          llvm::errs() << "reg start = " << regStart << "\n";
-          llvm::errs() << "reg end = " << regEnd << "\n";
-
           // both layouts are unpacked. however, we want to generate packed
           // shuffle vectors
-          for (int v = 0; v < regEnd; v += packedElemsPerLanePerDPASInst *
-                                           dpasTileToPackedIndicesRatio) {
+          for (int v = 0; v < tileLayoutPreLoads.getInDimSize(kRegister);
+               v +=
+               packedElemsPerLanePerDPASInst * dpasTileToPackedIndicesRatio) {
             llvm::errs() << "v = " << v << "\n";
             SmallVector<int32_t> indices;
             for (int r = v; r < v + (packedElemsPerLanePerDPASInst *
@@ -2143,38 +2039,12 @@ struct LoadOpConversion
               });
             }
 
-#if 0
-            // compute the index for the load vals map
-            auto loadValsIndex = offset;
-            llvm::errs() << "loadValsIndex = " << loadValsIndex[0].second
-                         << ", " << loadValsIndex[1].second << "\n";
-            auto loadValsOffset = tileLayoutPreLoads.apply(
-                {{kRegister, indices[0]}, {kLane, 0}, {kIteration, 0}});
-            assert(loadValsOffset.size() == 2);
-            llvm::errs() << "loadValsOffset = " << loadValsOffset[0].second
-                         << ", " << loadValsOffset[1].second << "\n";
-
-            auto loadValsX = loadValsIndex[0].second / repOuterStride +
-                             (loadValsOffset[0].second) *
-                                 dpasTileToPackedIndicesRatio /
-                                 elemsPerDPASInst[0];
-            auto loadValsY = loadValsIndex[1].second +
-                             (loadValsOffset[1].second) / elemsPerDPASInst[1];
-
-            // TODO: this isn't right for the transpose case
-            LLVM_DEBUG({
-              llvm::dbgs() << "new load vals index: " << loadValsX << ", "
-                           << loadValsY << "\n";
-            });
-#else
             // TODO: can we replace the loop specific vars here like row and
             // col? Save the decomposed vals to the map; need to replace row,
             // col, vblk
-#if 1
             const unsigned firstIndex =
                 isTransposeRequired ? indices[0] * dpasTileToPackedIndicesRatio
                                     : indices[0];
-#endif
             llvm::errs() << "first index = " << firstIndex << "\n";
 
             auto loadValsOffset = tileLayoutPreLoads.apply(
@@ -2196,7 +2066,6 @@ struct LoadOpConversion
             llvm::errs() << "row = " << row << ", col = " << col
                          << ", vblk = " << vblk << "\n";
 
-#if 1
             // under transpose we need to increase the packed row num by the
             // "interleave" factor - is this the same as the packed indices
             // ratio? probably not, it is probably something like row size /
@@ -2214,42 +2083,6 @@ struct LoadOpConversion
 #if 0
               loadVals[{loadX, loadY}] =
               b.bitcast(loadVal, unpackedDPASOperandType);
-#endif
-#else
-            switch (opIdx) {
-            case DpasEncodingAttr::OpIdx::OperandA: {
-              const auto loadX =
-                  outer * packedRowNum * numLoadPerOutRepCluster +
-                  rep * packedRowNum + row;
-              const auto loadY = k + vblk * packedColNumPerVBlock + col;
-              LLVM_DEBUG({
-                llvm::dbgs() << "layout load vals index: " << loadX << ", "
-                             << loadY << "\n";
-              });
-#if 0
-                  loadVals[{loadX, loadY}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
-#endif
-            } break;
-            case DpasEncodingAttr::OpIdx::OperandB: {
-              const auto loadX =
-                  outer * packedColNum * numLoadPerOutRepCluster +
-                  rep * packedColNum + vblk * packedColNumPerVBlock + col;
-              const auto loadY = k + row;
-              LLVM_DEBUG({
-                llvm::dbgs() << "layout load vals index: " << loadX << ", "
-                             << loadY << "\n";
-              });
-#if 0
-                  loadVals[{loadX, loadY}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
-#endif
-            } break;
-            case DpasEncodingAttr::OpIdx::OperandC: {
-              llvm_unreachable("unexpected OpIdx::OperandC");
-            } break;
-            }
-#endif // CASE vs IF
 #endif
           }
 
