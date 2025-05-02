@@ -5,8 +5,8 @@ using namespace mlir;
 namespace tt = mlir::triton;
 
 // Combine the current mask with the given predicate.
-Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
-                  Value pred) {
+Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
+                      Value pred) {
   Type maskType = tt::getI1SameShape(typeLike);
   Location loc = pred.getLoc();
   Value mask = pred;
