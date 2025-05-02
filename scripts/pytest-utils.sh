@@ -44,6 +44,7 @@ pytest() {
         if [[ $TEST_UNSKIP = false ]]; then
             pytest_extra_args+=(
                 "--skip-from-file=$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+                "--select-fail-on-missing"
             )
         else
             pytest_extra_args+=(

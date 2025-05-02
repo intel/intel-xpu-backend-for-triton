@@ -80,9 +80,6 @@ fi
 if [ ! -d "$PACKAGES_DIR" ]; then
   mkdir $PACKAGES_DIR
 fi
-if [ $BASE != $HOME ]; then
-  ln -sfT $PACKAGES_DIR $HOME/packages
-fi
 
 ############################################################################
 # Clone the Triton project fork if it does not exists.
