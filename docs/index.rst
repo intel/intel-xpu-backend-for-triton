@@ -29,6 +29,7 @@ Python API
 - :doc:`triton.language <python-api/triton.language>`
 - :doc:`triton.testing <python-api/triton.testing>`
 - :doc:`Triton semantics <python-api/triton-semantics>`
+- :doc:`triton.language.extra.cuda <python-api/triton.language.extra.cuda>`
 
 
 .. toctree::
