@@ -1683,6 +1683,10 @@ struct LoadOpConversion
 
     unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
     unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
+    LLVM_DEBUG({
+      llvm::dbgs() << "tileWidth = " << tileWidth << "\n";
+      llvm::dbgs() << "tileHeight = " << tileHeight << "\n";
+    });
 
     MLIRContext *ctx = rewriter.getContext();
     const StringAttr dimOuterStr = S("dim" + std::to_string(dimOuter));
@@ -1797,10 +1801,20 @@ struct LoadOpConversion
       numOperandsPer2DloadN = 1;
     }
 
-    // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
-    // enlarging the tileHeight.
-    numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
+    // PVC load supports max 32 rows, but we don't want to load more than the
+    // block size.
+    const unsigned maxSupportedLoadHeight =
+        std::min(32u, static_cast<unsigned>(tensorShape[dimOuter]));
+    // Increase numOperandsPer2DLoadM up to the maximum tile height - i.e.
+    // generate the load with the largest possible number of rows.
+    numOperandsPer2DLoadM =
+        std::min(numOperandsPer2DLoadM,
+                 mlir::ceil<unsigned>(maxSupportedLoadHeight, tileHeight));
     tileHeight = tileHeight * numOperandsPer2DLoadM;
+    LLVM_DEBUG(llvm::dbgs()
+               << "TileHeight after scaling to max allowed height ("
+               << maxSupportedLoadHeight << ") = " << tileHeight << "\n");
+    assert(tileHeight > 0);
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
@@ -1852,8 +1866,20 @@ struct LoadOpConversion
     if (isTransposeRequired)
       std::swap(numOperandsOuterDimPerLoad, numOperandsInnerDimPerLoad);
 
-    const unsigned numLoadPerOutRepCluster =
+    unsigned numRepetitions =
         mlir::ceil<unsigned>(repCluster[dimOuter], numOperandsOuterDimPerLoad);
+
+    unsigned numLoadPerOutRepCluster = 1;
+    if (tileWidth * numOperandsOuterDimPerLoad < tensorShape[dimOuter]) {
+      // layout unconstrained by tensor shape, handle repetitions using
+      // additional loads
+      // TODO: is it possible to develop a heuristic here to mix shuffle vector
+      // repetitions with additional loads?
+      numLoadPerOutRepCluster = numRepetitions;
+      numRepetitions = 1;
+    }
+
+    LLVM_DEBUG(llvm::dbgs() << "numRepetitions = " << numRepetitions << "\n");
     LLVM_DEBUG(llvm::dbgs() << "numLoadPerOutRepCluster = "
                             << numLoadPerOutRepCluster << "\n");
 
@@ -1862,6 +1888,11 @@ struct LoadOpConversion
                                 numOperandsInnerDimPerLoad;
     Type load2DGenXType =
         LLVM::getVectorType(loadResultElemType, numValuesPerLoad);
+    LLVM_DEBUG({
+      llvm::dbgs() << "load2DGenXType = " << load2DGenXType << "\n";
+      llvm::dbgs() << "loadResultElemType = " << loadResultElemType << "\n";
+      llvm::dbgs() << "numValuesPerLoad = " << numValuesPerLoad << "\n";
+    });
 
     // The stride for the replicates.
     unsigned repOuterStride = warpShape[dimOuter] * outerDimWarpNum;
@@ -2085,12 +2116,12 @@ struct LoadOpConversion
               /*vnni_transform*/
               (usePackedType && !isOperandA && !isTransposeRequired &&
                originalElemBits != 32));
+          LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
           if (failed(load2dOp.verify())) {
             // Explicitly invoke verifier because `triton_gen` ops are
             // immediately lowered further to a builtin call.
             return failure();
           }
-          LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
 
           unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsOuterDimPerLoad
@@ -2104,62 +2135,59 @@ struct LoadOpConversion
           for (int vblk = 0; vblk < vBlocks; ++vblk)
             for (int row = 0; row < packedRowNum; ++row)
               for (int col = 0; col < packedColNumPerVBlock; ++col) {
+                for (int shuffleRep = 0; shuffleRep < numRepetitions;
+                     ++shuffleRep) {
+                  unsigned operandStartOffset = (vblk * packedRowNum + row) *
+                                                packedColNumPerVBlock *
+                                                packedElemsPerLanePerDPASInst;
 
-                unsigned operandStartOffset = (vblk * packedRowNum + row) *
-                                              packedColNumPerVBlock *
-                                              packedElemsPerLanePerDPASInst;
+                  SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
+                  for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
+                       ++elemIdx) {
+                    indices[elemIdx] = operandStartOffset +
+                                       elemIdx * packedColNumPerVBlock + col;
+                    LLVM_DEBUG({
+                      llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
+                                   << indices[elemIdx] << "\n";
+                    });
+                  }
+                  DenseI32ArrayAttr attr =
+                      rewriter.getDenseI32ArrayAttr(indices);
+                  Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
+                      loc, packedDPASOperandType, load2dOp, load2dOp, attr);
 
-                SmallVector<int32_t> indices(packedElemsPerLanePerDPASInst);
-                for (int elemIdx = 0; elemIdx < packedElemsPerLanePerDPASInst;
-                     ++elemIdx) {
-                  indices[elemIdx] = operandStartOffset +
-                                     elemIdx * packedColNumPerVBlock + col;
-                  LLVM_DEBUG({
-                    llvm::dbgs() << "indices[" << elemIdx << "]" << " = "
-                                 << indices[elemIdx] << "\n";
-                  });
-                }
-                DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
-                Value loadVal = rewriter.create<LLVM::ShuffleVectorOp>(
-                    loc, packedDPASOperandType, load2dOp, load2dOp, attr);
-
-                // Save the decomposed vals to the map;
-                switch (opIdx) {
-                case DpasEncodingAttr::OpIdx::OperandA: {
-                  LLVM_DEBUG({
-                    llvm::dbgs() << "load vals index: "
-                                 << std::to_string(outer * packedRowNum *
-                                                       numLoadPerOutRepCluster +
-                                                   rep * packedRowNum + row)
-                                 << ", "
-                                 << std::to_string(
-                                        k + vblk * packedColNumPerVBlock + col)
-                                 << "\n";
-                  });
-                  loadVals[{outer * packedRowNum * numLoadPerOutRepCluster +
-                                rep * packedRowNum + row,
-                            k + vblk * packedColNumPerVBlock + col}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
-                } break;
-                case DpasEncodingAttr::OpIdx::OperandB: {
-                  LLVM_DEBUG({
-                    llvm::dbgs()
-                        << "load vals index: "
-                        << std::to_string(outer * packedColNum *
-                                              numLoadPerOutRepCluster +
-                                          rep * packedColNum +
-                                          vblk * packedColNumPerVBlock + col)
-                        << ", " << std::to_string(k + row) << "\n";
-                  });
-                  loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
-                                rep * packedColNum +
-                                vblk * packedColNumPerVBlock + col,
-                            k + row}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
-                } break;
-                case DpasEncodingAttr::OpIdx::OperandC: {
-                  llvm_unreachable("unexpected OpIdx::OperandC");
-                } break;
+                  // Save the decomposed vals to the map;
+                  switch (opIdx) {
+                  case DpasEncodingAttr::OpIdx::OperandA: {
+                    const unsigned loadValsX =
+                        outer * packedRowNum * numLoadPerOutRepCluster +
+                        rep * packedRowNum + shuffleRep * numRepetitions + row;
+                    const unsigned loadValsY =
+                        k + vblk * packedColNumPerVBlock + col;
+                    LLVM_DEBUG({
+                      llvm::dbgs() << "load vals index: " << loadValsX << ", "
+                                   << loadValsY << "\n";
+                    });
+                    loadVals[{loadValsX, loadValsY}] =
+                        b.bitcast(loadVal, unpackedDPASOperandType);
+                  } break;
+                  case DpasEncodingAttr::OpIdx::OperandB: {
+                    const unsigned loadValsX =
+                        outer * packedColNum * numLoadPerOutRepCluster +
+                        rep * packedColNum + shuffleRep +
+                        vblk * packedColNumPerVBlock + col;
+                    const unsigned loadValsY = k + row;
+                    LLVM_DEBUG({
+                      llvm::dbgs() << "load vals index: " << loadValsX << ", "
+                                   << loadValsY << "\n";
+                    });
+                    loadVals[{loadValsX, loadValsY}] =
+                        b.bitcast(loadVal, unpackedDPASOperandType);
+                  } break;
+                  case DpasEncodingAttr::OpIdx::OperandC: {
+                    llvm_unreachable("unexpected OpIdx::OperandC");
+                  } break;
+                  }
                 }
               }
         }
