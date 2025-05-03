@@ -1628,6 +1628,24 @@ struct LoadOpConversion
     numOperandsInnerDimPerLoad =
         isOperandA ? numOperandsPer2DloadN : numOperandsPer2DLoadM;
 
+    // downscale if the load size is bigger than the block size
+    LLVM_DEBUG({
+      llvm::dbgs() << "numOperandsOuterDimPerLoad before downscaling = "
+                   << numOperandsOuterDimPerLoad << "\n";
+      llvm::dbgs() << "numOperandsInnerDimPerLoad before downscaling = "
+                   << numOperandsInnerDimPerLoad << "\n";
+    });
+    numOperandsOuterDimPerLoad =
+        std::max(std::min(numOperandsOuterDimPerLoad,
+                          static_cast<unsigned>(tensorShape[dimOuter] /
+                                                elemsPerDPASInst[0])),
+                 1u);
+    numOperandsInnerDimPerLoad =
+        std::max(std::min(numOperandsInnerDimPerLoad,
+                          static_cast<unsigned>(tensorShape[dimInner] /
+                                                elemsPerDPASInst[1])),
+                 1u);
+
     LLVM_DEBUG({
       llvm::dbgs() << "numOperandsOuterDimPerLoad = "
                    << numOperandsOuterDimPerLoad << "\n";
