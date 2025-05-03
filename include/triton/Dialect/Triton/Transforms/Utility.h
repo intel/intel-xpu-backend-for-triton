@@ -5,7 +5,11 @@
 
 using namespace mlir;
 
+namespace mlir::triton {
+
 Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                   Value pred);
+
+} // namespace mlir::triton
 
 #endif // TRITON_TRANSFORMS_UTILITY_H
