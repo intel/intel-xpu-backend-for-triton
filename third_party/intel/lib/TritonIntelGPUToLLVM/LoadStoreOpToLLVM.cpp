@@ -1495,6 +1495,12 @@ struct LoadOpConversion
 
     unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
     unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
+    LLVM_DEBUG({
+      llvm::dbgs() << "tileWidth = elemsPerDPASInst[" << threadOrder[rank - 2]
+                   << "] = " << tileWidth << "\n";
+      llvm::dbgs() << "tileHeight = elemsPerDPASInst[" << threadOrder[rank - 1]
+                   << "] = " << tileHeight << "\n";
+    });
 
     MLIRContext *ctx = rewriter.getContext();
     const StringAttr dimOuterStr = str_attr("dim" + std::to_string(dimOuter));
@@ -1503,14 +1509,6 @@ struct LoadOpConversion
       llvm::dbgs() << "dimOuterStr: " << dimOuterStr << "\n";
       llvm::dbgs() << "dimInnerStr: " << dimInnerStr << "\n";
     });
-
-    unsigned dpasTileToPackedIndicesRatio =
-        elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst;
-    // if the number of elements in the DPAS tile is less than the number of
-    // packed elems per lane set the ratio to 1
-    dpasTileToPackedIndicesRatio = std::max(dpasTileToPackedIndicesRatio, 1u);
-    LLVM_DEBUG(llvm::dbgs() << "dpasTileToPackedIndicesRatio = "
-                            << dpasTileToPackedIndicesRatio << "\n");
 
     // Create the linear layout for the load.
     // First, we create a tile layout corresponding to a single invocation of
@@ -1655,6 +1653,8 @@ struct LoadOpConversion
       // rewrite the register/lane bases and add iteration as a size 1 dimension
       // actually maybe we just short circuit here...
       if (!oneMatrixPerLoadForBT) {
+
+        assert(numOperandsInnerDimPerLoad == 2);
         // TODO: de-dupe
         const unsigned widthDim = threadOrder[rank - 2];
 
@@ -1670,8 +1670,7 @@ struct LoadOpConversion
         // taking the dpas layout, iterating registers in a single lane, and
         // checking tensor values. maybe comparing them against the offset tile
         // layout
-        const unsigned basisIndexForInterleave =
-            llvm::Log2_32(numOperandsInnerDimPerLoad);
+        const unsigned basisIndexForInterleave = 32 / elemSizeInBits;
         LLVM_DEBUG(llvm::dbgs() << "Basis index for transpose interleave = "
                                 << basisIndexForInterleave << "\n");
 
@@ -1680,7 +1679,7 @@ struct LoadOpConversion
 
         basisT newRegBases;
         for (size_t i = 0; i < regBases.size(); i++) {
-          if (i == basisIndexForInterleave) {
+          if (i == basisIndexForInterleave - 1) {
             newRegBases.push_back(
                 {0, static_cast<int>(elemsPerDPASInst[widthDim])});
           }
@@ -1692,7 +1691,6 @@ struct LoadOpConversion
             bases, llvm::to_vector<2>(tileLayout.getOutDimNames()));
       }
     } else {
-      // what if we do this in the reg dimension??
       tileLayout *= LinearLayout::identity1D(numOperandsOuterDimPerLoad,
                                              kRegister, dimOuterStr);
       tileLayout *= LinearLayout::identity1D(numOperandsInnerDimPerLoad,
@@ -1786,7 +1784,37 @@ struct LoadOpConversion
       }
     });
 
+    llvm::errs() << "num consecutive in out = "
+                 << tileLayout.getNumConsecutiveInOut() << "\n";
+    // llvm::errs() << "num consecutive in out flattened = " <<
+    // tileLayout.transposeOuts(llvm::to_vector<2>(llvm::reverse(tileLayout.getOutDimNames()))).getNumConsecutiveInOut()
+    // << "\n";
+
+#if 0
+    unsigned dpasTileToPackedIndicesRatio = elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst;
+#else
+    // TODO: works for "working", gives incorrect results for the first float
+    // transpose test
+    llvm::errs() << "elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst = "
+                 << elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst << "\n";
+    unsigned dpasTileToPackedIndicesRatio =
+        std::min(elemsPerDPASInst[0] / packedElemsPerLanePerDPASInst,
+                 static_cast<unsigned>(tileLayout.getNumConsecutiveInOut()));
+#endif
+    // if the number of elements in the DPAS tile is less than the number of
+    // packed elems per lane set the ratio to 1
+    dpasTileToPackedIndicesRatio = std::max(dpasTileToPackedIndicesRatio, 1u);
+    LLVM_DEBUG(llvm::dbgs() << "dpasTileToPackedIndicesRatio = "
+                            << dpasTileToPackedIndicesRatio << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "packedElemsPerLanePerDPASInst = "
+                            << packedElemsPerLanePerDPASInst << "\n");
+
     auto tileLayoutPreLoads = tileLayout; // maintain a surjective layout
+    llvm::errs() << "getNumConsecutiveInOut = "
+                 << tileLayoutPreLoads.getNumConsecutiveInOut() << "\n";
+    llvm::errs() << "packedElemsPerLanePerDPASInst = "
+                 << packedElemsPerLanePerDPASInst << "\n";
+    llvm::errs() << "elemsPerDPASInst[0] = " << elemsPerDPASInst[0] << "\n";
 
     // Disable building the load layout if we are not going to use it. Building
     // the layout manually can cause an error which would abort the pass
@@ -1982,8 +2010,16 @@ struct LoadOpConversion
               }
               assert(tileLayoutHwIndex.size() > 0 &&
                      tileLayoutHwIndex[0].first == kRegister);
+
+#if 1
               auto reg =
                   tileLayoutHwIndex[0].second / dpasTileToPackedIndicesRatio;
+#else
+              auto reg = tileLayoutHwIndex[0].second;
+              if (isTransposeRequired) {
+                reg = reg / tileLayoutPreLoads.getNumConsecutiveInOut();
+              }
+#endif
 
               indices.push_back(reg);
               llvm::errs() << "reg = " << reg << "\n";
@@ -2004,12 +2040,12 @@ struct LoadOpConversion
             const unsigned firstIndex =
                 isTransposeRequired ? indices[0] * dpasTileToPackedIndicesRatio
                                     : indices[0];
-            llvm::errs() << "first index = " << firstIndex << "\n";
+            llvm::errs() << "\tfirst index = " << firstIndex << "\n";
 
             auto loadValsOffset =
                 tileLayoutPreLoads.apply({{kRegister, firstIndex}, {kLane, 0}});
             assert(loadValsOffset.size() == 2);
-            llvm::errs() << "loadValsOffset = " << loadValsOffset[0].second
+            llvm::errs() << "\tloadValsOffset = " << loadValsOffset[0].second
                          << ", " << loadValsOffset[1].second << "\n";
 
             // transpose interleaves coords at the row level
@@ -2022,7 +2058,7 @@ struct LoadOpConversion
               std::swap(row, col);
             int vblk = 0;
 
-            llvm::errs() << "row = " << row << ", col = " << col
+            llvm::errs() << "\trow = " << row << ", col = " << col
                          << ", vblk = " << vblk << "\n";
 
             // under transpose we need to increase the packed row num by the
