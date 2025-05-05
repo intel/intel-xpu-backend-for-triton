@@ -1635,16 +1635,14 @@ struct LoadOpConversion
       llvm::dbgs() << "numOperandsInnerDimPerLoad before downscaling = "
                    << numOperandsInnerDimPerLoad << "\n";
     });
-    numOperandsOuterDimPerLoad =
-        std::max(std::min(numOperandsOuterDimPerLoad,
-                          static_cast<unsigned>(tensorShape[dimOuter] /
-                                                elemsPerDPASInst[0])),
-                 1u);
-    numOperandsInnerDimPerLoad =
-        std::max(std::min(numOperandsInnerDimPerLoad,
-                          static_cast<unsigned>(tensorShape[dimInner] /
-                                                elemsPerDPASInst[1])),
-                 1u);
+
+    numOperandsOuterDimPerLoad = std::min(
+        numOperandsOuterDimPerLoad,
+        mlir::ceil<unsigned>(tensorShape[dimOuter], elemsPerDPASInst[0]));
+
+    numOperandsInnerDimPerLoad = std::min(
+        numOperandsInnerDimPerLoad,
+        mlir::ceil<unsigned>(tensorShape[dimInner], elemsPerDPASInst[1]));
 
     LLVM_DEBUG({
       llvm::dbgs() << "numOperandsOuterDimPerLoad = "
