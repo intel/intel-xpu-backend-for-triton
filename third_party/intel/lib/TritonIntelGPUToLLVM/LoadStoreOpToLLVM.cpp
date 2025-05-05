@@ -168,6 +168,13 @@ struct LoadStoreConversionBase {
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
+  unsigned getStride(Value ptr, unsigned dim) const {
+    AxisInfo *axisInfo =
+        const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+            .getAxisInfo(ptr);
+    return axisInfo ? axisInfo->getStride(dim) : -1;
+  }
+
   unsigned getContiguity(Value ptr) const {
     return const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
         .getContiguity(ptr);
@@ -676,22 +683,28 @@ struct PrefetchOpConversion
         masks[offset] = maskElems[i];
     }
 
-    // baseAddrs[{0, 0}] and baseAddrs[{1, 0}] are currently used to calculate
-    // the pitch.
-    if (baseAddrs.count({0, 0}) == 0 || baseAddrs.count({1, 0}) == 0)
-      return failure();
-
     Value baseWidth =
         b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
+    unsigned stride = getStride(op.getPtr(), 0);
+    Value rowStrideInBytes;
+    if (stride == -1) {
+      // baseAddrs[{0, 0}] and baseAddrs[{1, 0}] are currently used to calculate
+      // the pitch.
+      if (baseAddrs.count({0, 0}) == 0 || baseAddrs.count({1, 0}) == 0)
+        return failure();
+
+      rowStrideInBytes = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
+                               b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
+      rowStrideInBytes =
+          targetInfo.shuffleIdx(rewriter, loc, rowStrideInBytes, 0);
+      rowStrideInBytes = b.umax(b.trunc(i32_ty, rowStrideInBytes), baseWidth);
+    } else {
+      rowStrideInBytes = b.i32_val(stride * elemSizeInBits / 8);
+    }
+
     Value baseHeight = b.i32_val(tileHeightInElem);
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
-    Value rowStrideInBytes = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
-                                   b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
-    rowStrideInBytes =
-        targetInfo.shuffleIdx(rewriter, loc, rowStrideInBytes, 0);
-    rowStrideInBytes = b.umax(b.trunc(i32_ty, rowStrideInBytes), baseWidth);
-    rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
 
     for (int row = 0; row < numReps[0]; ++row) {
       for (int col = 0; col < numReps[1]; ++col) {
@@ -972,10 +985,6 @@ struct LoadOpToBlockIOConversion
       if (otherElems.size())
         others[offset] = otherElems[i];
     }
-    // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
-    // pitch.
-    if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
-      return failure();
 
     unsigned numOperandsPer2DLoadM, numOperandsPer2DloadN;
     if (!isTransposeRequired) {
@@ -1052,12 +1061,23 @@ struct LoadOpToBlockIOConversion
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
 
     Value baseWidth = b.i32_val(vBlocks * tileWidth * (elemSizeInBits / 8));
-    Value baseHeight = b.i32_val(tileHeight);
-    Value pitch = b.sub(b.ptrtoint(i64_ty, ptrs[{1, 0}]),
-                        b.ptrtoint(i64_ty, ptrs[{0, 0}]));
-    pitch = targetInfo.shuffleIdx(rewriter, loc, pitch, 0);
-    pitch = b.umax(b.trunc(i32_ty, pitch), baseWidth);
+    unsigned stride = getStride(ptr, 0);
+    Value pitch;
+    if (stride == -1) {
+      // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
+      // pitch.
+      if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
+        return failure();
 
+      pitch = b.sub(b.ptrtoint(i64_ty, ptrs[{1, 0}]),
+                    b.ptrtoint(i64_ty, ptrs[{0, 0}]));
+      pitch = targetInfo.shuffleIdx(rewriter, loc, pitch, 0);
+      pitch = b.umax(b.trunc(i32_ty, pitch), baseWidth);
+    } else {
+      pitch = b.i32_val(stride * elemSizeInBits / 8);
+    }
+
+    Value baseHeight = b.i32_val(tileHeight);
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");

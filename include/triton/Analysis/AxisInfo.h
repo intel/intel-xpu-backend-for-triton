@@ -70,7 +70,9 @@ public:
   //    [19, 23, 27, 31]]
   //
   // has stride [1, 4].
-  int64_t getStride(size_t dim) const { return stride[dim]; }
+  int64_t getStride(size_t dim) const {
+    return stride.size() > dim ? stride[dim] : -1;
+  }
   const DimVectorT &getStride() const { return stride; }
 
   // TODO: Add contiguity with stride.
