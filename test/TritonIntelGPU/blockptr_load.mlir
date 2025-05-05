@@ -273,6 +273,24 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
+// COM: 2D block load reduced to be <= block size
+// CHECK-DAG: llvm.func spir_funccc @_Z51intel_sub_group_2d_block_read_transform_8b_32r16x2cPU3AS1viiiDv2_iPj(!llvm.ptr<1> {llvm.nonnull, llvm.readonly}, i32, i32, i32, vector<2xi32>, !llvm.ptr {llvm.nonnull, llvm.writeonly}) attributes {no_unwind, will_return}
+#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 2], A = [8, 32], B = [32, 32], C = [8, 32]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=4}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func public @matmul_no_scf_with_advance_kernel(%arg0: !tt.ptr<i8>, %arg1: !tt.ptr<i8>, %arg2: i64, %arg3: i64, %arg4: i64, %arg5: i64, %arg7: i64) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %ptrB = tt.make_tensor_ptr %arg1, [%arg4, %arg3], [%arg7, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x16xi8, #dot1>>
+    // CHECK-COUNT-1: llvm.call spir_funccc @_Z51intel_sub_group_2d_block_read_transform_8b_32r16x2cPU3AS1viiiDv2_iPj({{.*}}) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
+    // CHECK-NOT: llvm.call spir_funccc @_Z51intel_sub_group_2d_block_read_transform_8b_32r16x2cPU3AS1viiiDv2_iPj({{.*}}) {{.*}} : (!llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
+    %B = tt.load %ptrB {boundaryCheck = array<i32: 0>, padding = 1 : i32, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<64x16xi8, #dot1>>
+    tt.return
+  }
+}
+
+// -----
+
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
