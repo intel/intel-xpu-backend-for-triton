@@ -92,14 +92,13 @@ def path_to_cuobjdump():
     return config.nvidia.cuobjdump.path
 
 
-@functools.lru_cache()
 def path_to_spvbin():
-    from triton.backends.intel.compiler import _path_to_binary
-    return _path_to_binary("spirv-dis")
+    from triton import config
+    return config.intel.spirv_dis.path
 
 
 def extract_spvbin(file_path):
-    dis, _ = path_to_spvbin()
+    dis = path_to_spvbin()
     spv_str = subprocess.check_output([dis, file_path], text=True)
     return spv_str
 

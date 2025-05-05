@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sysconfig
+import shutil
 
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -158,6 +159,25 @@ class NvidiaTool:
             return None
 
 
+@dataclass
+class IntelTool:
+    path: str
+    version: str
+
+    @staticmethod
+    def from_path(path: str) -> Optional[IntelTool]:
+        try:
+            result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
+            if result is None:
+                return None
+            version = re.search(r".*SPIRV-Tools v(\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
+            if version is None:
+                return None
+            return IntelTool(path, version.group(1))
+        except subprocess.CalledProcessError:
+            return None
+
+
 class env_nvidia_tool(env_base[str, NvidiaTool]):
 
     def __init__(self, binary: str) -> None:
@@ -182,6 +202,39 @@ class env_nvidia_tool(env_base[str, NvidiaTool]):
             if not path or not os.access(path, os.X_OK):
                 continue
             if tool := NvidiaTool.from_path(path):
+                return tool
+
+        raise RuntimeError(f"Cannot find {self.binary}")
+
+    def from_env(self, val: str) -> str:
+        return val
+
+
+class env_intel_tool(env_base[str, IntelTool]):
+
+    def __init__(self, binary: str) -> None:
+        binary += sysconfig.get_config_var("EXE")
+        self.binary = binary
+        super().__init__(f"TRITON_{binary.upper().replace('-', '_')}_PATH", lambda: os.path.join(
+            os.path.dirname(__file__),
+            "backends",
+            "intel",
+            "bin",
+            self.binary,
+        ))
+
+    def transform(self, path: str) -> IntelTool:
+        paths = [
+            path,
+            # We still add default as fallback in case the pointed binary isn't
+            # accessible.
+            self.default(),
+            shutil.which(self.binary) or "",
+        ]
+        for path in paths:
+            if not path or not os.access(path, os.X_OK):
+                continue
+            if tool := IntelTool.from_path(path):
                 return tool
 
         raise RuntimeError(f"Cannot find {self.binary}")
@@ -354,6 +407,21 @@ class nvidia_config(base_config):
     libcuda_path: env_opt_str = env_opt_str("TRITON_LIBCUDA_PATH")
 
 
+class intel_config(base_config):
+    spirv_dis: env_intel_tool = env_intel_tool("spirv-dis")
+
+    gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
+    tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
+    advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
+    opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
+    reduce_transpose: env_bool = env_bool("TRITON_INTEL_REDUCE_TRANSPOSE", False)
+
+    raise_block_pointer: env_bool = env_str("TRITON_INTEL_RAISE_BLOCK_POINTER", "0")
+    dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
+
+    libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
+
+
 class amd_config(base_config):
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
@@ -381,5 +449,6 @@ autotuning = autotuning_config()
 runtime = runtime_config()
 language = language_config()
 nvidia = nvidia_config()
+intel = intel_config()
 amd = amd_config()
 proton = proton_config()
