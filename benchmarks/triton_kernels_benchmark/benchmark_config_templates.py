@@ -3,9 +3,10 @@ from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, Benchm
 from triton_kernels_benchmark import (
     fused_softmax,
     gemm_benchmark,
-    flash_attention_benchmark,
     gemm_tensor_desc_benchmark,
     gemm_tensor_of_ptr_benchmark,
+    flash_attention_benchmark,
+    flash_attention_tensor_desc_benchmark,
 )
 
 CONFIGS = [
@@ -56,5 +57,11 @@ CONFIGS = [
         get_benchmark=flash_attention_benchmark.get_benchmark,
         run_opts={"fa_kernel_mode": "fwd"},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.FLASH_ATTENTION},
+    ),
+    BenchmarkConfig(
+        key="flash_attention_tensor_desc",
+        get_benchmark=flash_attention_tensor_desc_benchmark.get_benchmark,
+        run_opts={"fa_kernel_mode": "fwd"},
+        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.FLASH_ATTENTION},
     ),
 ]
