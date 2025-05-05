@@ -91,14 +91,8 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
     V_desc = tl.make_tensor_descriptor(base=V + qvk_offset, shape=(N_CTX, BLOCK_DMODEL), strides=(stride_vk, stride_vn),
                                        block_shape=(BLOCK_N, BLOCK_DMODEL))
     #FIXME: change to a tensor descriptor.
-    K_block_ptr = tl.make_block_ptr(
-        base=K + qvk_offset,
-        shape=(BLOCK_DMODEL, N_CTX),
-        strides=(stride_kk, stride_kn),
-        offsets=(0, 0),
-        block_shape=(BLOCK_DMODEL, BLOCK_N),
-        order=(0, 1),
-    )
+    K_block_ptr = tl.make_block_ptr(base=K + qvk_offset, shape=(BLOCK_DMODEL, N_CTX), strides=(stride_kk, stride_kn),
+                                    offsets=(0, 0), block_shape=(BLOCK_DMODEL, BLOCK_N), order=(0, 1))
     O_desc = tl.make_tensor_descriptor(base=Out + qvk_offset, shape=(N_CTX, BLOCK_DMODEL),
                                        strides=(stride_om, stride_on), block_shape=(BLOCK_M, BLOCK_DMODEL))
     # initialize offsets
@@ -114,8 +108,8 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
     # load q: it will stay in SRAM throughout
     q = Q_desc.load([start_m * BLOCK_M, 0])
     # stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
+    # For causal = True, STAGE = 3, the kernel gets 1 as its STAGE
+    # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
     if STAGE & 1:
         acc, l_i, m_i = _attn_fwd_inner_with_tensor_desc(acc, l_i, m_i, q, K_block_ptr, V_desc,  #
                                                          start_m, qk_scale,  #
