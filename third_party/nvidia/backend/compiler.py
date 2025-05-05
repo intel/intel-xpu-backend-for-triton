@@ -128,6 +128,7 @@ class CUDAOptions:
     ptx_version: int = None
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
+    launch_pdl: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -280,6 +281,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
+            nvidia.passes.ttnvgpuir.add_remove_tmem_tokens(pm)
             passes.common.add_canonicalizer(pm)
         else:
             passes.ttir.add_triton_licm(pm)

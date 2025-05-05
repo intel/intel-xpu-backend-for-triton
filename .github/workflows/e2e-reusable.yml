@@ -127,7 +127,7 @@ jobs:
         id: triton-cache
         uses: ./.github/actions/load
         with:
-          path: python/dist
+          path: dist
           key: ${{ steps.triton-key.outputs.key }}
 
       - name: Build Triton wheels
@@ -138,7 +138,7 @@ jobs:
 
       - name: Install Triton
         run: |
-          pip install python/dist/*.whl
+          pip install dist/*.whl
 
       - name: Save Triton wheels to a cache
         if: ${{ steps.triton-cache.outputs.status == 'miss' }}

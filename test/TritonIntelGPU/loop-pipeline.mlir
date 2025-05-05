@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3 support-regular-ptr=true" | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3" | FileCheck %s
 
 // CHECK: #[[$BLOCK_0:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 // CHECK: #[[$BLOCK_1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -20,7 +20,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #blocked>
-    %cst_1 = arith.constant dense<0.000000e+00> : tensor<32x256xf16, #blocked1>
     %c63_i32 = arith.constant 63 : i32
     %c255_i32 = arith.constant 255 : i32
     %c31_i32 = arith.constant 31 : i32
@@ -79,25 +78,34 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %51 = arith.muli %arg7, %c32_i32 : i32
     %52 = tt.splat %51 : i32 -> tensor<32x256xi32, #blocked1>
     // COM: There are 3 stages in loop pipelining, the first 2 prefetching stages are before the loop and the last one is inside the loop.
-    // CHECK: %[[LOAD_MASK:.*]] = arith.cmpi slt, {{.*}}
-    // CHECK: %[[LOOP_MASK:.*]] = tt.splat %[[LOAD_MASK]] : i1 -> tensor<64x32xi1, #[[$BLOCK_0]]>
-    // CHECK: triton_intel_gpu.prefetch {{.*}}, %[[LOOP_MASK]] {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
+    // CHECK: %[[LOAD_MASK:.*]] = arith.cmpi slt, {{.*}} : tensor<1x32xi32, #[[$BLOCK_0]]>
+    // CHECK-NEXT: %[[LOAD_MASK_2D:.*]] = tt.broadcast %[[LOAD_MASK]] : tensor<1x32xi1, #[[$BLOCK_0]]> -> tensor<64x32xi1, #[[$BLOCK_0]]>
+    // CHECK-NEXT: %[[LOOP_MASK:.*]] = tt.splat {{.*}} : i1 -> tensor<64x32xi1, #[[$BLOCK_0]]>
+    // CHECK-NEXT: %[[PREFETCH_MASK:.*]] = arith.andi %[[LOOP_MASK]], %[[LOAD_MASK_2D]] : tensor<64x32xi1, #[[$BLOCK_0]]>
+    // CHECK-NEXT: triton_intel_gpu.prefetch {{.*}}, %[[PREFETCH_MASK]] {{.*}}triton_intel_gpu.block_io = "row_major"{{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
     // CHECK: triton_intel_gpu.prefetch {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
     // CHECK: triton_intel_gpu.prefetch {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
     // CHECK: triton_intel_gpu.prefetch {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
-    // CHECK: scf.for %[[VAL_92:.*]] = {{.*}} to {{.*}} step {{.*}} iter_args(%[[VAL_93:.*]] = {{.*}}, %[[VAL_94:.*]] = {{.*}}, %[[VAL_95:.*]] = {{.*}}, %[[VAL_96:.*]] = {{.*}}, %[[VAL_97:.*]] = {{.*}}) -> (tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>)  : i32 {
-    // CHECK:   %[[LOAD_MASK:.*]] = arith.cmpi slt, {{.*}}
+    // CHECK: scf.for %[[VAL_92:.*]] = {{.*}} to {{.*}} step {{.*}} iter_args(%[[VAL_93:.*]] = {{.*}}, %[[VAL_94:.*]] = {{.*}}, %[[VAL_95:.*]] = {{.*}}, %[[VAL_96:.*]] = {{.*}}, %[[ARG_13:.*]] = {{.*}}, %[[ARG_14:.*]] = {{.*}}, %[[VAL_97:.*]] = {{.*}}, %[[ARG_16:.*]] = {{.*}}, %[[ARG_17:.*]] = {{.*}}) ->
+    // CHECK-SAME: (tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, i32, i32)  : i32 {
     // CHECK:   %[[VAL_106:.*]] = tt.addptr %[[VAL_94]], {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<64x32xi32, #[[$BLOCK_0]]>
     // CHECK:   %[[VAL_107:.*]] = tt.addptr %[[VAL_95]], {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<32x256xi32, #[[$BLOCK_1]]>
-    // CHECK:   %[[LOOP_MASK:.*]] = tt.splat %[[LOAD_MASK]] : i1 -> tensor<64x32xi1, #[[$BLOCK_0]]>
-    // CHECK:   triton_intel_gpu.prefetch %[[VAL_106]], %[[LOOP_MASK]] {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
-    // CHECK:   triton_intel_gpu.prefetch %[[VAL_107]], {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
+    // CHECK:   %[[VAL_108:.*]] = arith.subi {{.*}} : i32
+    // CHECK:   %[[VAL_109:.*]] = tt.splat %[[VAL_108]] : i32 -> tensor<1x32xi32, #blocked>
+    // CHECK-NEXT: %[[LOAD_MASK:.*]] = arith.cmpi slt, {{.*}}, %[[VAL_109]] : tensor<1x32xi32, #blocked>
+    // CHECK-NEXT: %[[LOAD_MASK_2D_1:.*]] = tt.broadcast %[[LOAD_MASK]] : tensor<1x32xi1, #blocked> -> tensor<64x32xi1, #blocked>
+    // CHECK-NEXT: %[[LOOP_MASK:.*]] = tt.splat {{.*}} : i1 -> tensor<64x32xi1, #[[$BLOCK_0]]>
+    // CHECK-NEXT: %[[PREFETCH_MASK:.*]] = arith.andi %[[LOOP_MASK]], %[[LOAD_MASK_2D_1]] : tensor<64x32xi1, #blocked>
+    // CHECK-NEXT: triton_intel_gpu.prefetch %[[VAL_106]], %[[PREFETCH_MASK]] {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
+    // CHECK:   %[[PREFETCH_MASK:.*]] = tt.splat {{.*}} : i1 -> tensor<32x256xi1, #[[$BLOCK_1]]>
+    // CHECK-NEXT: triton_intel_gpu.prefetch %[[VAL_107]], %[[PREFETCH_MASK]] {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
     // CHECK:   %[[VAL_116:.*]] = tt.load %[[VAL_96]], {{.*}}, {{.*}} : tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>
-    // CHECK:   %[[VAL_120:.*]] = tt.load %[[VAL_97]], {{.*}}, {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
+    // CHECK:   %[[VAL_120:.*]] = tt.load %[[VAL_97]] {{.*}} : tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
     // CHECK:   %[[VAL_121:.*]] = ttg.convert_layout %[[VAL_116]] : tensor<64x32xf16, #[[$BLOCK_0]]> -> tensor<64x32xf16, #{{.*}}<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>
     // CHECK:   %[[VAL_122:.*]] = ttg.convert_layout %[[VAL_120]] : tensor<32x256xf16, #[[$BLOCK_1]]> -> tensor<32x256xf16, #{{.*}}<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>>
     // CHECK:   %[[VAL_123:.*]] = tt.dot %[[VAL_121]], %[[VAL_122]], %[[VAL_93]], inputPrecision = tf32 : tensor<64x32xf16, #{{.*}}<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>> * tensor<32x256xf16, #{{.*}}<{opIdx = 1, parent = #[[$DPAS]], kWidth = 2}>> -> tensor<64x256xf32, #[[$DPAS]]>
-    // CHECK:   scf.yield %[[VAL_123]], %[[VAL_106]], %[[VAL_107]], %[[VAL_94]], %[[VAL_95]] : tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>
+    // CHECK:   scf.yield %[[VAL_123]], %[[VAL_106]], %[[VAL_107]], %[[VAL_94]], %[[ARG_14]], %[[LOAD_MASK_2D_1]], %[[VAL_95]], %[[ARG_17]], %[[VAL_108]] :
+    // CHECK-SAME: tensor<64x256xf32, #[[$DPAS]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, tensor<64x32x!tt.ptr<f16>, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<64x32xi1, #[[$BLOCK_0]]>, tensor<32x256x!tt.ptr<f16>, #[[$BLOCK_1]]>, i32, i32
     %53:3 = scf.for %arg9 = %c0_i32 to %50 step %c1_i32 iter_args(%arg10 = %cst_2, %arg11 = %38, %arg12 = %48) -> (tensor<64x256xf32, #dpas>, tensor<64x32x!tt.ptr<f16>, #blocked>, tensor<32x256x!tt.ptr<f16>, #blocked1>)  : i32 {
       %72 = arith.muli %arg9, %c32_i32 : i32
       %73 = arith.subi %arg5, %72 : i32
@@ -108,7 +116,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
       %78 = tt.splat %73 : i32 -> tensor<32x1xi32, #blocked1>
       %79 = arith.cmpi slt, %40, %78 : tensor<32x1xi32, #blocked1>
       %80 = tt.broadcast %79 : tensor<32x1xi1, #blocked1> -> tensor<32x256xi1, #blocked1>
-      %81 = tt.load %arg12, %80, %cst_1 {triton_intel_gpu.block_io = "row_major"} : tensor<32x256x!tt.ptr<f16>, #blocked1>
+      %81 = tt.load %arg12 {triton_intel_gpu.block_io = "row_major"} : tensor<32x256x!tt.ptr<f16>, #blocked1>
       %82 = ttg.convert_layout %77 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #dot0>
       %83 = ttg.convert_layout %81 : tensor<32x256xf16, #blocked1> -> tensor<32x256xf16, #dot1>
       %84 = tt.dot %82, %83, %arg10, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<64x256xf32, #dpas>
@@ -369,6 +377,40 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     } {tt.flatten}
     tt.return
   }
+}
 
+// -----
 
+// COM: Ensure prefetch operations aren't generated for 3D loads.
+#linear = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 0, 16], [0, 0, 32], [0, 64, 0]], lane = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8]], warp = [[0, 0, 0], [0, 0, 0], [0, 32, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 16, 0], [0, 0, 16], [0, 0, 32], [0, 128, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0]], warp = [[0, 32, 0], [0, 64, 0], [0, 0, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [0, 32], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0]], block = []}>
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: batched_gemm_3d_tma_kernel
+  tt.func public @batched_gemm_3d_tma_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32, %arg6: i32 {tt.divisibility = 16 : i32}) {
+    %c1_i32 = arith.constant 1 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %0 = tt.get_program_id x : i32
+    %16 = arith.extsi %arg6 : i32 to i64
+    %24 = arith.extsi %arg3 : i32 to i64
+    %26:1 = scf.for %arg7 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg8 = %c1_i32) -> (i32)  : i32 {
+      // CHECK-NOT: prefetch
+      %27 = arith.cmpi eq, %arg8, %c1_i32 : i32
+      %29 = arith.select %27, %c0_i32, %arg8 : i32
+      %33 = tt.make_tensor_ptr %arg0, [%24, %24, %16], [%16, %16, %c1_i64], [%arg8, %arg8, %29] {order = array<i32: 1, 0>} : <tensor<1x128x64xf16, #linear>>
+      %34 = tt.load %33 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<1x128x64xf16, #linear>>
+      %35 = tt.reshape %34 : tensor<1x128x64xf16, #linear> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %36 = tt.make_tensor_ptr %arg1, [%24, %16, %16], [%16, %16, %c1_i64], [%arg8, %arg8, %29] {order = array<i32: 1, 0>} : <tensor<1x256x64xf16, #linear1>>
+      %37 = tt.load %36 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<1x256x64xf16, #linear1>>
+      %38 = tt.reshape %37 : tensor<1x256x64xf16, #linear1> -> tensor<256x64xf16, #linear2>
+      %39 = tt.trans %38 {order = array<i32: 1, 0>} : tensor<256x64xf16, #linear2> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %40 = tt.dot %35, %39, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x256xf32, #mma>
+      scf.yield %29 : i32
+    }
+    tt.return
+  }
 }

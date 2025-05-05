@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
 #include <memory>
 
 namespace mlir::triton::gpu {
@@ -72,7 +73,11 @@ public:
         trans.getSrc());
     auto newTrans = rewriter.create<MemDescTransOp>(trans.getLoc(), alloc,
                                                     ArrayRef<int32_t>({1, 0}));
-    rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
+    auto localLoadOp =
+        rewriter.create<LocalLoadOp>(trans.getLoc(), sharedLoadTy, newTrans);
+    rewriter.modifyOpInPlace(cvtOp, [&]() {
+      cvtOp.getSrcMutable().assign(localLoadOp.getResult());
+    });
     return success();
   }
 };
@@ -213,9 +218,16 @@ private:
     }
 
     auto localLoad = getNextOp<triton::gpu::LocalLoadOp>(reshapeOp5D.getSrc());
-    if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
+    if (!localLoad) {
       return failure();
     }
+    auto localAlloc = getNextOp<LocalAllocOp>(localLoad.getSrc());
+    bool usesTMAload =
+        (localAlloc && localAlloc.getSrc() &&
+         (getNextOp<DescriptorLoadOp>(localAlloc.getSrc()) != nullptr));
+    if (!isTmemCopyCompatible(localLoad.getSrc().getType(), usesTMAload))
+      return failure();
+
     opOperand.assign(localLoad.getSrc());
     return success();
   }
@@ -227,20 +239,11 @@ private:
     return op.getDefiningOp<Op>();
   }
 
-  bool isDescendingOrder(triton::gpu::MemDescType scale) const {
-    auto order = triton::gpu::getOrder(scale);
-    auto rank = scale.getRank();
-    for (int i = 0; i < rank; ++i) {
-      if (order[i] != rank - 1 - i)
-        return false;
-    }
-    return true;
-  }
-
-  bool isTmemCopyCompatible(triton::gpu::MemDescType scaleType) const {
+  bool isTmemCopyCompatible(triton::gpu::MemDescType scaleType,
+                            bool usesTMAload) const {
     // TMEM copy expects that blocked scale "chunks" in SMEM are stored in
     // innermost axes contiguously.
-    if (!isDescendingOrder(scaleType))
+    if (!isInnermostContiguous(scaleType, 512))
       return false;
 
     auto sharedEnc =
@@ -253,9 +256,12 @@ private:
       return false;
     }
 
+    if (usesTMAload) {
+      return true;
+    }
+
     if (scaleType.getRank() != 2) {
       // TODO: Add support for higher rank when 5D coalesced load is fixed
-      // or 4D TMA is supported.
       return false;
     }
 

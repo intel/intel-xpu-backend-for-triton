@@ -7,6 +7,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -92,6 +93,51 @@ void triton::hoistOpsBefore(Block *block, Block::iterator it,
 }
 
 //===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+Value triton::sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
+                                    Block *block) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  for (; block != in.getParentBlock();
+       block = block->getParentOp()->getBlock()) {
+    Operation *op = block->getParentOp();
+    rewriter.setInsertionPoint(op);
+
+    // `in` is live into the loop body. `out` becomes the live-out if the
+    // loop executes at least once.
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      (void)addIterArgsToLoop(rewriter, forOp, in);
+      appendToForOpYield(forOp, out);
+      out = forOp.getResults().back();
+      continue;
+    }
+
+    // `in` is live into both branches. `out` becomes the live-out if the
+    // particular branch is taken.
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      scf::IfOp newIfOp =
+          replaceIfOpWithNewSignature(rewriter, ifOp, out.getType());
+      scf::YieldOp taken = newIfOp.thenYield();
+      scf::YieldOp other = newIfOp.elseYield();
+      if (block == newIfOp.elseBlock())
+        std::swap(taken, other);
+      taken->insertOperands(taken.getNumOperands(), out);
+      other->insertOperands(other.getNumOperands(), in);
+      out = newIfOp.getResults().back();
+      rewriter.eraseOp(ifOp);
+      continue;
+    }
+
+    // TODO: Handle `scf.while`, etc.
+    llvm::report_fatal_error("FIXME: sinking into unhandled control flow op: " +
+                             op->getName().getStringRef());
+  }
+
+  return out;
+}
+
+//===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities
 //===----------------------------------------------------------------------===//
 
@@ -107,21 +153,6 @@ bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
   return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
     return isa<scf::ForOp, scf::WhileOp>(op);
   });
-}
-
-// Combine the current mask with the given predicate.
-Value mlir::triton::getPredMask(RewriterBase &rewriter, Type typeLike,
-                                Value currentMask, Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  if (isa<RankedTensorType>(maskType)) {
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-  }
-  if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
-  }
-  return mask;
 }
 
 // Function to mask operations during scheduling.
@@ -232,56 +263,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   op->emitError("pipeliner doesn't know how to predicate this op.");
   llvm::report_fatal_error("Fatal pipeliner error");
   return op;
-}
-
-void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
-                                               Operation *oldUse, Value val) {
-  SmallVector<Operation *> opsToDelete;
-  SmallVector<OpOperand *> operandsToReplace;
-
-  // Save the operand to replace / delete later (avoid iterator invalidation).
-  // TODO: can we use an early_inc iterator?
-  for (OpOperand &use : oldUse->getUses()) {
-    // Non-subview/trans ops will be replaced by `val`.
-    if (!isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescSubviewOp>(
-            use.getOwner())) {
-      operandsToReplace.push_back(&use);
-      continue;
-    }
-    Operation *user = use.getOwner();
-    // `subview(old_op)` is replaced by a new `subview(val)`.
-    OpBuilder::InsertionGuard g(builder);
-    builder.setInsertionPoint(user);
-    Value newVal;
-    if (auto subview = dyn_cast<triton::gpu::MemDescSubviewOp>(user)) {
-      triton::gpu::MemDescType oldType = subview.getType();
-      bool isMutable =
-          cast<triton::gpu::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = triton::gpu::MemDescType::get(
-          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
-      newVal = builder.create<triton::gpu::MemDescSubviewOp>(
-          subview.getLoc(), newDstType, val, subview.getOffsets());
-      newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    } else if (auto trans = dyn_cast<triton::gpu::MemDescTransOp>(user)) {
-      newVal = builder.create<triton::gpu::MemDescTransOp>(trans.getLoc(), val,
-                                                           trans.getOrder());
-      newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    }
-    assert(newVal);
-    replaceUsesAndPropagateType(builder, user, newVal);
-    opsToDelete.push_back(use.getOwner());
-  }
-
-  // Perform late replacement.
-  for (OpOperand *operand : operandsToReplace) {
-    Operation *op = operand->getOwner();
-    operand->set(val);
-  }
-
-  // Perform late op erasure.
-  for (Operation *op : opsToDelete)
-    op->erase();
 }
 
 // Return true if the given ForOp has the attribute

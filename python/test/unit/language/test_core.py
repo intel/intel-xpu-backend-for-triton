@@ -845,7 +845,25 @@ def test_slice(device):
         t = data[None, :]
         tl.static_assert(t.shape == [1, XBLOCK])
 
+        t = data[None, None:]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
+        t = data[None, :None]
+        tl.static_assert(t.shape == [1, XBLOCK])
+
         t = data[None, :, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None:None:None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, ::None, None]
+        tl.static_assert(t.shape == [1, XBLOCK, 1])
+
+        t = data[None, None::None, None]
         tl.static_assert(t.shape == [1, XBLOCK, 1])
 
         scalar = tl.full([], 1, tl.int32)
@@ -3681,9 +3699,17 @@ def get_test_dot_double_rate_cases():
             (16, 16, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
+def get_test_dot_vdot2_cases():
+    if not is_hip_cdna():
+        return []
+    return [(4, 32, 32, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
+    get_test_dot_vdot2_cases() + \
     get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
     get_test_dot_mixed_sizes_cases() + \
@@ -3880,8 +3906,20 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     else:
         # added atol, to loose precision for float16xfloat16->float32 case
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01, atol=1e-3)
-    if not is_cuda():
+
+    if not (is_cuda() or is_hip_cdna()):
         return
+
+    if is_hip_cdna():
+        if M != 4:
+            return
+        amdgcn = pgm.asm['amdgcn']
+        if in_dtype == 'float16':
+            assert 'v_dot2c_f32_f16' in amdgcn
+        elif (in_dtype == 'bfloat16') and is_hip_cdna4():
+            assert 'v_dot2c_f32_bf16' in amdgcn
+        return
+
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
     if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
@@ -3994,6 +4032,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         m_bits: tl.constexpr,
         to_type: tl.constexpr,
         BLOCK_SIZE: tl.constexpr,
+        is_xpu: tl.constexpr,
     ):
         # x.shape ==     (N, 32) for fp8 or (N, 16) for fp4
         # scale.shape == (N,)
@@ -4027,14 +4066,15 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             if e_bits == 5 and m_bits == 2:
                 x_f8 = x.to(tl.float8e5, bitcast=True)
                 upcasted_x = x_f8.to(to_type)
-                # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
-                non_finite_mask: tl.constexpr = ((1 << e_bits) - 1) << m_bits
-                non_finite_mask_16bit: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
-                upcasted_x = tl.where(
-                    x & non_finite_mask == non_finite_mask,
-                    (upcasted_x.to(tl.uint16, bitcast=True) | non_finite_mask_16bit).to(to_type, bitcast=True),
-                    upcasted_x,
-                )
+                if not is_xpu:
+                    # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
+                    non_finite_mask: tl.constexpr = ((1 << e_bits) - 1) << m_bits
+                    non_finite_mask_16bit: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
+                    upcasted_x = tl.where(
+                        x & non_finite_mask == non_finite_mask,
+                        (upcasted_x.to(tl.uint16, bitcast=True) | non_finite_mask_16bit).to(to_type, bitcast=True),
+                        upcasted_x,
+                    )
             else:
                 tl.static_assert(e_bits == 4 and m_bits == 3)
                 x_f8 = x.to(tl.float8e4nv, bitcast=True)
@@ -4086,7 +4126,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE, )
             comp_dtype = tl.float16 if comp_dtype == torch.float16 else tl.bfloat16
             mxfp_upcast_kernel[grid](v, scale, v_upcast, scale.numel(), e_bits, m_bits, comp_dtype, BLOCK_SIZE,
-                                     num_warps=num_warps)
+                                     num_warps=num_warps, is_xpu=is_xpu())
             assert v_upcast.isfinite().all()
             if transposed:
                 v_upcast = v_upcast.mT

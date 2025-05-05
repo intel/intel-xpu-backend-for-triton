@@ -1,5 +1,5 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3921
-test/unit/intel/test_block_load.py::test_block_load_dpas_layout
-test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_store
-test/unit/intel/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
-test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul
+python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout
+python/test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_store
+python/test/unit/intel/test_tensor_descriptor.py::test_make_tensor_descriptor_matmul
+python/test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_rank_reducing_matmul
