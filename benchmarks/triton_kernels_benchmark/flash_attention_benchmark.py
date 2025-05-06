@@ -165,6 +165,8 @@ configs = [
     for w in [8, 16, 32] \
     ]
 
+tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
+
 
 @triton.jit
 def _attn_bwd_preprocess(O, DO,  #
@@ -561,6 +563,10 @@ def get_benchmark(
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
+    # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
+    _attention.attn_fwd = attn_fwd
+    _attention.tune_attn_fwd = tuner(attn_fwd)
+
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
             # argument names to use as an x-axis for the plot
@@ -615,11 +621,6 @@ def get_benchmark(
             )
 
         elif provider == 'triton':
-            # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
-            tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
-            _attention.attn_fwd = attn_fwd
-            _attention.tune_attn_fwd = tuner(attn_fwd)
-
             triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
             if MODE == 'bwd':
                 triton_o = triton_fn()
