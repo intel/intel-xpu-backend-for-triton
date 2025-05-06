@@ -281,7 +281,7 @@ def is_enough_memory(x_val):
     return enough_memory
 
 
-if os.getenv('NEW_SHAPES', '0') == '1':
+if os.getenv('NEW_SHAPES', '1') == '1':
     X_VALS += NEW_X_VALS
 X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
@@ -464,6 +464,6 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         transpose_a=(os.getenv('TRANSPOSE_A', '0') == '1'),
         transpose_b=(os.getenv('TRANSPOSE_B', '0') == '1'),
-        new_shapes=(os.getenv('NEW_SHAPES', '0') == '1'),
+        new_shapes=(os.getenv('NEW_SHAPES', '1') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)
