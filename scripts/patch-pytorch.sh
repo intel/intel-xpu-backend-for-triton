@@ -17,6 +17,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 cd "$REPO_ROOT"
 
 # put your patch applies here
-git apply "${SCRIPT_DIR}/triton_hooks.patch"
-
 curl -sSL https://github.com/pytorch/pytorch/pull/143553.diff | git apply -

@@ -14,7 +14,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
 from .. import config
 from ..runtime.driver import driver
-from .._utils import find_paths_if, get_iterable_path
+from .._utils import find_paths_if, get_iterable_path, classproperty
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -493,6 +493,24 @@ class JitFunctionInfo:
 
 
 class JITFunction(KernelInterface[T]):
+
+    # FIXME: remove cache_hook/compiled_hook properties
+    # when pytorch has a compatible layer for the new API.
+    @classproperty
+    def cache_hook(cls):
+        return config.runtime.jit_cache_hook
+
+    @cache_hook.setter
+    def cache_hook(cls, value):
+        config.runtime.jit_cache_hook = value
+
+    @classproperty
+    def compiled_hook(cls):
+        return config.runtime.jit_post_compile_hook
+
+    @compiled_hook.setter
+    def compiled_hook(cls, value):
+        config.runtime.jit_post_compile_hook = value
 
     def _call_hook(
         self,
