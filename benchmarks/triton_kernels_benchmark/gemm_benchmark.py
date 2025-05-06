@@ -282,7 +282,7 @@ def is_enough_memory(x_val):
 
 
 if os.getenv('NEW_SHAPES', '0') == '1':
-    X_VALS = NEW_X_VALS
+    X_VALS += NEW_X_VALS
 X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
