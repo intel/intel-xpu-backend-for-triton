@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from functools import cached_property
 
-from triton import config
+from triton import knobs
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
@@ -653,7 +653,7 @@ def serialize_kernel_metadata(arg, args_dict):
 def serialize_args(args, constants, signature):
     import torch
     import numbers
-    dir_path = config.intel.dump_spirv_kernel_args
+    dir_path = knobs.intel.dump_spirv_kernel_args
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
@@ -711,7 +711,7 @@ class XPULauncher(object):
         src = make_launcher(self.constants, self.signature)
         self.mod = compile_module_from_src(src, "__triton_launcher")
         # Serialize KernelArguments for SPIR-V Runner
-        self.serialize_kernel_args = config.intel.dump_spirv_kernel_args
+        self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
 
     def __call__(self, *args, **kwargs):
         if self.serialize_kernel_args:

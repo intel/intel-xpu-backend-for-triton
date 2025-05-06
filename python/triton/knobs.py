@@ -252,10 +252,10 @@ class env_opt_bool(env_opt_base[bool, bool], env_bool):
     pass
 
 
-config_type = TypeVar("config_type", bound='base_config')
+knobs_type = TypeVar("knobs_type", bound='base_knobs')
 
 
-class base_config:
+class base_knobs:
 
     @property
     def knob_descriptors(self) -> dict[str, env_base]:
@@ -270,13 +270,13 @@ class base_config:
     def knobs(self) -> dict[str, Any]:
         return {k: getattr(self, k) for k in self.knob_descriptors.keys()}
 
-    def copy(self: config_type) -> config_type:
+    def copy(self: knobs_type) -> knobs_type:
         res = type(self)()
         for k, v in self.__dict__.items():
             res.__dict__[k] = v
         return res
 
-    def reset(self: config_type) -> config_type:
+    def reset(self: knobs_type) -> knobs_type:
         for knob in self.knobs.keys():
             delattr(self, knob)
         return self
@@ -291,7 +291,7 @@ class base_config:
             self.__dict__.update(orig)
 
 
-class build_config(base_config):
+class build_knobs(base_knobs):
     """Configuration controlling how the native compiler is invoked"""
     cc: env_opt_str = env_opt_str("CC")
 
@@ -303,16 +303,16 @@ class build_config(base_config):
         return {path for path in (self.cudacrt_path, self.cudart_path) if path is not None}
 
 
-class redis_config(base_config):
+class redis_knobs(base_knobs):
     key_format: env_str = env_str("TRITON_REDIS_KEY_FORMAT", "triton:{key}:{filename}")
     host: env_str = env_str("TRITON_REDIS_HOST", "localhost")
     port: env_int = env_int("TRITON_REDIS_PORT", 6379)
 
 
-cache: cache_config
+cache: cache_knobs
 
 
-class cache_config(base_config):
+class cache_knobs(base_knobs):
     home_dir: env_str = env_str("TRITON_HOME", lambda: os.path.expanduser("~/"))
 
     dump_dir: env_str = env_str("TRITON_DUMP_DIR", lambda: cache.get_triton_dir("dump"))
@@ -326,7 +326,7 @@ class cache_config(base_config):
         return os.path.join(self.home_dir, ".triton", dirname)
 
 
-class compilation_config(base_config):
+class compilation_knobs(base_knobs):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
@@ -339,7 +339,7 @@ class compilation_config(base_config):
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
 
 
-class autotuning_config(base_config):
+class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
 
@@ -378,7 +378,7 @@ class JITHook(Protocol):
         ...
 
 
-class runtime_config(base_config):
+class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     debug: env_bool = env_bool("TRITON_DEBUG")
     override_arch: env_opt_str = env_opt_str("TRITON_OVERRIDE_ARCH")
@@ -393,12 +393,12 @@ class runtime_config(base_config):
     jit_post_compile_hook: Optional[JITHook] = None
 
 
-class language_config(base_config):
+class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
     default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
 
 
-class nvidia_config(base_config):
+class nvidia_knobs(base_knobs):
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
@@ -411,7 +411,7 @@ class nvidia_config(base_config):
     libcuda_path: env_opt_str = env_opt_str("TRITON_LIBCUDA_PATH")
 
 
-class intel_config(base_config):
+class intel_knobs(base_knobs):
     spirv_dis: env_intel_tool = env_intel_tool("spirv-dis")
 
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
@@ -426,7 +426,7 @@ class intel_config(base_config):
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
 
-class amd_config(base_config):
+class amd_knobs(base_knobs):
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
     libhip_path: env_opt_str = env_opt_str("TRITON_LIBHIP_PATH")
@@ -441,18 +441,18 @@ class amd_config(base_config):
     use_async_copy: env_bool = env_bool("TRITON_HIP_USE_ASYNC_COPY")
 
 
-class proton_config(base_config):
+class proton_knobs(base_knobs):
     cupti_path: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
 
 
-build = build_config()
-redis = redis_config()
-cache = cache_config()
-compilation = compilation_config()
-autotuning = autotuning_config()
-runtime = runtime_config()
-language = language_config()
-nvidia = nvidia_config()
-intel = intel_config()
-amd = amd_config()
-proton = proton_config()
+build = build_knobs()
+redis = redis_knobs()
+cache = cache_knobs()
+compilation = compilation_knobs()
+autotuning = autotuning_knobs()
+runtime = runtime_knobs()
+language = language_knobs()
+nvidia = nvidia_knobs()
+intel = intel_knobs()
+amd = amd_knobs()
+proton = proton_knobs()
