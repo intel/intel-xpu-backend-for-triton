@@ -159,6 +159,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
+// COM: Check that pitch is a constant calculated by AxisInfo analysis, instead of calculating dynamically.
 #dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_tensor_of_pointers
@@ -177,7 +178,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %8 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<128x64x!tt.ptr<bf16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     %9 = tt.addptr %8, %7 : tensor<128x64x!tt.ptr<bf16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>, tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
 
-    // COM: Pitch is calculated by AxisInfo analysis.
     // CHECK-DAG: %[[PITCH:.*]] = llvm.mlir.constant(1024 : i32) : i32
     // CHECK-COUNT-4: llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_8r16x2cPU3AS1viiiDv2_i(%{{.*}}, %{{.*}}, %{{.*}}, %[[PITCH]], %{{.*}})
     triton_intel_gpu.prefetch %9 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1>, triton_intel_gpu.block_io = "row_major"} : tensor<128x64x!tt.ptr<bf16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>

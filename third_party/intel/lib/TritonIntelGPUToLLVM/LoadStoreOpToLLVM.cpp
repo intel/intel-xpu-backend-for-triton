@@ -370,6 +370,27 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             ? encoding
             : getDotEncoding(tensorTy).value().getParent());
   }
+
+  Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
+                 const std::map<SmallVector<unsigned>, Value> &ptrs,
+                 Value baseWidth, unsigned elemSizeInBits) const {
+    Location loc = ptr.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    unsigned stride = getStride(ptr, 0);
+    if (stride != -1)
+      return b.i32_val(stride * elemSizeInBits / 8);
+
+    // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
+    // pitch.
+    if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
+      return nullptr;
+
+    Value pitch = b.sub(b.ptrtoint(i64_ty, ptrs.at({1, 0})),
+                        b.ptrtoint(i64_ty, ptrs.at({0, 0})));
+    pitch = targetInfo.shuffleIdx(rewriter, loc, pitch, 0);
+    return b.umax(b.trunc(i32_ty, pitch), baseWidth);
+  }
 };
 
 struct PrefetchOpConversion
@@ -685,22 +706,10 @@ struct PrefetchOpConversion
 
     Value baseWidth =
         b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
-    unsigned stride = getStride(op.getPtr(), 0);
-    Value rowStrideInBytes;
-    if (stride == -1) {
-      // baseAddrs[{0, 0}] and baseAddrs[{1, 0}] are currently used to calculate
-      // the pitch.
-      if (baseAddrs.count({0, 0}) == 0 || baseAddrs.count({1, 0}) == 0)
-        return failure();
-
-      rowStrideInBytes = b.sub(b.ptrtoint(i64_ty, baseAddrs[{1, 0}]),
-                               b.ptrtoint(i64_ty, baseAddrs[{0, 0}]));
-      rowStrideInBytes =
-          targetInfo.shuffleIdx(rewriter, loc, rowStrideInBytes, 0);
-      rowStrideInBytes = b.umax(b.trunc(i32_ty, rowStrideInBytes), baseWidth);
-    } else {
-      rowStrideInBytes = b.i32_val(stride * elemSizeInBits / 8);
-    }
+    Value rowStrideInBytes =
+        getPitch(rewriter, op.getPtr(), baseAddrs, baseWidth, elemSizeInBits);
+    if (!rowStrideInBytes)
+      return failure();
 
     Value baseHeight = b.i32_val(tileHeightInElem);
     Value offsetBaseX = b.i32_val(0);
@@ -1061,21 +1070,9 @@ struct LoadOpToBlockIOConversion
     unsigned numRepInner = numReps[bool(opIdx) ? 1 : 2];
 
     Value baseWidth = b.i32_val(vBlocks * tileWidth * (elemSizeInBits / 8));
-    unsigned stride = getStride(ptr, 0);
-    Value pitch;
-    if (stride == -1) {
-      // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
-      // pitch.
-      if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
-        return failure();
-
-      pitch = b.sub(b.ptrtoint(i64_ty, ptrs[{1, 0}]),
-                    b.ptrtoint(i64_ty, ptrs[{0, 0}]));
-      pitch = targetInfo.shuffleIdx(rewriter, loc, pitch, 0);
-      pitch = b.umax(b.trunc(i32_ty, pitch), baseWidth);
-    } else {
-      pitch = b.i32_val(stride * elemSizeInBits / 8);
-    }
+    Value pitch = getPitch(rewriter, ptr, ptrs, baseWidth, elemSizeInBits);
+    if (!pitch)
+      return failure();
 
     Value baseHeight = b.i32_val(tileHeight);
     StringAttr kRegister = str_attr("register");
