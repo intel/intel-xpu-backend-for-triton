@@ -498,19 +498,19 @@ class JITFunction(KernelInterface[T]):
     # when pytorch has a compatible layer for the new API.
     @classproperty
     def cache_hook(cls):
-        return config.runtime.jit_cache_hook
+        return knobs.runtime.jit_cache_hook
 
     @cache_hook.setter
     def cache_hook(cls, value):
-        config.runtime.jit_cache_hook = value
+        knobs.runtime.jit_cache_hook = value
 
     @classproperty
     def compiled_hook(cls):
-        return config.runtime.jit_post_compile_hook
+        return knobs.runtime.jit_post_compile_hook
 
     @compiled_hook.setter
     def compiled_hook(cls, value):
-        config.runtime.jit_post_compile_hook = value
+        knobs.runtime.jit_post_compile_hook = value
 
     def _call_hook(
         self,

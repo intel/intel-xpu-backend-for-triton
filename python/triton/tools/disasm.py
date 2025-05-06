@@ -93,8 +93,8 @@ def path_to_cuobjdump():
 
 
 def path_to_spvbin():
-    from triton import config
-    return config.intel.spirv_dis.path
+    from triton import knobs
+    return knobs.intel.spirv_dis.path
 
 
 def extract_spvbin(file_path):

@@ -123,7 +123,7 @@ def get_disassembler_command_and_debug_line_format():
         raise RuntimeError("llvm-objdump not found in PATH")
 
     if backend == "xpu":
-        spirv_dis = triton.config.intel.spirv_dis.path
+        spirv_dis = triton.knobs.intel.spirv_dis.path
         return ("spvbin", [spirv_dis], "", "")
 
     raise RuntimeError(f"unknown backend {backend}")

@@ -373,19 +373,19 @@ class CompiledKernel:
     # when pytorch has a compatible layer for the new API.
     @classproperty
     def launch_enter_hook(cls):
-        return config.runtime.launch_enter_hook
+        return knobs.runtime.launch_enter_hook
 
     @launch_enter_hook.setter
     def launch_enter_hook(cls, value):
-        config.runtime.launch_enter_hook = value
+        knobs.runtime.launch_enter_hook = value
 
     @classproperty
     def launch_exit_hook(cls):
-        return config.runtime.launch_exit_hook
+        return knobs.runtime.launch_exit_hook
 
     @launch_exit_hook.setter
     def launch_exit_hook(cls, value):
-        config.runtime.launch_exit_hook = value
+        knobs.runtime.launch_exit_hook = value
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple

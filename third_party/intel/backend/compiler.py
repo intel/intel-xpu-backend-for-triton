@@ -1,7 +1,7 @@
 from triton.backends.compiler import BaseBackend
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src
-from triton import config
+from triton import knobs
 
 from dataclasses import dataclass
 import functools
@@ -48,13 +48,13 @@ class XPUOptions:
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
-            extern_libs['libdevice'] = config.intel.libdevice_path or str(
+            extern_libs['libdevice'] = knobs.intel.libdevice_path or str(
                 default_libdir / 'libsycl-spir64-unknown-unknown.bc')
 
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.generate_native_code = config.intel.gen_native_code
+        self.generate_native_code = knobs.intel.gen_native_code
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -167,7 +167,7 @@ class XPUBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in XPUOptions.__dataclass_fields__.keys() if k in opts}
         args["allow_fp8e4nv"] = True
-        args["enable_tile_load_linear_layout"] = config.intel.tile_load_ll
+        args["enable_tile_load_linear_layout"] = knobs.intel.tile_load_ll
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -189,7 +189,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def parse_raise_block_pointer_flags() -> dict:
-        str = config.intel.raise_block_pointer
+        str = knobs.intel.raise_block_pointer
         raise_block_ptr_flags = {}
         raise_block_ptr_flags['enabled'] = False
         raise_block_ptr_flags['ignore-masks'] = False
@@ -275,7 +275,7 @@ class XPUBackend(BaseBackend):
         XPUBackend.validate_options(opt, properties)
 
         if (properties["has_subgroup_2d_block_io"] and properties["has_subgroup_matrix_multiply_accumulate"]
-                and (config.intel.advanced_path or opt.advanced_path)):
+                and (knobs.intel.advanced_path or opt.advanced_path)):
             return XPUBackend.AdvancedPath.make_ttgir(mod, metadata, opt)
 
         pm = ir.pass_manager(mod.context)
@@ -302,7 +302,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_canonicalizer(pm)
-        if config.intel.opt_reduction_locality:
+        if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         pm.run(mod)
@@ -321,7 +321,7 @@ class XPUBackend(BaseBackend):
         # FIXME: Advanced path uses custom type conversion and needs hacky
         # solutions for SLM allocation, so this will crash on some operations
         # being used, e.g., convert_layout.
-        if not config.intel.reduce_transpose:
+        if not knobs.intel.reduce_transpose:
             passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
@@ -333,7 +333,7 @@ class XPUBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if not config.compilation.disable_line_info:
+        if not knobs.compilation.disable_line_info:
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
