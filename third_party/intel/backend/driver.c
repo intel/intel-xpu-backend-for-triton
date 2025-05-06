@@ -24,7 +24,6 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
-static std::vector<ze_device_handle_t> g_devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
 
@@ -311,8 +310,6 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
     g_sycl_l0_device_list.push_back(std::make_pair(
         sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
                              sycl_devices[i])));
-    g_devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-        sycl_devices[i]));
   }
 
   return Py_BuildValue("(i)", deviceCount);
