@@ -14,12 +14,12 @@ import numpy as np
 
 # pylint: disable=unused-argument
 @triton.jit
-def _attn_fwd_inner_with_block_pointers(acc, l_i, m_i, q,  #
-                                        K_block_ptr, V_block_ptr,  #
-                                        start_m, qk_scale,  #
-                                        BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
-                                        STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                                        N_CTX: tl.constexpr):
+def _attn_fwd_inner(acc, l_i, m_i, q,  #
+                    K_block_ptr, V_block_ptr,  #
+                    start_m, qk_scale,  #
+                    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
+                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
+                    N_CTX: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -139,18 +139,18 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     # For causal = True, STAGE = 3 the kernel gets 1 as its STAGE
     # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner_with_block_pointers(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
-                                                            start_m, qk_scale,  #
-                                                            BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                                            4 - STAGE, offs_m, offs_n, N_CTX  #
-                                                            )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
+                                        start_m, qk_scale,  #
+                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
+                                        4 - STAGE, offs_m, offs_n, N_CTX  #
+                                        )
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner_with_block_pointers(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
-                                                            start_m, qk_scale,  #
-                                                            BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                                            2, offs_m, offs_n, N_CTX  #
-                                                            )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
+                                        start_m, qk_scale,  #
+                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
+                                        2, offs_m, offs_n, N_CTX  #
+                                        )
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -164,8 +164,6 @@ configs = [
     for s in [2, 3, 4] \
     for w in [8, 16, 32] \
     ]
-
-tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
 
 
 @triton.jit
@@ -419,9 +417,11 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 
 
 class _attention(torch.autograd.Function):
+    tune_attn_fwd: Callable = None
+    attn_fwd: Callable = None
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, attn_fwd_kernel: Callable):
+    def forward(ctx, q, k, v, causal, sm_scale):
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
@@ -440,7 +440,7 @@ class _attention(torch.autograd.Function):
 
         if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
             # default pipeline
-            tuner(attn_fwd_kernel)[grid](
+            _attention.tune_attn_fwd[grid](
                 q, k, v, sm_scale, M, o,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
@@ -453,7 +453,7 @@ class _attention(torch.autograd.Function):
                 split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
             )
         else:
-            attn_fwd_kernel[grid](
+            _attention.attn_fwd[grid](
                 q, k, v, sm_scale, M, o,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
@@ -615,7 +615,12 @@ def get_benchmark(
             )
 
         elif provider == 'triton':
-            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale, attn_fwd)
+            # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
+            tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
+            _attention.attn_fwd = attn_fwd
+            _attention.tune_attn_fwd = tuner(attn_fwd)
+
+            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
             if MODE == 'bwd':
                 triton_o = triton_fn()
                 triton_do = torch.randn_like(triton_o)

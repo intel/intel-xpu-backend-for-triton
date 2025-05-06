@@ -9,12 +9,12 @@ from triton_kernels_benchmark import flash_attention_benchmark
 
 # pylint: disable=unused-argument
 @triton.jit
-def _attn_fwd_inner_with_tensor_desc(acc, l_i, m_i, q,  #
-                                     K_block_ptr, V_desc,  #
-                                     start_m, qk_scale,  #
-                                     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
-                                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                                     N_CTX: tl.constexpr):
+def _attn_fwd_inner(acc, l_i, m_i, q,  #
+                    K_block_ptr, V_desc,  #
+                    start_m, qk_scale,  #
+                    BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
+                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
+                    N_CTX: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -111,18 +111,18 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
     # For causal = True, STAGE = 3, the kernel gets 1 as its STAGE
     # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner_with_tensor_desc(acc, l_i, m_i, q, K_block_ptr, V_desc,  #
-                                                         start_m, qk_scale,  #
-                                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                                         4 - STAGE, offs_m, offs_n, N_CTX  #
-                                                         )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_desc,  #
+                                        start_m, qk_scale,  #
+                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
+                                        4 - STAGE, offs_m, offs_n, N_CTX  #
+                                        )
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner_with_tensor_desc(acc, l_i, m_i, q, K_block_ptr, V_desc,  #
-                                                         start_m, qk_scale,  #
-                                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
-                                                         2, offs_m, offs_n, N_CTX  #
-                                                         )
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_desc,  #
+                                        start_m, qk_scale,  #
+                                        BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
+                                        2, offs_m, offs_n, N_CTX  #
+                                        )
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
