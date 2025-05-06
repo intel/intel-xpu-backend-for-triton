@@ -88,8 +88,8 @@ def get_spvdis(spvbin_asm):
 
 
 def path_to_cuobjdump():
-    from triton import config
-    return config.nvidia.cuobjdump.path
+    from triton import knobs
+    return knobs.nvidia.cuobjdump.path
 
 
 def path_to_spvbin():
