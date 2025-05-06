@@ -376,12 +376,16 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
         auto tensor_name = triton_args.spirv_dump_dir + "/" +
                            item.at("name").get<std::string>() + ".pt";
         auto tensor = load_tensor(tensor_name);
-        auto dev = sycl::malloc_device<char>(tensor.nbytes(), stream);
-        if (!dev)
-          throw std::runtime_error("Device Memory Allocation Failed \n");
+        auto nbytes = tensor.nbytes();
+        char *dev = nullptr;
+        if (nbytes) {
+          dev = sycl::malloc_device<char>(nbytes, stream);
+          if (!dev)
+            throw std::runtime_error("Device Memory Allocation Failed \n");
+        }
         triton_args.dev_buffers.push_back(dev);
-        stream.memcpy(dev, tensor_ptr(tensor), tensor.nbytes())
-            .wait_and_throw();
+        if (nbytes)
+          stream.memcpy(dev, tensor_ptr(tensor), nbytes).wait_and_throw();
 
         // Configure output tensor
         if (std::find(triton_args.out_tensor_names.begin(),
@@ -422,8 +426,6 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
   for (auto *dev_ptr : triton_args.dev_buffers) {
     if (dev_ptr)
       sycl::free(dev_ptr, stream);
-    else
-      throw std::runtime_error("sycl::free failed \n");
   }
 
   return triton_args.host_outbuffers;
