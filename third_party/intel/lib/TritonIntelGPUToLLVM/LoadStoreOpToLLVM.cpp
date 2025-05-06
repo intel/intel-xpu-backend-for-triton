@@ -1623,26 +1623,30 @@ struct LoadOpConversion
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
     vBlocks = numOperandsPer2DloadN;
 
+    // downscale if the load size is bigger than the block size
+    LLVM_DEBUG({
+      llvm::dbgs() << "numOperandsPer2DLoadM before downscaling = "
+                   << numOperandsPer2DLoadM << "\n";
+      llvm::dbgs() << "numOperandsPer2DloadN before downscaling = "
+                   << numOperandsPer2DloadN << "\n";
+    });
+
+    if (!isTransposeRequired) {
+      // transpose has specific requirements based on hardware limitations and
+      // optional flags
+      numOperandsPer2DLoadM =
+          std::min(numOperandsPer2DLoadM,
+                   mlir::ceil<unsigned>(tensorShape[0], elemsPerDPASInst[0]));
+
+      numOperandsPer2DloadN =
+          std::min(numOperandsPer2DloadN,
+                   mlir::ceil<unsigned>(tensorShape[1], elemsPerDPASInst[1]));
+    }
+
     numOperandsOuterDimPerLoad =
         isOperandA ? numOperandsPer2DLoadM : numOperandsPer2DloadN;
     numOperandsInnerDimPerLoad =
         isOperandA ? numOperandsPer2DloadN : numOperandsPer2DLoadM;
-
-    // downscale if the load size is bigger than the block size
-    LLVM_DEBUG({
-      llvm::dbgs() << "numOperandsOuterDimPerLoad before downscaling = "
-                   << numOperandsOuterDimPerLoad << "\n";
-      llvm::dbgs() << "numOperandsInnerDimPerLoad before downscaling = "
-                   << numOperandsInnerDimPerLoad << "\n";
-    });
-
-    numOperandsOuterDimPerLoad = std::min(
-        numOperandsOuterDimPerLoad,
-        mlir::ceil<unsigned>(tensorShape[dimOuter], elemsPerDPASInst[0]));
-
-    numOperandsInnerDimPerLoad = std::min(
-        numOperandsInnerDimPerLoad,
-        mlir::ceil<unsigned>(tensorShape[dimInner], elemsPerDPASInst[1]));
 
     LLVM_DEBUG({
       llvm::dbgs() << "numOperandsOuterDimPerLoad = "
@@ -1915,12 +1919,12 @@ struct LoadOpConversion
               /*vnni_transform*/
               (usePackedType && !isOperandA && !isTransposeRequired &&
                originalElemBits != 32));
+          LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
           if (failed(load2dOp.verify())) {
             // Explicitly invoke verifier because `triton_gen` ops are
             // immediately lowered further to a builtin call.
             return failure();
           }
-          LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
 
           unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
                                       ? numOperandsOuterDimPerLoad
