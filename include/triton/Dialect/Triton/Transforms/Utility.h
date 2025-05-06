@@ -10,6 +10,8 @@ namespace mlir::triton {
 Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                   Value pred);
 
+triton::MakeTensorPtrOp getMakeTensorPtrOp(Value v);
+
 } // namespace mlir::triton
 
 #endif // TRITON_TRANSFORMS_UTILITY_H

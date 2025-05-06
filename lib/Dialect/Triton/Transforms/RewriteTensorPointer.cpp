@@ -6,9 +6,9 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
+#include "triton/Dialect/Triton/Transforms/Utility.h"
 
 using namespace mlir;
 
@@ -340,7 +340,7 @@ public:
         continue;
       }
       needRewrite = true;
-      auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
+      auto makeTensorPtrOp = triton::getMakeTensorPtrOp(results[i]);
       assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
       const auto &info = rewritedInfo[makeTensorPtrOp.getResult()];
       for (unsigned j = 0; j < info.length(); ++j) {
@@ -378,7 +378,7 @@ public:
         oldResIdx++;
         newResIdx++;
       } else {
-        auto makeTensorPtrOp = getMakeTensorPtrOp(results[oldResIdx]);
+        auto makeTensorPtrOp = triton::getMakeTensorPtrOp(results[oldResIdx]);
         assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
         auto info = rewritedInfo[makeTensorPtrOp.getResult()];
         for (unsigned j = 0; j < info.length(); ++j) {
