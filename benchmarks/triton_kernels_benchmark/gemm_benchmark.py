@@ -304,8 +304,9 @@ def get_benchmark(
         'onednn': 'OneDNN',
     }
     # use_xetla and use_cutlass
-    if not (transpose_a or transpose_b) and not new_shapes:
-        supported_providers['xetla'] = 'XeTLA'
+    if not (transpose_a or transpose_b):
+        if not new_shapes:
+            supported_providers['xetla'] = 'XeTLA'
         supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
