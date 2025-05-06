@@ -442,8 +442,7 @@ class _attention(torch.autograd.Function):
 
         if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
             # default pipeline
-            _attention.tune_attn_fwd[grid](
-                q, k, v, sm_scale, M, o,  #
+            _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
                 v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
@@ -455,7 +454,7 @@ class _attention(torch.autograd.Function):
                 split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
             )
         else:
-            _attention.attn_fwd[grid](
+            _attention.attn_fwd[grid](  # pylint: disable=unsubscriptable-object
                 q, k, v, sm_scale, M, o,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
