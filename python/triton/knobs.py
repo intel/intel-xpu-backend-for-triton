@@ -449,7 +449,7 @@ class nvidia_knobs(base_knobs):
 class intel_knobs(base_knobs):
     spirv_dis: env_intel_tool = env_intel_tool("spirv-dis")
 
-    gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
+    gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", None)
     tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
     advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
