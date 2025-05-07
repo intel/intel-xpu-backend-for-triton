@@ -1,6 +1,5 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s
 
-// CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x1cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind}
 // CHECK-DAG: llvm.func spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_2r16x2cPU3AS1viiiDv2_i(!llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind}
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_block_ptr(
@@ -12,7 +11,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
 
-    // CHECK-DAG:       %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK-DAG:       %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK-DAG:       %[[CST_2_I32:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK-DAG:       %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
@@ -48,30 +46,32 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %rowMajorPtr = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x32xf16>>
     triton_intel_gpu.prefetch %rowMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<16x32xf16>>
 
-    // CHECK:           %[[VAL_32:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id()
-    // CHECK:           %[[VAL_33:.*]] = llvm.zext %[[VAL_32]] : i32 to i64
-    // CHECK:           %[[VAL_34:.*]] = llvm.trunc %[[VAL_33]] : i64 to i32
-    // CHECK:           %[[VAL_35:.*]] = llvm.urem %[[VAL_34]], %[[CST_2_I32]] : i32
-    // CHECK:           %[[VAL_36:.*]] = llvm.udiv %[[VAL_34]], %[[CST_2_I32]] : i32
-    // CHECK:           %[[VAL_37:.*]] = llvm.urem %[[VAL_36]], %[[CST_4]] : i32
-    // CHECK:           %[[VAL_38:.*]] = llvm.mul %[[BASE_WIDTH]], %[[CST_2]] : i64
-    // CHECK:           %[[COL_MAJOR_BASE_WIDTH:.*]] = llvm.trunc %[[VAL_38]] : i64 to i32
-    // CHECK:           %[[COL_MAJOR_BASE_HEIGHT:.*]] = llvm.trunc %[[BASE_HEIGHT]] : i64 to i32
-    // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[ROW_STRIDE]], %[[CST_2]] : i64
-    // CHECK:           %[[COL_MAJOR_PITCH:.*]] = llvm.trunc %[[VAL_41]] : i64 to i32
-    // CHECK:           %[[VAL_43:.*]] = llvm.mul %[[VAL_35]], %[[CST_16]] : i32
-    // CHECK:           %[[VAL_44:.*]] = llvm.add %[[VAL_43]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_45:.*]] = llvm.urem %[[VAL_44]], %[[CST_32]] : i32
-    // CHECK:           %[[VAL_46:.*]] = llvm.add %[[VAL_45]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_47:.*]] = llvm.mul %[[VAL_37]], %[[CST_4]] : i32
-    // CHECK:           %[[VAL_48:.*]] = llvm.add %[[VAL_47]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_49:.*]] = llvm.urem %[[VAL_48]], %[[CST_16]] : i32
+    // COM: The memory layout is same for the column major memory and row major memory. The prefetch should be the same.
+
+    // CHECK:           %[[VAL_38:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {no_unwind, will_return} : () -> i32
+    // CHECK:           %[[VAL_39:.*]] = llvm.zext %[[VAL_38]] : i32 to i64
+    // CHECK:           %[[VAL_40:.*]] = llvm.trunc %[[VAL_39]] : i64 to i32
+    // CHECK:           %[[VAL_41:.*]] = llvm.urem %[[VAL_40]], %[[CST_1]] : i32
+    // CHECK:           %[[VAL_42:.*]] = llvm.udiv %[[VAL_40]], %[[CST_1]] : i32
+    // CHECK:           %[[VAL_43:.*]] = llvm.urem %[[VAL_42]], %[[CST_8]] : i32
+    // CHECK:           %[[VAL_44:.*]] = llvm.mul %[[BASE_WIDTH]], %[[CST_2]] : i64
+    // CHECK:           %[[COLUM_MAJOR_BASE_WIDTH_I32:.*]] = llvm.trunc %[[VAL_44]] : i64 to i32
+    // CHECK:           %[[COLUM_MAJOR_BASE_HEIGHT_I32:.*]] = llvm.trunc %[[BASE_HEIGHT]] : i64 to i32
+    // CHECK:           %[[VAL_47:.*]] = llvm.mul %[[ROW_STRIDE]], %[[CST_2]] : i64
+    // CHECK:           %[[COLUM_MAJOR_PITCH:.*]] = llvm.trunc %[[VAL_47]] : i64 to i32
+    // CHECK:           %[[VAL_49:.*]] = llvm.mul %[[VAL_41]], %[[CST_32]] : i32
     // CHECK:           %[[VAL_50:.*]] = llvm.add %[[VAL_49]], %[[CST_0]] : i32
-    // CHECK:           %[[COL_MAJOR_OFFSET_Y:.*]] = llvm.trunc %[[VAL_50]] : i32 to i32
-    // CHECK:           %[[COL_MAJOR_OFFSET_X:.*]] = llvm.trunc %[[VAL_46]] : i32 to i32
-    // CHECK:           %[[VAL_54:.*]] = llvm.insertelement %[[COL_MAJOR_OFFSET_X]], {{.*}} : i32] : vector<2xi32>
-    // CHECK:           %[[COL_MAJOR_OFFSETS:.*]] = llvm.insertelement %[[COL_MAJOR_OFFSET_Y]], {{.*}} : i32] : vector<2xi32>
-    // CHECK:           llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x1cPU3AS1viiiDv2_i(%[[BASE]], %[[COL_MAJOR_BASE_WIDTH]], %[[COL_MAJOR_BASE_HEIGHT]], %[[COL_MAJOR_PITCH]], %[[COL_MAJOR_OFFSETS]]) {{.*}}
+    // CHECK:           %[[VAL_51:.*]] = llvm.urem %[[VAL_50]], %[[CST_32]] : i32
+    // CHECK:           %[[VAL_52:.*]] = llvm.add %[[VAL_51]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_53:.*]] = llvm.mul %[[VAL_43]], %[[CST_2_I32]] : i32
+    // CHECK:           %[[VAL_54:.*]] = llvm.add %[[VAL_53]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_55:.*]] = llvm.urem %[[VAL_54]], %[[CST_16]] : i32
+    // CHECK:           %[[VAL_56:.*]] = llvm.add %[[VAL_55]], %[[CST_0]] : i32
+    // CHECK:           %[[VAL_57:.*]] = llvm.trunc %[[VAL_56]] : i32 to i32
+    // CHECK:           %[[VAL_58:.*]] = llvm.trunc %[[VAL_52]] : i32 to i32
+    // CHECK:           %[[VAL_59:.*]] = llvm.insertelement %[[VAL_58]], {{.*}} : i32] : vector<2xi32>
+    // CHECK:           %[[COLUM_MAJOR_OFFSETS:.*]] = llvm.insertelement %[[VAL_57]], {{.*}} : i32] : vector<2xi32>
+    // CHECK:           llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_2r16x2cPU3AS1viiiDv2_i(%[[BASE]], %[[COLUM_MAJOR_BASE_WIDTH_I32]], %[[COLUM_MAJOR_BASE_HEIGHT_I32]], %[[COLUM_MAJOR_PITCH]], %[[COLUM_MAJOR_OFFSETS]]) {{.*}}
     %columnMajorPtr = tt.make_tensor_ptr %arg0, [%arg4, %arg2], [%c1_i64, %arg5], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x16xf16>>
     triton_intel_gpu.prefetch %columnMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<32x16xf16>>
 
