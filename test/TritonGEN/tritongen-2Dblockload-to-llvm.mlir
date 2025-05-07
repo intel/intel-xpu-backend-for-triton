@@ -6,14 +6,14 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK:     llvm.func @triton_gen.2Dblockload(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
   // CHECK:  [[EIGHT:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-NEXT:  [[DEST:%.*]] = llvm.alloca [[EIGHT]] x i16 : (i32) -> !llvm.ptr
-  // CHECK-NEXT:  [[CL:%.*]] = llvm.mlir.constant(63 : i64) : i64
   // CHECK-NEXT:  [[PTRTOINT:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
+  // CHECK-NEXT:  [[CL:%.*]] = llvm.mlir.constant(63 : i64) : i64
   // CHECK-NEXT:  [[AND:%.*]] = llvm.and [[PTRTOINT]], [[CL]] : i64
   // CHECK-NEXT:  [[TRUNC:%.*]] = llvm.trunc [[AND]] : i64 to i32
   // CHECK-NEXT:  [[ADD_0:%.*]] = llvm.add %arg1, [[TRUNC]] : i32
-  // CHECK-DAG:   [[ZERO_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK-NEXT:  [[SHR:%.*]] = llvm.lshr [[TRUNC]], [[ZERO_0]] : i32
-  // CHECK-NEXT:  [[ADD_1:%.*]] = llvm.add %arg4, [[SHR]] : i32
+  // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-NEXT:  [[DIV:%.*]] = llvm.udiv [[TRUNC]], [[ONE]] : i32
+  // CHECK-NEXT:  [[ADD_1:%.*]] = llvm.add %arg4, [[DIV]] : i32
   // CHECK-DAG:   [[ZERO_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:   [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -49,12 +49,13 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK:    [[PTR:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
   // CHECK:    [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:    [[PTR2:%.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
   // CHECK:    [[CL:%.*]] = llvm.mlir.constant(63 : i64) : i64
-  // CHECK:    [[AND:%.*]] = llvm.and [[PTR]], [[CL]] : i64
+  // CHECK:    [[AND:%.*]] = llvm.and [[PTR2]], [[CL]] : i64
   // CHECK:    [[TRUNC:%.*]] = llvm.trunc [[AND]] : i64 to i32
   // CHECK:    [[ADD:%.*]] = llvm.add %arg1, [[TRUNC]] : i32
-  // CHECK:    [[ZERO_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
-  // CHECK:    [[SHR:%.*]] = llvm.lshr [[TRUNC]], [[ZERO_0]] : i32
+  // CHECK:    [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:    [[SHR:%.*]] = llvm.udiv [[TRUNC]], [[ONE]] : i32
   // CHECK:    [[X:%.*]] = llvm.add %arg4, [[SHR]] : i32
   // CHECK:    [[BASEWIDTH:%.*]] = llvm.sub [[ADD]], %1 : i32
   // CHECK:    [[ELEM_BITS:%.*]] = llvm.mlir.constant(8 : i32) : i32

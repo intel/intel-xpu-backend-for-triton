@@ -110,6 +110,29 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
+// HW requires base address to be CL (64B) aligned. Compensate the non-64-byte
+// alignment base address by adjusting the base width and x-coordinate offset.
+[[maybe_unused]] static std::pair<Value, Value>
+computeAlignedBaseWidthAndOffset(TritonGEN::Matrix2DBlockLoadOp op,
+                                 ConversionPatternRewriter &rewriter) {
+  Location loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value baseAddr =
+      rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), op.getPtr());
+  // A mask for 64-byte alignment (0x3f = 63).
+  constexpr int64_t ALIGNMENT_MASK = 0x3f;
+  // Calculate the byte offset of the base address from a 64-byte alignment.
+  Value offsetInBytes =
+      b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
+  // Adjust the base width to account for the byte offset.
+  Value adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
+  // Adjust the x-coordinate offset based on the number of scalar elements.
+  Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
+  Value adjustedXOffset =
+      b.add(op.getX(), b.udiv(offsetInBytes, elemSizeInBytes));
+  return {adjustedBaseWidth, adjustedXOffset};
+}
+
 [[maybe_unused]] static Value
 createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                         ConversionPatternRewriter &rewriter) {
@@ -133,15 +156,11 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
 
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
-  Value one = b.i32_val(1);
 
-  // compensate the non-64 byte aligned base.
-  Value offset = b.trunc(i32_ty, b.and_(ptr, b.i64_val(0x3f)));
-  // In number of bytes.
-  baseWidth = b.add(op.getBaseWidth(), offset);
-  // In number of scalar elements.
-  x = b.add(x,
-            b.lshr(offset, b.i32_val(std::log2(op.getElemSizeInBits() / 8))));
+  Value one = b.i32_val(1);
+  auto res = computeAlignedBaseWidthAndOffset(op, rewriter);
+  baseWidth = res.first;
+  x = res.second;
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
@@ -458,16 +477,7 @@ struct TritonMatrix2DBlockLoadLowering
     fnName +=
         intel::getTypeMangling(resType.getElementType(), /*isUnsigned=*/true);
 
-    // compensate the non-64 byte aligned base.
-    Value baseAddr = op.getPtr();
-    Value offset =
-        b.trunc(i32_ty, b.and_(b.ptrtoint(i64_ty, baseAddr), b.i64_val(0x3f)));
-    // In number of bytes.
-    Value baseWidth = b.add(op.getBaseWidth(), offset);
-    // In number of scalar elements.
-    Value offsetX =
-        b.add(op.getX(),
-              b.lshr(offset, b.i32_val(std::log2(op.getElemSizeInBits() / 8))));
+    auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
 
     VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = b.insert_element(
@@ -477,7 +487,7 @@ struct TritonMatrix2DBlockLoadLowering
     SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty,  i32_ty,
                                i32_ty,         vecType, ptr_ty(ctx)};
 
-    SmallVector<Value> args{baseAddr,          baseWidth, op.getBaseHeight(),
+    SmallVector<Value> args{op.getPtr(),       baseWidth, op.getBaseHeight(),
                             op.getBasePitch(), byteCoord, dest};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 4> paramAttrs{
