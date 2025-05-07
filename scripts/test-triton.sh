@@ -421,6 +421,9 @@ run_benchmark_attention() {
   echo "Forward - Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
+  echo "Forward - with tensor descriptor:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
+
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
     IGC_VISAOptions=" -enableBCR" \
