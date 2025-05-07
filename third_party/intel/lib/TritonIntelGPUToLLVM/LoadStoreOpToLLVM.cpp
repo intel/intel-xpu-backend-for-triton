@@ -371,6 +371,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             : getDotEncoding(tensorTy).value().getParent());
   }
 
+  // Returns the pitch (stride in bytes) of \p ptr.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
                  const std::map<SmallVector<unsigned>, Value> &ptrs,
                  Value baseWidth, unsigned elemSizeInBits) const {
