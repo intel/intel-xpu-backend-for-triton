@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
@@ -117,8 +118,7 @@ static std::optional<LoadDotOperand> loadDotOperand(tt::LoadOp loadOp) {
 
 /// Collect loads to pipeline. Return success if we can pipeline this loop.
 static void collectOpsToPipeline(scf::ForOp forOp,
-                                 SmallVectorImpl<LoadDotOperand> &loadOps,
-                                 bool supportRegularPtr) {
+                                 SmallVectorImpl<LoadDotOperand> &loadOps) {
   assert(loadOps.empty() && "Expecting an empty list of load operations");
 
   ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
@@ -128,11 +128,6 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   // operations in the loop body block.
   for (Operation &op : forOp) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(&op)) {
-      Value ptr = loadOp.getPtr();
-      bool isBlockPtr = mlir::triton::isTensorPointerType(ptr.getType());
-      if (!isBlockPtr && !supportRegularPtr)
-        continue;
-
       // In order to avoid polluting the cache, do not prefetch loads unless the
       // memory they reference is densely structured.
       Attribute blockIOAttr =
@@ -156,21 +151,6 @@ static void collectOpsToPipeline(scf::ForOp forOp,
   }
 }
 
-/// Return a new mask of type of shape \p typeLike, and value combining the
-/// current mask \p currentMask with the given predicate \p pred.
-static Value computeNewMask(RewriterBase &rewriter, Type typeLike,
-                            Value currentMask, Value pred) {
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  Type maskType = tt::getI1SameShape(tt::getPointeeType(typeLike));
-
-  if (isa<RankedTensorType>(maskType))
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-
-  return currentMask ? rewriter.create<arith::AndIOp>(loc, mask, currentMask)
-                     : mask;
-}
-
 /// Function to mask operations during scheduling.
 static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
                               Value pred) {
@@ -182,7 +162,8 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
       .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
         rewriter.setInsertionPoint(op);
         Value mask =
-            computeNewMask(rewriter, op.getPtr().getType(), op.getMask(), pred);
+            tt::getPredMask(rewriter, tt::getPointeeType(op.getPtr().getType()),
+                            op.getMask(), pred);
         op.getMaskMutable().assign(mask);
         return op;
       });
@@ -309,12 +290,11 @@ createSchedule(scf::ForOp forOp, int numStages) {
 }
 
 bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
-                                        bool supportRegularPtr,
                                         mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
   SmallVector<LoadDotOperand> loads;
-  collectOpsToPipeline(forOp, loads, supportRegularPtr);
+  collectOpsToPipeline(forOp, loads);
   if (loads.empty()) {
     LDBG("No loads to pipeline");
     return false;

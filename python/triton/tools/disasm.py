@@ -87,26 +87,24 @@ def get_spvdis(spvbin_asm):
     return dis
 
 
-@functools.lru_cache()
 def path_to_cuobjdump():
-    from triton.backends.nvidia.compiler import _path_to_binary
-    return _path_to_binary("cuobjdump")
+    from triton import knobs
+    return knobs.nvidia.cuobjdump.path
 
 
-@functools.lru_cache()
 def path_to_spvbin():
-    from triton.backends.intel.compiler import _path_to_binary
-    return _path_to_binary("spirv-dis")
+    from triton import knobs
+    return knobs.intel.spirv_dis.path
 
 
 def extract_spvbin(file_path):
-    dis, _ = path_to_spvbin()
+    dis = path_to_spvbin()
     spv_str = subprocess.check_output([dis, file_path], text=True)
     return spv_str
 
 
 def extract(file_path, fun):
-    cuobjdump, _ = path_to_cuobjdump()
+    cuobjdump = path_to_cuobjdump()
     if fun is None:
         sass_str = subprocess.check_output([cuobjdump, "-sass", file_path])
     else:

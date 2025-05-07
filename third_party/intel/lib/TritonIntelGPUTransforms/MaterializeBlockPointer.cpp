@@ -5,7 +5,6 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
@@ -56,7 +55,7 @@ public:
              "Expected 'loadOp' to load a tensor value.");
 
       // Find the make tensor ptr operation that created the base ptr.
-      tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
+      tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
       if (!makeTensorPtrOp) {
         LDBG("Could not find make tensor ptr op for: " << loadOp);
         return;
@@ -289,7 +288,7 @@ private:
 
     // Find the make tensor ptr operation that created the base ptr for the load
     // operation.
-    tt::MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
+    tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
     assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
 
     Operation::operand_range shape = makeTensorPtrOp.getShape();

@@ -49,14 +49,20 @@ void hoistOpsBefore(Block *block, Block::iterator it,
                     const llvm::SetVector<Operation *> &toHoist);
 
 //===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+// Sink a value redefinition into a block, provided that the block is dominated
+// by `in` and postdominated by `out`.
+Value sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
+                            Block *block);
+
+//===----------------------------------------------------------------------===//
 // Loop Pipelining Utilities
 //===----------------------------------------------------------------------===//
 
 bool loopHasDistGreaterThanOne(scf::ForOp forOp);
 bool isOuterLoop(scf::ForOp forOp);
-
-Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
-                  Value pred);
 
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
@@ -91,7 +97,8 @@ DenseMap<Operation *, int> deserializeLatencies(Operation *op);
 Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                         unsigned numBuffers);
 // Create an allocation and init the mbarriers.
-Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
+Value createBarrierAlloc(scf::ForOp forOp, int numBarriers,
+                         int arriveCount = 1);
 // Create an allocation that can hold distance number of tensor shapes.
 Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);

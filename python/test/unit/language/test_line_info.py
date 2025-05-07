@@ -111,8 +111,7 @@ def get_disassembler_command_and_debug_line_format():
     backend = triton.runtime.driver.active.get_current_target().backend
 
     if backend == "cuda":
-        from triton.backends.nvidia.compiler import _path_to_binary
-        nvdisasm, _ = _path_to_binary("nvdisasm")
+        nvdisasm = triton.knobs.nvidia.nvdisasm.path
         return ("cubin", [nvdisasm, "-g"], "## File", ",")
 
     if backend == "hip":
@@ -124,9 +123,8 @@ def get_disassembler_command_and_debug_line_format():
         raise RuntimeError("llvm-objdump not found in PATH")
 
     if backend == "xpu":
-        from triton.backends.intel.compiler import _path_to_binary
-        dis, _ = _path_to_binary("spirv-dis")
-        return ("spvbin", [dis], "", "")
+        spirv_dis = triton.knobs.intel.spirv_dis.path
+        return ("spvbin", [spirv_dis], "", "")
 
     raise RuntimeError(f"unknown backend {backend}")
 
