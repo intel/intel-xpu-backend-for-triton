@@ -10,7 +10,7 @@ from triton_kernels_benchmark import flash_attention_benchmark
 # pylint: disable=unused-argument
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
-                    K_block_ptr, V_desc,  #
+                    K_desc, V_desc,  #
                     start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
@@ -24,13 +24,13 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     # causal = False
     else:
         lo, hi = 0, N_CTX
-    K_block_ptr = tl.advance(K_block_ptr, (0, lo))
+    off_k = lo
     off_v = lo
     # loop over k, v and update accumulator
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = tl.load(K_block_ptr)
+        k = K_desc.load([0, off_k])
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if STAGE == 2:
@@ -54,7 +54,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # update m_i and l_i
         m_i = m_ij
         off_v += BLOCK_N
-        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
+        off_k += BLOCK_N
     return acc, l_i, m_i
 
 
@@ -90,9 +90,8 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
                                        block_shape=(BLOCK_M, BLOCK_DMODEL))
     V_desc = tl.make_tensor_descriptor(base=V + qvk_offset, shape=(N_CTX, BLOCK_DMODEL), strides=(stride_vk, stride_vn),
                                        block_shape=(BLOCK_N, BLOCK_DMODEL))
-    #FIXME: change to a tensor descriptor.
-    K_block_ptr = tl.make_block_ptr(base=K + qvk_offset, shape=(BLOCK_DMODEL, N_CTX), strides=(stride_kk, stride_kn),
-                                    offsets=(0, 0), block_shape=(BLOCK_DMODEL, BLOCK_N), order=(0, 1))
+    K_desc = tl.make_tensor_descriptor(base=K + qvk_offset, shape=(BLOCK_DMODEL, N_CTX), strides=(stride_kk, stride_kn),
+                                       block_shape=(BLOCK_DMODEL, BLOCK_N))
     O_desc = tl.make_tensor_descriptor(base=Out + qvk_offset, shape=(N_CTX, BLOCK_DMODEL),
                                        strides=(stride_om, stride_on), block_shape=(BLOCK_M, BLOCK_DMODEL))
     # initialize offsets
@@ -111,14 +110,14 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
     # For causal = True, STAGE = 3, the kernel gets 1 as its STAGE
     # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_desc,  #
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_desc, V_desc,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_desc,  #
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_desc, V_desc,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX  #
