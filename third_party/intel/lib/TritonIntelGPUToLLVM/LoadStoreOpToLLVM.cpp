@@ -791,7 +791,7 @@ struct LoadOpToBlockIOConversion
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
-  ConversionPatternRewriter &rewriter) const final {
+                  ConversionPatternRewriter &rewriter) const final {
     ModuleOp mod = op->getParentOfType<ModuleOp>();
     if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
                           getSupportSG2DBlockAttrName()))
@@ -1219,6 +1219,33 @@ struct LoadOpToBlockIOConversion
             Value pred =
                 masks.size() ? masks[{offsetM, offsetN}] : b.int_val(1, 1);
             pred = targetInfo.shuffleIdx(rewriter, loc, pred, 0);
+            // Uses the hardware's capability to replace the predicate
+            // branching.
+            Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
+
+            // Use the top-left address of the block to load the data.
+            Value addrElem =
+                b.bitcast(ptrs[{offsetM, offsetN}], ptr_ty(ctx, 1 /*global*/));
+            addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+
+            auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+                loc, load2DGenXType,
+                /*ptr*/ addrElem,
+                /*base_width*/ baseWidth,
+                /*base_height*/ baseHeight,
+                /*base_pitch*/ pitch,
+                /*x*/ b.i32_val(0),
+                /*y*/ offsetY,
+                /*elem_size_in_bits*/ elemSizeInBits,
+                /*tile_width*/ tileWidth,
+                /*tile_height*/ tileHeight,
+                /*v_blocks*/ vBlocks,
+                /*transpose*/ false,
+                /*vnni_transform*/
+                (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
+                 !isTransposeRequired && originalElemBits != 32));
+
+            Value ret;
             Value other_ = b.undef(load2DGenXType);
             if (others.size()) {
               VectorType vecTy =
@@ -1249,43 +1276,11 @@ struct LoadOpToBlockIOConversion
                     }
                   }
                 }
-
               other_ = b.bitcast(v, load2DGenXType);
-
+              ret = b.select(pred, load2dOp, other_);
             } else {
-              other_ = rewriter.create<LLVM::ConstantOp>(
-                  loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
+              ret = load2dOp;
             }
-
-            // Create a predicated load operation.
-            Block &endBlock = LLVM::intel::createPredicatedBlock(
-                rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-                  // Use the top-left address of the block to load the data.
-                  Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
-                                             ptr_ty(ctx, 1 /*global*/));
-                  addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
-
-                  auto load2dOp =
-                      rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-                          loc, load2DGenXType,
-                          /*ptr*/ addrElem,
-                          /*base_width*/ baseWidth,
-                          /*base_height*/ baseHeight,
-                          /*base_pitch*/ pitch,
-                          /*x*/ b.i32_val(0),
-                          /*y*/ b.i32_val(0),
-                          /*elem_size_in_bits*/ elemSizeInBits,
-                          /*tile_width*/ tileWidth,
-                          /*tile_height*/ tileHeight,
-                          /*v_blocks*/ vBlocks,
-                          /*transpose*/ false,
-                          /*vnni_transform*/
-                          (usePackedType &&
-                           opIdx == DpasEncodingAttr::OpIdx::OperandB &&
-                           !isTransposeRequired && originalElemBits != 32));
-                  return SmallVector<Value, 1>{load2dOp};
-                });
-            Value ret = *endBlock.args_begin();
 
             unsigned numOperandsM = opIdx != DpasEncodingAttr::OpIdx::OperandB
                                         ? numOperandsOuterDimPerLoad
