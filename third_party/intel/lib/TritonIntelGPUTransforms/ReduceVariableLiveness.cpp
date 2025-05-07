@@ -87,28 +87,36 @@ static bool isLongLifeSpanVariable(Value v,
   return false;
 }
 
-static bool isLoadCandidate(tt::LoadOp loadOp, TensorValue tensorV,
+/// Return true if the \p loadOp is a suitable to be moved.
+/// \p expectedElementType is the element type expected for the load to be a
+/// candidate,
+/// \p forOp operation to which we want to move the loadOp
+static bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
                             Operation *forOp) {
   // Only pointer to tensor are considered to be moved
   if (!mlir::triton::isTensorPointerType(loadOp.getPtr().getType()))
     return false;
-  auto tensorType = cast<RankedTensorType>(tensorV.getType());
-  Type elType = tensorType.getElementType();
-  Type loadElType =
-      cast<RankedTensorType>(loadOp.getResult().getType()).getElementType();
+  RankedTensorType loadType =
+      cast<RankedTensorType>(loadOp.getResult().getType());
+  Type loadElType = loadType.getElementType();
   // Types mismatch => Skip this case to avoid inserting too
   // many addtional operations in the loop.
-  if (elType != loadElType)
+  if (expectedElementType != loadElType)
     return false;
   Attribute blockIOAttr = loadOp->getAttr(
       mlir::triton::gpu::intel::TritonIntelGPUDialect::getBlockIOAttrName());
   if (!blockIOAttr)
     return false;
   // Only tensor with rank = 2 are considered to be moved
-  if (tensorType.getShape().size() != 2)
+  if (loadType.getShape().size() != 2)
     return false;
   // Only loadOp out of the for loop body are considered to be moved
   if (loadOp->getParentOp() == forOp)
+    return false;
+  // We skip the load if the defining op is not is the same region.
+  // To avoid prefetching this data in another region
+  // (as the prefetch is added after the defining op).
+  if (!loadOp.getPtr().getDefiningOp())
     return false;
   return true;
 }
@@ -157,6 +165,7 @@ static bool optimizeDotOperands(scf::ForOp forOp,
   // Prefetch the dotOp operand and move it closer to dotOp.
   auto moveOperand = [&prefetchedValue](uint8_t opId, triton::DotOp dotOp,
                                         tt::LoadOp loadOp) {
+    assert(opId < 2 && "opId must be 0 or 1");
     OpBuilder b(dotOp);
     TensorValue tensorV = opId == 0 ? dotOp.getA() : dotOp.getB();
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
@@ -176,9 +185,8 @@ static bool optimizeDotOperands(scf::ForOp forOp,
   for (Operation &op : *loop)
     if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
       // Only accepts dotOps encoded as DPAS MMA
-      auto dstDpasEnc = dyn_cast<ttg::intel::DpasEncodingAttr>(
-          getEncoding(dotOp.getResult()));
-      if (!dstDpasEnc)
+      if (!mlir::triton::gpu::intel::hasDpasEncoding(
+              dotOp.getResult().getType()))
         // Don't rewrite if any other type is found.
         return false;
       dotsInFor.push_back(dotOp);
@@ -197,13 +205,15 @@ static bool optimizeDotOperands(scf::ForOp forOp,
     if (aVals && isLongLifeSpanVariable(aVals.value(), livenessBlockInfo,
                                         LiveInSizeInBytes)) {
       tt::LoadOp loadOp = aVals.value();
-      if (isLoadCandidate(loadOp, dot.getA(), forOp))
+      auto tensorType = cast<RankedTensorType>(dot.getA().getType());
+      if (isLoadCandidate(loadOp, tensorType.getElementType(), forOp))
         moveOperand(0, dot, loadOp);
     }
     if (bVals && isLongLifeSpanVariable(bVals.value(), livenessBlockInfo,
                                         LiveInSizeInBytes)) {
       tt::LoadOp loadOp = bVals.value();
-      if (isLoadCandidate(loadOp, dot.getB(), forOp))
+      auto tensorType = cast<RankedTensorType>(dot.getB().getType());
+      if (isLoadCandidate(loadOp, tensorType, forOp))
         moveOperand(1, dot, loadOp);
     }
   }
