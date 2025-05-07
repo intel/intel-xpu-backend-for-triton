@@ -187,3 +187,35 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @regular_pointer_block_io
+  tt.func public @regular_pointer_block_io(%arg0: tensor<256x64x!tt.ptr<f16>, #mma>) {
+
+    %a_mask = arith.constant dense<true> : tensor<256x64xi1, #mma>
+    %a_other = arith.constant dense<0.00e+00> : tensor<256x64xf16, #mma>
+    // CHECK-NOT: llvm.cond_br
+
+    // CHECK: %[[BASE_Y_0:.*]] = llvm.select {{.*}}, {{.*}}, {{.*}} : i1, i32
+    // CHECK: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_0]], {{.*}} : i1, vector<32xf16>
+
+    // CHECK: %[[BASE_Y_1:.*]] = llvm.select {{.*}}, {{.*}}, {{.*}} : i1, i32
+    // CHECK: %[[LOAD_1:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]]  {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_1]], {{.*}} : i1, vector<32xf16>
+
+    // CHECK: %[[BASE_Y_2:.*]] = llvm.select {{.*}}, {{.*}}, {{.*}} : i1, i32
+    // CHECK: %[[LOAD_2:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_2]]  {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_2]], {{.*}} : i1, vector<32xf16>
+
+    // CHECK: %[[BASE_Y_3:.*]] = llvm.select {{.*}}, {{.*}}, {{.*}} : i1, i32
+    // CHECK: %[[LOAD_3:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_3]]  {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_3]], {{.*}} : i1, vector<32xf16>
+    %0 = tt.load %arg0, %a_mask, %a_other {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
+
+    tt.return
+  }
+}
