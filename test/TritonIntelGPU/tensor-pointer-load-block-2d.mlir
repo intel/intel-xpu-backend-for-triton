@@ -187,3 +187,62 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @regular_pointer_block_io
+  tt.func public @regular_pointer_block_io(%arg0: tensor<256x64x!tt.ptr<f16>, #mma>) {
+
+    %a_mask = arith.constant dense<true> : tensor<256x64xi1, #mma>
+    %a_other = arith.constant dense<0.00e+00> : tensor<256x64xf16, #mma>
+    // CHECK-NOT: llvm.cond_br
+
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_32:.*]] = llvm.extractvalue {{.*}}[32] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_64:.*]] = llvm.extractvalue {{.*}}[64] : !llvm.struct<(i1, i1, {{.*}}
+    // CHECK: %[[TOP_LEFT_MASK_BOOL_96:.*]] = llvm.extractvalue {{.*}}[96] : !llvm.struct<(i1, i1, {{.*}}
+
+
+    // CHECK: %[[BLOCK_SHAPE_Y:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[TOP_LEFT_MASK_0:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_0]] : i1 to i8
+    // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK_0]], %[[CST0_1]])
+    // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
+    // CHECK: %[[BASE_Y_0:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
+    // CHECK: %[[LOAD_0:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_0]], {{.*}} : i1, vector<32xf16>
+
+    // CHECK: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[TOP_LEFT_MASK_1:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_64]] : i1 to i8
+    // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK_1]], %[[CST0_1]])
+    // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
+    // CHECK: %[[BASE_Y_1:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
+    // CHECK: %[[LOAD_1:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_1]]  {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_1]], {{.*}} : i1, vector<32xf16>
+
+    // CHECK: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[TOP_LEFT_MASK_2:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_32]] : i1 to i8
+    // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK_2]], %[[CST0_1]])
+    // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
+    // CHECK: %[[BASE_Y_2:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
+    // CHECK: %[[LOAD_2:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_2]]  {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_2]], {{.*}} : i1, vector<32xf16>
+
+    // CHECK: %[[CST0_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[CST0_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[TOP_LEFT_MASK_3:.*]] = llvm.zext %[[TOP_LEFT_MASK_BOOL_96]] : i1 to i8
+    // CHECK: %[[PRED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%[[TOP_LEFT_MASK_3]], %[[CST0_1]])
+    // CHECK: %[[PRED_BOOL:.*]] =  llvm.trunc %[[PRED]] : i8 to i1
+    // CHECK: %[[BASE_Y_3:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
+    // CHECK: %[[LOAD_3:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_3]]  {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
+    // CHECK: llvm.select {{.*}}, %[[LOAD_3]], {{.*}} : i1, vector<32xf16>
+    %0 = tt.load %arg0, %a_mask, %a_other {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
+
+    tt.return
+  }
+}
