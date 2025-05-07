@@ -69,7 +69,7 @@ def build_report(args: PassedArgs):
             df[p] = df[p].astype(int)
             df_results["params"] = [json.dumps(j) for j in df[[*param_cols, "MASK"]].to_dict("records")]
     else:
-        df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(int).to_dict("records")]
+        df_results["params"] = [json.dumps(j) for j in df[param_cols].astype(str).to_dict("records")]
     df_results["tflops"] = df[args.tflops_col]
     if hbm_col is not None:
         df_results["hbm_gbs"] = df[hbm_col]
