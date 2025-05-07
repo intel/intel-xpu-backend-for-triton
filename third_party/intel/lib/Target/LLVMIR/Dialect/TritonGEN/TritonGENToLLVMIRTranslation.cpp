@@ -35,22 +35,22 @@ public:
                  NamedAttribute attribute,
                  LLVM::ModuleTranslation &moduleTranslation) const final {
     StringRef attrName = attribute.getName().getValue();
-    if (attrName ==
-        triton::TritonGEN::TritonGENDialect::getCacheControlsAttrName()) {
-      auto decorationAttr =
-          dyn_cast<triton::TritonGEN::DecorationCacheControlAttr>(
-              attribute.getValue());
-      if (!decorationAttr)
-        return op->emitOpError(
-            "Expecting triton_gen.decoration_cache_control attribute");
-      if (instructions.size() != 1)
-        return op->emitOpError("Expecting a single instruction");
-      return handleDecorationCacheControl(op, instructions.front(),
-                                          decorationAttr);
-    }
-    if (attrName.starts_with("triton_gen"))
-      return handleTritonGenAttr(op, attribute, moduleTranslation);
-    return success();
+    if (!attrName.starts_with("triton_gen"))
+      return success();
+    assert(
+        attrName ==
+            triton::TritonGEN::TritonGENDialect::getCacheControlsAttrName() &&
+        "Expecting cache controls attribute");
+    auto decorationAttr =
+        dyn_cast<triton::TritonGEN::DecorationCacheControlAttr>(
+            attribute.getValue());
+    if (!decorationAttr)
+      return op->emitOpError(
+          "Expecting triton_gen.decoration_cache_control attribute");
+    if (instructions.size() != 1)
+      return op->emitOpError("Expecting a single instruction");
+    return handleDecorationCacheControl(op, instructions.front(),
+                                        decorationAttr);
   }
 
 private:
@@ -100,41 +100,6 @@ private:
     inst->setMetadata(decorationCacheControlMDName,
                       llvm::MDNode::get(ctx, decorations));
     return success();
-  }
-
-  LogicalResult
-  handleTritonGenAttr(Operation *op, NamedAttribute attribute,
-                      LLVM::ModuleTranslation &moduleTranslation) const {
-    llvm::LLVMContext &llvmContext = moduleTranslation.getLLVMContext();
-    llvm::Function *llvmFunc =
-        moduleTranslation.lookupFunction(cast<LLVM::LLVMFuncOp>(op).getName());
-    if (isKernel(op))
-      amendKernel(llvmContext, llvmFunc, attribute);
-    return success();
-  }
-
-  // Checks if the given operation is a kernel function.
-  bool isKernel(Operation *op) const {
-    auto fn = dyn_cast<LLVM::LLVMFuncOp>(op);
-    return fn && fn.getCConv() == LLVM::CConv::SPIR_KERNEL;
-  }
-
-  // The attribute is converted into metadata and added to the function.
-  void amendKernel(llvm::LLVMContext &llvmContext, llvm::Function *llvmFunc,
-                   NamedAttribute attribute) const {
-    StringRef name = attribute.getName().getValue();
-    assert(name == triton::TritonGEN::TritonGENDialect::
-                       getMaxWorkGroupSizeAttrName() &&
-           "Unexpected attribute");
-    SmallVector<llvm::Metadata *, 3> metadata;
-    llvm::Type *i64 = llvm::IntegerType::get(llvmContext, 64);
-    for (int32_t i :
-         cast<DenseI32ArrayAttr>(attribute.getValue()).asArrayRef()) {
-      llvm::Constant *constant = llvm::ConstantInt::get(i64, i);
-      metadata.push_back(llvm::ConstantAsMetadata::get(constant));
-    }
-    llvm::MDNode *node = llvm::MDNode::get(llvmContext, metadata);
-    llvmFunc->setMetadata(name.drop_front(11), node);
   }
 };
 } // namespace
