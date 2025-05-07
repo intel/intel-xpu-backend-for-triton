@@ -70,10 +70,125 @@ permissions: read-all
 env:
   TRITON_DISABLE_LINE_INFO: 1
   TEST_UNSKIP: ${{ inputs.enable_unskip }}
+  # Increase this value to reset cache
+  PIP_CACHE_NUMBER: 1
 
 jobs:
+  build:
+    name: Build
+    runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    outputs:
+      test-triton-command: ${{ steps.test-triton.outputs.command }}
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
+        if: ${{ !inputs.use_pyenv_python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        if: ${{ inputs.use_pyenv_python }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      # Build PyTorch here once, integration tests jobs should load it from cache.
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        with:
+          ref: ${{ inputs.pytorch_ref }}
+          mode: ${{ inputs.pytorch_mode }}
+
+      - name: Build Proton with XPU support
+        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        run: |
+          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
+
+      - name: Build Triton
+        uses: ./.github/actions/setup-triton
+        with:
+          build_llvm: ${{ inputs.build_llvm }}
+          use_spirv_backend: ${{ inputs.use_spirv_backend }}
+          command: >
+            DEBUG=1
+            python setup.py bdist_wheel && pip install dist/*.whl
+
+      - name: Set test-triton command line
+        id: test-triton
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+
+          if [[ -n "${{ inputs.skip_list }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
+          elif [[ -n "${{ inputs.driver_version }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
+          fi
+
+          if [ -d "$skiplist" ]; then
+            skiplist="--skip-list $skiplist"
+          else
+            skiplist="--skip-list $GITHUB_WORKSPACE/scripts/skiplist/default"
+          fi
+
+          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
+          echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
+          echo "TRITON_TEST_CMD=$TRITON_TEST_CMD" | tee -a $GITHUB_ENV
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+
+      # Unit tests require `build` directory.
+      - name: Run unit tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --unit
+
+      # Instrumentation tests require `build` directory.
+      - name: Run instrumentation tests
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --instrumentation
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload Triton wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          path: dist/*.whl
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports
+
   integration-tests:
     name: Integration tests
+    needs: build
     strategy:
       fail-fast: false
       matrix:
@@ -98,12 +213,9 @@ jobs:
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 1
         with:
           path: $HOME/.cache/pip
-          key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
+          key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
       - name: Install Python (using actions/setup-python) ${{ inputs.python_version }}
         if: ${{ !inputs.use_pyenv_python }}
@@ -123,16 +235,15 @@ jobs:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
 
-      - name: Build Proton with XPU support
-        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
-        run: |
-          echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
-
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
+      - name: Download Triton wheels
+        uses: actions/download-artifact@v4
         with:
-          build_llvm: ${{ inputs.build_llvm }}
-          use_spirv_backend: ${{ inputs.use_spirv_backend }}
+          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+
+      - name: Install Triton
+        run: |
+          pip install triton-*.whl
+          python -c 'import triton; print(triton.__version__)'
 
       - name: Report environment details
         if: matrix.suite == 'core'
@@ -151,30 +262,13 @@ jobs:
           EOF
           ./scripts/capture-hw-details.sh | tee -a reports/.env
 
-      - name: Create test-triton command line
-        run: |
-          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
-
-          if [[ -n "${{ inputs.skip_list }}" ]]; then
-            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
-          elif [[ -n "${{ inputs.driver_version }}" ]]; then
-            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.driver_version }}"
-          fi
-
-          if [ -d "$skiplist" ]; then
-            skiplist="--skip-list $skiplist"
-          else
-            skiplist="--skip-list $GITHUB_WORKSPACE/scripts/skiplist/default"
-          fi
-
-          {
-            echo SKIPLIST="$skiplist"
-            echo TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --warning-reports --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports ${{ inputs.ignore_errors && '--ignore-errors' || '' }} $skiplist"
-          } | tee -a $GITHUB_ENV
-
       - name: Install test dependencies
         run: |
           pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+
+      - name: Set test-triton command line
+        run: |
+          echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
       - name: Run Proton tests
         if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
@@ -182,11 +276,6 @@ jobs:
           cd third_party/proton/test
           pytest test_api.py test_lib.py test_profile.py test_viewer.py test_record.py -s -v
           cd ..
-
-      - name: Run unit tests
-        if: matrix.suite == 'rest'
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
         if: matrix.suite == 'core'
@@ -202,11 +291,6 @@ jobs:
         if: matrix.suite == 'rest'
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial
-
-      - name: Run instrumentation tests
-        if: matrix.suite == 'rest'
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --instrumentation
 
       - name: Get transformers version
         if: matrix.suite == 'rest'
@@ -255,12 +339,9 @@ jobs:
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
-        env:
-          # Increase this value to reset cache
-          CACHE_NUMBER: 1
         with:
           path: $HOME/.cache/pip
-          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.CACHE_NUMBER }}
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
 
       - name: Download test reports
         uses: actions/download-artifact@v4
