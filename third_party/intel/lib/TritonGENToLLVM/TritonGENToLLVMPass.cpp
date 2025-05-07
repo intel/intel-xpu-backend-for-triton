@@ -135,6 +135,14 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
   Value one = b.i32_val(1);
 
+  // compensate the non-64 byte aligned base.
+  Value offset = b.trunc(i32_ty, b.and_(ptr, b.i64_val(0x3f)));
+  // In number of bytes.
+  baseWidth = b.add(op.getBaseWidth(), offset);
+  // In number of scalar elements.
+  x = b.add(x,
+            b.lshr(offset, b.i32_val(std::log2(op.getElemSizeInBits() / 8))));
+
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
                              baseHeight.getType(),
