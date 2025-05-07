@@ -8,7 +8,9 @@ import itertools
 import argparse
 import datetime
 import os
+import time
 
+import scipy.stats
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -177,7 +179,9 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
         raise AssertionError(
             f"the profiling number not match; {n_repeat=}, {kernels=}, "
-            f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}")
+            f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}",
+            "You may try to relax profiling check by setting env variable TRITON_RELAX_PROFILING_CHECK=1",
+        )
     # Make the time to the milliseconds.
     times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
     return _summarize_statistics(times, quantiles, return_mode)
@@ -227,26 +231,26 @@ class MarkArgs:
     n_runs: int = 1
 
     @classmethod
-    def parse_common_args(cls) -> tuple[argparse.Namespace, list[str]]:
+    def _get_parser(cls) -> argparse.ArgumentParser:
         """Parses arguments via CLI, allows save_path overloading to `reports`."""
         parser = argparse.ArgumentParser()
         parser.add_argument(
             "--reports",
             type=str,
             default="",
-            help="directory to save reports",
+            help="Path to directory to save reports.",
         )
         parser.add_argument(
             "--n_runs",
             type=int,
             default=1,
-            help="number of runs for this benchmark",
+            help="Number of runs for this benchmark. The default is one.",
         )
-        return parser.parse_known_args()
+        return parser
 
     @classmethod
     def from_args(cls) -> "MarkArgs":
-        args, _ = cls.parse_common_args()
+        args = cls._get_parser().parse_args()
         return MarkArgs(args.reports, args.n_runs)
 
 
@@ -379,6 +383,7 @@ class BenchmarkCategory(Enum):
     SOFTMAX = "softmax"
     GEMM = "gemm"
     FLASH_ATTENTION = "flash_attention"
+    PREFIX_SUMS = "prefix_sums"
     CORE = "core"
     OPTIONAL = "optional"
     EXPERIMENTAL = "experimental"
@@ -386,22 +391,136 @@ class BenchmarkCategory(Enum):
 
 @dataclass
 class BenchmarkSummary:
-    key: str
-    plot_name: str
-    variant_fields: List[str]
-    variants: List[Union[int, str, List[str]]]
-    supported_providers: Dict[str, str]
-    selected_providers: Dict[str, str]
-    perf_metrics: List[str]
+    plot_name: str = ""
+    variant_fields: List[str] = field(init=False)
+    variants: List[Union[int, str, List[str]]] = field(init=False)
+    supported_providers: Dict[str, str] = field(init=False)
+    selected_providers: Dict[str, str] = field(init=False)
+    perf_metrics: List[str] = field(init=False)
 
     memory_metric: ClassVar[str] = "GB/s"
     compute_metric: ClassVar[str] = "TFlops"
+
+    @property
+    def primary_metric(self) -> str:
+        return self.compute_metric
+
+    @property
+    def reference_provider(self) -> Optional[str]:
+        all_providers = list(self.selected_providers.keys())
+        non_triton_providers = [provider for provider in all_providers if not provider.startswith("triton")]
+        if "xetla" in non_triton_providers:
+            return "xetla"
+        if "onednn" in non_triton_providers:
+            return "onednn"
+        if len(all_providers) < 2:
+            return None
+        if len(non_triton_providers) > 0:
+            return non_triton_providers[0]
+        return all_providers[1]
 
     def __post_init__(self):
         known_metrics = [self.memory_metric, self.compute_metric]
         for metric in self.perf_metrics:
             if metric not in known_metrics:
                 raise NotImplementedError(f"Unsupported {metric} metric. Known metrics are {known_metrics}")
+
+
+@dataclass
+class BenchmarkRunResult(BenchmarkSummary):
+    res_df: Optional[pd.DataFrame] = field(default=None, init=False)
+
+    def _run_summary_df(self, primary_metric_only: bool = False) -> pd.DataFrame:
+
+        def _keep_column(column: str) -> bool:
+            return (any(column.startswith(p + "-") for p in providers) and not column.endswith(("-min", "-max"))
+                    and (not primary_metric_only or column.endswith(self.primary_metric)))
+
+        res_df = self.res_df.copy()
+        variant_fields = self.variant_fields
+        variant_name = "[" + "-".join(variant_fields) + "]"
+        variant_fields_w_floats = [
+            float_col for float_col in res_df.select_dtypes(include="float").columns if float_col in variant_fields
+        ]
+        for variant_field_w_floats in variant_fields_w_floats:
+            res_df[variant_field_w_floats] = res_df[variant_field_w_floats].astype(int)
+        res_df[variant_name] = "[" + res_df[variant_fields].astype(str).agg("-".join, axis=1) + "]"
+        res_df.drop(columns=variant_fields + ["run_counter", "datetime"] +
+                    [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))])
+        providers = self.selected_providers.values()
+        metric_cols = [column for column in res_df.columns if _keep_column(column)]
+        column_tuples = [tuple(col.split("-", 1)) for col in metric_cols]
+        metrics_df = res_df[metric_cols].copy()
+        metrics_df.index = res_df[variant_name]
+        metrics_df.index.name = variant_name
+        metrics_df.columns = pd.MultiIndex.from_tuples(column_tuples, names=["provider", "metric"])
+        geomeans_df = pd.DataFrame(
+            [metrics_df.select_dtypes(include="number").apply(scipy.stats.gmean)],
+            index=["GeoMean"],
+        )
+        summary_df = pd.concat([metrics_df, geomeans_df])
+
+        ref_provider = self.reference_provider if self.reference_provider else ""
+        metric = self.primary_metric
+        ref_provider_name = next((provider for provider in providers if provider.lower() == ref_provider.lower()), None)
+        if ref_provider and primary_metric_only:
+            non_ref_providers = [provider for provider in providers if provider.lower() != ref_provider.lower()]
+            for non_ref_provider in non_ref_providers:
+                summary_df[(non_ref_provider, "%diff")] = (
+                    (100 *
+                     (summary_df[(non_ref_provider, metric)] / summary_df[(ref_provider_name, metric)])).round(1).map(
+                         "{:.1f}%".format)  # pylint: disable=C0209
+                )
+        return summary_df
+
+    @property
+    def run_summary_df_detailed(self) -> pd.DataFrame:
+        return self._run_summary_df()
+
+    @property
+    def run_summary_df(self) -> pd.DataFrame:
+        return self._run_summary_df(True)
+
+
+@dataclass
+class BenchmarkConfig:
+    key: str
+    get_benchmark: Callable[..., Mark]
+    categories: Set[BenchmarkCategory]
+    description: str = ""
+    providers_filter: Optional[list[str]] = None
+    run_opts: Dict[str, Union[str, bool, List[str]]] = field(default_factory=dict)
+
+
+@dataclass
+class BenchmarkConfigRunResult(
+        BenchmarkRunResult,
+        BenchmarkConfig,
+):  # pylint: disable=R0902
+    run_time: Optional[float] = field(default=None, init=False)
+
+    def _get_benchmark(self, apply_providers_filter=True) -> Mark:
+        run_opts = self.run_opts
+        if self.providers_filter and apply_providers_filter:
+            run_opts = run_opts | {"providers_filter": self.providers_filter}
+        mark = self.get_benchmark(**run_opts)
+        if not isinstance(mark.benchmarks, Benchmark):
+            raise NotImplementedError(
+                "Benchmark config list is not supported, exactly one benchmark config is expected.")
+        return mark
+
+    def __post_init__(self):
+        benchmark = self._get_benchmark().benchmarks
+        full_benchmark = self._get_benchmark(False).benchmarks
+
+        self.plot_name = benchmark.plot_name
+        self.variant_fields = benchmark.x_names
+        self.variants = benchmark.x_vals
+        self.supported_providers = dict(zip(full_benchmark.line_vals, full_benchmark.line_names))
+        self.selected_providers = dict(zip(benchmark.line_vals, benchmark.line_names))
+        self.perf_metrics = benchmark.ylabel
+
+        super().__post_init__()
 
     def __str__(self) -> str:
         variants_repr = []
@@ -415,108 +534,43 @@ class BenchmarkSummary:
             "Variants:",
             *variants_repr,
         ]
-        return "\n".join(summary)
-
-    @classmethod
-    def from_benchmarks(cls, key, benchmark: Benchmark, full_benchmark: Benchmark) -> BenchmarkSummary:
-        return BenchmarkSummary(
-            key=key,
-            plot_name=benchmark.plot_name,
-            variant_fields=benchmark.x_names,
-            variants=benchmark.x_vals,
-            supported_providers=dict(zip(full_benchmark.line_vals, full_benchmark.line_names)),
-            selected_providers=dict(zip(benchmark.line_vals, benchmark.line_names)),
-            perf_metrics=benchmark.ylabel,
-        )
-
-
-@dataclass
-class BenchmarkConfig:
-    key: str
-    get_benchmark: Callable[..., Mark]
-    categories: Set[BenchmarkCategory]
-    description: str = ""
-    providers_filter: Optional[list[str]] = None
-    run_opts: Dict[str, Union[str, bool, List[str]]] = field(default_factory=dict)
-    config_summary: BenchmarkSummary = field(init=False)
-
-    def _get_benchmark(self, apply_providers_filter=True) -> Mark:
-        run_opts = self.run_opts
-        if self.providers_filter and apply_providers_filter:
-            run_opts = run_opts | {"providers_filter": self.providers_filter}
-        mark = self.get_benchmark(**run_opts)
-        if not isinstance(mark.benchmarks, Benchmark):
-            raise NotImplementedError(
-                "Benchmark config list is not supported, exactly one benchmark config is expected.")
-        return mark
-
-    def __post_init__(self):
-        self.config_summary = BenchmarkSummary.from_benchmarks(
-            self.key,
-            benchmark=self._get_benchmark().benchmarks,
-            full_benchmark=self._get_benchmark(False).benchmarks,
-        )
-
-    def __str__(self) -> str:
+        variants_str = "\n".join(summary)
         str_repr = [
             f"Config: {self.key}",
             f"Config categories: {[category.value for category in self.categories]}",
             f"Run options: {self.run_opts}",
-            f"Supported providers: {self.config_summary.supported_providers}",
-            f"Selected providers: {self.config_summary.selected_providers}",
-            str(self.config_summary),
+            f"Supported providers: {self.supported_providers}",
+            f"Selected providers: {self.selected_providers}",
+            variants_str,
         ]
         return "\n".join(str_repr)
 
-    def _pretty_print_results(self, res_df: pd.DataFrame):
-        pd.set_option("display.float_format", "{:.2f}".format)  # pylint: disable=consider-using-f-string
-        variant_fields = self.config_summary.variant_fields
-        variant_name = "[" + "-".join(variant_fields) + "]"
-        variant_fields_w_floats = [
-            float_col for float_col in res_df.select_dtypes(include="float").columns if float_col in variant_fields
-        ]
-        for variant_field_w_floats in variant_fields_w_floats:
-            res_df[variant_field_w_floats] = res_df[variant_field_w_floats].astype(int)
-        res_df[variant_name] = "[" + res_df[variant_fields].astype(str).agg("-".join, axis=1) + "]"
-        res_df.drop(columns=variant_fields + ["run_counter", "datetime"] +
-                    [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))])
-        providers = self.config_summary.selected_providers.values()
-        metric_cols = [
-            column for column in res_df.columns
-            if any(column.startswith(p + "-") for p in providers) and not column.endswith(("-min", "-max"))
-        ]
-        column_tuples = [tuple(col.split("-", 1)) for col in metric_cols]
-        metrics_df = res_df[metric_cols].copy()
-        metrics_df.index = res_df[variant_name]
-        metrics_df.index.name = variant_name
-        metrics_df.columns = pd.MultiIndex.from_tuples(column_tuples, names=["provider", "metric"])
-        print(metrics_df)
+    def run(self, args: MarkArgs) -> BenchmarkConfigRunResult:
+        start_time = time.perf_counter()
+        self.res_df: pd.DataFrame = (self._get_benchmark().run(
+            show_plots=False,
+            print_data=False,
+            return_df=True,
+            mark_args=args,
+        ) if self.res_df is None else self.res_df)
+        self.run_time = time.perf_counter() - start_time
+        return self
 
-    def run(self, collect_only: bool, args: MarkArgs, tag: str = ""):
-        if collect_only:
-            print(str(self))
-            return
-        # FIXME: add run summary - total timings, etc
-        print(f"Running {self.key}")
-        res_df: pd.DataFrame = self._get_benchmark().run(show_plots=False, print_data=False, return_df=True,
-                                                         mark_args=args)
+    def build_report(self, reports_folder: str, tag: str = ""):
         variant_cols_for_report_builder = [
-            column for column in res_df.select_dtypes(include=["number", "bool"]).columns
-            if column in self.config_summary.variant_fields
+            column for column in self.res_df.select_dtypes(include=["number", "bool"]).columns
+            if column in self.variant_fields
         ]
-        print(str(self))
-        self._pretty_print_results(res_df)
-        if args.reports:
-            for provider_key, provider_label in self.config_summary.selected_providers.items():
-                report_args = build_report.PassedArgs(
-                    source=f"{args.reports}/{self.config_summary.plot_name}.csv",
-                    target=f"{args.reports}/{self.key}-{provider_key}-report.csv",
-                    param_cols=",".join(variant_cols_for_report_builder),
-                    benchmark=self.key,
-                    compiler=str(provider_key),
-                    tflops_col=f"{provider_label}-{BenchmarkSummary.compute_metric}",
-                    hbm_col=f"{provider_label}-{BenchmarkSummary.memory_metric}",
-                    tag=tag,
-                    mask=False,
-                )
-                build_report.build_report(report_args)
+        for provider_key, provider_label in self.selected_providers.items():
+            report_args = build_report.PassedArgs(
+                source=f"{reports_folder}/{self.plot_name}.csv",
+                target=f"{reports_folder}/{self.key}-{provider_key}-report.csv",
+                param_cols=",".join(variant_cols_for_report_builder),
+                benchmark=self.key,
+                compiler=str(provider_key),
+                tflops_col=f"{provider_label}-{BenchmarkSummary.compute_metric}",
+                hbm_col=f"{provider_label}-{BenchmarkSummary.memory_metric}",
+                tag=tag,
+                mask=False,
+            )
+            build_report.build_report(report_args)
