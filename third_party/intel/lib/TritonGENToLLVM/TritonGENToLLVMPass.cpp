@@ -38,6 +38,8 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
+#include "GenIntrinsicHelper.h"
+
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGENTOLLVM
 #include "intel/include/TritonGENToLLVM/Passes.h.inc"
@@ -267,7 +269,7 @@ storeCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-[[maybe_unused]] static LLVM::CallOp
+static LLVM::CallOp
 createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
                          ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -315,7 +317,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   return call;
 }
 
-[[maybe_unused]] static LLVM::CallOp
+static LLVM::CallOp
 createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                             ConversionPatternRewriter &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
@@ -413,26 +415,47 @@ struct TritonMatrixDPASLowering
     if (cOrigTy != cTy)
       c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
 
-    std::string fnName =
-        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
-        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-        std::to_string(8 /*systolic depth*/ *
-                       getNumOperandsPerDword(precisionA));
+    Value result;
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
+      MLIRContext *ctx = rewriter.getContext();
+      auto builder = TritonLLVMOpBuilder(loc, rewriter);
+      mlir::triton::gpu::intel::GenISA_Dpas dpasOp(rewriter, cTy, cTy, aTy,
+                                                   bTy);
 
-    SmallVector<Type> argTypes{aTy, bTy, cTy};
-    fnName = intel::mangle(fnName, argTypes);
+      // refer the call signature in GenISA
+      result =
+          dpasOp(rewriter, loc, c, a, b,
+                 builder.i32_val(
+                     static_cast<unsigned>(precisionA)), /*src0's precision*/
+                 builder.i32_val(
+                     static_cast<unsigned>(op.getPb())), /*src1's precision*/
+                 builder.i32_val(8),                     /*systolic depth*/
+                 builder.i32_val(8),                     /*repeate count*/
+                 builder.int_val(1, 0) /*is double = false*/)
+              ->getResult(0);
+    } else {
+      std::string fnName =
+          "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
+          stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
+          std::to_string(8 /*systolic depth*/ *
+                         getNumOperandsPerDword(precisionA));
 
-    SmallVector<Value> args{a, b, c};
-    auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
-        /*other=*/LLVM::ModRefInfo::NoModRef,
-        /*argMem=*/LLVM::ModRefInfo::NoModRef,
-        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
-    auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
-    funcAttrs.memEffectsAttr = memAttr;
+      SmallVector<Type> argTypes{aTy, bTy, cTy};
+      fnName = intel::mangle(fnName, argTypes);
 
-    Value result = intel::createDeviceFunctionCall(
-                       rewriter, fnName, cTy, argTypes, args, {}, funcAttrs)
-                       ->getResult(0);
+      SmallVector<Value> args{a, b, c};
+      auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+          /*other=*/LLVM::ModRefInfo::NoModRef,
+          /*argMem=*/LLVM::ModRefInfo::NoModRef,
+          /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef);
+      auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
+      funcAttrs.memEffectsAttr = memAttr;
+
+      result = intel::createDeviceFunctionCall(rewriter, fnName, cTy, argTypes,
+                                               args, {}, funcAttrs)
+                   ->getResult(0);
+    }
+
     if (cOrigTy != cTy)
       result = rewriter.create<LLVM::BitcastOp>(loc, cOrigTy, result);
 
@@ -465,7 +488,8 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isOCLBuiltinAvailable(op)) {
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA") ||
+        !isOCLBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
@@ -536,6 +560,12 @@ struct TritonMatrix2DBlockStoreLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    if (tools::getBoolEnv("TRITONGEN_FORCE_GENISA")) {
+      rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -601,6 +631,13 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // TODO: Remove GenISA lowering after PoC productization is completed.
+    bool useGenISA = tools::getBoolEnv("TRITONGEN_FORCE_GENISA");
+    if (useGenISA) {
+      rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
