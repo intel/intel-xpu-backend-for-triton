@@ -188,10 +188,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
+  bool is_spv;
   int devId;
 
-  if (!PyArg_ParseTuple(args, "sSisi", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &devId)) {
+  if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
@@ -216,10 +217,6 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     const auto &ctx = get_default_context(sycl_device);
     const auto l0_context =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-
-    const auto use_native_code =
-        isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
-    const bool is_spv = use_native_code ? !(*use_native_code) : true;
 
     ze_device_compute_properties_t compute_properties = {};
     compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
