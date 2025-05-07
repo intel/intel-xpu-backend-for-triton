@@ -87,7 +87,7 @@ getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
     }
     // Don't count view operations as uses. Follow them through to their
     // users.
-    if (isa<ttg::MemDescTransOp, ttg::MemDescSubviewOp>(use->getOwner())) {
+    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
       for (auto &use : use->getOwner()->getUses())
         q.push_back(&use);
       continue;
@@ -463,7 +463,7 @@ void createTMABarrierAndWait(
 // Check if load requires additional buffer for a mma pipelining
 bool loadRequiresAdditionalBuffer(Operation *loadOp) {
   auto skipViewOps = [](Operation *op) -> Operation * {
-    while (op->hasOneUse() && isa<ttg::MemDescTransOp>(op)) {
+    while (op->hasOneUse() && op->hasTrait<OpTrait::MemDescViewTrait>()) {
       op = *op->getUsers().begin();
     }
     return op;
@@ -1205,7 +1205,7 @@ scf::ForOp lowerMMAs(scf::ForOp forOp, CoarseSchedule &schedule) {
   SmallVector<ttng::MMAv5OpInterface> mmas;
   forOp.walk([&](ttng::MMAv5OpInterface mma) { mmas.push_back(mma); });
   if (!triton::tools::getBoolEnv("ENABLE_MMA_V5_ATT_PIPELINE")) {
-    if (mmas.size() > 2) {
+    if (mmas.size() > 1) {
       return forOp;
     }
   }
