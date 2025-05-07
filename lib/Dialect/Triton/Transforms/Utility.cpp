@@ -6,21 +6,6 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 
-// Combine the current mask with the given predicate.
-Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
-                      Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
-  Location loc = pred.getLoc();
-  Value mask = pred;
-  if (isa<RankedTensorType>(maskType)) {
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
-  }
-  if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
-  }
-  return mask;
-}
-
 static tt::MakeTensorPtrOp getMakeTensorPtrOpImpl(Operation *op, Value v) {
 
   if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
