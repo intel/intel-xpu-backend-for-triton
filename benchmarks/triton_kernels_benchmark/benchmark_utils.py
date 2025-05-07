@@ -208,6 +208,14 @@ class BenchmarkConfigs(MarkArgs):
                       "If not set all providers will be benchmarked in a given context - "
                       "hw capabilities, provider support for a specific set of benchmark config params, etc."),
             )
+            filters_group.add_argument(
+                "--shape-pattern",
+                dest="shape_filter",
+                metavar="SHAPE_PATTERN",
+                default="",
+                type=str,
+                help=("Limit benchmark run to a certain shape or shape pattern"),
+            )
 
         def _add_output_opts(cmd_with_outputs_parser: argparse.ArgumentParser):
             output_group = cmd_with_outputs_parser.add_argument_group("Output options")
