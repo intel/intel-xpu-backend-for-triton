@@ -193,7 +193,9 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - core
+          - minicore
+          - mxfp
+          - scaled_dot
           - rest
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
@@ -246,7 +248,7 @@ jobs:
           python -c 'import triton; print(triton.__version__)'
 
       - name: Report environment details
-        if: matrix.suite == 'core'
+        if: matrix.suite == 'minicore'
         run: |
           mkdir -p reports
           cat <<EOF | tee reports/.env
@@ -277,10 +279,20 @@ jobs:
           pytest test_api.py test_lib.py test_profile.py test_viewer.py test_record.py -s -v
           cd ..
 
-      - name: Run core tests
-        if: matrix.suite == 'core'
+      - name: Run minicore tests
+        if: matrix.suite == 'minicore'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --core
+          ${{ env.TRITON_TEST_CMD }} --minicore
+
+      - name: Run mxfp tests
+        if: matrix.suite == 'mxfp'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --mxfp
+
+      - name: Run scaled_dot tests
+        if: matrix.suite == 'scaled_dot'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --scaled-dot
 
       - name: Run interpreter tests
         if: matrix.suite == 'rest'
