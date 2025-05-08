@@ -197,6 +197,7 @@ private:
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
     auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+    auto res = scaledDotOp.getD();
     auto scale = opIdx == 0 ? scaledDotOp.getAScale() : scaledDotOp.getBScale();
     auto isFp4 =
         ScaleDotElemType::E2M1 ==
@@ -211,11 +212,13 @@ private:
 
     // 0) Upcast value to computeType (fp16/bf16)
     if (isFp4) {
+      auto resShape = res.getType().getShape();
+      auto vShape = v.getType().getShape();
       auto packDim = kDim;
-      if ((!scaledDotOp.getLhsKPack() && opIdx == 0) ||
-          (!scaledDotOp.getRhsKPack() && opIdx == 1))
+      if (opIdx == 0 && resShape[rank - 2] != vShape[rank - 2])
         packDim = (packDim + 1) % 2;
-      // We always pack along the fastest moving dimension, kDim
+      if (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])
+        packDim = (packDim + 1) % 2;
       v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, packDim);
     } else {
       auto vType16 = v.getType().clone(computeType);
