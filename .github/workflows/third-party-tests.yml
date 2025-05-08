@@ -7,6 +7,10 @@ on:
         description: Runner label, keep empty for default
         type: string
         default: ""
+      liger_all_tests:
+        description: Run all Liger-Kernel tests, including marked for skipping
+        type: boolean
+        default: false
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
@@ -89,10 +93,20 @@ jobs:
       - name: Run Liger-Kernel tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          pip install transformers pandas pytest
+          pip install transformers pandas pytest pillow
 
           git clone https://github.com/linkedin/Liger-Kernel
           pip install transformers datasets -e Liger-Kernel
+
+          if [ "${{ inputs.liger_all_tests }}" = "true" ]; then
+            echo "Removing XPU skip markers from tests"
+            find Liger-Kernel/test -type f -name '*.py' -exec sed -i \
+              -e 's/,\s*marks=pytest\.mark\.skipif(device="xpu", reason="skip for XPU")//g' \
+              -e 's/marks=pytest\.mark\.skipif(device="xpu", reason="skip for XPU"),\s*//g' \
+              -e 's/,\s*pytest\.mark\.skipif(device="xpu", reason="skip for XPU")//g' \
+              -e 's/pytest\.mark\.skipif(device="xpu", reason="skip for XPU"),\s*//g' \
+              {} +
+          fi
 
           pytest Liger-Kernel/test/
 
