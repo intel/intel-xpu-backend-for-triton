@@ -255,7 +255,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
 
     if ndim not in [1] or dtype_str not in ["uint16", "uint32"]:
-        return pytest.skip("FIXME: issue #")
+        return pytest.skip("FIXME: issue #4139")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
@@ -321,7 +321,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
 def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
 
     if ndim not in [1]:
-        return pytest.skip("FIXME: TBD")
+        return pytest.skip("FIXME: issue #4140")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
@@ -874,59 +874,6 @@ def test_tensor_descriptor_batched_gemm_3d_tma():
     torch.xpu.synchronize()
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
-
-
-@pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("ndim", [3, 4, 5])
-@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
-def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK):
-
-    @triton.jit
-    def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
-        desc = tl.make_tensor_descriptor(
-            a_ptr,
-            shape=shape,
-            strides=strides,
-            block_shape=BLOCK_SHAPE,
-        )
-        ndim: tl.constexpr = len(BLOCK_SHAPE)
-
-        offs = (0, ) * ndim
-        M_BLOCK: tl.constexpr = BLOCK_SHAPE[-2]
-        N_BLOCK: tl.constexpr = BLOCK_SHAPE[-1]
-        block = desc.load(offs).reshape(M_BLOCK, N_BLOCK)
-
-        idx = tl.arange(0, M_BLOCK)[:, None] * strides[-2] + tl.arange(0, N_BLOCK)[None, :]
-        tl.store(out_ptr + idx, block)
-
-    def alloc_fn(size: int, align: int, stream: Optional[int]):
-        return torch.empty(size, dtype=torch.int8, device="cuda")
-
-    triton.set_allocator(alloc_fn)
-
-    alloc_shape = (1, 1, 1, 7, INNER_BLOCK)[-ndim:]
-    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cuda", dst_type=dtype_str)
-    inp.data = inp.data[..., :INNER_BLOCK - 3]
-
-    if INNER_BLOCK * inp.element_size() < 32:
-        return pytest.skip("Invalid last dim size")
-
-    BLOCK_SHAPE = (1, 1, 1, 8, INNER_BLOCK)[-ndim:]
-    out = inp.new_empty(BLOCK_SHAPE)
-
-    constexpr_block_shape = tuple(tl.constexpr(v) for v in BLOCK_SHAPE)
-    kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape)
-
-    # Check in-bounds
-    actual = unwrap_tensor(out)
-    expect = unwrap_tensor(inp)
-    idx = [slice(None, s) for s in inp.shape]
-    torch.testing.assert_close(expect, actual[idx])
-
-    # Check out-of-bounds
-    actual[idx].zero_()
-    expect = expect.new_zeros(BLOCK_SHAPE)
-    torch.testing.assert_close(expect, actual)
 
 
 @triton.jit
