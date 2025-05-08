@@ -79,7 +79,7 @@ jobs:
       - name: Install Triton
         id: install
         run: |
-          pip install python/dist/*.whl
+          pip install dist/*.whl
 
       - name: Create reports dir
         run: |

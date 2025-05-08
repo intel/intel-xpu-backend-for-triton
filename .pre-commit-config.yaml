@@ -119,6 +119,10 @@ repos:
         name: mypy for scripts
         stages: [pre-commit, pre-push, manual]
         files: '^scripts/.*'
+        args:
+          - --config-file=
+          - --ignore-missing-imports
+          - --scripts-are-modules
 
 exclude: |
   (?x)(

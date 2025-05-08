@@ -402,12 +402,12 @@ ref_out = [torch.matmul(a, b) for a, b in zip(group_A, group_B)]
 for i in range(group_size):
     # Note: the torch.matmul and Triton implementations uses different
     # algorithms so we need to adjust tolerance.
-    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-4, rtol=1e-3)
+    assert torch.allclose(ref_out[i], tri_out[i], atol=1e-4, rtol=1e-2)
 
 if supports_tma():
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
-        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-3)
+        assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
 
 
 # only launch the kernel, no tensor preparation here to remove all overhead

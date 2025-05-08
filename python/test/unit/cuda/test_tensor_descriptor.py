@@ -1,9 +1,11 @@
 import pytest
 import torch
+import numpy as np
 
 import triton
+from triton.compiler.errors import CompilationError
 import triton.language as tl
-from triton._internal_testing import is_interpreter, numpy_random, to_triton, requires_tma, unwrap_tensor, tma_dtypes
+from triton._internal_testing import is_interpreter, numpy_random, to_triton, requires_tma, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.tools.tensor_descriptor import TensorDescriptor
 from typing import Optional
@@ -102,6 +104,118 @@ def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
     kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
 
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
+
+
+SUPPORTED_REDUCE_DTYPES = {
+    "add": {tl.uint32, tl.int32, tl.uint64, tl.float32, tl.float16, tl.bfloat16},
+    "min": {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16},
+    "max": {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16},
+    "and": {tl.uint32, tl.int32, tl.uint64, tl.int64},
+    "or": {tl.uint32, tl.int32, tl.uint64, tl.int64},
+    "xor": {tl.uint32, tl.int32, tl.uint64, tl.int64},
+}
+
+
+def min_op(a, b):
+    out = np.minimum(to_numpy(a), to_numpy(b))
+    return unwrap_tensor(to_triton(out, device=a.device))
+
+
+def max_op(a, b):
+    out = np.maximum(to_numpy(a), to_numpy(b))
+    return unwrap_tensor(to_triton(out, device=a.device))
+
+
+REDUCE_OP = {
+    "add": lambda a, b: unwrap_tensor(a) + unwrap_tensor(b),
+    "min": min_op,
+    "max": max_op,
+    "and": lambda a, b: torch.bitwise_and(unwrap_tensor(a), unwrap_tensor(b)),
+    "or": lambda a, b: torch.bitwise_or(unwrap_tensor(a), unwrap_tensor(b)),
+    "xor": lambda a, b: torch.bitwise_xor(unwrap_tensor(a), unwrap_tensor(b)),
+}
+
+
+@requires_tma
+# TODO: interpreter support
+# @pytest.mark.interpreter
+@pytest.mark.parametrize("kind", ["add", "min", "max", "and", "or", "xor"])
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("descriptor", ["host", "device"])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK, N_BLOCK):
+
+    @triton.jit(debug=True)
+    def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        midx = moffset + tl.arange(0, M_BLOCK)[:, None]
+        nidx = noffset + tl.arange(0, N_BLOCK)[None, :]
+        idx = midx * N + nidx
+
+        val = tl.load(a_ptr + idx)
+
+        if out_desc is None:
+            desc = tl.make_tensor_descriptor(
+                out_ptr,
+                shape=[M, N],
+                strides=[N, 1],
+                block_shape=[M_BLOCK, N_BLOCK],
+            )
+        else:
+            desc = out_desc
+
+        assert desc.shape[0] == M
+        assert desc.shape[1] == N
+        assert desc.strides[0] == N
+        assert desc.strides[1] == 1
+        assert desc.block_shape == [M_BLOCK, N_BLOCK]
+        if kind == "add":
+            desc.atomic_add([moffset, noffset], val)
+        elif kind == "min":
+            desc.atomic_min([moffset, noffset], val)
+        elif kind == "max":
+            desc.atomic_max([moffset, noffset], val)
+        elif kind == "and":
+            desc.atomic_and([moffset, noffset], val)
+        elif kind == "or":
+            desc.atomic_or([moffset, noffset], val)
+        else:
+            tl.static_assert(kind == "xor")
+            desc.atomic_xor([moffset, noffset], val)
+
+    M, N = 32, 128
+    rs = np.random.RandomState(seed=17)
+    inp = to_triton(numpy_random((M, N), dtype_str, rs), device="cuda", dst_type=dtype_str)
+    out = to_triton(numpy_random((M, N), dtype_str, rs), device="cuda", dst_type=dtype_str)
+
+    grid_m = M // M_BLOCK
+    grid_n = N // N_BLOCK
+
+    if descriptor == "host":
+        out_desc = TensorDescriptor.from_tensor(out, [M_BLOCK, N_BLOCK])
+    else:
+
+        def alloc_fn(size: int, align: int, stream: Optional[int]):
+            assert size == 128 * (grid_m * grid_n) * num_ctas
+            assert align == 128
+            assert stream == 0
+            return torch.empty(size, dtype=torch.int8, device="cuda")
+
+        triton.set_allocator(alloc_fn)
+        out_desc = None
+
+    supported = getattr(tl, dtype_str) in SUPPORTED_REDUCE_DTYPES[kind]
+    if not supported:
+        with pytest.raises(CompilationError):
+            kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
+        return
+
+    expect = REDUCE_OP[kind](inp, out)
+    kernel[(grid_m, grid_n)](out_desc, out, inp, M, N, M_BLOCK, N_BLOCK, kind, num_ctas=num_ctas)
+    torch.testing.assert_close(expect, unwrap_tensor(out), check_dtype=False)
 
 
 # Exercise the functional load/store builtins once to ensure they map through.
@@ -1416,3 +1530,125 @@ def test_specialization_after_host_tensordesc():
     desc = TensorDescriptor.from_tensor(A, [128])
     h = kernel.warmup(desc, 16, grid=(1, ))
     assert ", %arg3: i32 {tt.divisibility = 16 : i32}" in h.asm["ttir"]
+
+
+@triton.jit()
+def matmul_kernel_reshape(a_ptr, b_ptr, c_ptr,  #
+                          M, N, K,  #
+                          BLOCK_SIZE_M: tl.constexpr,  #
+                          BLOCK_SIZE_N: tl.constexpr,  #
+                          BLOCK_SIZE_K: tl.constexpr,  #
+                          NUM_SMS: tl.constexpr):  #
+    # Matmul using TMA and device-side descriptor creation
+    GROUP_SIZE_M: tl.constexpr = 8
+    dtype = c_ptr.dtype.element_ty
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+    num_tiles = num_pid_m * num_pid_n
+
+    a_desc = tl.make_tensor_descriptor(
+        a_ptr,
+        shape=[2, M // 2, K],
+        strides=[(M // 2) * K, K, 1],
+        block_shape=[2, BLOCK_SIZE_M // 2, BLOCK_SIZE_K],
+    )
+    b_desc = tl.make_tensor_descriptor(
+        b_ptr,
+        shape=[2, N // 2, K],
+        strides=[(N // 2) * K, K, 1],
+        block_shape=[2, BLOCK_SIZE_N // 2, BLOCK_SIZE_K],
+    )
+    c_desc = tl.make_tensor_descriptor(
+        c_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+    )
+
+    tile_id_c = start_pid - NUM_SMS
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am = pid_m * (BLOCK_SIZE_M // 2)
+        offs_bn = pid_n * (BLOCK_SIZE_N // 2)
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K
+            a = a_desc.load([0, offs_am, offs_k]).reshape(BLOCK_SIZE_M, BLOCK_SIZE_K)
+            b = b_desc.load([0, offs_bn, offs_k]).reshape(BLOCK_SIZE_N, BLOCK_SIZE_K)
+            accumulator = tl.dot(a, b.T, accumulator)
+
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_cm = pid_m * BLOCK_SIZE_M
+        offs_cn = pid_n * BLOCK_SIZE_N
+
+        c = accumulator.to(dtype)
+        c_desc.store([offs_cm, offs_cn], c)
+
+
+@requires_tma
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32"])
+def test_tensor_descriptor_reshape_matmul(dtype_str):
+    NUM_SMS = 4
+    M, N, K = 256, 256, 128
+    BLOCK_SIZE_M = 64
+    BLOCK_SIZE_N = 64
+    BLOCK_SIZE_K = 64
+
+    # trunc float32 to avoid large precision differences.
+    def trunc_to_tf32(tensor):
+        int_view = tensor.view(np.uint32)
+        mask = np.uint32(0xFFFFE000)
+        masked_int = int_view & mask
+        tf32_simulated = masked_int.view(np.float32)
+        return tf32_simulated
+
+    # test a layout where block_m and block_N are split into two separate chunks.
+    A = numpy_random((M, K), dtype_str)
+    if dtype_str == "float32":
+        A = trunc_to_tf32(A)
+
+    def chunk(X, BLOCK0, BLOCK1):
+        s0, s1 = X.shape
+        X_reshaped = (X.reshape(s0 // BLOCK0, 2, BLOCK0 // 2, s1).transpose(1, 0, 2, 3).reshape(2, s0 // 2, s1))
+        return X_reshaped
+
+    A_reshaped = chunk(A, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    A = to_triton(A, device="cuda", dst_type=dtype_str)
+    A_reshaped = to_triton(A_reshaped, device="cuda", dst_type=dtype_str)
+
+    B = numpy_random((N, K), dtype_str)
+    if dtype_str == "float32":
+        B = trunc_to_tf32(B)
+
+    B_reshaped = chunk(B, BLOCK_SIZE_N, BLOCK_SIZE_K)
+    B = to_triton(B, device="cuda", dst_type=dtype_str)
+    B_reshaped = to_triton(B_reshaped, device="cuda", dst_type=dtype_str)
+
+    C = A.new_empty(M, N)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+    matmul_kernel_reshape[(NUM_SMS, )](
+        A_reshaped,
+        B_reshaped,
+        C,
+        M,
+        N,
+        K,
+        NUM_SMS=4,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_N=BLOCK_SIZE_N,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
+    )
+
+    actual = unwrap_tensor(C)
+    expect = torch.matmul(A, B.mT)
+    torch.testing.assert_close(expect, actual, atol=1e-1, rtol=1e-4)

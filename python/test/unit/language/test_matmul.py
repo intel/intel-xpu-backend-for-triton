@@ -922,7 +922,10 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         pytest.xfail("Pack along K can only be False for float4")
 
     if is_xpu():
-        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
+        required_sm = BLOCK_M * BLOCK_K * 2 + BLOCK_N * BLOCK_K * 2
+        if triton.runtime.driver.active.utils.get_device_properties(
+                triton.runtime.driver.active.get_current_device())["max_shared_mem"] < required_sm:
+            pytest.xfail("Not enough shared memory")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2

@@ -35,7 +35,7 @@ OPTION:
 "
 
 err() {
-    echo $@
+    echo "$@"
     exit 1
 }
 
@@ -238,13 +238,13 @@ run_unit_tests() {
   echo "***************************************************"
   echo "******      Running Triton CXX unittests     ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/cmake* || err "****** ERROR: Build Triton first ******"
+  cd $TRITON_PROJ/build/cmake* || err "****** ERROR: Build Triton first ******"
   ctest .
 
   echo "***************************************************"
   echo "******       Running Triton LIT tests        ******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/build/cmake*/test
+  cd $TRITON_PROJ/build/cmake*/test
   lit -v . || $TRITON_TEST_IGNORE_ERRORS
 }
 
@@ -421,6 +421,9 @@ run_benchmark_attention() {
   echo "Forward - Default path:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
+  echo "Forward - with tensor descriptor:"
+  python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_tensor_desc_benchmark.py
+
   echo "Forward - Advanced path:"
   TRITON_INTEL_ADVANCED_PATH=1 \
     IGC_VISAOptions=" -enableBCR" \
@@ -447,14 +450,15 @@ run_benchmarks() {
 }
 
 run_instrumentation_tests() {
-  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/python/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/python/build/*lib*/triton/instrumentation, build Triton first"
+  INSTRUMENTATION_LIB_DIR=$(ls -1d $TRITON_PROJ/build/*lib*/triton/instrumentation) || err "Could not find $TRITON_PROJ/build/*lib*/triton/instrumentation, build Triton first"
   INSTRUMENTATION_LIB_NAME=$(ls -1 $INSTRUMENTATION_LIB_DIR/*GPUInstrumentationTestLib* | head -n1)
 
   cd $TRITON_PROJ/python/test/unit
 
+  # FIXME: `-n 1` is not required, but a workaround for pytest-skip, which does report a false positive skip list item not matching to any test.
   TRITON_TEST_SUITE=instrumentation \
     TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_NAME} \
-    run_pytest_command -vvv --device xpu instrumentation/test_gpuhello.py
+    run_pytest_command -vvv -n 1 --device xpu instrumentation/test_gpuhello.py
 }
 
 run_inductor_tests() {

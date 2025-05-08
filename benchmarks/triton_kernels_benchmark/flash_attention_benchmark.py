@@ -1,6 +1,6 @@
 import os
 import contextlib
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 from torch.profiler import record_function
@@ -64,18 +64,22 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 
 
 @triton.jit
-def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
-              stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr, stride_qk: tl.constexpr,  #
-              stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr, stride_kk: tl.constexpr,  #
-              stride_vz: tl.constexpr, stride_vh: tl.constexpr, stride_vk: tl.constexpr, stride_vn: tl.constexpr,  #
-              stride_oz: tl.constexpr, stride_oh: tl.constexpr, stride_om: tl.constexpr, stride_on: tl.constexpr,  #
-              Z: tl.constexpr, H: tl.constexpr,  #
-              N_CTX: tl.constexpr,  #
-              BLOCK_M: tl.constexpr,  #
-              BLOCK_DMODEL: tl.constexpr,  #
-              BLOCK_N: tl.constexpr,  #
-              STAGE: tl.constexpr  #
-              ):  # pylint: disable=unused-argument
+def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
+                                  stride_qz: tl.constexpr, stride_qh: tl.constexpr, stride_qm: tl.constexpr,
+                                  stride_qk: tl.constexpr,  #
+                                  stride_kz: tl.constexpr, stride_kh: tl.constexpr, stride_kn: tl.constexpr,
+                                  stride_kk: tl.constexpr,  #
+                                  stride_vz: tl.constexpr, stride_vh: tl.constexpr, stride_vk: tl.constexpr,
+                                  stride_vn: tl.constexpr,  #
+                                  stride_oz: tl.constexpr, stride_oh: tl.constexpr, stride_om: tl.constexpr,
+                                  stride_on: tl.constexpr,  #
+                                  Z: tl.constexpr, H: tl.constexpr,  #
+                                  N_CTX: tl.constexpr,  #
+                                  BLOCK_M: tl.constexpr,  #
+                                  BLOCK_DMODEL: tl.constexpr,  #
+                                  BLOCK_N: tl.constexpr,  #
+                                  STAGE: tl.constexpr  #
+                                  ):  # pylint: disable=unused-argument
 
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
@@ -132,8 +136,8 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
     # stage 1: off-band
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
+    # For causal = True, STAGE = 3 the kernel gets 1 as its STAGE
+    # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
     if STAGE & 1:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
@@ -150,8 +154,6 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
-    # m_ptrs = M + off_hz * N_CTX + offs_m
-    # tl.store(m_ptrs, m_i)
     tl.store(O_block_ptr, acc.to(Out.type.element_ty))
 
 
@@ -164,7 +166,6 @@ configs = [
     ]
 
 tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
-tune_attn_fwd = tuner(_attn_fwd)
 
 
 @triton.jit
@@ -418,6 +419,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 
 
 class _attention(torch.autograd.Function):
+    tune_attn_fwd: Callable = None
+    attn_fwd: Callable = None
 
     @staticmethod
     def forward(ctx, q, k, v, causal, sm_scale):
@@ -439,7 +442,7 @@ class _attention(torch.autograd.Function):
 
         if os.getenv('TRITON_INTEL_ADVANCED_PATH', '0') == '0':
             # default pipeline
-            tune_attn_fwd[grid](
+            _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
                 q, k, v, sm_scale, M, o,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
@@ -452,7 +455,7 @@ class _attention(torch.autograd.Function):
                 split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
             )
         else:
-            _attn_fwd[grid](
+            _attention.attn_fwd[grid](  # pylint: disable=unsubscriptable-object
                 q, k, v, sm_scale, M, o,  #
                 q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
                 k.stride(0), k.stride(1), k.stride(2), k.stride(3),  #
@@ -545,6 +548,7 @@ def check_close(f_val, f_ref, atol, rtol):
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
+    attn_fwd=_attn_fwd_with_block_pointers,
     xetla_assert_result=False,
     xetla_warn_mismatch=True,
 ):
@@ -558,6 +562,10 @@ def get_benchmark(
         'xetla': 'XeTLA',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+
+    # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
+    _attention.attn_fwd = attn_fwd
+    _attention.tune_attn_fwd = tuner(attn_fwd)
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(

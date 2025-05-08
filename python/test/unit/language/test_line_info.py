@@ -111,8 +111,7 @@ def get_disassembler_command_and_debug_line_format():
     backend = triton.runtime.driver.active.get_current_target().backend
 
     if backend == "cuda":
-        from triton.backends.nvidia.compiler import _path_to_binary
-        nvdisasm, _ = _path_to_binary("nvdisasm")
+        nvdisasm = triton.knobs.nvidia.nvdisasm.path
         return ("cubin", [nvdisasm, "-g"], "## File", ",")
 
     if backend == "hip":
@@ -124,9 +123,8 @@ def get_disassembler_command_and_debug_line_format():
         raise RuntimeError("llvm-objdump not found in PATH")
 
     if backend == "xpu":
-        from triton.backends.intel.compiler import _path_to_binary
-        dis, _ = _path_to_binary("spirv-dis")
-        return ("spvbin", [dis], "", "")
+        spirv_dis = triton.knobs.intel.spirv_dis.path
+        return ("spvbin", [spirv_dis], "", "")
 
     raise RuntimeError(f"unknown backend {backend}")
 
@@ -298,6 +296,13 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
         file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if status == "ttir":
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=False)
-        assert check_file_lines(file_lines, str(temp_file), -1, should_contain=True)
+        import os
+        if os.name != "nt":
+            path = str(temp_file)
+        else:
+            # FIXME: use `str(temp_file)` instead of `temp_file.name`
+            # when https://github.com/KhronosGroup/SPIRV-LLVM-Translator/issues/3126 is fixed.
+            path = temp_file.name
+        assert check_file_lines(file_lines, path, -1, should_contain=True)
     else:
         assert check_file_lines(file_lines, "/path/test.py", 8, should_contain=True)

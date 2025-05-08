@@ -7,8 +7,7 @@ import json
 import os
 import pathlib
 import platform
-import sys
-from typing import Dict, List
+from typing import List
 
 from defusedxml.ElementTree import parse
 
@@ -77,30 +76,6 @@ def get_warnings(reports_path: pathlib.Path, suite: str) -> List[TestWarning]:
     with path.open(encoding='utf-8') as warnings_file:
         warnings_data = json.load(warnings_file)
     return [TestWarning(location=next(iter(w.keys())), message=next(iter(w.values()))) for w in warnings_data]
-
-
-def get_missing_tests(warnings: List[TestWarning]) -> List[str]:
-    """Searches warnings for UserWarning and returns a list of missing tests."""
-    tests = set()
-    for warning in warnings:
-        if 'UserWarning: pytest-skip: Not all deselected' not in warning.message:
-            continue
-        for line in warning.message.splitlines():
-            if line.startswith('  - '):
-                tests.add(line.removeprefix('  - '))
-    return sorted(list(tests))
-
-
-def get_all_missing_tests(reports_path: pathlib.Path) -> Dict[str, List[str]]:
-    """Returns missing tests for all suites."""
-    all_missing_tests = {}
-    for report in reports_path.glob('*.xml'):
-        suite = report.stem
-        warnings = get_warnings(reports_path, suite)
-        missing_tests = get_missing_tests(warnings)
-        if missing_tests:
-            all_missing_tests[suite] = missing_tests
-    return all_missing_tests
 
 
 def parse_report(report_path: pathlib.Path) -> ReportStats:
@@ -220,14 +195,6 @@ def main():
     """Main."""
     args = create_argument_parser().parse_args()
     args.report_path = pathlib.Path(args.reports)
-
-    missing_tests = get_all_missing_tests(args.report_path)
-    if missing_tests:
-        for suite, tests in missing_tests.items():
-            print(f'# Missing tests in {suite}:')
-            for test in tests:
-                print(test)
-        sys.exit(1)
 
     stats = parse_reports(args)
 

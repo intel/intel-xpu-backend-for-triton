@@ -81,7 +81,7 @@ runs:
       shell: bash
       run: |
         mkdir -p ~/.triton
-        TRITON_CACHE_KEY="$(sha256sum python/setup.py | cut -d\  -f1)"
+        TRITON_CACHE_KEY="$(sha256sum setup.py | cut -d\  -f1)"
         echo "TRITON_CACHE_KEY=$TRITON_CACHE_KEY" | tee -a $GITHUB_ENV
 
     - name: Load Triton cache
@@ -97,8 +97,7 @@ runs:
     - name: Build Triton
       shell: bash
       run: |
-        cd python
-        pip install -r requirements.txt
+        pip install -r python/requirements.txt
         ${{ inputs.command }}
 
     - name: Save Triton cache

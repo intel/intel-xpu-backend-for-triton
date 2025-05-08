@@ -85,10 +85,28 @@ bool isDivisible(Value value, unsigned divisor) {
 }
 
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
-  if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op))
+  if (auto makeTensorPtrOp = dyn_cast<MakeTensorPtrOp>(op))
     return encoding;
-  if (auto advanceOp = dyn_cast<tt::AdvanceOp>(op))
+  if (auto advanceOp = dyn_cast<AdvanceOp>(op))
     return encoding;
+
+  if (auto dotEnc = dyn_cast<DotOperandEncodingAttr>(encoding)) {
+    if (auto parentEnc = dyn_cast<DpasEncodingAttr>(dotEnc.getParent())) {
+      if (auto fp4ToFpOp = dyn_cast<gpu::Fp4ToFpOp>(op)) {
+        // Dispatch DotEncoding + DPASEncoding to the
+        // TritonIntelGPUInferLayoutInterface
+        Attribute srcEnc;
+        llvm::ArrayRef<int64_t> shape = fp4ToFpOp.getSrc().getType().getShape();
+        if (succeeded(parentEnc.getDialect()
+                          .getRegisteredInterface<DialectInferLayoutInterface>()
+                          ->inferFp4ToFpOpEncoding(
+                              shape, fp4ToFpOp.getAxis(), parentEnc, srcEnc,
+                              /*fwdInference*/ false, std::nullopt)))
+          return srcEnc;
+        return {};
+      }
+    }
+  }
 
   return mlir::inferSrcEncoding(op, encoding);
 }

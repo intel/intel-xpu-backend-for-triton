@@ -58,8 +58,6 @@ def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr 
     tl.static_assert(len(shape) == len(strides))
     tl.static_assert(len(strides) == len(block_shape))
     if transpose:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
         return tl.make_tensor_descriptor(
             ptr,
             shape=shape[:-2] + [shape[-1], shape[-2]],
@@ -67,8 +65,6 @@ def _make_tensor_desc(ptr, shape, strides, block_shape, transpose: tl.constexpr 
             block_shape=block_shape[:-2] + [block_shape[-1], block_shape[-2]],
         )
     else:
-        # Pass constexpr(1) to workaround torchflow tracer changing values of 1 to 2 during compile.
-        # We check that the stride is actually 1 before launching the kernel.
         return tl.make_tensor_descriptor(
             ptr,
             shape=shape,
@@ -293,7 +289,7 @@ def _ptma_matmul_ogs(
     # Enable warp specialization when all loads are TMA loads. Don't enable it
     # for mixed-precision yet.
     ENABLE_WS: tl.constexpr = True
-    WARP_SPECIALIZE: tl.constexpr = ((USE_GATHER_TMA or X_USE_LOAD_TMA) and not is_microscaled_format) and ENABLE_WS
+    WARP_SPECIALIZE: tl.constexpr = (USE_GATHER_TMA or X_USE_LOAD_TMA) and ENABLE_WS
 
     for tile_id in tl.range(tl.program_id(0), num_tiles, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=WARP_SPECIALIZE):
         expt_id, start_z, start_m, eM, off_m, off_n, pid_k = _load_tile_attrs(

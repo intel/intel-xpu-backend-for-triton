@@ -77,12 +77,10 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   AttrSizedOperandSegments,
-  TypesMatchWith<"infer mask type from src type",
-                 "src", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
-  TypesMatchWith<"infer other type from src type",
-                 "src", "other", "getPointeeType($_self)",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">
+  OptionalTypesMatchWith<"infer mask type from src type",
+                 "src", "mask", "getI1SameShape($_self)">,
+  OptionalTypesMatchWith<"infer other type from src type",
+                 "src", "other", "getPointeeType($_self)">,
 ]> {
   let summary = "copy data from global memory to local memory asynchronously";
 
@@ -200,7 +198,7 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc"> {
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
-def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
+def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure, MemDescViewTrait]> {
   let summary = "take a subview of the descriptor.";
 
   let description = [{
@@ -226,6 +224,7 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
 }
 
 def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
+                                                  MemDescViewTrait,
                                                   TransposeOpInterface,
                                                   InferTypeOpWithLayoutEquivalence,
                                                   SameOperandsAndResultElementType]> {
@@ -248,6 +247,29 @@ def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
   let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
 
   let hasFolder = 1;
+}
+
+def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
+                                                      MemDescViewTrait,
+                                                      SameOperandsAndResultElementType]> {
+  let summary = "creates a descriptor for the new shape";
+
+  let description = [{
+    This operation returns a new descriptor representing a reshaped view of the underlying buffer.
+    This doesn't affect the memory.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src);
+
+  let arguments = (
+    ins TTG_MemDescType:$src
+  );
+
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasVerifier = 1;
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load"> {

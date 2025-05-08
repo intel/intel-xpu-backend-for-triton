@@ -8,10 +8,11 @@ import tempfile
 from pathlib import Path
 from functools import cached_property
 
+from triton import knobs
 from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase
+from triton.backends.driver import DriverBase, platform_key
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -251,11 +252,11 @@ class TritonLauncher:
 
 def compile_module_from_src(src, name):
     hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
-    hasher.update(src.encode("utf-8"))
+    hasher.update((src + platform_key()).encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
-    file_name = f"{name}.{sysconfig.get_config_var('EXT_SUFFIX').split('.')[-1]}"
-    cache_path = cache.get_file(file_name)
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    cache_path = cache.get_file(f"{name}{suffix}")
     if cache_path is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src_path = os.path.join(tmpdir, "main.cpp")
@@ -271,7 +272,7 @@ def compile_module_from_src(src, name):
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
                         COMPILATION_HELPER.libraries, extra_compile_args=extra_compiler_args)
             with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), file_name, binary=True)
+                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
     if name == 'arch_utils':
         return ArchParser(cache_path)
@@ -652,7 +653,7 @@ def serialize_kernel_metadata(arg, args_dict):
 def serialize_args(args, constants, signature):
     import torch
     import numbers
-    dir_path = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS')
+    dir_path = knobs.intel.dump_spirv_kernel_args
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
@@ -710,7 +711,7 @@ class XPULauncher(object):
         src = make_launcher(self.constants, self.signature)
         self.mod = compile_module_from_src(src, "__triton_launcher")
         # Serialize KernelArguments for SPIR-V Runner
-        self.serialize_kernel_args = os.getenv('TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS', None)
+        self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
 
     def __call__(self, *args, **kwargs):
         if self.serialize_kernel_args:

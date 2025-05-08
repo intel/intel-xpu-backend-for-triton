@@ -106,7 +106,6 @@ struct KernelArguments {
 };
 
 /** SYCL Globals **/
-static std::vector<ze_device_handle_t> g_devices;
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
 
@@ -196,8 +195,6 @@ size_t initDevices(sycl::queue *sycl_queue) {
     g_sycl_l0_device_list.push_back(std::make_pair(
         sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
                              sycl_devices[i])));
-    g_devices.push_back(sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-        sycl_devices[i]));
   }
 
   return deviceCount;
@@ -376,12 +373,16 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
         auto tensor_name = triton_args.spirv_dump_dir + "/" +
                            item.at("name").get<std::string>() + ".pt";
         auto tensor = load_tensor(tensor_name);
-        auto dev = sycl::malloc_device<char>(tensor.nbytes(), stream);
-        if (!dev)
-          throw std::runtime_error("Device Memory Allocation Failed \n");
+        auto nbytes = tensor.nbytes();
+        char *dev = nullptr;
+        if (nbytes) {
+          dev = sycl::malloc_device<char>(nbytes, stream);
+          if (!dev)
+            throw std::runtime_error("Device Memory Allocation Failed \n");
+        }
         triton_args.dev_buffers.push_back(dev);
-        stream.memcpy(dev, tensor_ptr(tensor), tensor.nbytes())
-            .wait_and_throw();
+        if (nbytes)
+          stream.memcpy(dev, tensor_ptr(tensor), nbytes).wait_and_throw();
 
         // Configure output tensor
         if (std::find(triton_args.out_tensor_names.begin(),
@@ -422,8 +423,6 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
   for (auto *dev_ptr : triton_args.dev_buffers) {
     if (dev_ptr)
       sycl::free(dev_ptr, stream);
-    else
-      throw std::runtime_error("sycl::free failed \n");
   }
 
   return triton_args.host_outbuffers;

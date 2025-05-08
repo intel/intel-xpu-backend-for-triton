@@ -122,7 +122,7 @@ jobs:
         run: |
           mkdir -p wheels
           cp -L pytorch/dist/*.whl wheels/
-          cp -L python/dist/*.whl wheels/
+          cp -L dist/*.whl wheels/
           cp -L torchvision*/dist/*.whl wheels/
           cp -L torchtext*/dist/*.whl wheels/
           cp -L torchaudio*/dist/*.whl wheels/

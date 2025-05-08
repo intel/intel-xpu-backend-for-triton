@@ -121,7 +121,7 @@ def test_print(func: str, data_type: str, device: str):
             # torch.xpu.synchronize() does not work because it just sync on reserved stream
             triton.runtime.driver.active.utils.wait()
 
-        triton.compiler.CompiledKernel.launch_exit_hook = exit_hook
+        triton.knobs.runtime.launch_exit_hook = exit_hook
 
     if func == "device_print":
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
