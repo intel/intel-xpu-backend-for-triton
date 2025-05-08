@@ -35,7 +35,7 @@ OPTION:
 "
 
 err() {
-    echo $@
+    echo "$@"
     exit 1
 }
 
