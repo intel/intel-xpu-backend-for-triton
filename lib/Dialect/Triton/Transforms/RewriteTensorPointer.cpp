@@ -7,8 +7,8 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
-#include "triton/Dialect/Triton/Transforms/Utility.h"
 
 using namespace mlir;
 
