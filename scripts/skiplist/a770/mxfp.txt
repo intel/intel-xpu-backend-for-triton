@@ -1,2 +1,0 @@
-python/test/unit/language/test_matmul.py::test_mxfp
-python/test/unit/language/test_matmul.py::test_mxfp8_mxfp4_matmul
