@@ -212,9 +212,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_202:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[VAL_203:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_204:.*]] = llvm.mlir.undef : vector<2xi32>
-    // CHECK:           %[[VAL_205:.*]] = llvm.insertelement %[[VAL_199]], %[[VAL_204]]{{\[}}%[[VAL_203]] : i32] : vector<2xi32>
+    // CHECK:           %[[VAL_205:.*]] = llvm.insertelement %{{.*}}, %[[VAL_204]]{{\[}}%[[VAL_203]] : i32] : vector<2xi32>
     // CHECK:           %[[VAL_206:.*]] = llvm.insertelement %[[VAL_198]], %[[VAL_205]]{{\[}}%[[VAL_202]] : i32] : vector<2xi32>
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], %[[VAL_206]], %[[VAL_201]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], %[[VAL_206]], %[[VAL_201]])
 
     // COM: replica [0, 1]
     // CHECK:           %[[VAL_207:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -232,7 +232,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_229:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_230:.*]] = llvm.alloca %[[VAL_229]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           llvm.store %[[VAL_226]], %[[VAL_230]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_230]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_230]])
 
     // COM: replica [1, 0]
     // CHECK:           %[[VAL_236:.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -252,7 +252,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_260:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_261:.*]] = llvm.alloca %[[VAL_260]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           llvm.store %[[VAL_257]], %[[VAL_261]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_261]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_261]])
 
     // COM: replica [1, 1]
     // CHECK:           %[[VAL_267:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -270,7 +270,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_289:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_290:.*]] = llvm.alloca %[[VAL_289]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           llvm.store %[[VAL_286]], %[[VAL_290]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_290]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_290]])
 
     // COM: replica [2, 0]
     // CHECK:           %[[VAL_296:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -290,7 +290,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_320:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_321:.*]] = llvm.alloca %[[VAL_320]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           llvm.store %[[VAL_317]], %[[VAL_321]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_321]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_321]])
 
     // COM: replica [2, 1]
     // CHECK:           %[[VAL_327:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -308,7 +308,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_349:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_350:.*]] = llvm.alloca %[[VAL_349]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           llvm.store %[[VAL_346]], %[[VAL_350]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_350]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_350]])
 
     // COM: replica [3, 0]
     // CHECK:           %[[VAL_356:.*]] = llvm.mlir.constant(24 : i32) : i32
@@ -328,7 +328,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_380:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_381:.*]] = llvm.alloca %[[VAL_380]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           llvm.store %[[VAL_377]], %[[VAL_381]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_381]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_381]])
 
     // COM: replica [3, 1]
     // CHECK:           %[[VAL_387:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -346,7 +346,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_409:.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK:           %[[VAL_410:.*]] = llvm.alloca %[[VAL_409]] x i16 : (i32) -> !llvm.ptr
     // CHECK:           llvm.store %[[VAL_406]], %[[VAL_410]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %[[baseWidth]], %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_410]])
+    // CHECK:           llvm.call spir_funccc @_Z42intel_sub_group_2d_block_write_16b_8r16x1cPU3AS1viiiDv2_iPt(%[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_410]])
 
     tt.store %13, %cst {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x32xf16, #dpas>>
     tt.return

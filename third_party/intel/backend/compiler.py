@@ -375,6 +375,8 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
+        metadata["generate_native_code"] = options.generate_native_code
+
         if options.generate_native_code:
             with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
                 tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:

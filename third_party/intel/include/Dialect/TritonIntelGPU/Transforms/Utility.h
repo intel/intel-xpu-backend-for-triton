@@ -10,7 +10,7 @@
 #define TRITON_DIALECT_TRITONINTELGPU_TRANSFORMS_UTILITY_H
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "triton/Dialect/Triton/Transforms/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir {
