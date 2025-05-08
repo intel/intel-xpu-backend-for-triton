@@ -110,7 +110,7 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-// HW requires base address to be CL (64B) aligned. Compensate the non-64-byte
+// HW requires base address to be 64-byte aligned. Compensate the non-64-byte
 // alignment base address by adjusting the base width and x-coordinate offset.
 template <
     typename OpTy,
