@@ -39,7 +39,7 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
 def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str], libraries: list[str],
            extra_compile_args: list[str] = []) -> str:
     if impl := knobs.build.impl:
-        return impl(name, src, srcdir, library_dirs, include_dirs, libraries)
+        return impl(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compile_args)
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible

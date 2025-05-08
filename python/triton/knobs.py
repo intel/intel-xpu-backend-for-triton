@@ -328,7 +328,7 @@ class base_knobs:
 class BuildImpl(Protocol):
 
     def __call__(self, name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str],
-                 libraries: list[str], /) -> str:
+                 libraries: list[str], extra_compile_args: list[str], /) -> str:
         ...
 
 
