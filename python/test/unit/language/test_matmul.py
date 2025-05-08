@@ -338,7 +338,7 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if is_xpu():
-        pytest.skip("XPU does not natively support scaled mxfp matmul")
+        pytest.xfail("XPU does not natively support scaled mxfp matmul")
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
@@ -385,8 +385,6 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     atol = 0.0001
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
-    if not is_cuda():
-        return
 
     if is_cuda() and torch.cuda.get_device_capability()[0] == 10:
         # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
@@ -479,6 +477,9 @@ def block_scale_mxfp_matmul(  #
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
+    if is_xpu():
+        pytest.xfail("XPU does not natively support scaled mxfp matmul")
+
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
@@ -551,6 +552,9 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
+    if is_xpu():
+        pytest.xfail("XPU does not natively support tmem")
+
     M = 1024
     N = 512
     K = 256
@@ -618,6 +622,9 @@ def lhs_in_tmem_kernel_mxfp(  #
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
+    if is_xpu():
+        pytest.xfail("XPU does not natively support scaled mxfp matmul and tmem")
+
     M, N, K = 128, 64, 32
     torch.manual_seed(42)
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device)
@@ -738,7 +745,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
     elif is_xpu():
-        pytest.skip("XPU does not natively support scaled fp4 matmul")
+        pytest.xfail("XPU does not natively support scaled fp4 matmul")
 
     NUM_STAGES = 1
     torch.manual_seed(42)
@@ -898,7 +905,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
     elif is_xpu():
-        pytest.skip("XPU does not natively support scaled mxfp8 & mxfp4 matmul")
+        pytest.xfail("XPU does not natively support scaled mxfp8 & mxfp4 matmul")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
 
