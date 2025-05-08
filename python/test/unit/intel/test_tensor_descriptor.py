@@ -1,5 +1,6 @@
 import pytest
 import torch
+import numpy as np
 
 import triton
 import triton.language as tl
@@ -9,8 +10,9 @@ from typing import Optional
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32)])
-def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
+@pytest.mark.parametrize("num_ctas", [1])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -31,7 +33,7 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
         tl.store(out_ptr + idx, block)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 128
+        assert size == 128 * num_ctas
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="xpu")
@@ -42,7 +44,7 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
     inp = to_triton(numpy_random((M, N), dtype_str), device="xpu", dst_type=dtype_str)
     out = inp.new_empty((M_BLOCK, N_BLOCK))
 
-    kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK)
+    kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
 
     expect = unwrap_tensor(inp)[1 * M_BLOCK:2 * M_BLOCK, 2 * N_BLOCK:3 * N_BLOCK]
     torch.testing.assert_close(expect, unwrap_tensor(out))
@@ -50,8 +52,9 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32)])
-def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
+@pytest.mark.parametrize("num_ctas", [1])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
+def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -86,14 +89,14 @@ def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
     grid_n = N // N_BLOCK
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 128 * (grid_m * grid_n)
+        assert size == 128 * (grid_m * grid_n) * num_ctas
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="xpu")
 
     triton.set_allocator(alloc_fn)
 
-    kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK)
+    kernel[(grid_m, grid_n)](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
 
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
 
@@ -181,7 +184,7 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
     inp.data = inp.data[:, :50, :119]
 
     if K_BLOCK * inp.element_size() < 32:
-        return pytest.skip("Invalid last dim size")
+        return pytest.xfail("Invalid last dim size")
 
     M_BLOCK, N_BLOCK = 8, 8
     out = inp.new_empty(inp.shape)
@@ -200,7 +203,7 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
 def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
 
     if dtype_str == 'bfloat16':
-        return pytest.skip("TODO: bfloat16 test fails verification")
+        return pytest.skip("FIXME: bfloat16 test fails verification")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -232,7 +235,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
     inp = to_triton(numpy_random((10, 50, 119), dtype_str), device="xpu", dst_type=dtype_str)
 
     if K_BLOCK * inp.element_size() < 32:
-        return pytest.skip("Invalid last dim size")
+        return pytest.xfail("Invalid last dim size")
 
     M_BLOCK, N_BLOCK = 8, 8
     out = inp.new_empty((10, 64, 128))
@@ -369,11 +372,11 @@ def test_tensor_descriptor_argument():
 
 
 @triton.jit
-def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
-                                        M, N, K,  #
-                                        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
-                                        BLOCK_SIZE_K: tl.constexpr,  #
-                                        ):
+def matmul_kernel_make_tensor_descriptor(a_ptr, b_ptr, c_ptr,  #
+                                         M, N, K,  #
+                                         BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+                                         BLOCK_SIZE_K: tl.constexpr,  #
+                                         ):
     pid_m = tl.program_id(axis=0)
     pid_n = tl.program_id(axis=1)
     offs_am = pid_m * BLOCK_SIZE_M
@@ -410,6 +413,7 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("num_ctas", [1])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
     (128, 128, 16, 1),
     (256, 64, 32, 2),
@@ -419,7 +423,7 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
     (32, 32, 32, 4),
     (256, 128, 32, 4),
 ])
-def test_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
+def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, BLOCK_K):
     device = "xpu"
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
@@ -436,14 +440,14 @@ def test_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N), 1)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 3 * 128 * grid[0] * grid[1]
+        assert size == 3 * 128 * grid[0] * grid[1] * num_ctas
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="xpu")
 
     triton.set_allocator(alloc_fn)
 
-    matmul_kernel_make_tensor_desciptor[grid](
+    matmul_kernel_make_tensor_descriptor[grid](
         A,
         B,
         C,
@@ -455,6 +459,7 @@ def test_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
         BLOCK_K,
         num_warps=8,
         num_stages=num_stages,
+        num_ctas=num_ctas,
     )
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
@@ -651,6 +656,127 @@ def test_tensor_descriptor_rank_reducing_matmul(dtype_str):
         BLOCK_SIZE_M=32,
         BLOCK_SIZE_N=32,
         BLOCK_SIZE_K=32,
+    )
+
+    actual = unwrap_tensor(C)
+    expect = torch.matmul(A, B.mT)
+    torch.testing.assert_close(expect, actual, atol=1e-1, rtol=1e-4)
+
+
+@triton.jit()
+def matmul_kernel_reshape(a_ptr, b_ptr, c_ptr,  #
+                          M, N, K,  #
+                          BLOCK_SIZE_M: tl.constexpr,  #
+                          BLOCK_SIZE_N: tl.constexpr,  #
+                          BLOCK_SIZE_K: tl.constexpr,  #
+                          NUM_SMS: tl.constexpr):  #
+    # Matmul using TMA and device-side descriptor creation
+    GROUP_SIZE_M: tl.constexpr = 8
+    dtype = c_ptr.dtype.element_ty
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+    num_tiles = num_pid_m * num_pid_n
+
+    a_desc = tl.make_tensor_descriptor(
+        a_ptr,
+        shape=[2, M // 2, K],
+        strides=[(M // 2) * K, K, 1],
+        block_shape=[2, BLOCK_SIZE_M // 2, BLOCK_SIZE_K],
+    )
+    b_desc = tl.make_tensor_descriptor(
+        b_ptr,
+        shape=[2, N // 2, K],
+        strides=[(N // 2) * K, K, 1],
+        block_shape=[2, BLOCK_SIZE_N // 2, BLOCK_SIZE_K],
+    )
+    c_desc = tl.make_tensor_descriptor(
+        c_ptr,
+        shape=[M, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+    )
+
+    tile_id_c = start_pid - NUM_SMS
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am = pid_m * (BLOCK_SIZE_M // 2)
+        offs_bn = pid_n * (BLOCK_SIZE_N // 2)
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K
+            a = a_desc.load([0, offs_am, offs_k]).reshape(BLOCK_SIZE_M, BLOCK_SIZE_K)
+            b = b_desc.load([0, offs_bn, offs_k]).reshape(BLOCK_SIZE_N, BLOCK_SIZE_K)
+            accumulator = tl.dot(a, b.T, accumulator)
+
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_cm = pid_m * BLOCK_SIZE_M
+        offs_cn = pid_n * BLOCK_SIZE_N
+
+        c = accumulator.to(dtype)
+        c_desc.store([offs_cm, offs_cn], c)
+
+
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32"])
+def test_tensor_descriptor_reshape_matmul(dtype_str):
+    NUM_SMS = 4
+    M, N, K = 256, 256, 128
+    BLOCK_SIZE_M = 64
+    BLOCK_SIZE_N = 64
+    BLOCK_SIZE_K = 64
+
+    # trunc float32 to avoid large precision differences.
+    def trunc_to_tf32(tensor):
+        int_view = tensor.view(np.uint32)
+        mask = np.uint32(0xFFFFE000)
+        masked_int = int_view & mask
+        tf32_simulated = masked_int.view(np.float32)
+        return tf32_simulated
+
+    # test a layout where block_m and block_N are split into two separate chunks.
+    A = numpy_random((M, K), dtype_str)
+    if dtype_str == "float32":
+        A = trunc_to_tf32(A)
+
+    def chunk(X, BLOCK0, BLOCK1):
+        s0, s1 = X.shape
+        X_reshaped = (X.reshape(s0 // BLOCK0, 2, BLOCK0 // 2, s1).transpose(1, 0, 2, 3).reshape(2, s0 // 2, s1))
+        return X_reshaped
+
+    A_reshaped = chunk(A, BLOCK_SIZE_M, BLOCK_SIZE_K)
+    A = to_triton(A, device="xpu", dst_type=dtype_str)
+    A_reshaped = to_triton(A_reshaped, device="xpu", dst_type=dtype_str)
+
+    B = numpy_random((N, K), dtype_str)
+    if dtype_str == "float32":
+        B = trunc_to_tf32(B)
+
+    B_reshaped = chunk(B, BLOCK_SIZE_N, BLOCK_SIZE_K)
+    B = to_triton(B, device="xpu", dst_type=dtype_str)
+    B_reshaped = to_triton(B_reshaped, device="xpu", dst_type=dtype_str)
+
+    C = A.new_empty(M, N)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="xpu")
+
+    triton.set_allocator(alloc_fn)
+    matmul_kernel_reshape[(NUM_SMS, )](
+        A_reshaped,
+        B_reshaped,
+        C,
+        M,
+        N,
+        K,
+        NUM_SMS=4,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_N=BLOCK_SIZE_N,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
     )
 
     actual = unwrap_tensor(C)
