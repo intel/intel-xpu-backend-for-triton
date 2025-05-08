@@ -400,3 +400,34 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       tt.return
   }
 }
+
+// -----
+
+// COM: Test specific load sizes and limits for constrained layouts
+// CHECK-DAG: llvm.func spir_funccc @_Z42intel_sub_group_2d_block_read_32b_16r16x1cPU3AS1viiiDv2_iPj
+// CHECK-DAG: llvm.func spir_funccc @_Z41intel_sub_group_2d_block_read_32b_16r8x2cPU3AS1viiiDv2_iPj
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 8], B = [8, 32], C = [32, 32]}>
+module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+  tt.func public @block_load_dpas_layout(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i64 = arith.constant 64 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %0 = tt.get_program_id x : i32
+    %1 = tt.make_tensor_ptr %arg0, [%c16_i64, %c64_i64], [%c64_i64, %c1_i64], [%0, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    %2 = tt.load %1 {boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    // CHECK-COUNT-4: llvm.call spir_funccc @_Z41intel_sub_group_2d_block_read_32b_16r8x2cPU3AS1viiiDv2_iPj
+    // CHECK-NOT: llvm.call spir_funccc @_Z41intel_sub_group_2d_block_read_32b_16r8x2cPU3AS1viiiDv2_iPj
+    %3 = tt.make_tensor_ptr %arg1, [%c16_i64, %c64_i64], [%c64_i64, %c1_i64], [%0, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    tt.store %3, %2 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x64xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    %4 = tt.make_tensor_ptr %arg2, [%c64_i64, %c16_i64], [%c16_i64, %c1_i64], [%c0_i32, %0] {order = array<i32: 1, 0>} : <tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>>
+    %5 = tt.load %4 {boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>>
+    // CHECK-COUNT-4: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_read_32b_16r16x1cPU3AS1viiiDv2_iPj
+    // CHECK-COUNT-2: llvm.shufflevector {{.*}}, {{.*}} [0, 1, 2, 3, 4, 5, 6, 7]
+    // CHECK-COUNT-2: llvm.shufflevector {{.*}}, {{.*}} [8, 9, 10, 11, 12, 13, 14, 15]
+    // CHECK-NOT: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_read_32b_16r16x1cPU3AS1viiiDv2_iPj
+    %6 = tt.make_tensor_ptr %arg3, [%c64_i64, %c16_i64], [%c16_i64, %c1_i64], [%c0_i32, %0] {order = array<i32: 1, 0>} : <tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>>
+    tt.store %6, %5 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>>
+    tt.return
+  }
+}
