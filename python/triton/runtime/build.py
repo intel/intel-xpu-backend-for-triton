@@ -36,25 +36,28 @@ def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
     return cc_cmd
 
 
-def _build(name, src, srcdir, library_dirs, include_dirs, libraries, extra_compile_args=[]):
+def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_dirs: list[str], libraries: list[str],
+           extra_compile_args: list[str] = []) -> str:
+    if impl := knobs.build.impl:
+        return impl(name, src, srcdir, library_dirs, include_dirs, libraries)
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
     # try to avoid setuptools if possible
     cc = os.environ.get("CC")
     if cc is None:
-        # TODO: support more things here.
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
         if os.name == "nt":
             cc = shutil.which("cl")
         if cc is None:
-            raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
+            raise RuntimeError(
+                "Failed to find C compiler. Please specify via CC environment variable or set triton.knobs.build.impl.")
     # This function was renamed and made public in Python 3.10
     if hasattr(sysconfig, 'get_default_scheme'):
         scheme = sysconfig.get_default_scheme()
     else:
-        scheme = sysconfig._get_default_scheme()
+        scheme = sysconfig._get_default_scheme()  # type: ignore
     # 'posix_local' is a custom scheme on Debian. However, starting Python 3.10, the default install
     # path changes to include 'local'. This change is required to use triton with system-wide python.
     if scheme == 'posix_local':
