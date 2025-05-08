@@ -7,6 +7,7 @@ from triton_kernels_benchmark import (
     gemm_tensor_of_ptr_benchmark,
     flash_attention_benchmark,
     flash_attention_tensor_desc_benchmark,
+    prefix_sums,
 )
 
 CONFIGS = [
@@ -29,14 +30,14 @@ CONFIGS = [
         get_benchmark=gemm_tensor_of_ptr_benchmark.get_benchmark,
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
-        description="Triton GEMM kernel benchmark - with tensor of pointer",
+        description="GEMM kernel benchmark - with tensor of pointer",
     ),
     BenchmarkConfig(
         key="gemm-tensor-desc",
         get_benchmark=gemm_tensor_desc_benchmark.get_benchmark,
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
-        description="Triton GEMM kernel benchmark - with tensor descriptor",
+        description="GEMM kernel benchmark - with tensor descriptor",
     ),
     BenchmarkConfig(
         key="gemm_bt",
@@ -49,7 +50,7 @@ CONFIGS = [
         key="gemm_at",
         get_benchmark=gemm_benchmark.get_benchmark,
         run_opts={"transpose_a": True},
-        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM (A^t@B) kernel benchmark",
     ),
     BenchmarkConfig(
@@ -57,6 +58,7 @@ CONFIGS = [
         get_benchmark=flash_attention_benchmark.get_benchmark,
         run_opts={"fa_kernel_mode": "fwd"},
         categories={BenchmarkCategory.CORE, BenchmarkCategory.FLASH_ATTENTION},
+        description="FlashAttention forward kernel benchmark",
     ),
     BenchmarkConfig(
         key="flash_attention_tensor_desc",
@@ -64,4 +66,20 @@ CONFIGS = [
         run_opts={"fa_kernel_mode": "fwd"},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.FLASH_ATTENTION},
     ),
+    BenchmarkConfig(
+        key="flash_attention_bwd",
+        get_benchmark=flash_attention_benchmark.get_benchmark,
+        run_opts={"fa_kernel_mode": "bwd"},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
+        description="FlashAttention backward kernel benchmark",
+    ),
+    BenchmarkConfig(
+        key="prefix-sums",
+        get_benchmark=prefix_sums.get_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.PREFIX_SUMS},
+        description="Prefix Sums kernel benchmark",
+    ),
+    # FIXME: add optional - splitK, streamk, gemm with pre-op or postops, microbenchmarks
+    # FIXME: Experimental - FlexAttention
 ]
