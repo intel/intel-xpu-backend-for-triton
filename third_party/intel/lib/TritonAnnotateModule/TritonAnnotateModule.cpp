@@ -40,6 +40,11 @@ struct TritonAnnotateModule
     mod->setAttr(intel::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
+    if (support16BitAtomics)
+      mod->setAttr(
+          intel::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
+          builder.getUnitAttr());
+
     DPASAnalysis &dpasAnalysis = getAnalysis<DPASAnalysis>();
     setThreadsPerWarp(mod, dpasAnalysis);
   }

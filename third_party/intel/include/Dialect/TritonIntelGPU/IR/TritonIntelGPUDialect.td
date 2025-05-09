@@ -55,6 +55,12 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getTargetArchAttrName() {
       return "triton_intel_gpu.target_arch";
     }
+
+    /// Get the name of the attribute used to indicate whether the native 16bit
+    /// atomic operations are available.
+    static constexpr llvm::StringRef getSupport16BitAtomicsAttrName() {
+      return "triton_intel_gpu.support_16bit_atomics";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

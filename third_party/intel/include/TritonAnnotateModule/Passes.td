@@ -33,6 +33,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether DPAS instruction is available">,
     Option<"supportBF16Conversion", "support-bf16-conversion", "bool", /*default*/"false",
            "whether BF16 conversion instruction is available">,
+    Option<"support16BitAtomics", "support-16bit-atomics", "bool", /*default*/"false",
+           "whether 16bit atomic operations are available">,
     Option<"threadsPerWarp", "threads-per-warp",
            "unsigned", /*default*/"32",
            "number of threads per warp (aka subgroup size)">,
