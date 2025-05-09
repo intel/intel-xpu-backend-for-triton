@@ -32,6 +32,7 @@ add_triton_library(TritonIntelGPUToLLVM
     MLIRSPIRVToLLVM
     TritonGENIR
     TritonGENToLLVM
+    TritonGENToSPIRV
     TritonIntelGPUIR
     TritonIntelUtils
     TritonProtonToLLVM
