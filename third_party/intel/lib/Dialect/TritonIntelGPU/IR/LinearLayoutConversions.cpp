@@ -568,23 +568,6 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
     }
   };
 
-  auto ctaLayout = layout.getCTALayout();
-  llvm::errs() << "ctaLayout: " << ctaLayout << "\n";
-  auto ctaSplitNum = ctaLayout.getCTASplitNum();
-  llvm::errs() << "ctaSplitNum: ";
-  printVector(ctaSplitNum);
-  llvm::errs() << "\n";
-
-  auto ctasPerCGA = ctaLayout.getCTAsPerCGA();
-  llvm::errs() << "ctasPerCGA: ";
-  printVector(ctasPerCGA);
-  llvm::errs() << "\n";
-
-  auto ctaOrder = ctaLayout.getCTAOrder();
-  llvm::errs() << "ctaOrder: ";
-  printVector(ctaOrder);
-  llvm::errs() << "\n";
-
   auto printBases = [&printVector](const auto base) {
     for (size_t i = 0; i < base.size(); i++) {
       llvm::errs() << i << " : ";
@@ -594,7 +577,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
   };
 
   if (opIdx == 0) {
-    SmallVector<int64_t> blockShape({instrShapeMNK[0], instrShapeMNK[2]});
+    auto blockShape = SmallVector<int64_t>{instrShapeMNK[0], instrShapeMNK[2]};
 
     LinearLayout::BasesT bases;
 
@@ -612,7 +595,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
 
     auto laneBases =
         DPASLaneBasesA(opsPerChannel, layout.getThreadsPerWarp(),
-                       DpasEncodingAttr::DPASCapability::systolicDepth);
+                        DpasEncodingAttr::DPASCapability::systolicDepth);
 
     llvm::errs() << "laneBases:\n";
     printBases(laneBases);
@@ -623,7 +606,6 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
     llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
 
     auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
-    // auto repOrder = layout.getRepOrderForOperand(opIdx);
 
     unsigned inner = order[0];
     unsigned outer = order[1];
@@ -636,9 +618,9 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
     auto numDPASInstPerInnerDim =
         shape[inner] / ctaLayout.getOutDimSize(dimNames[inner]);
     llvm::errs() << "numDPASInstPerOuterDim = " << numDPASInstPerOuterDim
-                 << "\n";
+                  << "\n";
     llvm::errs() << "numDPASInstPerInnerDim = " << numDPASInstPerInnerDim
-                 << "\n";
+                  << "\n";
 
     ctaLayout *= LinearLayout::identity1D(numDPASInstPerOuterDim, kRegister,
                                           dimNames[outer]);
@@ -664,117 +646,84 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
                                     rank - 1, kWarp)
             .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
     llvm::errs() << "ctaLayout after applying warp layout: " << ctaLayout
-                 << "\n";
+                  << "\n";
 
     return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), blockShape);
-    ;
-#if 0
-    SmallVector<unsigned> tileShape({instrShapeMNK[0], instrShapeMNK[2]});
-    llvm::errs() << "tile shape for A = " << tileShape[0] << ", "
-                 << tileShape[1] << "\n";
-    auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
-    auto repOrder = layout.getRepOrderForOperand(opIdx);
+    } else if (opIdx == 1) {
+      auto blockShape = SmallVector<int64_t>{instrShapeMNK[2], instrShapeMNK[1]};
 
-    LinearLayout ctaLayout =
-        identityStandardND(kRegister, trivialShape, repOrder);
-    llvm::errs() << "ctaLayout: " << ctaLayout << "\n";
-
-    unsigned inner = order[0];
-    unsigned outer = order[1];
-
-
-    // kWidth of elements are packed into a single i32 register for TMM
-    // operations. At this point, each element is represented by a
-    // separate register. These registers are going to be packed on TMM
-    // lowering to LLVM.
-    ctaLayout = ctaLayout *
-                LinearLayout::identity1D(kWidth, kRegister, dimNames[inner]);
-    // Outer dimension is spread along all lanes.
-    ctaLayout = ctaLayout * LinearLayout::identity1D(tileShape[outer], kLane,
-                                                     dimNames[outer]);
-    // Now spread the rest of the inner dimension over registers.
-    ctaLayout =
-        ctaLayout * LinearLayout::identity1D(tileShape[inner] / kWidth,
-                                             kRegister, dimNames[inner]);
-
-    // Apply warp layout.
-    ctaLayout *=
-        broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(), warpOrder,
-                                    rank - 1, kWarp)
-            .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-
-    return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), shape);
-#endif
-  } else if (opIdx == 1) {
-    assert(false && "TODO");
-#if 0
-    SmallVector<unsigned> tileShape({instrShapeMNK[2], instrShapeMNK[1]});
-    auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
-    auto repOrder = layout.getRepOrderForOperand(opIdx);
-
-    LinearLayout ctaLayout =
-        identityStandardND(kRegister, trivialShape, repOrder);
-
-    unsigned inner = order[0];
-    unsigned outer = order[1];
-
-    // Start with kWidth elements over the K dimension. These are values
-    // that later are going to be packed into a single i32 value.
-    ctaLayout = ctaLayout * LinearLayout::identity1D(kWidth, S("register"),
-                                                     dimNames[inner]);
-    // The rest if the inner dimension is spread among lanes.
-    ctaLayout = ctaLayout * LinearLayout::identity1D(tileShape[inner] / kWidth,
-                                                     kLane, dimNames[inner]);
-    // At this point, we are likely to have some of 32 lanes unassigned.
-    // Keep assigning lanes, now going in the outer dimension.
-    unsigned outerPerLane =
-        std::min(32 * kWidth / tileShape[inner], tileShape[outer]);
-    ctaLayout = ctaLayout *
-                LinearLayout::identity1D(outerPerLane, kLane, dimNames[outer]);
-    // Cover the rest of the outer dimension using additional registers.
-    ctaLayout =
-        ctaLayout * LinearLayout::identity1D(tileShape[outer] / outerPerLane,
-                                             kRegister, dimNames[outer]);
-    // Apply warp layout.
-    ctaLayout *=
-        broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(), warpOrder,
-                                    rank - 2, kWarp)
-            .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-
-    return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), shape);
-#endif
-  } else {
-    assert(false && "TODO");
-#if 0
-    assert(opIdx == 2);
-    SmallVector<unsigned> tileShape({instrShapeMNK[0], instrShapeMNK[1]});
-    auto order = getMatrixOrder(rank, /*rowMajor*/ true);
-    auto repOrder = layout.getRepOrder();
-
-    LinearLayout ctaLayout =
-        identityStandardND(kRegister, trivialShape, repOrder);
-
-    unsigned inner = order[0];
-    unsigned outer = order[1];
-
-    // Tile layout is similar to A.
-    ctaLayout = ctaLayout * LinearLayout::identity1D(kWidth, S("register"),
-                                                     dimNames[inner]);
-    ctaLayout = ctaLayout * LinearLayout::identity1D(tileShape[outer], kLane,
-                                                     dimNames[outer]);
-    ctaLayout =
-        ctaLayout * LinearLayout::identity1D(tileShape[inner] / kWidth,
-                                             kRegister, dimNames[inner]);
-    // Apply warp layout.
-    ctaLayout *=
-        identityStandardND(S("warp"), layout.getWarpsPerCTA(), warpOrder)
-            .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-
-    return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), shape);
-#endif
-  }
-  llvm_unreachable("Unhandled Op Idx");
-  return LinearLayout::empty(); // Remove
+      LinearLayout::BasesT bases;
+  
+      // start with the DPAS tile
+      int opsPerChannel = 2; // TODO: how to get this?
+      auto regBases = DPASRegBasesB(
+          opsPerChannel, DpasEncodingAttr::DPASCapability::repeatCount,
+          layout.getThreadsPerWarp(),
+          DpasEncodingAttr::DPASCapability::systolicDepth);
+  
+      llvm::errs() << "regBases\n";
+      printBases(regBases);
+  
+      bases[kRegister] = regBases;
+  
+      auto laneBases =
+          DPASLaneBasesB(opsPerChannel, layout.getThreadsPerWarp(),
+                          DpasEncodingAttr::DPASCapability::systolicDepth);
+  
+      llvm::errs() << "laneBases:\n";
+      printBases(laneBases);
+  
+      bases[kLane] = laneBases;
+  
+      auto ctaLayout = LinearLayout(bases, dimNames);
+      llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
+  
+      auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
+  
+      unsigned inner = order[0];
+      unsigned outer = order[1];
+      llvm::errs() << "outer = " << outer << "\n";
+      llvm::errs() << "inner = " << inner << "\n";
+  
+      // expand the DPAS tile to match the desired load size
+      auto numDPASInstPerOuterDim =
+          shape[outer] / ctaLayout.getOutDimSize(dimNames[outer]);
+      auto numDPASInstPerInnerDim =
+          shape[inner] / ctaLayout.getOutDimSize(dimNames[inner]);
+      llvm::errs() << "numDPASInstPerOuterDim = " << numDPASInstPerOuterDim
+                    << "\n";
+      llvm::errs() << "numDPASInstPerInnerDim = " << numDPASInstPerInnerDim
+                    << "\n";
+  
+      ctaLayout *= LinearLayout::identity1D(numDPASInstPerOuterDim, kRegister,
+                                            dimNames[outer]);
+      ctaLayout *= LinearLayout::identity1D(numDPASInstPerInnerDim, kRegister,
+                                            dimNames[inner]);
+  
+      // replicate the tile
+      auto numReps = layout.getNumReps();
+      assert(numReps.size() == 2);
+      llvm::errs() << "numReps: ";
+      printVector(numReps);
+      llvm::errs() << "\n";
+  
+      ctaLayout *=
+          LinearLayout::identity1D(numReps[outer], kRegister, dimNames[outer]);
+      ctaLayout *= LinearLayout::identity1D(
+          numReps[inner] / numDPASInstPerInnerDim, kRegister, dimNames[inner]);
+      llvm::errs() << "ctaLayout after replicating: " << ctaLayout << "\n";
+  
+      // Apply warp layout.
+      ctaLayout *=
+          broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(), warpOrder,
+                                      rank - 2, kWarp)
+              .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
+      llvm::errs() << "ctaLayout after applying warp layout: " << ctaLayout
+                    << "\n";
+  
+      return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), blockShape);
+    } 
+    llvm_unreachable("unhandle Op Idx");
 }
 
 } // namespace mlir::triton::gpu
