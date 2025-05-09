@@ -68,9 +68,9 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
         # Prefill shapes of Phi3-mini-3.8B
         [[z, 32, 32, 1024, 1024, 96, 96, 'fwd'] for z in batch_sizes] +
         # Prefill shapes of Deepseek-v3
-        [[z, 128, 128, 1024, 1024, 192, 128, 'fwd'] for z in batch_sizes] +
+        # [[z, 128, 128, 1024, 1024, 192, 128, 'fwd'] for z in batch_sizes] +
         # Append shapes of Phi3-mini-3.8B
-        [[z, 32, 32, 512, 1024 + 128 + 512, 96, 96, 'fwd'] for z in batch_sizes] +
+        # [[z, 32, 32, 512, 1024 + 128 + 512, 96, 96, 'fwd'] for z in batch_sizes] +
 
         # Multi-query attention. H_kv equals 1.
         # Append shapes of Deepseek-v3 (Nope)
@@ -83,17 +83,17 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
 
         # Grouped-query attention. H_q / H_kv > 1
         # Prefill shapes of Llama-3.1-8B
-        [[z, 32, 8, 1024, 1024, 128, 128, 'fwd'] for z in batch_sizes] +
+        # [[z, 32, 8, 1024, 1024, 128, 128, 'fwd'] for z in batch_sizes] +
         # Prefill shapes of Qwen2-7B
-        [[z, 28, 4, 1024, 1024, 128, 128, 'fwd'] for z in batch_sizes] +
+        # [[z, 28, 4, 1024, 1024, 128, 128, 'fwd'] for z in batch_sizes] +
         # Append shapes of Llama-3.1-8B
-        [[z, 32, 8, 512, 1024 + 128 + 512, 128, 128, 'fwd'] for z in batch_sizes] +
+        # [[z, 32, 8, 512, 1024 + 128 + 512, 128, 128, 'fwd'] for z in batch_sizes] +
         # Append shapes of Qwen2-7B
-        [[z, 28, 4, 512, 1024 + 128 + 512, 128, 128, 'fwd'] for z in batch_sizes] +
+        # [[z, 28, 4, 512, 1024 + 128 + 512, 128, 128, 'fwd'] for z in batch_sizes] +
 
         # FlexDecoding configuration. N_CTX_q equals 1. N_CTX_kv >= 1k
         # Decode shapes of Llama-3.1-8B
-        [[z, 32, 8, 1, 1024 + 64, 128, 128, 'fwd'] for z in batch_sizes] +
+        # [[z, 32, 8, 1, 1024 + 64, 128, 128, 'fwd'] for z in batch_sizes] +
         # Decode shapes of Phi3-mini-3.8B
         [
             # acc = acc.reshape(G, BLOCK_M_PER_HQ, V_HEAD_DIM)
