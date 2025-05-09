@@ -18,6 +18,7 @@ from triton_kernels_benchmark.benchmark_testing import (
     BenchmarkCategory,
     MarkArgs,
 )
+from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 from triton_kernels_benchmark.benchmark_config_templates import CONFIGS
 
 
@@ -74,10 +75,12 @@ class BenchmarkConfigs(MarkArgs):
             run_result = config.run(self)
             # Pretty print run results table
             pd.set_option("display.float_format", "{:.2f}".format)  # pylint: disable=consider-using-f-string
-            if self.detailed_output:
-                _json_print(run_result.run_summary_df_detailed)
-            else:
-                _json_print(run_result.run_summary_df)
+            run_summaries_df_list = (run_result.run_summary_detailed_df_list
+                                     if self.detailed_output else run_result.run_summary_df_list)
+            _json_print(f"Total number of runs: {len(run_summaries_df_list)}")
+            for idx, summary_df in enumerate(run_summaries_df_list):
+                _json_print(f"Run: {idx}")
+                _json_print(summary_df)
             _json_print(f"Run time: {round(run_result.run_time, 3)} seconds.")
             run_results.append(run_result)
             if self.reports:
@@ -119,6 +122,7 @@ class BenchmarkConfigs(MarkArgs):
         configs_filter: Set[str],
         categories_filter: Set[str],
         providers_filter: List[str],
+        shape_pattern: Optional[ShapePatternParser],
     ) -> List[BenchmarkConfigRunResult]:
         template_configs = cls._get_template_configs(
             config_filter=configs_filter,
@@ -130,6 +134,7 @@ class BenchmarkConfigs(MarkArgs):
                    for key, value in asdict(template_config).items()
                    if key != "providers_filter"},
                 providers_filter=providers_filter,
+                shape_pattern=shape_pattern,
             )
             for template_config in template_configs
         ]
@@ -140,12 +145,14 @@ class BenchmarkConfigs(MarkArgs):
         configs_filter: Set[str],
         categories_filter: Set[str],
         providers_filter: List[str],
+        shape_pattern: Optional[ShapePatternParser],
         **kwargs: Any,
     ) -> BenchmarkConfigs:
         configs = cls._get_configs(
             configs_filter=configs_filter,
             categories_filter=categories_filter,
             providers_filter=providers_filter,
+            shape_pattern=shape_pattern,
         )
         cls_init_fields = {obj_field.name for obj_field in fields(cls) if obj_field.init}
         filtered_kwargs = {key: value for key, value in kwargs.items() if key in cls_init_fields}
@@ -210,9 +217,9 @@ class BenchmarkConfigs(MarkArgs):
             )
             filters_group.add_argument(
                 "--shape-pattern",
-                dest="shape_filter",
+                dest="shape_pattern",
                 metavar="SHAPE_PATTERN",
-                default="",
+                default=None,
                 type=str,
                 help=("Limit benchmark run to a certain shape or shape pattern"),
             )
@@ -224,8 +231,8 @@ class BenchmarkConfigs(MarkArgs):
                 action="store_true",
                 dest="detailed_output",
                 help=("Show detailed outputs.\n"
-                      "For config summary - info on providers, categories, variant fields. "
-                      "Default shows only config[<variant value>]\n"
+                      "For config summary - info on providers, categories, shape fields. "
+                      "Default shows only config[<shape>]\n"
                       "For the detailed run results - memory throughtput and coefficient of variation between runs."
                       "Default shows only compute performance\n"),
             )
@@ -247,7 +254,7 @@ class BenchmarkConfigs(MarkArgs):
                 default=[],
                 help=
                 (f"Filter ALL configs to the provided list and run COMMAND. Known configs are {cls._get_all_configs().keys()}"
-                 "Run `describe ALL` to get the supported configs details (variants/shapes, providers, etc)."),
+                 "Run `describe ALL` to get the supported configs details (shapes, providers, etc)."),
             )
             categories_str = ", ".join(categories)
             filters_group_for_all.add_argument(
@@ -326,7 +333,7 @@ class BenchmarkConfigs(MarkArgs):
             "describe",
             conflict_handler="resolve",
             formatter_class=_CustomHelpFormatter,
-            help="Describe BENCHMARK(s) configuration - supported providers, run variants(shapes), etc.",
+            help="Describe BENCHMARK(s) configuration - supported providers, specific shapes to run, etc.",
         )
         # Same standard benchmark argument groups are added to command and subcommand to improve UX
         _add_argument_groups(describe_subparser)
@@ -337,6 +344,9 @@ class BenchmarkConfigs(MarkArgs):
         args.categories_filter = args.categories_filter if hasattr(args, "categories_filter") else categories
         args.reports = args.reports if hasattr(args, "reports") else ""
         args.junit_report = args.junit_report if hasattr(args, "junit_report") else False
+
+        if args.shape_pattern:
+            args.shape_pattern = ShapePatternParser(args.shape_pattern)
 
         if args.benchmark == "ALL":
             args.configs_filter = cls._get_all_configs().keys()

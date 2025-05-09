@@ -1,6 +1,6 @@
-from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, BenchmarkConfig
+from ..benchmark_testing import BenchmarkCategory, BenchmarkConfig
 
-from triton_kernels_benchmark import (
+from .. import (
     fused_softmax,
     gemm_benchmark,
     gemm_tensor_desc_benchmark,
