@@ -1,7 +1,6 @@
-from typing import Optional
+from typing import List, Optional
 
 import re
-
 import io
 
 import pytest
@@ -28,34 +27,52 @@ PERFORMANCE_CSVS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def capture_hw_details_env(monkeypatch):
+    monkeypatch.setenv("GPU_DEVICE", "Intel(R) Data Center GPU Max 1100")
+    yield
+
+
 @pytest.mark.parametrize("command", ["run"])
-@pytest.mark.parametrize("benchmark", ["softmax"])
+@pytest.mark.parametrize(
+    "benchmark",
+    [
+        ["softmax"],
+        ["softmax", "--shape-pattern", "[256]"],
+        ["softmax", "--shape-pattern", "[*]"],
+    ],
+)
 @pytest.mark.parametrize("provider", ["triton", None])
-@pytest.mark.parametrize("n_runs", [None, 1, 2])
+@pytest.mark.parametrize("n_runs", [1, 2, 3])
 @pytest.mark.parametrize("show_details", [False, True])
 @pytest.mark.parametrize("json_output", [False, True])
+@pytest.mark.parametrize("reports", [False, True])
 def test_benchmark_run_monkeypatched(
     command: str,
-    benchmark: str,
+    benchmark: List[str],
     provider: Optional[str],
-    n_runs: Optional[int],
+    n_runs: int,
     show_details: bool,
     json_output: bool,
+    reports: bool,
     capsys,
+    tmp_path,
 ):
-    args = [command, benchmark]
+    args = [command] + benchmark
     if provider:
         args.extend(["--provider", provider])
-    if n_runs:
+    if n_runs > 1:
         args.extend(["--n_runs", str(n_runs)])
     if show_details:
         args.extend(["--show-details"])
     if json_output:
         args.extend(["--json"])
+    if reports:
+        args.extend(["--reports", str(tmp_path)])
 
     configs = BenchmarkConfigs.from_args(args)
     for config in configs.configs:
-        config.res_df = pd.read_csv(io.StringIO(PERFORMANCE_CSVS[config.key]))
+        config.res_df_list = [pd.read_csv(io.StringIO(PERFORMANCE_CSVS[config.key]))] * n_runs
     configs.run()
 
     captured_output = capsys.readouterr().out
