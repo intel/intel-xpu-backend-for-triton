@@ -18,6 +18,11 @@ LinearLayout DPAStoLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
                                           ArrayRef<int64_t> shape);
 
+LinearLayout
+subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
+                              intel::Subgroup2DBlockEncodingAttr layout,
+                              unsigned kWidth, unsigned opIdx = 2);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONINTELGPU_IR_LINEARLAYOUTCONVERSIONS_H
