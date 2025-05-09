@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
+from collections.abc import Iterable
 from enum import Enum
 from dataclasses import dataclass, field
 import itertools
@@ -432,8 +433,11 @@ class ShapeValue:
         values = self.dims
         return values if isinstance(values, list) else list(values) if isinstance(values, tuple) else [values]
 
+    def _to_iterable(self) -> Iterable[Union[str, int, bool]]:
+        return self.dims if isinstance(self.dims, Iterable) else [self.dims]
+
     def __str__(self):
-        return "[" + "-".join([str(value) for value in self.to_list()]) + "]"
+        return "[" + "-".join([str(value) for value in self._to_iterable()]) + "]"
 
     @classmethod
     def from_vals(
@@ -594,10 +598,7 @@ class BenchmarkConfig:
 
 
 @dataclass
-class BenchmarkConfigRunResult(
-        BenchmarkRunResult,
-        BenchmarkConfig,
-):
+class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
 
     @property
     def shapes_repr(self) -> List[str]:
