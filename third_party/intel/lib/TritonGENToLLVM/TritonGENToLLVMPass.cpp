@@ -110,6 +110,24 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
+static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  // The following signature is not valid in OCL interface.
+  // _Z42intel_sub_group_2d_block_read_16b_16r16x2cPU3AS1viiiDv2_iPDh
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 2) {
+    return false;
+  }
+
+  if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
+      op.getVBlocks() != 4 && !op.getVnniTransform()) {
+    // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
+    // vBlock reads
+    return false;
+  }
+
+  return true;
+}
+
 // HW requires base address to be 64-byte aligned. Compensate the non-64-byte
 // alignment base address by adjusting the base width and x-coordinate offset.
 template <
@@ -447,10 +465,8 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
-        op.getVBlocks() != 4 && !op.getVnniTransform()) {
-      // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
-      // vBlock reads
+    if (!isOCLBuiltinAvailable(op)) {
+      // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
     }
