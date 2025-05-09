@@ -1993,6 +1993,20 @@ struct LoadOpConversion
     }
     Value elemSizeInBytes = b.i32_val(originalElemBits / 8);
 
+    LLVM_DEBUG({
+      const unsigned numLoads = numRepOuter * numLoadPerOutRepCluster *
+                                numRepInner / numOperandsInnerDimPerLoad;
+      llvm::dbgs() << "Preparing to dispatch " << numLoads << " loads\n";
+      llvm::dbgs() << "Outer loads: " << numRepOuter * numLoadPerOutRepCluster
+                   << " (" << numLoadPerOutRepCluster
+                   << " per out rep cluster)\n";
+      llvm::dbgs() << "Inner loads: "
+                   << numRepInner / numOperandsInnerDimPerLoad << "\n";
+      llvm::dbgs() << "Load dimension: " << tileHeight << ", "
+                   << tileWidth * vBlocks << " (" << elemSizeInBits
+                   << " bits)\n";
+    });
+
     ValueTable loadVals;
     for (int outer = 0; outer < numRepOuter; ++outer) {
       for (int rep = 0; rep < numLoadPerOutRepCluster; ++rep) {
