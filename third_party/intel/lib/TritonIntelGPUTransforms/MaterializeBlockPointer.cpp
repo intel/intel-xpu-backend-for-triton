@@ -68,7 +68,7 @@ public:
       if (rank == 1)
         return;
 
-      if (!satisfies2DBlockReadAlignment(loadOp)) {
+      if (!satisfies2DBlockReadAlignment(loadOp, axisInfoAnalysis)) {
         LDBG("Alignment checks failed for: " << loadOp);
         return;
       }
@@ -279,7 +279,9 @@ private:
     return strideOneDim;
   }
 
-  bool satisfies2DBlockReadAlignment(tt::LoadOp loadOp) const {
+  bool satisfies2DBlockReadAlignment(
+      tt::LoadOp loadOp,
+      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value ptr = loadOp.getPtr();
     assert(tt::isTensorPointerType(ptr.getType()) &&
            "Expected a ptr to a tensor of ptrs.");
@@ -295,15 +297,6 @@ private:
     if (shape.size() == 1)
       return false;
 
-    // Ensure the base ptr is 4-byte aligned.
-    // Note: the HW requires the address to be 64-byte aligned, however we will
-    // compensate by imposing restrictions on the offsetX and baseWidth.
-    TypedValue<tt::PointerType> base = makeTensorPtrOp.getBase();
-    if (!ttgi::isDivisible(base, 4)) {
-      LDBG("Found non 4-bytes aligned base: " << base);
-      return false;
-    }
-
     std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
     if (!strideOneDim) {
       LDBG("Could not find stride one dimension in: " << makeTensorPtrOp);
@@ -315,6 +308,16 @@ private:
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     unsigned strideOneDimVal = strideOneDim.value();
     LDBG("strideOneDim: " << strideOneDimVal);
+
+    // Ensure the base ptr is 4-byte aligned.
+    // Note: the HW requires the address to be 64-byte aligned, however we will
+    // compensate by imposing restrictions on the offsetX and baseWidth.
+    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
+      LDBG("Found non 4 bytes aligned base: "
+           << axisInfo->getDivisibility(strideOneDimVal));
+      return false;
+    }
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
