@@ -1,6 +1,5 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -2743,10 +2742,7 @@ struct AtomicCASOpConversion
 
       Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
       if (!atomicNeedsSharedMemory(op.getResult()))
-        rewriter.create<spirv::ControlBarrierOp>(
-            loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
-            spirv::MemorySemantics::SequentiallyConsistent |
-                spirv::MemorySemantics::CrossWorkgroupMemory);
+        rewriter.create<TritonGEN::BarrierOp>(loc, TritonGEN::MemFence::GLOBAL);
 
       auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
         // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
@@ -2909,10 +2905,8 @@ struct AtomicRMWOpConversion
         ret = endBlock->getArgument(0);
       } else {
         if (!atomicNeedsSharedMemory(op.getResult()))
-          rewriter.create<spirv::ControlBarrierOp>(
-              loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
-              spirv::MemorySemantics::SequentiallyConsistent |
-                  spirv::MemorySemantics::CrossWorkgroupMemory);
+          rewriter.create<TritonGEN::BarrierOp>(loc,
+                                                TritonGEN::MemFence::GLOBAL);
 
         auto createAtomicBinOpInstruction = [&]() -> SmallVector<Value, 1> {
           mlir::LLVM::AtomicBinOp rmwKind = matchAtomicOp(atomicRmwAttr);

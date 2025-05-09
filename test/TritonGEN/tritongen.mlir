@@ -1,5 +1,12 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics | FileCheck %s
 
+llvm.func @triton_gen.barrier() {
+  // CHECK-LABEL: triton_gen.barrier
+  // CHECK: triton_gen.barrier {mem_fence = Local}
+  triton_gen.barrier {mem_fence=Local}
+  llvm.return
+}
+
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:      llvm.func @triton_gen.dpas(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
   // CHECK-NEXT:   %0 = triton_gen.dpas %arg0, %arg1, %arg2 {pa = i8, pb = i8, rc = 8} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>
