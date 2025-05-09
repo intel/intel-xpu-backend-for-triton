@@ -3,11 +3,10 @@ from typing import Callable, List, Optional, Type
 import pytest
 
 from triton_kernels_benchmark.benchmark_testing import MarkArgs
-from triton_kernels_benchmark import CONFIGS
 from triton_kernels_benchmark.benchmark_utils import BenchmarkCategory, BenchmarkConfigs
 
 ALL_CATEGORIES = {cat.value for cat in BenchmarkCategory}
-ALL_CONFIGS = {config.key: config for config in CONFIGS}
+ALL_CONFIGS = set(BenchmarkConfigs._get_all_configs().keys())  # pylint: disable=W0212
 
 
 @pytest.mark.parametrize(

@@ -11,7 +11,6 @@ from .benchmark_testing import (
     BENCHMARKING_METHOD,
 )
 
-from .configs import CONFIGS
 from .benchmark_shapes_parser import ShapePatternParser
 
 if BENCHMARKING_METHOD == "UPSTREAM_PYTORCH_PROFILER":
@@ -26,6 +25,5 @@ __all__ = [
     "BenchmarkCategory",
     "BenchmarkConfig",
     "BENCHMARKING_METHOD",
-    "CONFIGS",
     "ShapePatternParser",
 ]
