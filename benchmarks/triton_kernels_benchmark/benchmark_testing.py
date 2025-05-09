@@ -382,7 +382,7 @@ class Mark:
 
     def run_constrained(
         self,
-        shapes: List[Shape],
+        shapes: List[ShapeValue],
         show_plots=False,
         print_data=False,
         save_precision=6,
@@ -392,7 +392,7 @@ class Mark:
         if not isinstance(self.benchmarks, Benchmark):
             raise NotImplementedError("Only single benchmark is supported")
         x_vals = self.benchmarks.x_vals
-        self.benchmarks.x_vals = [shape.dim_values for shape in shapes]
+        self.benchmarks.x_vals = [shape.dims for shape in shapes]
         res_df = self.run(
             show_plots=show_plots,
             print_data=print_data,
@@ -415,18 +415,13 @@ class BenchmarkCategory(Enum):
     EXPERIMENTAL = "experimental"
 
 
-ShapeDimValues = Union[
-    int,
-    str,
-    bool,
-    List[Union[str, int, bool]],
-    Tuple[Union[int, str, bool]],
-]
+DimValue = Union[int, str, bool]
+DimValues = Union[DimValue, List[DimValue], Tuple[DimValue, ...]]
 
 
 @dataclass
-class Shape:
-    dim_values: ShapeDimValues
+class ShapeValue:
+    dims: DimValues
     matcher: Optional[ShapePatternParser]
 
     @property
@@ -434,7 +429,7 @@ class Shape:
         return self.matcher(str(self)) if self.matcher else True
 
     def to_list(self) -> List[Union[str, int, bool]]:
-        values = self.dim_values
+        values = self.dims
         return values if isinstance(values, list) else list(values) if isinstance(values, tuple) else [values]
 
     def __str__(self):
@@ -443,10 +438,10 @@ class Shape:
     @classmethod
     def from_vals(
         cls,
-        x_vals: List[ShapeDimValues],
+        x_vals: List[DimValues],
         pattern_matcher: Optional[ShapePatternParser],
-    ) -> List[Shape]:
-        return [Shape(x_val, pattern_matcher) for x_val in x_vals]
+    ) -> List[ShapeValue]:
+        return [ShapeValue(x_val, pattern_matcher) for x_val in x_vals]
 
 
 @dataclass
@@ -471,15 +466,15 @@ class _BenchmarkSummary(ABC):
         return self._benchmark.plot_name
 
     @property
-    def supported_shapes(self) -> List[Shape]:
-        return Shape.from_vals(self._benchmark.x_vals, self.shape_pattern)
+    def supported_shapes(self) -> List[ShapeValue]:
+        return ShapeValue.from_vals(self._benchmark.x_vals, self.shape_pattern)
 
     @property
     def shape_dimensions(self):
         return self._benchmark.x_names
 
     @property
-    def selected_shapes(self) -> List[Shape]:
+    def selected_shapes(self) -> List[ShapeValue]:
         return [shape for shape in self.supported_shapes if shape.matches_pattern]
 
     @property
@@ -618,7 +613,7 @@ class BenchmarkConfigRunResult(
 
     def __str__(self) -> str:
 
-        def _shapes_repr(shapes: List[Shape]):
+        def _shapes_repr(shapes: List[ShapeValue]):
             return ", ".join([self.key + str(shape) for shape in shapes])
 
         str_repr = [
