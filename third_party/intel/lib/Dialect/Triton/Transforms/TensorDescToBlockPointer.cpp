@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -6,7 +7,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
+// #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -73,6 +74,8 @@ public:
     });
 
     finalize();
+
+    llvm::errs() << "moduleOp: " << *moduleOp << "\n";
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -121,11 +124,19 @@ private:
     return (yieldedVal != blockArg);
   }
 
+  // Create a new block pointer if a suitable one doesn't already exist.
+  // Otherwise, return the existing one. The function takes the base, shape,
+  // strides, offsets, sizes of the block pointer to create/lookup and its
+  // tensor element type (to ensure the block pointer has the tensor layout).
   Value findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
                                   ValueRange strides, ValueRange offsets,
-                                  ArrayRef<int32_t> sizes, OpBuilder &builder) {
+                                  ArrayRef<int32_t> sizes,
+                                  RankedTensorType tensorType,
+                                  OpBuilder &builder) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
+    auto ptrType = tt::PointerType::get(
+        tensorType, tt::TritonGEN::TritonGENMemorySpace::kCrossWorkgroup);
 
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
       if (auto makeTensorPtrOp = dyn_cast<tt::MakeTensorPtrOp>(op)) {
@@ -138,7 +149,9 @@ private:
           }
           return true;
         };
-        return makeTensorPtrOp.getBase() == base &&
+
+        return makeTensorPtrOp.getType() == ptrType &&
+               makeTensorPtrOp.getBase() == base &&
                makeTensorPtrOp.getShape() == shape &&
                makeTensorPtrOp.getStrides() == strides &&
                makeTensorPtrOp.getOffsets() == offsets &&
@@ -147,10 +160,16 @@ private:
       return false;
     });
 
+    auto makeTensorPtrOp = [&]() {
+      Value makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
+          loc, base, shape, strides, offsets, sizes,
+          builder.getDenseI32ArrayAttr({1, 0}));
+      makeTensorPtr.setType(ptrType);
+      return makeTensorPtr;
+    };
+
     return (it != insertPoint) ? cast<tt::MakeTensorPtrOp>(*it)
-                               : builder.createOrFold<tt::MakeTensorPtrOp>(
-                                     loc, base, shape, strides, offsets, sizes,
-                                     builder.getDenseI32ArrayAttr({1, 0}));
+                               : makeTensorPtrOp();
   }
 
   template <typename OpTy,
@@ -176,6 +195,11 @@ private:
 
     LLVM_DEBUG(llvm::dbgs() << "which has tdesc: " << makeTensorDescOp << "\n");
 
+    auto createPointerType = [](RankedTensorType tensorType) {
+      return tt::PointerType::get(
+          tensorType, tt::TritonGEN::TritonGENMemorySpace::kCrossWorkgroup);
+    };
+
     // Create a new block pointer if a suitable one doesn't already exist.
     SmallVector<Value> shapes, strides, offsets;
     SmallVector<int32_t> sizes;
@@ -193,16 +217,22 @@ private:
       sizes.push_back(static_cast<int32_t>(size));
     }
 
+    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
+    RankedTensorType tensorType;
+    if constexpr (isLoad)
+      tensorType = op.getResult().getType();
+    else
+      tensorType = op.getSrc().getType();
+
     Value makeTensorPtrOp =
         findOrCreateMakeTensorPtr(loc, makeTensorDescOp.getBase(), shapes,
-                                  strides, offsets, sizes, builder);
+                                  strides, offsets, sizes, tensorType, builder);
 
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << makeTensorPtrOp << "\n";
     });
 
-    constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
       auto loadOp = builder.createOrFold<tt::LoadOp>(
           loc, makeTensorPtrOp, op.getCache(), op.getEvict(),
