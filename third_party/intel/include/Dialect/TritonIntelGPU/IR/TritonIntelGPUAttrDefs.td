@@ -280,4 +280,35 @@ def WarpEncodingAttr : DistributedEncoding<"WarpEncoding", "intel_warp_encoding"
   let hasCustomAssemblyFormat = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Intel Subgroup2DBlock Encoding
+//===----------------------------------------------------------------------===//
+
+def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding", "subgroup_2d_block_encoding", [MmaEncodingTrait], TritonIntelGPU_Dialect> {
+  let mnemonic = "subgroup_2d_block";
+
+  let description = [{
+    An encoding for tensors produced via Intel Subgroup 2D Block IO operations.
+  }];
+
+  let parameters = (
+    ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
+    "CTALayoutAttr":$CTALayout,
+    ArrayRefParameter<"unsigned">:$instrShape,
+    ArrayRefParameter<"unsigned">:$numReps,
+    "unsigned":$kWidth,
+    "unsigned":$threadsPerWarp
+  );
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
+                                          int opIdx) const;
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
+
 #endif
