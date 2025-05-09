@@ -112,7 +112,7 @@ def get_git_commit_hash(length=8):
 setup(
     name="triton-kernels-benchmark",
     version="3.3.0" + get_git_commit_hash(),
-    packages=["triton_kernels_benchmark", "triton_kernels_benchmark.configs"],
+    packages=["triton_kernels_benchmark"],
     install_requires=[
         "torch>=2.6",
         "pandas",
