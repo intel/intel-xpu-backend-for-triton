@@ -7,8 +7,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
-// #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "triton-intel-tdesc-to-block-pointer"
@@ -74,8 +72,6 @@ public:
     });
 
     finalize();
-
-    llvm::errs() << "moduleOp: " << *moduleOp << "\n";
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
