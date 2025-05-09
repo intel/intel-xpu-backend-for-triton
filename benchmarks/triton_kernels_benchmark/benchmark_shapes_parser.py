@@ -17,8 +17,8 @@ class ShapePatternParser:
     def __str__(self):
         return self.pattern
 
-    @classmethod
-    def parse(cls, shape_string: str, pattern_shape: bool = False) -> List[Union[int, str]]:
+    @staticmethod
+    def parse(shape_string: str, pattern_shape: bool = False) -> List[Union[int, str]]:
         pattern_match = re.fullmatch(r"\[(.*)\]", shape_string)
         if not pattern_match:
             raise ValueError(
@@ -27,7 +27,7 @@ class ShapePatternParser:
         if not inner_string:
             raise ValueError(f"Empty shape - {inner_string}")
         tokens = inner_string.split("-")
-        if not tokens:
+        if not any(tokens):
             raise ValueError(f"Empty shape - {inner_string}")
         result: List[Union[int, str]] = []
         for token in tokens:

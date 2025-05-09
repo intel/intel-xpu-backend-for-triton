@@ -52,7 +52,10 @@ def test_parse_bracketed_star_without_pattern_shape_fails():
         "1-2-3",
         "[]",
         "[ ]",
-        "[ - ]"
+        "[ - ]",
+        "[-]",
+        "[--]",
+        "[- -]",
         "[1-2-@-4]",
     ],
 )
