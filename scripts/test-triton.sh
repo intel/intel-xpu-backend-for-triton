@@ -300,7 +300,7 @@ run_minicore_tests() {
     run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/ --ignore=intel/test_mxfp_matmul.py
 
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
@@ -316,8 +316,7 @@ run_mxfp_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "test_mxfp"
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/test_mxfp_matmul.py
 }
 
 run_scaled_dot_tests() {
