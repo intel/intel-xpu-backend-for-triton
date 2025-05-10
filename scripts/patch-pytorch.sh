@@ -36,3 +36,8 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch https://github.com/pytorch/pytorch/pull/143553.diff
+
+# https://github.com/pytorch/pytorch/pull/152007
+fetch_patch https://patch-diff.githubusercontent.com/raw/pytorch/kineto/pull/1066.diff
+cd "$REPO_ROOT/third_party/kineto"
+git apply "$SCRIPTS_DIR/1066.diff"

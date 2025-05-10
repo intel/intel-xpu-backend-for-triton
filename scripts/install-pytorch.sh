@@ -199,7 +199,7 @@ function build_pytorch {
   pip install 'cmake<4.0.0'
   pip install -r requirements.txt
   pip install cmake ninja
-  USE_KINETO=0 USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
+  USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
 }
 
 function install_pytorch {
