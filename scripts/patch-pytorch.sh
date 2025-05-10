@@ -39,5 +39,4 @@ apply_patch https://github.com/pytorch/pytorch/pull/143553.diff
 
 # https://github.com/pytorch/pytorch/pull/152007
 cd $REPO_ROOT/third_party/kineto
-git fetch origin main
-git checkout fb36cce6dc3169aee003df30384f45a46fda8f4c
+git submodule update --remote --rebase third_party/kineto
