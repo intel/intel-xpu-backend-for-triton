@@ -38,5 +38,5 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 apply_patch https://github.com/pytorch/pytorch/pull/143553.diff
 
 # https://github.com/pytorch/pytorch/pull/152007
-cd $REPO_ROOT/third_party/kineto
+cd $REPO_ROOT
 git submodule update --remote --rebase third_party/kineto
