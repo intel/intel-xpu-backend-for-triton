@@ -610,6 +610,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
+    Py_DECREF(ret);
   }}
 
   void * pStream = PyLong_AsVoidPtr(py_obj_stream);
@@ -633,7 +634,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
-
+    Py_DECREF(ret);
   }}
 
   Py_RETURN_NONE;
