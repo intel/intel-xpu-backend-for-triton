@@ -700,7 +700,7 @@ class _attention(torch.autograd.Function):
             num_stages=NUM_STAGES  #
         )
 
-        return dq, dk, dv, None, None
+        return dq, dk, dv, None, None, None, None
 
 
 attention = _attention.apply
