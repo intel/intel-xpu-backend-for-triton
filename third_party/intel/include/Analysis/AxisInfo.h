@@ -14,46 +14,9 @@ namespace mlir::triton::intel {
 // unique axis info.
 class ModuleAxisInfoAnalysis : public triton::ModuleAxisInfoAnalysis {
 public:
-  explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp)
-      : triton::ModuleAxisInfoAnalysis(moduleOp) {
-    funcMap.clear();
+  explicit ModuleAxisInfoAnalysis(ModuleOp moduleOp);
 
-    SmallVector<FunctionOpInterface> funcs;
-    for (auto root : getRoots()) {
-      walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-          // Pre-order edge walk callback
-          [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
-          // Post-order node walk callback
-          [&](FunctionOpInterface funcOp) {
-            funcs.push_back(funcOp);
-            funcMap.try_emplace(funcOp, AxisInfoMapT{});
-          });
-    }
-    SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
-    SymbolTableCollection symbolTable;
-    for (auto funcOp : llvm::reverse(sortedFuncs)) {
-      initialize(funcOp);
-      funcOp.walk([&](CallOpInterface callOp) {
-        auto callee = dyn_cast<FunctionOpInterface>(
-            callOp.resolveCallableInTable(&symbolTable));
-        update(callOp, callee);
-      });
-    }
-  }
-
-  AxisInfo *getAxisInfo(Value value) {
-    auto funcOp =
-        value.getParentRegion()->getParentOfType<FunctionOpInterface>();
-    auto *axisInfoMap = getFuncData(funcOp);
-    if (!axisInfoMap) {
-      return nullptr;
-    }
-    auto it = axisInfoMap->find(value);
-    if (it == axisInfoMap->end()) {
-      return nullptr;
-    }
-    return &(it->second);
-  }
+  AxisInfo *getAxisInfo(Value value);
 
   unsigned getContiguity(Value value);
   unsigned getAlignment(Value value);
