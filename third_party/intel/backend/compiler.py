@@ -322,7 +322,7 @@ class XPUBackend(BaseBackend):
         if not knobs.intel.reduce_transpose:
             passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, False,
                                            options.enable_tile_load_linear_layout)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_canonicalizer(pm)
