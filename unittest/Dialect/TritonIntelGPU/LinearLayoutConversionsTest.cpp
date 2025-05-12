@@ -76,12 +76,12 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_A) {
           {S("dim0"), S("dim1")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_B) {
+TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
   // Layout for A operand, warpsPerCTA is (8, 4). We have one tile per warp.
   // The load should be 32 by 16 with 2 blocks --> 32 by 32
   // There are two loads per warp.
 
-  auto sdbEncoding = sdb(/*instrShape*/ {32, 32}, /*numBlocks*/ 1, /*kWidth*/ 2,
+  auto sdbEncoding = sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
                          /*warpsPerCTA*/ {8, 4}, /*blockShape*/ {32, 256},
                          /*opIdx*/ 1);
   llvm::errs() << "sdp: " << sdbEncoding << "\n";
@@ -90,14 +90,14 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_B) {
       /*shape*/ {32, 256}, sdbEncoding,
       /*kWidth*/ 2, /*opIdx*/ 1);
   llvm::errs() << "layout from conversion: " << layout << "\n";
-  EXPECT_EQ(
-      layout,
-      LinearLayout(
-          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 16}}},
-           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
-           {S("warp"), {{0, 0}, {0, 0}, {32, 0}, {64, 0}, {128, 0}}},
-           {S("block"), {}}},
-          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(layout,
+            LinearLayout(
+                {{S("register"),
+                  {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 16}, {0, 128}}},
+                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                 {S("warp"), {{0, 32}, {0, 64}, {0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
 }
 
 } // anonymous namespace
