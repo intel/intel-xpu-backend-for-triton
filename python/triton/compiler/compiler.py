@@ -493,8 +493,15 @@ class CompiledKernel:
             if self.metadata.tmem_size > max_tmem_size:
                 raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device)
+        self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
+            self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
+            not self.metadata.generate_native_code, device)
+        if hasattr(self.metadata, "threads_per_warp"):
+            warp_size = self.metadata.threads_per_warp
+        else:
+            warp_size = driver.active.get_current_target().warp_size
+        if self.metadata.num_warps * warp_size > self.n_max_threads:
+            raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
 
     def __getattribute__(self, name):
         if name == 'run':

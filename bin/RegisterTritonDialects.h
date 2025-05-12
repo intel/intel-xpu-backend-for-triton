@@ -6,6 +6,7 @@
 #include "intel/include/GPUToTritonGEN/Passes.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonGENToLLVM/Passes.h"
+#include "intel/include/TritonGENToSPIRV/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
 #include "intel/include/TritonRaiseBlockPointer/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
@@ -74,6 +75,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
   mlir::triton::intel::registerTritonRaiseBlockPointer();
+  mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();
   mlir::triton::gpu::registerTritonGPUGlobalScratchAllocationPass();
@@ -87,6 +89,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertGPUToTritonGEN();
   mlir::triton::registerConvertTritonGENToLLVM();
   mlir::triton::registerTritonGENToLLVMPasses();
+  mlir::triton::registerTritonGENToSPIRVPasses();
 
   // TritonAMDGPUToLLVM passes
   mlir::triton::registerConvertTritonAMDGPUToLLVM();

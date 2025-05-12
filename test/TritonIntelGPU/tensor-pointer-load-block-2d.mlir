@@ -135,3 +135,57 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     tt.return
   }
 }
+
+// -----
+
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
+#mma_1 = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1]}>
+#mma_2 = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2]}>
+module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @regular_pointer_block_io
+  tt.func public @regular_pointer_block_io(%arg0: tensor<256x64x!tt.ptr<f16>, #mma>,
+                                           %arg1: tensor<256x64x!tt.ptr<f16>, #mma_1>,
+                                           %arg2: tensor<128x64x!tt.ptr<f16>, #mma_2>,
+                                           %arg3: tensor<256x64x!tt.ptr<f16>, #mma_2>) {
+
+    // CHECK-COUNT-4: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v32f16
+    %0 = tt.load %arg0 {triton_intel_gpu.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
+
+    // CHECK-COUNT-16: llvm.call spir_funccc @_Z41intel_sub_group_2d_block_read_16b_8r16x1cPU3AS1viiiDv2_iPDh
+    %1 = tt.load %arg1 {triton_intel_gpu.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma_1>
+
+    // CHECK-COUNT-2: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPDh
+    %2 = tt.load %arg3 {triton_intel_gpu.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma_2>
+
+    // COM: The data is duplicated in the warps because the warp shape is 32*8=256 larger than the tensor shape 128
+    // CHECK-COUNT-2: llvm.call spir_funccc @_Z42intel_sub_group_2d_block_read_16b_32r16x2cPU3AS1viiiDv2_iPDh
+    %3 = tt.load %arg2 {triton_intel_gpu.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #mma_2>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
+#mma_1 = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 8, 1], repCluster = [1, 2, 2]}>
+#mma_32 = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
+module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @regular_pointer_gather_io
+  tt.func public @regular_pointer_gather_io(%arg0: tensor<128x64x!tt.ptr<f16>, #mma>,
+                                            %arg1: tensor<128x64x!tt.ptr<f16>, #mma_32>,
+                                            %arg2: tensor<2x128x64x!tt.ptr<f16>, #mma_1>) {
+    // COM: The pitch is not available in the current implementation.
+    // COM: Not from axis info or ptrs[{0, 0}] and ptrs[{1, 0}] in the same work item.
+    // CHECK-COUNT-32: llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    %0 = tt.load %arg1 {triton_intel_gpu.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #mma_32>
+
+    // COM: Not support column major block io.
+    // CHECK-COUNT-32: llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    %1 = tt.load %arg0 {triton_intel_gpu.block_io = "column_major"} : tensor<128x64x!tt.ptr<f16>, #mma>
+
+    // COM: Not support rank size > 2.
+    // CHECK-COUNT-128: llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    %2 = tt.load %arg2 {triton_intel_gpu.block_io = "column_major"} : tensor<2x128x64x!tt.ptr<f16>, #mma_1>
+    tt.return
+  }
+}

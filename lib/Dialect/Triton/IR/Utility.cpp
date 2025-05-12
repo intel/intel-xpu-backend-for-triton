@@ -1,12 +1,10 @@
-#include "triton/Dialect/Triton/Transforms/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 
-// Combine the current mask with the given predicate.
 Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                       Value pred) {
   Type maskType = tt::getI1SameShape(typeLike);

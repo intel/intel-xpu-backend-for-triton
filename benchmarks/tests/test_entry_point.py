@@ -6,6 +6,7 @@ from triton_kernels_benchmark.benchmark_testing import MarkArgs
 from triton_kernels_benchmark.benchmark_utils import BenchmarkCategory, BenchmarkConfigs
 
 ALL_CATEGORIES = {cat.value for cat in BenchmarkCategory}
+ALL_CONFIGS = set(BenchmarkConfigs._get_all_configs().keys())  # pylint: disable=W0212
 
 
 @pytest.mark.parametrize(
@@ -20,7 +21,7 @@ ALL_CATEGORIES = {cat.value for cat in BenchmarkCategory}
         "providers_count",
     ),
     (
-        [True, set(), True, ALL_CATEGORIES, [], None, lambda x: x > 1, lambda x: x > 1],
+        [True, ALL_CONFIGS, True, ALL_CATEGORIES, [], None, lambda x: x > 1, lambda x: x >= 1],
         [True, {"softmax", "gemm"}, True, ALL_CATEGORIES, [], None, lambda x: x > 1, lambda x: x > 1],
         [True, {"softmax", "gemm"}, True, {"core", "gemm", "softmax"}, [], None, lambda x: x > 1, lambda x: x > 1],
         [False, {"softmax"}, False, {"optional"}, ["triton"], AssertionError, None, None],
@@ -47,6 +48,9 @@ def test_collect_only(
             select_all=select_all,
             categories_filter=categories_filter,
             providers_filter=providers_filter,
+            shape_pattern=None,
+            json_output=False,
+            detailed_output=False,
             tag="",
         )
 
@@ -57,6 +61,6 @@ def test_collect_only(
         configs = benchmark_configs().configs
         benchmark_configs().run()
         assert configs_count(len(configs))
-        providers_counts = [len(config.config_summary.selected_providers) for config in configs]
+        providers_counts = [len(config.selected_providers) for config in configs]
         assert providers_count(max(providers_counts))
         assert providers_count(min(providers_counts))

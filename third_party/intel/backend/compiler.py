@@ -213,8 +213,6 @@ class XPUBackend(BaseBackend):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
-        if opt.threads_per_warp * opt.num_warps > properties['max_work_group_size']:
-            raise ValueError(f"Kernel threads number exceeds the limit ({properties['max_work_group_size']})")
 
     @staticmethod
     def annotate_module(mod, properties, opt, target_arch):
@@ -380,6 +378,8 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
         else:
             metadata["build_flags"] = ""
+
+        metadata["generate_native_code"] = options.generate_native_code
 
         if options.generate_native_code:
             with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \

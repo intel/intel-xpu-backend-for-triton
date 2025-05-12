@@ -188,10 +188,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const char *name, *build_flags_ptr;
   int shared;
   PyObject *py_bytes;
+  bool is_spv;
   int devId;
 
-  if (!PyArg_ParseTuple(args, "sSisi", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &devId)) {
+  if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId)) {
     std::cerr << "loadBinary arg parse failed" << std::endl;
     return NULL;
   }
@@ -207,20 +208,20 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
     const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
     const sycl::device sycl_device = sycl_l0_device_pair.first;
+    const auto l0_device = sycl_l0_device_pair.second;
 
     const std::string kernel_name = name;
     const size_t binary_size = PyBytes_Size(py_bytes);
 
     uint8_t *binary_ptr = (uint8_t *)PyBytes_AsString(py_bytes);
     const auto &ctx = get_default_context(sycl_device);
-    const auto l0_device =
-        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_device);
     const auto l0_context =
         sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
-    const auto use_native_code =
-        isEnvValueBool(getStrEnv("TRITON_XPU_GEN_NATIVE_CODE"));
-    const bool is_spv = use_native_code ? !(*use_native_code) : true;
+    ze_device_compute_properties_t compute_properties = {};
+    compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
+    zeDeviceGetComputeProperties(l0_device, &compute_properties);
+    int32_t n_max_threads = compute_properties.maxTotalGroupSize;
 
     auto [l0_module, l0_kernel, n_spills] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
@@ -277,8 +278,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                           "kernel_bundle", freeKernelBundle);
 
-    return Py_BuildValue("(OOii)", kernel_bundle_py, kernel_py, n_regs,
-                         n_spills);
+    return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
+                         n_spills, n_max_threads);
 
   } catch (const std::exception &e) {
     char err[1024] = {0};

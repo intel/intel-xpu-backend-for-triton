@@ -7,6 +7,8 @@ import numbers
 from .._C.libtriton import ir
 from . import core as tl
 
+import triton
+
 T = TypeVar('T')
 
 
@@ -1381,7 +1383,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
-    if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
+    if element_ty in [tl.int16, tl.uint16, tl.bfloat16] or element_ty.primitive_bitwidth < 16:
         raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask is not None:
@@ -1953,7 +1955,8 @@ def make_tensor_descriptor(
         )
 
     strides[-1] = tl._constexpr_to_value(strides[-1])
-    if strides[-1] != 1:
+    backend = triton.runtime.driver.active.get_current_target().backend
+    if backend != "xpu" and strides[-1] != 1:
         raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
 
     shape = [to_tensor(x, builder) for x in shape]
