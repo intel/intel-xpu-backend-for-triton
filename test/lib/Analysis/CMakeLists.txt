@@ -8,5 +8,5 @@ add_mlir_library(TritonTestAnalysis
 
   LINK_LIBS PUBLIC
   MLIRPass
-  ${triton_libs}
+  TritonAnalysis
 )
