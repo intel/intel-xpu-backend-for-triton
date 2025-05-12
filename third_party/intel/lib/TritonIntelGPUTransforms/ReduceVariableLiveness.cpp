@@ -25,8 +25,6 @@ namespace mlir::triton::gpu::intel {
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
-#include <iostream>
-
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -39,7 +37,7 @@ using TensorValue = TypedValue<RankedTensorType>;
 namespace {
 
 #define TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES 32768
-#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 8192
+#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 128 * 128 * 2
 
 static unsigned getSizeInBytes(RankedTensorType &tensorType) {
   Type elType = tensorType.getElementType();
@@ -81,7 +79,7 @@ static bool isLongLifeSpanVariable(Value v,
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
     return (
         (LiveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
-        (getSizeInBytes(tensorType) > LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
+        (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
         livenessBlockInfo->isLiveIn(v));
   }
   return false;
@@ -94,7 +92,10 @@ static bool isLongLifeSpanVariable(Value v,
 static bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
                             Operation *forOp) {
   // Only pointer to tensor are considered to be moved
-  if (!mlir::triton::isTensorPointerType(loadOp.getPtr().getType()))
+  if (!mlir::triton::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
+    return false;
+  // LoadOps with non-null mask are not considered to be moved
+  if (loadOp.getMask())
     return false;
   RankedTensorType loadType =
       cast<RankedTensorType>(loadOp.getResult().getType());
@@ -126,7 +127,7 @@ static void createPrefetchOp(tt::LoadOp loadOp) {
   Operation *op = loadOp.getPtr().getDefiningOp();
   OpBuilder builder(op);
   // TODO: Add prefetchOp after last dependency between ptr and mask,
-  // if this support is extended to tensor of pointers.
+  // if this support is extended to support masks.
   builder.setInsertionPointAfter(op);
   auto prefetchOp = builder.create<ttgi::PrefetchOp>(
       loadOp->getLoc(), loadOp.getPtr(), loadOp.getCache(), loadOp.getEvict(),
