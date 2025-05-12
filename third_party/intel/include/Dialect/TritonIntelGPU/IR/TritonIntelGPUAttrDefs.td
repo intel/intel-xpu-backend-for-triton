@@ -289,6 +289,9 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
 
   let description = [{
     An encoding for tensors produced via Intel Subgroup 2D Block IO operations.
+
+    instrShape - the height/width for the block load
+    numBlocks / numVBlocks - number of blocks to simultaneously load (for making most use of cache)
   }];
 
   let parameters = (
@@ -296,6 +299,7 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape,
+    "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$numReps,
     "unsigned":$kWidth,
     "unsigned":$threadsPerWarp
