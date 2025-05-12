@@ -603,26 +603,18 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
 
     // start with the DPAS tile
     int opsPerChannel = 2; // TODO: how to get this?
-    auto regBases = DPASRegBasesA(
-        opsPerChannel, DpasEncodingAttr::DPASCapability::repeatCount,
-        layout.getThreadsPerWarp(),
-        DpasEncodingAttr::DPASCapability::systolicDepth);
-
-    llvm::errs() << "regBases\n";
-    printBases(regBases);
+    auto [regBases, laneBases] =
+        createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
 
     bases[kRegister] = regBases;
-
-    auto laneBases =
-        DPASLaneBasesA(opsPerChannel, layout.getThreadsPerWarp(),
-                       DpasEncodingAttr::DPASCapability::systolicDepth);
-
-    llvm::errs() << "laneBases:\n";
-    printBases(laneBases);
-
     bases[kLane] = laneBases;
 
     auto ctaLayout = LinearLayout(bases, dimNames);
+    llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
+    // handle num blocks
+    ctaLayout *=
+        LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
+
     llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
 
     auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
@@ -631,7 +623,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
     unsigned outer = order[1];
     llvm::errs() << "outer = " << outer << "\n";
     llvm::errs() << "inner = " << inner << "\n";
-
+#if 0
     // expand the DPAS tile to match the desired load size
     auto numDPASInstPerOuterDim =
         loadTileSize[outer] / ctaLayout.getOutDimSize(dimNames[outer]);
@@ -659,6 +651,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
     ctaLayout *= LinearLayout::identity1D(
         numReps[inner] / numDPASInstPerInnerDim, kRegister, dimNames[inner]);
     llvm::errs() << "ctaLayout after replicating: " << ctaLayout << "\n";
+#endif
 
     // Apply warp layout.
     ctaLayout *=
@@ -674,29 +667,8 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
 
     // start with the DPAS tile
     int opsPerChannel = 2; // TODO: how to get this?
-#if 0
-    auto regBases = DPASRegBasesB(
-        opsPerChannel, DpasEncodingAttr::DPASCapability::repeatCount,
-        layout.getThreadsPerWarp(),
-        DpasEncodingAttr::DPASCapability::systolicDepth);
-    // TODO: the reg bases for operand B use a packed layout, but we want the unpacked layout. Manually "unpack" the layout for now
-    // if (opsPerChannel == 2)
-      // regBases.push_back({16,0});
-
-    llvm::errs() << "regBases\n";
-    printBases(regBases);
-
-
-    auto laneBases =
-        DPASLaneBasesB(opsPerChannel, layout.getThreadsPerWarp(),
-                       DpasEncodingAttr::DPASCapability::systolicDepth);
-
-    llvm::errs() << "laneBases:\n";
-    printBases(laneBases);
-#else
     auto [regBases, laneBases] =
         createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
-#endif
 
     bases[kRegister] = regBases;
     bases[kLane] = laneBases;
@@ -715,36 +687,6 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
     unsigned outer = order[1]; // k
     llvm::errs() << "outer = " << outer << "\n";
     llvm::errs() << "inner = " << inner << "\n";
-#if 0
-    // expand the load tile to match the DPAS repetititons
-    auto numDPASInstPerOuterDim =
-        loadTileSize[outer] / ctaLayout.getOutDimSize(dimNames[outer]);
-    auto numDPASInstPerInnerDim =
-        loadTileSize[inner] / ctaLayout.getOutDimSize(dimNames[inner]);
-    llvm::errs() << "numDPASInstPerOuterDim = " << numDPASInstPerOuterDim
-                 << "\n";
-    llvm::errs() << "numDPASInstPerInnerDim = " << numDPASInstPerInnerDim
-                 << "\n";
-
-#if 0
-    ctaLayout *= LinearLayout::identity1D(numDPASInstPerOuterDim, kRegister,
-                                          dimNames[outer]);
-    ctaLayout *= LinearLayout::identity1D(numDPASInstPerInnerDim, kRegister,
-                                          dimNames[inner]);
-#endif
-
-    auto numReps = layout.getNumReps();
-    assert(numReps.size() == 2);
-    llvm::errs() << "numReps: ";
-    printVector(numReps);
-    llvm::errs() << "\n";
-
-    ctaLayout *=
-        LinearLayout::identity1D(numReps[outer], kRegister, dimNames[outer]);
-    ctaLayout *= LinearLayout::identity1D(
-        numReps[inner] / numDPASInstPerInnerDim, kRegister, dimNames[inner]);
-    llvm::errs() << "ctaLayout after replicating: " << ctaLayout << "\n";
-#endif
 
     // Apply warp layout.
     ctaLayout *=
