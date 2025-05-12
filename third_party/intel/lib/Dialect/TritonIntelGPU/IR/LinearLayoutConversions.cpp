@@ -525,7 +525,6 @@ LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
 
 namespace {
 
-// maybe unused?
 static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
                                                 ArrayRef<unsigned> shape,
                                                 ArrayRef<unsigned> order,
@@ -545,6 +544,26 @@ static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
   return layout;
 }
 
+// creates a tiled layout across a single warp (register/lane block) with the
+// specified height and width. the width specifies the number of
+// lanes/work-items the height specifies the number of registers per lane
+using basisT = std::vector<std::vector<int32_t>>;
+
+std::pair<basisT, basisT> createRegisterLaneTileLayout(const int height,
+                                                       const int width) {
+  basisT laneBase;
+  for (int i = 1; i < width; i = i << 1) {
+    laneBase.push_back({0, i});
+  }
+
+  basisT regBase;
+  for (int i = 1; i < height; i = i << 1) {
+    regBase.push_back({i, 0});
+  }
+
+  return {regBase, laneBase};
+}
+
 } // namespace
 
 LinearLayout
@@ -555,9 +574,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
   int rank = blockShape.size();
   assert(rank == layout.getRank());
   auto dimNames = standardOutDimNames(ctx, rank);
-  SmallVector<unsigned> loadTileSize = llvm::to_vector(layout.getInstrShape());
-  assert(loadTileSize.size() == 2);
-  loadTileSize[1] *= layout.getNumBlocks();
+  auto loadTileSize = layout.getInstrShape();
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
@@ -568,6 +585,10 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
       llvm::errs() << vec[i] << " ";
     }
   };
+
+  llvm::errs() << "blockShape: ";
+  printVector(blockShape);
+  llvm::errs() << "\n";
 
   auto printBases = [&printVector](const auto base) {
     for (size_t i = 0; i < base.size(); i++) {
@@ -653,15 +674,18 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
 
     // start with the DPAS tile
     int opsPerChannel = 2; // TODO: how to get this?
+#if 0
     auto regBases = DPASRegBasesB(
         opsPerChannel, DpasEncodingAttr::DPASCapability::repeatCount,
         layout.getThreadsPerWarp(),
         DpasEncodingAttr::DPASCapability::systolicDepth);
+    // TODO: the reg bases for operand B use a packed layout, but we want the unpacked layout. Manually "unpack" the layout for now
+    // if (opsPerChannel == 2)
+      // regBases.push_back({16,0});
 
     llvm::errs() << "regBases\n";
     printBases(regBases);
 
-    bases[kRegister] = regBases;
 
     auto laneBases =
         DPASLaneBasesB(opsPerChannel, layout.getThreadsPerWarp(),
@@ -669,20 +693,30 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
 
     llvm::errs() << "laneBases:\n";
     printBases(laneBases);
+#else
+    auto [regBases, laneBases] =
+        createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
+#endif
 
+    bases[kRegister] = regBases;
     bases[kLane] = laneBases;
 
     auto ctaLayout = LinearLayout(bases, dimNames);
+    llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
+    // handle num blocks
+    ctaLayout *=
+        LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
+
     llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
 
     auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
 
-    unsigned inner = order[0];
-    unsigned outer = order[1];
+    unsigned inner = order[0]; // n
+    unsigned outer = order[1]; // k
     llvm::errs() << "outer = " << outer << "\n";
     llvm::errs() << "inner = " << inner << "\n";
-
-    // expand the DPAS tile to match the desired load size
+#if 0
+    // expand the load tile to match the DPAS repetititons
     auto numDPASInstPerOuterDim =
         loadTileSize[outer] / ctaLayout.getOutDimSize(dimNames[outer]);
     auto numDPASInstPerInnerDim =
@@ -692,12 +726,13 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
     llvm::errs() << "numDPASInstPerInnerDim = " << numDPASInstPerInnerDim
                  << "\n";
 
+#if 0
     ctaLayout *= LinearLayout::identity1D(numDPASInstPerOuterDim, kRegister,
                                           dimNames[outer]);
     ctaLayout *= LinearLayout::identity1D(numDPASInstPerInnerDim, kRegister,
                                           dimNames[inner]);
+#endif
 
-    // replicate the tile
     auto numReps = layout.getNumReps();
     assert(numReps.size() == 2);
     llvm::errs() << "numReps: ";
@@ -709,6 +744,7 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
     ctaLayout *= LinearLayout::identity1D(
         numReps[inner] / numDPASInstPerInnerDim, kRegister, dimNames[inner]);
     llvm::errs() << "ctaLayout after replicating: " << ctaLayout << "\n";
+#endif
 
     // Apply warp layout.
     ctaLayout *=
