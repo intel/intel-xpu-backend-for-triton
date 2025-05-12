@@ -19,31 +19,17 @@ class LinearLayoutConversionsTest : public ::testing::Test {
 public:
   void SetUp() { ctx.loadDialect<TritonGPUDialect, TritonIntelGPUDialect>(); }
 
-#if 0
-        Subgroup2DBlockEncodingAttr sdb(ArrayRef<unsigned> instrShape, unsigned kWidth, unsigned threadsPerWarp,
-                                ArrayRef<unsigned> warpsPerCTA,
-                                ArrayRef<unsigned> CTAsPerCGA,
-                                ArrayRef<unsigned> CTASplitNum,
-                                ArrayRef<unsigned> CTAOrder) {
-        return Subgroup2DBlockEncodingAttr::get(
-            &ctx, warpsPerCTA,
-            CTALayoutAttr::get(&ctx, CTAsPerCGA, CTASplitNum, CTAOrder), instrShape,
-            kWidth, threadsPerWarp);
-        }
-#endif
-
   Subgroup2DBlockEncodingAttr sdb(ArrayRef<unsigned> instrShape,
-                                  unsigned kWidth,
+                                  unsigned numBlocks, unsigned kWidth,
                                   ArrayRef<unsigned> warpsPerCTA,
+                                  ArrayRef<int64_t> blockShape,
                                   unsigned opIdx) {
     auto dpasLayout = DpasEncodingAttr::get(
         &ctx, /*repeatCount=*/8, /*systolicDepth=*/8, /*executionSize=*/16,
         /*opsPerChan=*/2, warpsPerCTA, /*repCluster=*/{4, 2},
         /*threadsPerWarp=*/16);
 
-    // TODO: unsigned or int64_t?
-    auto instrShapeSigned = SmallVector<int64_t>{instrShape[0], instrShape[2]};
-    auto dpasReps = dpasLayout.getDPASRepetitions(instrShapeSigned, opIdx);
+    auto dpasReps = dpasLayout.getDPASRepetitions(blockShape, opIdx);
     llvm::errs() << "dpas reps size = " << dpasReps.size() << "\n";
     assert(dpasReps.size() == 3);
     llvm::errs() << "dpas reps: ";
@@ -58,7 +44,8 @@ public:
         CTALayoutAttr::get(&ctx, dpasLayout.getCTAsPerCGA(),
                            dpasLayout.getCTASplitNum(),
                            dpasLayout.getCTAOrder()),
-        instrShape, dpasRepsUnsigned, kWidth, dpasLayout.getThreadsPerWarp());
+        instrShape, numBlocks, dpasRepsUnsigned, kWidth,
+        dpasLayout.getThreadsPerWarp());
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -67,15 +54,16 @@ protected:
   MLIRContext ctx;
 };
 
-TEST_F(LinearLayoutConversionsTest, FP16_M256_N32_K16_A) {
+TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_A) {
   // Layout for A operand, warpsPerCTA is (8, 4). We have one tile per warp.
   // The load should be 32 by 16 with 2 blocks --> 32 by 32
   // There is one load per warp.
 
   auto layout = subgroup2DBlockToLinearLayout(
-      /*shape*/ {32, 32},
-      sdb(/*instrShape*/ {256, 256, 32}, /*kWidth*/ 2, /*warpsPerCTA*/ {8, 4},
-          /*opIdx*/ 0),
+      /*blockShape*/ {256, 32},
+      sdb(/*instrShape*/ {32, 32}, /*numBlocks*/ 1, /*kWidth*/ 2,
+          /*warpsPerCTA*/ {8, 4},
+          /*blockShape*/ {256, 32}, /*opIdx*/ 0),
       /*kWidth*/ 2, /*opIdx*/ 0);
   llvm::errs() << "layout from conversion: " << layout << "\n";
   EXPECT_EQ(
@@ -88,30 +76,29 @@ TEST_F(LinearLayoutConversionsTest, FP16_M256_N32_K16_A) {
           {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_B) {
+  // Layout for A operand, warpsPerCTA is (8, 4). We have one tile per warp.
+  // The load should be 32 by 16 with 2 blocks --> 32 by 32
+  // There are two loads per warp.
 
-TEST_F(LinearLayoutConversionsTest, FP16_M256_N32_K16_B) {
-    // Layout for A operand, warpsPerCTA is (8, 4). We have one tile per warp.
-    // The load should be 32 by 16 with 2 blocks --> 32 by 32
-    // There are two loads per warp.
-  
-    auto sdbEncoding = sdb(/*instrShape*/ {256, 256, 32}, /*kWidth*/ 2, /*warpsPerCTA*/ {8, 4},
-        /*opIdx*/ 1);
-    llvm::errs() << "sdp: " << sdbEncoding << "\n";
+  auto sdbEncoding = sdb(/*instrShape*/ {32, 32}, /*numBlocks*/ 1, /*kWidth*/ 2,
+                         /*warpsPerCTA*/ {8, 4}, /*blockShape*/ {32, 256},
+                         /*opIdx*/ 1);
+  llvm::errs() << "sdp: " << sdbEncoding << "\n";
 
-    auto layout = subgroup2DBlockToLinearLayout(
-        /*shape*/ {32, 32},
-        sdbEncoding,
-        /*kWidth*/ 2, /*opIdx*/ 1);
-    llvm::errs() << "layout from conversion: " << layout << "\n";
-    EXPECT_EQ(
-        layout,
-        LinearLayout(
-            {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 16}}},
-             {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
-             {S("warp"), {{0, 0}, {0, 0}, {32, 0}, {64, 0}, {128, 0}}},
-             {S("block"), {}}},
-            {S("dim0"), S("dim1")}));
-  }
+  auto layout = subgroup2DBlockToLinearLayout(
+      /*shape*/ {32, 256}, sdbEncoding,
+      /*kWidth*/ 2, /*opIdx*/ 1);
+  llvm::errs() << "layout from conversion: " << layout << "\n";
+  EXPECT_EQ(
+      layout,
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 16}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+           {S("warp"), {{0, 0}, {0, 0}, {32, 0}, {64, 0}, {128, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
 
 } // anonymous namespace
 } // namespace mlir::triton::gpu::intel
