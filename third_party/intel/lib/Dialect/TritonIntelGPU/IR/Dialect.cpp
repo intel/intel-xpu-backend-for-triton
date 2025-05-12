@@ -531,25 +531,12 @@ void maybePrintCTALayout(mlir::MLIRContext *context, mlir::AsmPrinter &printer,
 LogicalResult Subgroup2DBlockEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<unsigned> warpsPerCTA, CTALayoutAttr CTALayout,
-    ArrayRef<unsigned> instrShape, ArrayRef<unsigned> numReps, unsigned kWidth,
-    unsigned threadsPerWarp) {
-#if 0
-  unsigned m = instrShape[0];
-  unsigned n = instrShape[1];
-  unsigned k = instrShape[2];
-  if (m != 32) {
-    return emitError() << "instrShape[0] must be 32, but was:" << m;
+    ArrayRef<unsigned> instrShape, unsigned numBlocks,
+    ArrayRef<unsigned> numReps, unsigned kWidth, unsigned threadsPerWarp) {
+  if (instrShape.size() != 2) {
+    return emitError() << "instrShape must be rank 2 but was: "
+                       << instrShape.size();
   }
-
-  if (!(k == 8 || k == 16 || k == 32)) {
-    return emitError() << "instrShape[2] must be 8, 16 or 32, but was:" << k;
-  }
-
-  if (!(n == 1 || n == 2 || n == 3 || n == 4 || n == 8 || n == 16 || n == 32)) {
-    return emitError()
-           << "instrShape[1] must be 1, 2, 3, 4, 8, 16 or 32, but was:" << n;
-  }
-#endif
   if (!threadsPerWarp == 16) {
     return emitError() << "threadsPerWarp must be 16, but was: "
                        << threadsPerWarp;
@@ -574,6 +561,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
   SmallVector<unsigned> instrShape;
+  unsigned numBlocks = 0;
   SmallVector<unsigned> numReps;
   unsigned kWidth = 0;
   unsigned threadsPerWarp = 0;
@@ -599,23 +587,24 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
         return {};
     }
     if (attr.getName() == "instrShape") {
-      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed()) {
+      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
         return {};
-      }
+    }
+    if (attr.getName() == "numBlocks") {
+      if (parseUInt(parser, attr, numBlocks, "numBlocks").failed())
+        return {};
     }
     if (attr.getName() == "numReps") {
-      if (parseIntArrayAttr(parser, attr, numReps, "numReps").failed()) {
+      if (parseIntArrayAttr(parser, attr, numReps, "numReps").failed())
         return {};
-      }
     }
     if (attr.getName() == "kWidth") {
       if (parseUInt(parser, attr, kWidth, "kWidth").failed())
         return {};
     }
     if (attr.getName() == "threadsPerWarp") {
-      if (parseUInt(parser, attr, threadsPerWarp, "threadsPerWarp").failed()) {
+      if (parseUInt(parser, attr, threadsPerWarp, "threadsPerWarp").failed())
         return {};
-      }
     }
   }
 
@@ -625,8 +614,8 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   return parser.getChecked<Subgroup2DBlockEncodingAttr>(
-      parser.getContext(), warpsPerCTA, *CTALayout, instrShape, numReps, kWidth,
-      threadsPerWarp);
+      parser.getContext(), warpsPerCTA, *CTALayout, instrShape, numBlocks,
+      numReps, kWidth, threadsPerWarp);
 }
 
 SmallVector<int64_t>
@@ -662,9 +651,10 @@ void Subgroup2DBlockEncodingAttr::print(AsmPrinter &printer) const {
 
   maybePrintCTALayout(getContext(), printer, getCTALayout(), getRank());
 
-  printer << ", instrShape = [" << getInstrShape() << "], numReps = ["
+  printer << ", instrShape = [" << getInstrShape()
+          << "], numBlocks=" << getNumBlocks() << ", numReps = ["
           << getNumReps() << "], kWidth=" << getKWidth()
-          << ", threadsPerWarp=" << getThreadsPerWarp() << " }>";
+          << ", threadsPerWarp=" << getThreadsPerWarp() << "}>";
 }
 
 LinearLayout
