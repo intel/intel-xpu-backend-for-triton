@@ -1,0 +1,13 @@
+# 
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-False-False-float4-float4-False-True-True-1-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-False-False-float4-float4-True-True-True-1-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-False-False-float4-float4-True-True-True-3-128-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-False-True-float4-float4-True-True-True-1-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-False-float4-float4-False-True-True-1-128-256-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-False-float4-float4-False-True-True-1-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-False-float4-float4-False-True-True-3-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-False-float4-float4-True-True-True-1-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-False-float4-float4-True-True-True-3-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-True-float4-float4-False-True-False-1-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-True-float4-float4-True-True-True-1-256-128-128-1024-512-512]
+language/test_matmul.py::test_mxfp8_mxfp4_matmul[0-True-True-float4-float4-True-True-True-3-256-128-128-1024-512-512]
