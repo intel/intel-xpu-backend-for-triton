@@ -54,7 +54,9 @@ protected:
   MLIRContext ctx;
 };
 
-TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_A) {
+// TODO: is this valid, and how should this layout be created?
+TEST_F(LinearLayoutConversionsTest, DISABLED_FP16_32x32x1_M256_N32_K32_A) {
+
   // Layout for A operand, warpsPerCTA is (8, 4). We have one tile per warp.
   // The load should be 32 by 16 with 2 blocks --> 32 by 32
   // There is one load per warp.
@@ -64,6 +66,29 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_A) {
       sdb(/*instrShape*/ {32, 32}, /*numBlocks*/ 1, /*kWidth*/ 2,
           /*warpsPerCTA*/ {8, 4},
           /*blockShape*/ {256, 32}, /*opIdx*/ 0),
+      /*kWidth*/ 2, /*opIdx*/ 0);
+  llvm::errs() << "layout from conversion: " << layout << "\n";
+  EXPECT_EQ(
+      layout,
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 16}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+           {S("warp"), {{0, 0}, {0, 0}, {32, 0}, {64, 0}, {128, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_A) {
+  // Layout for A operand, warpsPerCTA is (8, 4). We have one tile per warp.
+  // The load should be 32 by 16 with 2 blocks --> 32 by 32
+  // There is one load per warp.
+  auto sdbEncoding = sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
+                         /*warpsPerCTA*/ {8, 4},
+                         /*blockShape*/ {256, 32}, /*opIdx*/ 0);
+  llvm::errs() << "sdp: " << sdbEncoding << "\n";
+
+  auto layout = subgroup2DBlockToLinearLayout(
+      /*blockShape*/ {256, 32}, sdbEncoding,
       /*kWidth*/ 2, /*opIdx*/ 0);
   llvm::errs() << "layout from conversion: " << layout << "\n";
   EXPECT_EQ(
