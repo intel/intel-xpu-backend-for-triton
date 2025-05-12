@@ -106,7 +106,7 @@ public:
 };
 
 static SPIRV::TranslatorOpts getSPIRVOpts() {
-  SPIRV::TranslatorOpts SPIRVOpts {SPIRV::VersionNumber::SPIRV_1_4};
+  SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
   static constexpr std::array<SPIRV::ExtensionID, 16> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
