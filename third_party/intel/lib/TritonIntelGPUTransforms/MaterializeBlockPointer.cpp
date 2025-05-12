@@ -114,7 +114,7 @@ public:
           LDBG("dotLayout: " << *dotLayout);
           auto opIdx =
               static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-          auto dotOrder = mlir::triton::gpu::getThreadOrder(tensorType);
+          auto dotOrder = tt::gpu::getThreadOrder(tensorType);
           const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
           if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
               valueRowMajor ^ isRowMajor) {
@@ -134,7 +134,7 @@ public:
 private:
   void MaterializeTensorOfPointers(
       tt::LoadOp loadOp,
-      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     MLIRContext *context = loadOp.getContext();
     Value ptr = loadOp.getPtr();
     assert(!tt::isTensorPointerType(ptr.getType()) &&
@@ -281,7 +281,7 @@ private:
 
   bool satisfies2DBlockReadAlignment(
       tt::LoadOp loadOp,
-      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value ptr = loadOp.getPtr();
     assert(tt::isTensorPointerType(ptr.getType()) &&
            "Expected a ptr to a tensor of ptrs.");
