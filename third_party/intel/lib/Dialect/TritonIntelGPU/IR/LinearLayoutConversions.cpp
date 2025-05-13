@@ -551,8 +551,10 @@ using basisT = std::vector<std::vector<int32_t>>;
 
 std::pair<basisT, basisT>
 createRegisterLaneTileLayout(const int height, const int width,
-                             const unsigned threadsPerWarp) {
+                             const unsigned threadsPerWarp,
+                             const unsigned kWidth) {
 
+  llvm::errs() << "kWidth = " << kWidth << "\n";
   const unsigned packedElementsPerLane =
       mlir::ceil<unsigned>(width, threadsPerWarp);
   llvm::errs() << "packedElementsPerLane = " << packedElementsPerLane << "\n";
@@ -602,7 +604,8 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
   // start with the DPAS tile
   // TODO: strided version, 32x32x1
   auto [regBases, laneBases] = createRegisterLaneTileLayout(
-      loadTileSize[0], loadTileSize[1], layout.getThreadsPerWarp());
+      loadTileSize[0], loadTileSize[1], layout.getThreadsPerWarp(),
+      layout.getKWidth());
 
   bases[kRegister] = regBases;
   bases[kLane] = laneBases;
