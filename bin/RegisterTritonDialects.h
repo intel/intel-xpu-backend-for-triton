@@ -59,7 +59,7 @@ void registerTestTritonAMDGPURangeAnalysis();
 
 inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerAllPasses();
-  mlir::registerTritonPasses();
+  mlir::triton::registerTritonPasses();
   mlir::triton::gpu::registerTritonGPUPasses();
   mlir::registerTritonNvidiaGPUPasses();
   mlir::test::intel::registerTestAxisInfoPass();
