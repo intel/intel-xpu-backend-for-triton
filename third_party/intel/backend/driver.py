@@ -661,7 +661,7 @@ def serialize_args(args, constants, signature):
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
 
     cnt = 0
-    args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    args_dict = {"gridX": int(args[cnt]), "gridY": int(args[cnt + 1]), "gridZ": int(args[cnt + 2])}
     # 3: stream
     # 4: function
     # 5: packed kernel metadata
