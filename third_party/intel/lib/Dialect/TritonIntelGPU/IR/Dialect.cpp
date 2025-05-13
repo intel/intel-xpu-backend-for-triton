@@ -531,8 +531,7 @@ void maybePrintCTALayout(mlir::MLIRContext *context, mlir::AsmPrinter &printer,
 LogicalResult Subgroup2DBlockEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<unsigned> warpsPerCTA, CTALayoutAttr CTALayout,
-    ArrayRef<unsigned> instrShape, unsigned numBlocks,
-    ArrayRef<unsigned> numReps, ArrayRef<unsigned> order, unsigned kWidth,
+    ArrayRef<unsigned> instrShape, unsigned numBlocks, ArrayRef<unsigned> order, unsigned kWidth,
     unsigned threadsPerWarp) {
   if (instrShape.size() != 2) {
     return emitError() << "instrShape must be rank 2 but was: "
@@ -570,7 +569,6 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAOrder;
   SmallVector<unsigned> instrShape;
   unsigned numBlocks = 0;
-  SmallVector<unsigned> numReps;
   SmallVector<unsigned> order;
   unsigned kWidth = 0;
   unsigned threadsPerWarp = 0;
@@ -603,10 +601,6 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseUInt(parser, attr, numBlocks, "numBlocks").failed())
         return {};
     }
-    if (attr.getName() == "numReps") {
-      if (parseIntArrayAttr(parser, attr, numReps, "numReps").failed())
-        return {};
-    }
     if (attr.getName() == "order") {
       if (parseIntArrayAttr(parser, attr, order, "order").failed())
         return {};
@@ -628,7 +622,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<Subgroup2DBlockEncodingAttr>(
       parser.getContext(), warpsPerCTA, *CTALayout, instrShape, numBlocks,
-      numReps, order, kWidth, threadsPerWarp);
+      order, kWidth, threadsPerWarp);
 }
 
 SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
@@ -658,8 +652,7 @@ void Subgroup2DBlockEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(), getRank());
 
   printer << ", instrShape = [" << getInstrShape()
-          << "], numBlocks=" << getNumBlocks() << ", numReps=[" << getNumReps()
-          << "], order=[" << getOrder() << "], kWidth=" << getKWidth()
+          << "], numBlocks=" << getNumBlocks() << ", order=[" << getOrder() << "], kWidth=" << getKWidth()
           << ", threadsPerWarp=" << getThreadsPerWarp() << "}>";
 }
 

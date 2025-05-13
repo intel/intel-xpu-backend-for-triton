@@ -29,21 +29,13 @@ public:
         opsPerChannel, warpsPerCTA, repCluster,
         /*threadsPerWarp=*/16);
 
-    auto dpasRepsRef =
-        llvm::to_vector(dpasLayout.getDPASRepetitions(blockShape, opIdx));
-    assert(dpasRepsRef.size() == 3);
-    auto dpasReps =
-        SmallVector<unsigned>{static_cast<unsigned>(dpasRepsRef[1]),
-                              static_cast<unsigned>(dpasRepsRef[2])};
-
     // TODO: could put the getOrderForDotOperand in the builder?
     auto layout = Subgroup2DBlockEncodingAttr::get(
         &ctx, warpsPerCTA,
         CTALayoutAttr::get(
             &ctx, dpasLayout.getCTAsPerCGA(), // TODO: add to DpasLayout?
             dpasLayout.getCTASplitNum(), dpasLayout.getCTAOrder()),
-        instrShape, numBlocks, dpasReps,
-        getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
+        instrShape, numBlocks, getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
         dpasLayout.getThreadsPerWarp());
     return layout;
   }
