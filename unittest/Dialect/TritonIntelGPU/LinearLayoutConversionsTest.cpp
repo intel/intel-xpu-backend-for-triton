@@ -45,7 +45,6 @@ public:
         instrShape, numBlocks, dpasReps,
         getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
         dpasLayout.getThreadsPerWarp());
-    llvm::errs() << "sdb layout: " << layout << "\n";
     return layout;
   }
 
@@ -104,7 +103,6 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_A) {
 }
 
 TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_A) {
-
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
           /*blockShape*/ {256, 32},
@@ -121,16 +119,13 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_A) {
 }
 
 TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
-
-  auto layout = subgroup2DBlockToLinearLayout(
-      /*shape*/ {32, 256},
-      sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
-          /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
-          /*blockShape*/ {32, 256}, /*opsPerChannel*/ 2,
-          /*opIdx*/ 1),
-      /*kWidth*/ 2);
-  llvm::errs() << "layout from conversion: " << layout << "\n";
-  EXPECT_EQ(layout,
+  EXPECT_EQ(subgroup2DBlockToLinearLayout(
+                /*shape*/ {32, 256},
+                sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
+                    /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
+                    /*blockShape*/ {32, 256}, /*opsPerChannel*/ 2,
+                    /*opIdx*/ 1),
+                /*kWidth*/ 2),
             LinearLayout(
                 {{S("register"),
                   {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 16}, {0, 128}}},
@@ -141,17 +136,14 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
 }
 
 TEST_F(LinearLayoutConversionsTest, I8_16x32x1_M64_N128_K32_A) {
-
-  auto layout = subgroup2DBlockToLinearLayout(
-      /*shape*/ {64, 32},
-      sdb(/*instrShape*/ {16, 32}, /*numBlocks*/ 1, /*kWidth*/ 1,
-          /*warpsPerCTA*/ {4, 8}, /*repCluster*/ {2, 1},
-          /*blockShape*/ {64, 32}, /*opsPerChannel*/ 4,
-          /*opIdx*/ 0),
-      /*kWidth*/ 1);
-  llvm::errs() << "layout from conversion: " << layout << "\n";
   EXPECT_EQ(
-      layout,
+      subgroup2DBlockToLinearLayout(
+          /*shape*/ {64, 32},
+          sdb(/*instrShape*/ {16, 32}, /*numBlocks*/ 1, /*kWidth*/ 1,
+              /*warpsPerCTA*/ {4, 8}, /*repCluster*/ {2, 1},
+              /*blockShape*/ {64, 32}, /*opsPerChannel*/ 4,
+              /*opIdx*/ 0),
+          /*kWidth*/ 1),
       LinearLayout({{S("register"), {{0, 1}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
                     {S("lane"), {{0, 2}, {0, 4}, {0, 8}, {0, 16}}},
                     {S("warp"), {{0, 0}, {0, 0}, {0, 0}, {16, 0}, {32, 0}}},
@@ -160,17 +152,14 @@ TEST_F(LinearLayoutConversionsTest, I8_16x32x1_M64_N128_K32_A) {
 }
 
 TEST_F(LinearLayoutConversionsTest, I8_32x32x1_M64_N128_K32_B) {
-
-  auto layout = subgroup2DBlockToLinearLayout(
-      /*shape*/ {32, 128},
-      sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*kWidth*/ 1,
-          /*warpsPerCTA*/ {4, 8}, /*repCluster*/ {2, 1},
-          /*blockShape*/ {32, 128}, /*opsPerChannel*/ 4,
-          /*opIdx*/ 1),
-      /*kWidth*/ 1);
-  llvm::errs() << "layout from conversion: " << layout << "\n";
   EXPECT_EQ(
-      layout,
+      subgroup2DBlockToLinearLayout(
+          /*shape*/ {32, 128},
+          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*kWidth*/ 1,
+              /*warpsPerCTA*/ {4, 8}, /*repCluster*/ {2, 1},
+              /*blockShape*/ {32, 128}, /*opsPerChannel*/ 4,
+              /*opIdx*/ 1),
+          /*kWidth*/ 1),
       LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
                     {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
                     {S("warp"), {{0, 16}, {0, 32}, {0, 64}, {0, 0}, {0, 0}}},
