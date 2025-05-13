@@ -18,7 +18,7 @@ from pathlib import Path
 
 @dataclass
 class XPUOptions:
-    num_warps: int = 4
+    num_warps: int = 2
     num_ctas: int = 1
     num_stages: int = 2
     cluster_dims: tuple = (1, 1, 1)
