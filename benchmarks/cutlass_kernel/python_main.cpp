@@ -56,9 +56,9 @@ static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
 
   using CollectiveMainloop =
       typename cutlass::gemm::collective::CollectiveBuilder<
-          cutlass::arch::IntelPVC, cutlass::arch::OpClassTensorOp,
-          ElementInputA, LayoutA, AlignmentA, ElementInputB, LayoutB,
-          AlignmentB, ElementAccumulator, TileShape,
+          cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp, ElementInputA,
+          LayoutA, AlignmentA, ElementInputB, LayoutB, AlignmentB,
+          ElementAccumulator, TileShape,
           cute::Shape<cute::_1, cute::_1, cute::_1>,
           cutlass::gemm::collective::StageCountAuto,
           cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
@@ -71,7 +71,7 @@ static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
       cutlass::FloatRoundStyle::round_to_nearest>;
   using CollectiveEpilogue =
       typename cutlass::epilogue::collective::CollectiveBuilder<
-          cutlass::arch::IntelPVC, cutlass::arch::OpClassTensorOp, TileShape,
+          cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp, TileShape,
           cute::Shape<cute::_1, cute::_1, cute::_1>,
           cutlass::epilogue::collective::EpilogueTileAuto,
           ElementComputeEpilogue, ElementAccumulator, ElementAccumulator,
@@ -184,9 +184,8 @@ auto gemm(const at::Tensor &A, const at::Tensor &B, at::Tensor &C, const int M,
     return gemm_run<TileShape_RRR_3>(A, B, C, M, N, K, L);
   if (test_case == Dim{4096, 8, 128, 16384})
     return gemm_run<TileShape_RRR_4>(A, B, C, M, N, K, L);
-  /// FIXME: Getting a compile time error for RRR_5
-  // if (test_case == Dimension{4096, 8, 16384, 128})
-  //   return gemm_run<TileShape_RRR_5>(A, B, C, M, N, K, L);
+  if (test_case == Dim{4096, 8, 16384, 128})
+    return gemm_run<TileShape_RRR_5>(A, B, C, M, N, K, L);
 
   return gemm_run<TileShape_RRR_1>(A, B, C, M, N, K, L);
 }
