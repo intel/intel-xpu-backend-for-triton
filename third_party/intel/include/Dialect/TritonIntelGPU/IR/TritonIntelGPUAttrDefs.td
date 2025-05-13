@@ -301,6 +301,7 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     ArrayRefParameter<"unsigned">:$instrShape,
     "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$numReps,
+    ArrayRefParameter<"unsigned">:$order,
     "unsigned":$kWidth,
     "unsigned":$threadsPerWarp
   );

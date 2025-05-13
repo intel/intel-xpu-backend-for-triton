@@ -44,7 +44,8 @@ public:
         CTALayoutAttr::get(&ctx, dpasLayout.getCTAsPerCGA(),
                            dpasLayout.getCTASplitNum(),
                            dpasLayout.getCTAOrder()),
-        instrShape, numBlocks, dpasRepsUnsigned, kWidth,
+        instrShape, numBlocks, dpasRepsUnsigned,
+        getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
         dpasLayout.getThreadsPerWarp());
   }
 
@@ -66,7 +67,7 @@ TEST_F(LinearLayoutConversionsTest, DISABLED_FP16_32x32x1_M256_N32_K32_A) {
       sdb(/*instrShape*/ {32, 32}, /*numBlocks*/ 1, /*kWidth*/ 2,
           /*warpsPerCTA*/ {8, 4},
           /*blockShape*/ {256, 32}, /*opIdx*/ 0),
-      /*kWidth*/ 2, /*opIdx*/ 0);
+      /*kWidth*/ 2);
   llvm::errs() << "layout from conversion: " << layout << "\n";
   EXPECT_EQ(
       layout,
@@ -89,7 +90,7 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_A) {
 
   auto layout = subgroup2DBlockToLinearLayout(
       /*blockShape*/ {256, 32}, sdbEncoding,
-      /*kWidth*/ 2, /*opIdx*/ 0);
+      /*kWidth*/ 2);
   llvm::errs() << "layout from conversion: " << layout << "\n";
   EXPECT_EQ(
       layout,
@@ -113,7 +114,7 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
 
   auto layout = subgroup2DBlockToLinearLayout(
       /*shape*/ {32, 256}, sdbEncoding,
-      /*kWidth*/ 2, /*opIdx*/ 1);
+      /*kWidth*/ 2);
   llvm::errs() << "layout from conversion: " << layout << "\n";
   EXPECT_EQ(layout,
             LinearLayout(

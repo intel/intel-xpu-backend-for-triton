@@ -569,7 +569,7 @@ std::pair<basisT, basisT> createRegisterLaneTileLayout(const int height,
 LinearLayout
 subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
                               intel::Subgroup2DBlockEncodingAttr layout,
-                              unsigned kWidth, unsigned opIdx) {
+                              unsigned kWidth) {
   auto ctx = layout.getContext();
   int rank = blockShape.size();
   assert(rank == layout.getRank());
@@ -598,107 +598,37 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
     }
   };
 
-  if (opIdx == 0) {
-    LinearLayout::BasesT bases;
+  auto order = layout.getOrder();
+  unsigned inner = order[0];
+  unsigned outer = order[1];
+  llvm::errs() << "inner = " << inner << "\n";
+  llvm::errs() << "outer = " << outer << "\n";
 
-    // start with the DPAS tile
-    int opsPerChannel = 2; // TODO: how to get this?
-    auto [regBases, laneBases] =
-        createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
+  LinearLayout::BasesT bases;
 
-    bases[kRegister] = regBases;
-    bases[kLane] = laneBases;
+  // start with the DPAS tile
+  int opsPerChannel = 2; // TODO: how to get this?
+  auto [regBases, laneBases] =
+      createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
 
-    auto ctaLayout = LinearLayout(bases, dimNames);
-    llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
-    // handle num blocks
-    ctaLayout *=
-        LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
+  bases[kRegister] = regBases;
+  bases[kLane] = laneBases;
 
-    llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
+  auto ctaLayout = LinearLayout(bases, dimNames);
+  llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
+  // handle num blocks
+  ctaLayout *=
+      LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
 
-    auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
+  llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
 
-    unsigned inner = order[0];
-    unsigned outer = order[1];
-    llvm::errs() << "outer = " << outer << "\n";
-    llvm::errs() << "inner = " << inner << "\n";
-#if 0
-    // expand the DPAS tile to match the desired load size
-    auto numDPASInstPerOuterDim =
-        loadTileSize[outer] / ctaLayout.getOutDimSize(dimNames[outer]);
-    auto numDPASInstPerInnerDim =
-        loadTileSize[inner] / ctaLayout.getOutDimSize(dimNames[inner]);
-    llvm::errs() << "numDPASInstPerOuterDim = " << numDPASInstPerOuterDim
-                 << "\n";
-    llvm::errs() << "numDPASInstPerInnerDim = " << numDPASInstPerInnerDim
-                 << "\n";
+  // Apply warp layout.
+  ctaLayout *= broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(),
+                                           warpOrder, inner, kWarp)
+                   .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
+  llvm::errs() << "ctaLayout after applying warp layout: " << ctaLayout << "\n";
 
-    ctaLayout *= LinearLayout::identity1D(numDPASInstPerOuterDim, kRegister,
-                                          dimNames[outer]);
-    ctaLayout *= LinearLayout::identity1D(numDPASInstPerInnerDim, kRegister,
-                                          dimNames[inner]);
-
-    // replicate the tile
-    auto numReps = layout.getNumReps();
-    assert(numReps.size() == 2);
-    llvm::errs() << "numReps: ";
-    printVector(numReps);
-    llvm::errs() << "\n";
-
-    ctaLayout *=
-        LinearLayout::identity1D(numReps[outer], kRegister, dimNames[outer]);
-    ctaLayout *= LinearLayout::identity1D(
-        numReps[inner] / numDPASInstPerInnerDim, kRegister, dimNames[inner]);
-    llvm::errs() << "ctaLayout after replicating: " << ctaLayout << "\n";
-#endif
-
-    // Apply warp layout.
-    ctaLayout *=
-        broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(), warpOrder,
-                                    rank - 1, kWarp)
-            .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-    llvm::errs() << "ctaLayout after applying warp layout: " << ctaLayout
-                 << "\n";
-
-    return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), blockShape);
-  } else if (opIdx == 1) {
-    LinearLayout::BasesT bases;
-
-    // start with the DPAS tile
-    int opsPerChannel = 2; // TODO: how to get this?
-    auto [regBases, laneBases] =
-        createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
-
-    bases[kRegister] = regBases;
-    bases[kLane] = laneBases;
-
-    auto ctaLayout = LinearLayout(bases, dimNames);
-    llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
-    // handle num blocks
-    ctaLayout *=
-        LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
-
-    llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
-
-    auto order = getOrderForDotOperand(opIdx, rank, /*kContig*/ true);
-
-    unsigned inner = order[0]; // n
-    unsigned outer = order[1]; // k
-    llvm::errs() << "outer = " << outer << "\n";
-    llvm::errs() << "inner = " << inner << "\n";
-
-    // Apply warp layout.
-    ctaLayout *=
-        broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(), warpOrder,
-                                    rank - 2, kWarp)
-            .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-    llvm::errs() << "ctaLayout after applying warp layout: " << ctaLayout
-                 << "\n";
-
-    return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), blockShape);
-  }
-  llvm_unreachable("unhandle Op Idx");
+  return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), blockShape);
 }
 
 } // namespace mlir::triton::gpu
