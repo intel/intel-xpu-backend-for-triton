@@ -329,6 +329,7 @@ public:
                       MaskedOpsCollector<CanonicalMaskValidator> &collector) {
     assert(!collector.getMaskedOps().empty() &&
            "Expecting a non-empty collection of masked operations");
+    return false;
 
     // Limitation
     // Currently we can version the loop only if it doesn't have downward
