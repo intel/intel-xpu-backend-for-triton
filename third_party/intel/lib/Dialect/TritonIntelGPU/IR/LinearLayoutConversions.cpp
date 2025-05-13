@@ -558,23 +558,30 @@ createRegisterLaneTileLayout(const int height, const int width,
   const unsigned packedElementsPerLane =
       mlir::ceil<unsigned>(width, threadsPerWarp);
   llvm::errs() << "packedElementsPerLane = " << packedElementsPerLane << "\n";
-  basisT laneBase;
+  basisT laneBases;
   for (int i = packedElementsPerLane; i < width; i = i << 1) {
-    laneBase.push_back({0, i});
+    laneBases.push_back({0, i});
   }
 
-  basisT regBase;
+  const int rowsToLaneRatio =
+      mlir::ceil<int>(threadsPerWarp, 1 << laneBases.size());
+  llvm::errs() << "rowsToLaneRatio = " << rowsToLaneRatio << "\n";
+  for (int i = 1; i < rowsToLaneRatio; i = i << 1) {
+    laneBases.push_back({i, 0});
+  }
+
+  basisT regBases;
 
   // push back to the reg base to indicate packing
   for (int i = 1; i < packedElementsPerLane; i = i << 1) {
-    regBase.push_back({0, i});
+    regBases.push_back({0, i});
   }
 
-  for (int i = 1; i < height; i = i << 1) {
-    regBase.push_back({i, 0});
+  for (int i = 1; i < height / rowsToLaneRatio; i = i << 1) {
+    regBases.push_back({i * rowsToLaneRatio, 0});
   }
 
-  return {regBase, laneBase};
+  return {regBases, laneBases};
 }
 
 } // namespace
