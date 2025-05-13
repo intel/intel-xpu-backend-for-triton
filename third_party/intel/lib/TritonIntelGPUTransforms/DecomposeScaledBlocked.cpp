@@ -148,31 +148,19 @@ private:
                                        DotScaledOp scaledDotOp, ModuleOp mod,
                                        TypedValue<RankedTensorType> mxfp,
                                        TypedValue<RankedTensorType> scale,
-                                       FloatType computeType, int dim) const {
+                                       int dim) const {
     // Implement tl.where(scale == 0xFF, float("nan"), mxfp)
     auto loc = scale.getLoc();
 
-    // FIXME: use large int type (int32) for comparing with 0xFF to avoid
-    // accidently masking non-NaN values to NaN.
-    // This piece of code will be removed after
-    // https://github.com/intel/intel-xpu-backend-for-triton/issues/3605
-    FloatType largeFpType = computeType == rewriter.getF16Type()
-                                ? rewriter.getF32Type()
-                                : computeType;
-    int intWidth = largeFpType.getIntOrFloatBitWidth();
-    auto intType = rewriter.getIntegerType(intWidth);
-    // Use large int scale type, incase it get nonNaN to NaN
-    auto scaleTy = scale.getType().clone(intType);
-    auto zexted = rewriter.create<arith::ExtUIOp>(loc, scaleTy, scale);
-
     // Scale is NaN
+    auto scaleTy = scale.getType();
     auto constFF = rewriter.create<arith::ConstantOp>(
         loc, scaleTy,
         DenseElementsAttr::get(scaleTy,
                                APInt(scaleTy.getElementTypeBitWidth(), 0xff)));
     auto scaleIsNan = cast<TypedValue<RankedTensorType>>(
         rewriter
-            .create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, zexted,
+            .create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, scale,
                                    constFF)
             .getResult());
     auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
@@ -247,7 +235,7 @@ private:
       return mxfp;
 
     // 4) If the scale is NaN, return NaN, else return the scaled value.
-    return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, computeType, kDim);
+    return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, kDim);
   }
 };
 
