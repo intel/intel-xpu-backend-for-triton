@@ -1,7 +1,6 @@
 #ifndef TRITON_INTEL_ANALYSIS_DPAS_H
 #define TRITON_INTEL_ANALYSIS_DPAS_H
 
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 

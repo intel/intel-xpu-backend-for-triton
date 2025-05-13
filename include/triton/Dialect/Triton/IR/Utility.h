@@ -2,7 +2,6 @@
 #define TRITON_IR_UTILITY_H_
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include <algorithm>
 #include <numeric>
 
 namespace mlir {
