@@ -290,8 +290,19 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
   let description = [{
     An encoding for tensors produced via Intel Subgroup 2D Block IO operations.
 
-    instrShape - the height/width for the block load
-    numBlocks / numVBlocks - number of blocks to simultaneously load (for making most use of cache)
+    The subgroup 2D block IO operations read or write two-dimensional blocks of data from a two-dimensional region of memory. The Subgroup 2D Block Encoding layout is parameterized by the block width, block height, and block count for the individual load instructions and the distribution and replication of loads across warps.
+
+    The SPV_INTEL_2d_block_io extension documentation provides more information on the subgroup 2D block IO operations and parameters: https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_2d_block_io.html
+
+    For the layout, the following parameters are required:
+    - `instrShape` : contains the (height, width) block parameters for the block io operation
+    - `numBlocks` : the block count parameter allows a single load to load multiple blocks in row-major order (useful for increasing cache line utilization)
+    - `threadsPerWarp` : currently a scalar, this parameter allows us to support different subgroup / warp configurations. Because the 2d block io operation is a subgroup operation, the size of the subgroup is important in determining the ordering of the loaded tensor.
+    - `warpsPerCTA` : the number of warps per block / subgroups per workgroup and their distribution
+    - `order` : The order within the block, used to determine along which dimension to broadcast.
+    - `kWidth` : used?
+    - `numReps` : unused?
+    - `CTALayout` : ??
   }];
 
   let parameters = (
