@@ -549,14 +549,25 @@ static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
 // lanes/work-items the height specifies the number of registers per lane
 using basisT = std::vector<std::vector<int32_t>>;
 
-std::pair<basisT, basisT> createRegisterLaneTileLayout(const int height,
-                                                       const int width) {
+std::pair<basisT, basisT>
+createRegisterLaneTileLayout(const int height, const int width,
+                             const unsigned threadsPerWarp) {
+
+  const unsigned packedElementsPerLane =
+      mlir::ceil<unsigned>(width, threadsPerWarp);
+  llvm::errs() << "packedElementsPerLane = " << packedElementsPerLane << "\n";
   basisT laneBase;
-  for (int i = 1; i < width; i = i << 1) {
+  for (int i = packedElementsPerLane; i < width; i = i << 1) {
     laneBase.push_back({0, i});
   }
 
   basisT regBase;
+
+  // push back to the reg base to indicate packing
+  for (int i = 1; i < packedElementsPerLane; i = i << 1) {
+    regBase.push_back({0, i});
+  }
+
   for (int i = 1; i < height; i = i << 1) {
     regBase.push_back({i, 0});
   }
@@ -589,14 +600,18 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
   LinearLayout::BasesT bases;
 
   // start with the DPAS tile
-  auto [regBases, laneBases] =
-      createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
+  // TODO: strided version, 32x32x1
+  auto [regBases, laneBases] = createRegisterLaneTileLayout(
+      loadTileSize[0], loadTileSize[1], layout.getThreadsPerWarp());
 
   bases[kRegister] = regBases;
   bases[kLane] = laneBases;
 
   auto ctaLayout = LinearLayout(bases, dimNames);
   llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
+
+  assert(ctaLayout.getInDimSize(kLane) <= layout.getThreadsPerWarp() &&
+         "number of lanes should not exceed threads per warp");
 
   // Handle block count
   ctaLayout *=
