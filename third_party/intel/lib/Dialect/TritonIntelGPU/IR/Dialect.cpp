@@ -531,8 +531,8 @@ void maybePrintCTALayout(mlir::MLIRContext *context, mlir::AsmPrinter &printer,
 LogicalResult Subgroup2DBlockEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<unsigned> warpsPerCTA, CTALayoutAttr CTALayout,
-    ArrayRef<unsigned> instrShape, unsigned numBlocks, ArrayRef<unsigned> order, unsigned kWidth,
-    unsigned threadsPerWarp) {
+    ArrayRef<unsigned> instrShape, unsigned numBlocks, ArrayRef<unsigned> order,
+    unsigned kWidth, unsigned threadsPerWarp) {
   if (instrShape.size() != 2) {
     return emitError() << "instrShape must be rank 2 but was: "
                        << instrShape.size();
@@ -652,7 +652,8 @@ void Subgroup2DBlockEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(), getRank());
 
   printer << ", instrShape = [" << getInstrShape()
-          << "], numBlocks=" << getNumBlocks() << ", order=[" << getOrder() << "], kWidth=" << getKWidth()
+          << "], numBlocks=" << getNumBlocks() << ", order=[" << getOrder()
+          << "], kWidth=" << getKWidth()
           << ", threadsPerWarp=" << getThreadsPerWarp() << "}>";
 }
 

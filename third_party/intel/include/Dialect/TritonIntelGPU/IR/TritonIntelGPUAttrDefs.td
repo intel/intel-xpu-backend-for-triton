@@ -300,9 +300,8 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     - `threadsPerWarp` : currently a scalar, this parameter allows us to support different subgroup / warp configurations. Because the 2d block io operation is a subgroup operation, the size of the subgroup is important in determining the ordering of the loaded tensor.
     - `warpsPerCTA` : the number of warps per block / subgroups per workgroup and their distribution
     - `order` : The order within the block, used to determine along which dimension to broadcast.
-    - `kWidth` : used?
-    - `numReps` : unused?
-    - `CTALayout` : ??
+    - `kWidth` : Currently unused, but keeping because we will likely need it for layout conversions.
+    - `CTALayout` : Describes how blocks are distributed among work-groups/thread blocks.
   }];
 
   let parameters = (
