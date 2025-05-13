@@ -78,6 +78,13 @@ TEST_F(XeAsmFormatTest, MultiLineXe) {
   EXPECT_EQ(values[1], v[2]); // $1 -> v[2]
 }
 
+TEST_F(XeAsmFormatTest, XeSIMDReduce) {
+  MLIRContext ctx;
+  XeBuilder builder;
+  mlir::triton::simdReduceAsm("add", 16, 16, Float16Type::get(&ctx));
+  mlir::triton::simdReduceAsm("max", 16, 16, Float32Type::get(&ctx));
+}
+
 } // namespace triton
 } // namespace mlir
 

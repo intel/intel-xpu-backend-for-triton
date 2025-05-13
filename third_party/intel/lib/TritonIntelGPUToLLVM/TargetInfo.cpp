@@ -8,6 +8,7 @@
 
 #include "TargetInfo.h"
 #include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
+#include <llvm/ADT/TypeSwitch.h>
 
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
@@ -16,6 +17,13 @@
 using namespace mlir;
 
 namespace mlir::triton::intel {
+
+struct XeSIMDReduceInstr : public XeInstr {
+
+  XeSIMDReduceInstr(XeBuilder *builder, std::string binOp, int warpSize,
+                    int accSize, Type elemTy)
+      : XeInstr(builder, simdReduceAsm(binOp, warpSize, accSize, elemTy)) {};
+};
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -114,6 +122,14 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
 }
 
+static SmallVector<ArrayRef<Value>> splitInBatches(ArrayRef<Value> srcValues,
+                                                   size_t batchSize) {
+  SmallVector<ArrayRef<Value>> batches;
+  for (; !srcValues.empty(); srcValues = srcValues.drop_front(batchSize))
+    batches.push_back(srcValues.take_front(batchSize));
+  return batches;
+}
+
 bool TargetInfo::warpBatchReduce(
     RewriterBase &rewriter, Location loc,
     std::map<SmallVector<unsigned>, SmallVector<Value>> &acc,
@@ -144,135 +160,77 @@ bool TargetInfo::warpBatchReduce(
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
+  // TODO: support clustered reduce.
+  if (numLaneToReduce != warpSize)
+    return false;
+
   if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
     return false;
 
-  // It is only experimental code supports threads_per_warp=16
-  if (warpSize != 16)
-    return false;
-
-  if (acc.size() == 16 && isa<arith::AddFOp, arith::MaxNumFOp>(reduceOp)) {
+  if (isa<arith::AddFOp, arith::MaxNumFOp>(reduceOp)) {
+    // So we have to align the number of simd reduce results to the warp size.
+    if (acc.size() % warpSize)
+      return false;
+    Type elemType = acc.begin()->second[0].getType();
+    VectorType reduceTy = vec_ty(elemType, warpSize);
 
     // Group the acc in batch.
-    SmallVector<Value> grouped_accs;
+    SmallVector<Value> inputAccs;
     for (auto it : acc) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &val = acc[key];
       assert(val.size() == 1 && "acc size has to be 1 for ungrouped input");
-      grouped_accs.push_back(val[0]);
+      inputAccs.push_back(val[0]);
     }
+    SmallVector<Value> resultAccs(inputAccs.size() / warpSize);
 
-    VectorType reduceTy =
-        vec_ty(grouped_accs[0].getType(), grouped_accs.size());
-    Value batchedReduceVal = rewriter.create<LLVM::UndefOp>(loc, reduceTy);
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    for (unsigned i = 0; i < grouped_accs.size(); ++i) {
-      batchedReduceVal = b.insert_element(reduceTy, batchedReduceVal,
-                                          grouped_accs[i], b.i32_val(i));
-    }
-    XeBuilder vISABuilder;
     std::string batchedHorizontalReduce;
-    if (isa<arith::AddFOp>(reduceOp)) {
-      batchedHorizontalReduce =
-          "{\n"
-          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
-          // 1st round 2x8 + 2x8 -> 1x16
-          "add (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
-          "8)<16;8,1> \n"
-          "add (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
-          "8)<16;8,1> \n"
-          "add (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
-          "8)<16;8,1> \n"
-          "add (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
-          "8)<16;8,1> \n"
-          "add (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
-          "8)<16;8,1> \n"
-          "add (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
-          "8)<16;8,1> \n"
-          "add (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
-          "8)<16;8,1> \n"
-          "add (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
-          "8)<16;8,1> \n"
+    // TODO: support all possible reduction modes
+    TypeSwitch<Operation *>(reduceOp)
+        .Case<arith::AddFOp>([&](auto) { batchedHorizontalReduce = "add"; })
+        .Case<arith::MaxNumFOp>([&](auto) { batchedHorizontalReduce = "max"; })
+        .Default(
+            [&](auto) { llvm_unreachable("Unhandled batched reduce kind"); });
 
-          // 2nd round 2x2x4 + 2x2x4 -> 1x16
-          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
-          "temp_result(0, 4)<8;4,1> \n"
-          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
-          "temp_result(2, 4)<8;4,1> \n"
-          "add (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
-          "temp_result(4, 4)<8;4,1> \n"
-          "add (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
-          "temp_result(6, 4)<8;4,1> \n"
+    llvm::transform(
+        splitInBatches(inputAccs, warpSize), std::begin(resultAccs),
+        [&](ArrayRef<Value> inputs) {
+          auto inputRange = llvm::enumerate(inputs);
+          Value batchedReduceVal = std::accumulate(
+              std::begin(inputRange), std::end(inputRange),
+              rewriter.create<LLVM::PoisonOp>(loc, reduceTy).getRes(),
+              [reduceTy, loc, &rewriter](Value acc, auto entry) -> Value {
+                auto [index, src] = entry;
+                auto b = TritonLLVMOpBuilder(loc, rewriter);
+                return b.insert_element(reduceTy, acc, src, b.i32_val(index));
+              });
+          XeBuilder xeBuilder;
+          XeSIMDReduceInstr &bReduceOp = *xeBuilder.create<XeSIMDReduceInstr>(
+              batchedHorizontalReduce, warpSize, warpSize, elemType);
+          // The VISA inline asm doesn't support uniform result type. "=rw.u"
+          //    auto res = vISABuilder.newOperand("=rw.u");
+          XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+          XeBuilder::Operand *in = xeBuilder.newOperand(batchedReduceVal, "rw");
+          bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
+          Type resultTy = reduceTy.getElementType();
+          return xeBuilder.launch(rewriter, loc, resultTy, true);
+        });
 
-          // 3rd round 4x2x2 + 4x2x2 -> 1x16
-          "add (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
-          "temp_result(0, 2)<4;2,1> \n"
-          "add (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
-          "temp_result(2, 2)<4;2,1> \n"
-
-          // 4th round 8x2x1 + 8x2x1 -> 1x16
-          "add (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
-          "temp_result(0, 1)<2;1,0> \n"
-          "}\n";
-    } else if (isa<arith::MaxNumFOp>(reduceOp)) {
-      batchedHorizontalReduce =
-          "{\n"
-          ".decl temp_result v_type=G type=f num_elts=128 align=wordx32\n"
-          // 1st round 2x8 + 2x8 -> 1x16
-          "max (M1_NM, 16) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, "
-          "8)<16;8,1> \n"
-          "max (M1_NM, 16) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, "
-          "8)<16;8,1> \n"
-          "max (M1_NM, 16) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, "
-          "8)<16;8,1> \n"
-          "max (M1_NM, 16) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, "
-          "8)<16;8,1> \n"
-          "max (M1_NM, 16) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, "
-          "8)<16;8,1> \n"
-          "max (M1_NM, 16) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, "
-          "8)<16;8,1> \n"
-          "max (M1_NM, 16) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, "
-          "8)<16;8,1> \n"
-          "max (M1_NM, 16) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, "
-          "8)<16;8,1> \n"
-
-          // 2nd round 2x2x4 + 2x2x4 -> 1x16
-          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> "
-          "temp_result(0, 4)<8;4,1> \n"
-          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> "
-          "temp_result(2, 4)<8;4,1> \n"
-          "max (M1_NM, 16) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> "
-          "temp_result(4, 4)<8;4,1> \n"
-          "max (M1_NM, 16) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> "
-          "temp_result(6, 4)<8;4,1> \n"
-
-          // 3rd round 4x2x2 + 4x2x2 -> 1x16
-          "max (M1_NM, 16) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> "
-          "temp_result(0, 2)<4;2,1> \n"
-          "max (M1_NM, 16) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> "
-          "temp_result(2, 2)<4;2,1> \n"
-
-          // 4th round 8x2x1 + 8x2x1 -> 1x16
-          "max (M1_NM, 16) $0(0, 0)<1>  temp_result(0, 0)<2;1,0> "
-          "temp_result(0, 1)<2;1,0> \n"
-          "}\n";
-    } else {
-      llvm_unreachable("batched reduce WIP");
-    }
-
-    auto &bReduceOp = *vISABuilder.create<>(batchedHorizontalReduce);
-
-    // The VISA inline asm doesn't support uniform result type. "=rw.u"
-    //    auto res = vISABuilder.newOperand("=rw.u");
-    auto res = vISABuilder.newOperand("=rw");
-    auto in = vISABuilder.newOperand(batchedReduceVal, "rw");
-    bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
-    Type resultTy = reduceTy.getElementType();
-    Value ret = vISABuilder.launch(rewriter, loc, resultTy, false);
-    for (unsigned i = 0; i < grouped_accs.size(); ++i) {
+    unsigned grouped_iter = 0;
+    for (unsigned i = 0; i < resultAccs.size(); ++i) {
       // The output of the inline vISA has to be the non-uniform value.
       // Have to shuffle the result to get the reduce value.
-      grouped_accs[i] = LLVM::intel::shuffleIdx(loc, rewriter, ret, i);
+      Value ret = resultAccs[i];
+      for (unsigned j = 0; j < warpSize; ++j) {
+        inputAccs[grouped_iter++] =
+            LLVM::intel::shuffleIdx(loc, rewriter, ret, j);
+      }
+    }
+    grouped_iter = 0;
+    for (auto it : acc) {
+      const SmallVector<unsigned> &key = it.first;
+      SmallVector<Value> &val = acc[key];
+      val[0] = inputAccs[grouped_iter++];
     }
 #if 0
     auto res = vISABuilder.newOperand("=rw.u");
@@ -284,12 +242,6 @@ bool TargetInfo::warpBatchReduce(
       grouped_accs[i] = b.extract_element(resultTy, ret, b.i32_val(i));
     }
 #endif
-    unsigned grouped_iter = 0;
-    for (auto it : acc) {
-      const SmallVector<unsigned> &key = it.first;
-      SmallVector<Value> &val = acc[key];
-      val[0] = grouped_accs[grouped_iter++];
-    }
 
     return true;
   }

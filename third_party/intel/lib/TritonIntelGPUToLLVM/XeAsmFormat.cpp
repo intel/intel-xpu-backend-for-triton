@@ -1,8 +1,9 @@
 #include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
+#include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <sstream>
 
 namespace mlir {
@@ -228,6 +229,80 @@ XeInstr &XeInstr::v(int vecWidth, bool predicate) {
 XeInstr &XeInstr::b(int width) {
   o("b" + std::to_string(width));
   return *this;
+}
+
+std::string simdReduceAsm(std::string binOp, int warpSize, int accSize,
+                          Type elemTy) {
+  // TODO: implement more varients.
+  assert(warpSize == 16 && "only suppor warpSize=16 for now");
+  assert(accSize == warpSize && "The acc size has to be equal to size");
+  unsigned numElem = accSize * warpSize;
+  unsigned tempResultSize = numElem / 2;
+  // TODO: to support Xe (ATS) and Xe3 (BMG).
+  // PVC is 16 words per GRF.
+  static constexpr unsigned align = 16;
+
+  std::string typeSyntax;
+  // TODO: support all possible reduction modes
+  TypeSwitch<Type>(elemTy)
+      .Case<Float32Type>([&](auto) { typeSyntax = "f"; })
+      .Case<Float16Type>([&](auto) { typeSyntax = "hf"; })
+      .Default([&](auto) { llvm_unreachable("Unsupported scalar type"); });
+
+  constexpr StringLiteral reduceBuff = R"({
+  .decl temp_result v_type=G type={0} num_elts={1} align=wordx{2}
+  )";
+
+  std::string simdAsm =
+      llvm::formatv(reduceBuff.data(), typeSyntax, tempResultSize, align).str();
+
+  constexpr StringLiteral reduceBinOp =
+      R"({0} (M1_NM, {1}) {5}({2}, 0)<1>  {6}({7}, 0)<{3};{4},1> {6}({7}, {8})<{3};{4},1>
+  )";
+
+  for (unsigned n = numElem, rowStride = warpSize, colNum = warpSize / 2;
+       n > accSize; n >>= 1, rowStride >>= 1, colNum >>= 1) {
+    unsigned rowNum = n / warpSize;
+    unsigned reduceNum = rowNum / 2;
+    for (unsigned r = 0; r < reduceNum; r++) {
+      unsigned dstOffset = r;
+      unsigned srcOffM = r * 2;
+      unsigned srcOffN = colNum;
+      std::string simdOps =
+          llvm::formatv(reduceBinOp.data(), binOp, warpSize, dstOffset,
+                        rowStride, colNum, colNum == 1 ? "$0" : "temp_result",
+                        colNum == warpSize / 2 ? "$1" : "temp_result", srcOffM,
+                        srcOffN)
+              .str();
+      simdAsm += simdOps;
+    }
+  }
+  simdAsm += "}";
+  llvm::outs() << "johnlu the asm code:" << simdAsm << "\n";
+
+  constexpr StringLiteral asmTemplate = R"({
+  .decl temp_result v_type=G type=f num_elts={2} align=wordx32
+  {0} (M1_NM, {1}) temp_result(0, 0)<1>  $1(0, 0)<16;8,1> $1(0, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(1, 0)<1>  $1(2, 0)<16;8,1> $1(2, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(2, 0)<1>  $1(4, 0)<16;8,1> $1(4, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(3, 0)<1>  $1(6, 0)<16;8,1> $1(6, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(4, 0)<1>  $1(8, 0)<16;8,1> $1(8, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(5, 0)<1>  $1(10, 0)<16;8,1> $1(10, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(6, 0)<1>  $1(12, 0)<16;8,1> $1(12, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(7, 0)<1>  $1(14, 0)<16;8,1> $1(14, 8)<16;8,1>
+  {0} (M1_NM, {1}) temp_result(0, 0)<1>  temp_result(0, 0)<8;4,1> temp_result(0, 4)<8;4,1>
+  {0} (M1_NM, {1}) temp_result(1, 0)<1>  temp_result(2, 0)<8;4,1> temp_result(2, 4)<8;4,1>
+  {0} (M1_NM, {1}) temp_result(2, 0)<1>  temp_result(4, 0)<8;4,1> temp_result(4, 4)<8;4,1>
+  {0} (M1_NM, {1}) temp_result(3, 0)<1>  temp_result(6, 0)<8;4,1> temp_result(6, 4)<8;4,1>
+  {0} (M1_NM, {1}) temp_result(0, 0)<1>  temp_result(0, 0)<4;2,1> temp_result(0, 2)<4;2,1>
+  {0} (M1_NM, {1}) temp_result(1, 0)<1>  temp_result(2, 0)<4;2,1> temp_result(2, 2)<4;2,1>
+  {0} (M1_NM, {1}) $0(0, 0)<1>  temp_result(0, 0)<2;1,1> temp_result(0, 1)<2;1,1>
+  })";
+  std::string simdAsmExample =
+      llvm::formatv(asmTemplate.data(), binOp, warpSize, tempResultSize).str();
+
+  llvm::outs() << "johnlu the simdAsmExample code:" << simdAsmExample << "\n";
+  return simdAsm;
 }
 
 } // namespace triton

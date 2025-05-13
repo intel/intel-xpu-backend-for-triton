@@ -315,6 +315,9 @@ struct XeInstrExecution {
   bool onlyAttachMLIRArgs{};
 };
 
+std::string simdReduceAsm(std::string binOp, int warpSize, int accSize,
+                          Type elemTy);
+
 } // namespace triton
 } // namespace mlir
 

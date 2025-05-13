@@ -100,5 +100,6 @@ private:
 };
 
 std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod);
+
 } // namespace mlir::triton::intel
 #endif // TRITON_CONVERSION_TRITONGPU_TO_LLVM_TARGETINFOINTEL_H
