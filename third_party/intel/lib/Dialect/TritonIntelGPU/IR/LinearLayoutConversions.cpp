@@ -580,24 +580,6 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
   StringAttr kWarp = S("warp");
   auto warpOrder = getMatrixOrder(rank, /*rowMajor*/ true);
 
-  auto printVector = [](const auto vec) {
-    for (size_t i = 0; i < vec.size(); i++) {
-      llvm::errs() << vec[i] << " ";
-    }
-  };
-
-  llvm::errs() << "blockShape: ";
-  printVector(blockShape);
-  llvm::errs() << "\n";
-
-  auto printBases = [&printVector](const auto base) {
-    for (size_t i = 0; i < base.size(); i++) {
-      llvm::errs() << i << " : ";
-      printVector(base[i]);
-      llvm::errs() << "\n";
-    }
-  };
-
   auto order = layout.getOrder();
   unsigned inner = order[0];
   unsigned outer = order[1];
@@ -607,7 +589,6 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
   LinearLayout::BasesT bases;
 
   // start with the DPAS tile
-  int opsPerChannel = 2; // TODO: how to get this?
   auto [regBases, laneBases] =
       createRegisterLaneTileLayout(loadTileSize[0], loadTileSize[1]);
 
@@ -616,7 +597,8 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
 
   auto ctaLayout = LinearLayout(bases, dimNames);
   llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
-  // handle num blocks
+
+  // Handle block count
   ctaLayout *=
       LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
 

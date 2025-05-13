@@ -307,8 +307,6 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
-                                          int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
   }];
 
