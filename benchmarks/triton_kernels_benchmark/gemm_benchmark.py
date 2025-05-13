@@ -421,21 +421,14 @@ def get_benchmark(
             cutlass_fn = cutlass_invoker
             torch_fn = lambda: torch.matmul(torch_a, torch_b).to(torch.float32)
 
-            # FIXME: Remove temporary condition when https://github.com/codeplaysoftware/cutlass-fork/pull/313 will be merged
-            if (B, M, N, K) == (4096, 8, 128, 16384) or (B, M, N, K) == (4096, 8, 16384, 128):
-                min_ms = float('nan')
-                max_ms = float('nan')
-                mean_ms = float('nan')
-                cv = float('nan')
-            else:
-                rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
-                benchmark_suite.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
-                _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-                    cutlass_fn,
-                    n_warmup=10,
-                    n_repeat=10,
-                    quantiles=quantiles,
-                )
+            rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+            benchmark_suite.assert_close(cutlass_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='cutlass to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                cutlass_fn,
+                n_warmup=10,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
