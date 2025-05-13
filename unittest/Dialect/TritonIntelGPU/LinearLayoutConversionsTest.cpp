@@ -39,6 +39,7 @@ public:
     llvm::errs() << "\n";
     auto dpasRepsUnsigned = SmallVector<unsigned>{
         static_cast<unsigned>(dpasReps[1]), static_cast<unsigned>(dpasReps[2])};
+    // TODO: could put the getOrderForDotOperand in the builder?
     return Subgroup2DBlockEncodingAttr::get(
         &ctx, warpsPerCTA,
         CTALayoutAttr::get(&ctx, dpasLayout.getCTAsPerCGA(),
