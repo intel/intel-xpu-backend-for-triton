@@ -21,7 +21,7 @@ LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
 LinearLayout
 subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
                               intel::Subgroup2DBlockEncodingAttr layout,
-                              unsigned kWidth, unsigned opIdx = 2);
+                              unsigned kWidth);
 
 } // namespace mlir::triton::gpu
 

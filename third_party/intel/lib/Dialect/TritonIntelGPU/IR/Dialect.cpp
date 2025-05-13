@@ -532,17 +532,25 @@ LogicalResult Subgroup2DBlockEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<unsigned> warpsPerCTA, CTALayoutAttr CTALayout,
     ArrayRef<unsigned> instrShape, unsigned numBlocks,
-    ArrayRef<unsigned> numReps, unsigned kWidth, unsigned threadsPerWarp) {
+    ArrayRef<unsigned> numReps, ArrayRef<unsigned> order, unsigned kWidth,
+    unsigned threadsPerWarp) {
   if (instrShape.size() != 2) {
     return emitError() << "instrShape must be rank 2 but was: "
                        << instrShape.size();
   }
-  if (!threadsPerWarp == 16) {
-    return emitError() << "threadsPerWarp must be 16, but was: "
-                       << threadsPerWarp;
+  if (order.size() != 2) {
+    return emitError() << "order must be rank 2 but was " << order.size();
+  }
+  if (warpsPerCTA.size() != 2) {
+    return emitError() << "warpsPerCTA must be rank 2 but was "
+                       << warpsPerCTA.size();
   }
   if (!(kWidth == 1 || kWidth == 2 || kWidth == 4)) {
     return emitError() << "kWidth must be 1, 2 or 4, but was: " << kWidth;
+  }
+  if (!threadsPerWarp == 16) {
+    return emitError() << "threadsPerWarp must be 16, but was: "
+                       << threadsPerWarp;
   }
   return success();
 }
@@ -563,6 +571,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> instrShape;
   unsigned numBlocks = 0;
   SmallVector<unsigned> numReps;
+  SmallVector<unsigned> order;
   unsigned kWidth = 0;
   unsigned threadsPerWarp = 0;
 
@@ -598,6 +607,10 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, numReps, "numReps").failed())
         return {};
     }
+    if (attr.getName() == "order") {
+      if (parseIntArrayAttr(parser, attr, order, "order").failed())
+        return {};
+    }
     if (attr.getName() == "kWidth") {
       if (parseUInt(parser, attr, kWidth, "kWidth").failed())
         return {};
@@ -615,7 +628,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<Subgroup2DBlockEncodingAttr>(
       parser.getContext(), warpsPerCTA, *CTALayout, instrShape, numBlocks,
-      numReps, kWidth, threadsPerWarp);
+      numReps, order, kWidth, threadsPerWarp);
 }
 
 SmallVector<int64_t>
@@ -626,6 +639,7 @@ Subgroup2DBlockEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape,
 }
 
 SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
+  // TODO: used?
   return getMatrixOrder(getRank(), /*rowMajor*/ true);
 }
 
@@ -643,6 +657,7 @@ SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTASplitNum() const {
 
 SmallVector<unsigned>
 Subgroup2DBlockEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  // TODO: used?
   return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
 }
 
@@ -652,8 +667,8 @@ void Subgroup2DBlockEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(), getRank());
 
   printer << ", instrShape = [" << getInstrShape()
-          << "], numBlocks=" << getNumBlocks() << ", numReps = ["
-          << getNumReps() << "], kWidth=" << getKWidth()
+          << "], numBlocks=" << getNumBlocks() << ", numReps=[" << getNumReps()
+          << "], order=[" << getOrder() << "], kWidth=" << getKWidth()
           << ", threadsPerWarp=" << getThreadsPerWarp() << "}>";
 }
 
