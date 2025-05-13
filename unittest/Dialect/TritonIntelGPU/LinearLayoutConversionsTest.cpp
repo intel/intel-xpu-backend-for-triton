@@ -35,7 +35,8 @@ public:
         CTALayoutAttr::get(
             &ctx, dpasLayout.getCTAsPerCGA(), // TODO: add to DpasLayout?
             dpasLayout.getCTASplitNum(), dpasLayout.getCTAOrder()),
-        instrShape, numBlocks, getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
+        instrShape, numBlocks,
+        getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
         dpasLayout.getThreadsPerWarp());
     return layout;
   }
