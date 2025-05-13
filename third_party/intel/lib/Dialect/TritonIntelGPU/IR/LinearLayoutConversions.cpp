@@ -544,20 +544,23 @@ static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
   return layout;
 }
 
-// creates a tiled layout across a single warp (register/lane block) with the
-// specified height and width. the width specifies the number of
-// lanes/work-items the height specifies the number of registers per lane
 using basisT = std::vector<std::vector<int32_t>>;
 
+// Creates a row major tile layout with register/lane in dimension according to
+// the provided height, width, and threadsPerWarp. The relationship between the
+// width and threadsPerWarp determines the packing of registers in lanes.
+// * if width == threadsPerWarp, registers are distributed to lanes in row major
+// order, i.e. one column per lane
+// * if width < threadsPerWarp, rows are distributed to lanes according to
+// rowToLaneration, i.e. width * rowToLaneRatio = threadsPerWarp
+// * if width > threadsPerWarp, row values are packed in lanes such that
+// packedElementsPerLane row values exist in consecutive registers for each lane
 std::pair<basisT, basisT>
-createRegisterLaneTileLayout(const int height, const int width,
-                             const unsigned threadsPerWarp,
-                             const unsigned kWidth) {
-
-  llvm::errs() << "kWidth = " << kWidth << "\n";
+createRegisterLaneBases(const int height, const int width,
+                        const unsigned threadsPerWarp) {
   const unsigned packedElementsPerLane =
       mlir::ceil<unsigned>(width, threadsPerWarp);
-  llvm::errs() << "packedElementsPerLane = " << packedElementsPerLane << "\n";
+
   basisT laneBases;
   for (int i = packedElementsPerLane; i < width; i = i << 1) {
     laneBases.push_back({0, i});
@@ -565,14 +568,14 @@ createRegisterLaneTileLayout(const int height, const int width,
 
   const int rowsToLaneRatio =
       mlir::ceil<int>(threadsPerWarp, 1 << laneBases.size());
-  llvm::errs() << "rowsToLaneRatio = " << rowsToLaneRatio << "\n";
+  // Place subsequent rows into adjacent lanes until all lanes have been filled
   for (int i = 1; i < rowsToLaneRatio; i = i << 1) {
     laneBases.push_back({i, 0});
   }
 
   basisT regBases;
 
-  // push back to the reg base to indicate packing
+  // Add packed row-wise elements (width > threadsPerWarp) before adding columns
   for (int i = 1; i < packedElementsPerLane; i = i << 1) {
     regBases.push_back({0, i});
   }
@@ -581,7 +584,7 @@ createRegisterLaneTileLayout(const int height, const int width,
     regBases.push_back({i * rowsToLaneRatio, 0});
   }
 
-  return {regBases, laneBases};
+  return std::make_pair(regBases, laneBases);
 }
 
 } // namespace
@@ -592,49 +595,42 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
                               unsigned kWidth) {
   auto ctx = layout.getContext();
   int rank = blockShape.size();
-  assert(rank == layout.getRank());
+  assert(rank == layout.getRank() && "unexpected block shape rank, layout rank "
+                                     "and block shape rank must be equal");
   auto dimNames = standardOutDimNames(ctx, rank);
   auto loadTileSize = layout.getInstrShape();
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
-  auto warpOrder = getMatrixOrder(rank, /*rowMajor*/ true);
 
-  auto order = layout.getOrder();
-  unsigned inner = order[0];
-  unsigned outer = order[1];
-  llvm::errs() << "inner = " << inner << "\n";
-  llvm::errs() << "outer = " << outer << "\n";
+  // Start by creating register/lane bases corresponding to the desired load
+  // tile size
+  auto [regBases, laneBases] = createRegisterLaneBases(
+      loadTileSize[0], loadTileSize[1], layout.getThreadsPerWarp());
 
   LinearLayout::BasesT bases;
-
-  // start with the DPAS tile
-  // TODO: strided version, 32x32x1
-  auto [regBases, laneBases] = createRegisterLaneTileLayout(
-      loadTileSize[0], loadTileSize[1], layout.getThreadsPerWarp(),
-      layout.getKWidth());
-
   bases[kRegister] = regBases;
   bases[kLane] = laneBases;
-
   auto ctaLayout = LinearLayout(bases, dimNames);
-  llvm::errs() << "ctaLayer pre vblocks: " << ctaLayout << "\n";
 
   assert(ctaLayout.getInDimSize(kLane) <= layout.getThreadsPerWarp() &&
          "number of lanes should not exceed threads per warp");
 
-  // Handle block count
+  // Increasing the block count always increases the inner dimension for the
+  // register/lane layout regardless of order
   ctaLayout *=
       LinearLayout::identity1D(layout.getNumBlocks(), kRegister, dimNames[1]);
 
-  llvm::errs() << "ctaLayer based on DPAS tile: " << ctaLayout << "\n";
+  // Broadcast the layout according to warpsPerCTA, then combine with the
+  // overall CTALayout and reshape according to the provided blockShape.
+  auto warpOrder = getMatrixOrder(rank, /*rowMajor*/ true);
+  auto order = layout.getOrder();
+  assert(order.size() == 2 && "only rank 2 order supported");
+  unsigned inner = order[0];
 
-  // Apply warp layout.
   ctaLayout *= broadcastedDotOperandLayout(ctx, layout.getWarpsPerCTA(),
                                            warpOrder, inner, kWarp)
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
-  llvm::errs() << "ctaLayout after applying warp layout: " << ctaLayout << "\n";
-
   return combineCtaCgaWithShape(ctaLayout, layout.getCTALayout(), blockShape);
 }
 
