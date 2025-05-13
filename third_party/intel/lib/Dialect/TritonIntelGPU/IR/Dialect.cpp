@@ -631,15 +631,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
       numReps, order, kWidth, threadsPerWarp);
 }
 
-SmallVector<int64_t>
-Subgroup2DBlockEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape,
-                                              int opIdx) const {
-  assert(false && "TODO");
-  return {};
-}
-
 SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
-  // TODO: used?
   return getMatrixOrder(getRank(), /*rowMajor*/ true);
 }
 
@@ -657,7 +649,6 @@ SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTASplitNum() const {
 
 SmallVector<unsigned>
 Subgroup2DBlockEncodingAttr::getRepOrderForOperand(int opIdx) const {
-  // TODO: used?
   return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
 }
 
