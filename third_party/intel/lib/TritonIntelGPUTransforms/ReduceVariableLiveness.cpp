@@ -37,7 +37,7 @@ using TensorValue = TypedValue<RankedTensorType>;
 namespace {
 
 #define TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES 32768
-#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 128 * 128 * 2
+#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 128 * 64 * 2
 
 static unsigned getSizeInBytes(RankedTensorType &tensorType) {
   Type elType = tensorType.getElementType();
@@ -91,7 +91,6 @@ static bool isLongLifeSpanVariable(Value v,
 /// \p forOp operation to which we want to move the loadOp
 static bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
                             Operation *forOp) {
-  // Only pointer to tensor are considered to be moved
   if (!mlir::triton::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
     return false;
   // LoadOps with non-null mask are not considered to be moved
@@ -113,6 +112,12 @@ static bool isLoadCandidate(tt::LoadOp loadOp, Type expectedElementType,
     return false;
   // Only loadOp out of the for loop body are considered to be moved
   if (loadOp->getParentOp() == forOp)
+    return false;
+  // Multiple users
+  if (any_of(loadOp->getUsers(), [&](Operation *user) {
+        return ((user->getBlock() == forOp->getBlock()) &&
+                user->isBeforeInBlock(forOp));
+      }))
     return false;
   // We skip the load if the defining op is not is the same region.
   // To avoid prefetching this data in another region
@@ -170,16 +175,42 @@ static bool optimizeDotOperands(scf::ForOp forOp,
     OpBuilder b(dotOp);
     TensorValue tensorV = opId == 0 ? dotOp.getA() : dotOp.getB();
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
+    Operation *insertBeforeOp = dotOp;
+    SmallVector<Operation *> usesInSameLoop;
+    // Other use(s) in the same loop
+    for (Operation *user : loadOp->getUsers()) {
+      if (user == dotOp)
+        continue;
+      if (user->getParentOp() == dotOp->getParentOp()) {
+        usesInSameLoop.push_back(user);
+        if (user->isBeforeInBlock(insertBeforeOp))
+          insertBeforeOp = user;
+      }
+    }
+
     if (std::find(prefetchedValue.begin(), prefetchedValue.end(),
                   loadOp.getPtr()) == prefetchedValue.end()) {
       createPrefetchOp(loadOp);
       prefetchedValue.push_back(loadOp.getPtr());
     }
-    b.setInsertionPoint(dotOp);
+    b.setInsertionPoint(insertBeforeOp);
     auto newLoad = cast<tt::LoadOp>(b.clone(*loadOp.getOperation()));
     auto newCvt = b.create<ttg::ConvertLayoutOp>(tensorV.getLoc(), tensorType,
                                                  newLoad.getResult());
     dotOp.setOperand(opId, newCvt.getResult());
+
+    // Update other user in the same loop if any
+    for (Operation *user : usesInSameLoop)
+      user->replaceUsesOfWith(loadOp.getResult(), newLoad.getResult());
+
+    // Multiple users:
+    // Note that if other users come before the loop, the loadOp is not a
+    // candidate for being moved.
+    if (!loadOp->use_empty()) {
+      b.setInsertionPointAfter(dotOp->getParentOp());
+      auto copyLoad = cast<tt::LoadOp>(b.clone(*loadOp.getOperation()));
+      loadOp->replaceAllUsesWith(copyLoad);
+    }
   };
 
   SmallVector<triton::DotOp> dotsInFor;
@@ -240,8 +271,12 @@ public:
     }
 
     Operation *rootOperation = getOperation();
-    Liveness livenessAnalysis(rootOperation);
     rootOperation->walk([&](scf::ForOp forOp) {
+      // The liveness analysis must be re-performed before the processing of
+      // each "for loop" given that the liveness of variables may have changed
+      // as a result of the code, and specifically `LoadOps`, being modified
+      // by the pass.
+      Liveness livenessAnalysis(rootOperation);
       if (optimizeDotOperands(forOp, prefetchedValue, livenessAnalysis))
         return;
     });
