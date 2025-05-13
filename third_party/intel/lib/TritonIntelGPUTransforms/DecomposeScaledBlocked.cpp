@@ -215,10 +215,10 @@ private:
       auto resShape = res.getType().getShape();
       auto vShape = v.getType().getShape();
       auto packDim = kDim;
-      if (opIdx == 0 && resShape[rank - 2] != vShape[rank - 2])
+      if ((opIdx == 0 && resShape[rank - 2] != vShape[rank - 2]) ||
+          (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])) {
         packDim = (packDim + 1) % 2;
-      if (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])
-        packDim = (packDim + 1) % 2;
+      }
       v = rewriter.create<Fp4ToFpOp>(loc, v, computeType, packDim);
     } else {
       auto vType16 = v.getType().clone(computeType);
