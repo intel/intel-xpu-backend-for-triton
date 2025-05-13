@@ -55,6 +55,38 @@ protected:
   MLIRContext ctx;
 };
 
+TEST_F(LinearLayoutConversionsTest, FP32_32x8x2_M256_N128_K32_A) {
+  EXPECT_EQ(
+      subgroup2DBlockToLinearLayout(
+          /*blockShape*/ {256, 32},
+          sdb(/*instrShape*/ {32, 8}, /*numBlocks*/ 2, /*kWidth*/ 4,
+              /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 1},
+              /*blockShape*/ {256, 32}, /*opsPerChannel*/ 1, /*opIdx*/ 0),
+          /*kWidth*/ 4),
+      LinearLayout(
+          {{S("register"), {{2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 8}, {0, 16}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {1, 0}}},
+           {S("warp"), {{0, 0}, {0, 0}, {32, 0}, {64, 0}, {128, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, FP32_32x16x1_M256_N128_K32_B) {
+  EXPECT_EQ(
+      subgroup2DBlockToLinearLayout(
+          /*blockShape*/ {32, 128},
+          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*kWidth*/ 4,
+              /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 1},
+              /*blockShape*/ {32, 128}, /*opsPerChannel*/ 1, /*opIdx*/ 1),
+          /*kWidth*/ 4),
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 64}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+           {S("warp"), {{0, 16}, {0, 32}, {0, 0}, {0, 0}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_A) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
