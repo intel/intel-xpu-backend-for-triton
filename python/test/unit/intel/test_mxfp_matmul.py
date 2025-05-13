@@ -111,8 +111,6 @@ def test_mxfp_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PA
         pytest.skip("Float4 for both A and B has [ZE]0x78000011 error")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
-    if not PACK_B_ALONG_K and B_DATA_TYPE == "float4":
-        pytest.skip("Pack along K fix depends on https://github.com/intel/intel-xpu-backend-for-triton/pull/4060")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
