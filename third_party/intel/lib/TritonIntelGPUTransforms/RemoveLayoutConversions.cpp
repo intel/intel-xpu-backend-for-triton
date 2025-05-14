@@ -692,6 +692,29 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
+// Recursively update the operands in a chain of AdvanceOps, after setting the
+// pointer operand of the first one.
+static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
+                                 Value data, OpBuilder &rewriter) {
+  auto newAdvanceOp =
+      rewriter.create<AdvanceOp>(advanceOp.getLoc(), makeTensorPtrOp.getType(),
+                                 makeTensorPtrOp, advanceOp.getOffsets());
+
+  SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
+  for (Operation *user : advanceOpUsers) {
+    if (auto storeOp = dyn_cast<StoreOp>(user)) {
+      // Update the StoreOp operands.
+      storeOp.setOperand(0, newAdvanceOp);
+      storeOp.setOperand(1, data);
+    } else if (auto nextAdvanceOp = dyn_cast<AdvanceOp>(user)) {
+      // Recursive call to handle the next AdvanceOp in the chain.
+      updateAdvanceOpChain(nextAdvanceOp, makeTensorPtrOp, data, rewriter);
+    } else {
+      llvm_unreachable("Unexpected user of AdvanceOp");
+    }
+  }
+}
+
 bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // Disable 2D block store on LTS.
   if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
@@ -705,13 +728,16 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   if (!isTensorPointerType(ptr.getType()))
     return false;
 
-  // 2D block store are preceeded by a MakeTensorPtrOp
-  auto makeTensorPtrOp = ptr.getDefiningOp<MakeTensorPtrOp>();
-  if (!makeTensorPtrOp)
-    return false;
+  // Locate the operation that created the block pointer.
+  Operation *defOp = ptr.getDefiningOp();
+  while (auto advanceOp = dyn_cast<AdvanceOp>(defOp))
+    defOp = advanceOp.getPtr().getDefiningOp();
+  assert(isa<MakeTensorPtrOp>(defOp) &&
+         "MakeTensorPtrOp should be the only op that creates a tensor pointer");
+  auto makeTensorPtrOp = cast<MakeTensorPtrOp>(defOp);
 
-  // DPAS encoding have to be propagate if conversion from DPAS to
-  // other has been done before.
+  // DPAS encoding have to be propagated if conversion from a DPAS layout to
+  // another layout has been done before.
   auto convertOp = storeOp.getValue().getDefiningOp<ConvertLayoutOp>();
   PointerType newPtrType;
   Attribute encoding;
@@ -758,21 +784,36 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
     encoding = convertOpSrcType.getEncoding();
   }
 
-  // We create a new MakeTensorPtrOp with the new data type.
+  // Create a new MakeTensorPtrOp with the new layout.
   OpBuilder rewriter(makeTensorPtrOp);
-  Value newStorePtr = rewriter.create<MakeTensorPtrOp>(
+  Value newMakeTensorPtrOp = rewriter.create<MakeTensorPtrOp>(
       makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
       makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
-      makeTensorPtrOp.getOffsets(), rewriter.getDenseI32ArrayAttr({1, 0}));
+      makeTensorPtrOp.getOffsets(), makeTensorPtrOp.getOrderAttr());
 
+#if 1
+  // Update the store operation with the new layout.
+  for (Operation *user : makeTensorPtrOp->getUsers()) {
+    if (auto storeOp = dyn_cast<StoreOp>(user)) {
+      storeOp.setOperand(0, newMakeTensorPtrOp);
+      storeOp.setOperand(1, getValueAs(value, encoding));
+    } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
+      updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp,
+                           getValueAs(value, encoding), rewriter);
+    } else {
+      llvm_unreachable("Unexpected user of MakeTensorPtrOp");
+    }
+  }
+#else
   // The encoding of the StoreOp is updated with the new
   // operands:
   // - the Ptr created by the MakeTensorPtrOp with the new data
   // type
   // - the forwarded DPAS encoding.
   Value newOperand = getValueAs(value, encoding);
-  storeOp.setOperand(0, newStorePtr);
+  storeOp.setOperand(0, newMakeTensorPtrOp);
   storeOp.setOperand(1, newOperand);
+#endif
 
   // If the DPAS encoding is forwarded, we do not need the
   // convertOp anymore if the convertOp was only used by the
