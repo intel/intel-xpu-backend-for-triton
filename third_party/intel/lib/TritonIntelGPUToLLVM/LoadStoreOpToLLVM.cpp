@@ -2910,7 +2910,9 @@ struct AtomicRMWOpConversion
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-      if (valueElemNBits == 16) {
+      bool support16BitAtomics = moduleOp->hasAttr(
+          TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+      if (valueElemNBits == 16 && !support16BitAtomics) {
         op.emitWarning(
             "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "
