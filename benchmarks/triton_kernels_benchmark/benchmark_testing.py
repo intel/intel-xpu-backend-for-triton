@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Callable, ClassVar, Dict, Optional, List, Union, Set
+from abc import ABC, abstractmethod
+from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
+from collections.abc import Iterable
 from enum import Enum
 from dataclasses import dataclass, field
 import itertools
@@ -21,6 +23,7 @@ import triton
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
 from triton_kernels_benchmark import build_report
+from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 BENCHMARKING_CONFIG = {
@@ -358,8 +361,6 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
-                if run_counter > 0:
-                    disable_verification()
                 df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1
@@ -378,6 +379,30 @@ class Mark:
 
         return None
 
+    def run_constrained(
+        self,
+        shapes: List[ShapeValue],
+        show_plots=False,
+        print_data=False,
+        save_precision=6,
+        mark_args=None,
+        **kwargs,
+    ) -> pd.DataFrame:
+        if not isinstance(self.benchmarks, Benchmark):
+            raise NotImplementedError("Only single benchmark is supported")
+        x_vals = self.benchmarks.x_vals
+        self.benchmarks.x_vals = [shape.dims for shape in shapes]
+        res_df = self.run(
+            show_plots=show_plots,
+            print_data=print_data,
+            save_precision=save_precision,
+            return_df=True,
+            mark_args=mark_args,
+            **kwargs,
+        )
+        self.benchmarks.x_vals = x_vals
+        return [res_df] if isinstance(res_df, pd.DataFrame) else res_df
+
 
 class BenchmarkCategory(Enum):
     SOFTMAX = "softmax"
@@ -389,21 +414,94 @@ class BenchmarkCategory(Enum):
     EXPERIMENTAL = "experimental"
 
 
+DimValue = Union[int, str, bool]
+DimValues = Union[DimValue, List[DimValue], Tuple[DimValue, ...]]
+
+
 @dataclass
-class BenchmarkSummary:
-    plot_name: str = ""
-    variant_fields: List[str] = field(init=False)
-    variants: List[Union[int, str, List[str]]] = field(init=False)
-    supported_providers: Dict[str, str] = field(init=False)
-    selected_providers: Dict[str, str] = field(init=False)
-    perf_metrics: List[str] = field(init=False)
+class ShapeValue:
+    dims: DimValues
+    matcher: Optional[ShapePatternParser]
+
+    @property
+    def matches_pattern(self) -> bool:
+        return self.matcher(str(self)) if self.matcher else True
+
+    def to_list(self) -> List[Union[str, int, bool]]:
+        values = self.dims
+        return values if isinstance(values, list) else list(values) if isinstance(values, tuple) else [values]
+
+    def _to_iterable(self) -> Iterable[Union[str, int, bool]]:
+        return self.dims if isinstance(self.dims, Iterable) else [self.dims]
+
+    def __str__(self):
+        return "[" + "-".join([str(value) for value in self._to_iterable()]) + "]"
+
+    @classmethod
+    def from_vals(
+        cls,
+        x_vals: List[DimValues],
+        pattern_matcher: Optional[ShapePatternParser],
+    ) -> List[ShapeValue]:
+        return [ShapeValue(x_val, pattern_matcher) for x_val in x_vals]
+
+
+@dataclass
+class _BenchmarkSummary(ABC):
+    shape_pattern: Optional[ShapePatternParser] = field(default=None, init=True)
 
     memory_metric: ClassVar[str] = "GB/s"
     compute_metric: ClassVar[str] = "TFlops"
 
     @property
+    @abstractmethod
+    def _benchmark(self) -> Benchmark:
+        pass
+
+    @property
+    @abstractmethod
+    def _full_benchmark(self) -> Benchmark:
+        pass
+
+    @property
+    def plot_name(self) -> str:
+        return self._benchmark.plot_name
+
+    @property
+    def supported_shapes(self) -> List[ShapeValue]:
+        return ShapeValue.from_vals(self._benchmark.x_vals, self.shape_pattern)
+
+    @property
+    def shape_dimensions(self):
+        return self._benchmark.x_names
+
+    @property
+    def selected_shapes(self) -> List[ShapeValue]:
+        return [shape for shape in self.supported_shapes if shape.matches_pattern]
+
+    @property
+    def shapes(self) -> List[str]:
+        return [str(shape) for shape in self.supported_shapes if shape.matches_pattern]
+
+    @property
+    def supported_providers(self) -> Dict[str, str]:
+        return dict(zip(self._full_benchmark.line_vals, self._full_benchmark.line_names))
+
+    @property
+    def selected_providers(self) -> Dict[str, str]:
+        return dict(zip(self._benchmark.line_vals, self._benchmark.line_names))
+
+    @property
     def primary_metric(self) -> str:
+        known_metrics = [self.memory_metric, self.compute_metric]
+        for metric in self.perf_metrics:
+            if metric not in known_metrics:
+                raise NotImplementedError(f"Unsupported {metric} metric. Known metrics are {known_metrics}")
         return self.compute_metric
+
+    @property
+    def perf_metrics(self) -> str:
+        return self._benchmark.ylabel
 
     @property
     def reference_provider(self) -> Optional[str]:
@@ -419,40 +517,43 @@ class BenchmarkSummary:
             return non_triton_providers[0]
         return all_providers[1]
 
-    def __post_init__(self):
-        known_metrics = [self.memory_metric, self.compute_metric]
-        for metric in self.perf_metrics:
-            if metric not in known_metrics:
-                raise NotImplementedError(f"Unsupported {metric} metric. Known metrics are {known_metrics}")
-
 
 @dataclass
-class BenchmarkRunResult(BenchmarkSummary):
-    res_df: Optional[pd.DataFrame] = field(default=None, init=False)
+class BenchmarkRunResult(_BenchmarkSummary, ABC):
+    res_df_list: Optional[List[pd.DataFrame]] = field(default=None, init=False)
+    run_time: Optional[float] = field(default=None, init=False)
 
-    def _run_summary_df(self, primary_metric_only: bool = False) -> pd.DataFrame:
+    @property
+    def run_summary_detailed_df_list(self) -> List[pd.DataFrame]:
+        return [self._run_summary_df(res_df.copy()) for res_df in self.res_df_list]
+
+    @property
+    def run_summary_df_list(self) -> List[pd.DataFrame]:
+        return [self._run_summary_df(res_df.copy(), True) for res_df in self.res_df_list]
+
+    def _run_summary_df(self, res_df: pd.DataFrame, primary_metric_only: bool = False) -> pd.DataFrame:
 
         def _keep_column(column: str) -> bool:
             return (any(column.startswith(p + "-") for p in providers) and not column.endswith(("-min", "-max"))
                     and (not primary_metric_only or column.endswith(self.primary_metric)))
 
-        res_df = self.res_df.copy()
-        variant_fields = self.variant_fields
-        variant_name = "[" + "-".join(variant_fields) + "]"
-        variant_fields_w_floats = [
-            float_col for float_col in res_df.select_dtypes(include="float").columns if float_col in variant_fields
+        shape_fields = self.shape_dimensions
+        shape_name = "[" + "-".join(shape_fields) + "]"
+        shape_fields_w_floats = [
+            float_col for float_col in res_df.select_dtypes(include="float").columns if float_col in shape_fields
         ]
-        for variant_field_w_floats in variant_fields_w_floats:
-            res_df[variant_field_w_floats] = res_df[variant_field_w_floats].astype(int)
-        res_df[variant_name] = "[" + res_df[variant_fields].astype(str).agg("-".join, axis=1) + "]"
-        res_df.drop(columns=variant_fields + ["run_counter", "datetime"] +
-                    [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))])
+        for shape_field_w_floats in shape_fields_w_floats:
+            res_df[shape_field_w_floats] = res_df[shape_field_w_floats].astype(int)
+        res_df[shape_name] = "[" + res_df[shape_fields].astype(str).agg("-".join, axis=1) + "]"
+        res_df.drop(
+            columns=shape_fields + ["run_counter", "datetime"] +
+            [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))], )
         providers = self.selected_providers.values()
         metric_cols = [column for column in res_df.columns if _keep_column(column)]
         column_tuples = [tuple(col.split("-", 1)) for col in metric_cols]
         metrics_df = res_df[metric_cols].copy()
-        metrics_df.index = res_df[variant_name]
-        metrics_df.index.name = variant_name
+        metrics_df.index = res_df[shape_name]
+        metrics_df.index.name = shape_name
         metrics_df.columns = pd.MultiIndex.from_tuples(column_tuples, names=["provider", "metric"])
         geomeans_df = pd.DataFrame(
             [metrics_df.select_dtypes(include="number").apply(scipy.stats.gmean)],
@@ -473,14 +574,6 @@ class BenchmarkRunResult(BenchmarkSummary):
                 )
         return summary_df
 
-    @property
-    def run_summary_df_detailed(self) -> pd.DataFrame:
-        return self._run_summary_df()
-
-    @property
-    def run_summary_df(self) -> pd.DataFrame:
-        return self._run_summary_df(True)
-
 
 @dataclass
 class BenchmarkConfig:
@@ -490,14 +583,6 @@ class BenchmarkConfig:
     description: str = ""
     providers_filter: Optional[list[str]] = None
     run_opts: Dict[str, Union[str, bool, List[str]]] = field(default_factory=dict)
-
-
-@dataclass
-class BenchmarkConfigRunResult(
-        BenchmarkRunResult,
-        BenchmarkConfig,
-):  # pylint: disable=R0902
-    run_time: Optional[float] = field(default=None, init=False)
 
     def _get_benchmark(self, apply_providers_filter=True) -> Mark:
         run_opts = self.run_opts
@@ -509,68 +594,65 @@ class BenchmarkConfigRunResult(
                 "Benchmark config list is not supported, exactly one benchmark config is expected.")
         return mark
 
-    def __post_init__(self):
-        benchmark = self._get_benchmark().benchmarks
-        full_benchmark = self._get_benchmark(False).benchmarks
 
-        self.plot_name = benchmark.plot_name
-        self.variant_fields = benchmark.x_names
-        self.variants = benchmark.x_vals
-        self.supported_providers = dict(zip(full_benchmark.line_vals, full_benchmark.line_names))
-        self.selected_providers = dict(zip(benchmark.line_vals, benchmark.line_names))
-        self.perf_metrics = benchmark.ylabel
+@dataclass
+class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
 
-        super().__post_init__()
+    @property
+    def shapes_repr(self) -> List[str]:
+        return [f"{self.key}{shape}" for shape in self.shapes]
+
+    @property
+    def _benchmark(self) -> Benchmark:
+        return self._get_benchmark().benchmarks
+
+    @property
+    def _full_benchmark(self) -> Benchmark:
+        return self._get_benchmark(False).benchmarks
 
     def __str__(self) -> str:
-        variants_repr = []
-        for variant in self.variants:
-            variant_list = variant if isinstance(variant, list) else [variant]
-            variant_value = [str(value) for value in variant_list]
-            variants_repr.append(f"{self.key}[" + "-".join(variant_value) + "]")
-        summary = [
-            f"Name: {self.key}",
-            f"Variant fields: {self.variant_fields}",
-            "Variants:",
-            *variants_repr,
-        ]
-        variants_str = "\n".join(summary)
+
+        def _shapes_repr(shapes: List[ShapeValue]):
+            return ", ".join([self.key + str(shape) for shape in shapes])
+
         str_repr = [
             f"Config: {self.key}",
             f"Config categories: {[category.value for category in self.categories]}",
             f"Run options: {self.run_opts}",
+            f"Shape dimensions: {self.shape_dimensions}",
+            f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
+            f"Supported shapes: {_shapes_repr(self.supported_shapes)}",
+            f"Selected shapes: {_shapes_repr(self.supported_shapes)}",
             f"Supported providers: {self.supported_providers}",
             f"Selected providers: {self.selected_providers}",
-            variants_str,
         ]
         return "\n".join(str_repr)
 
     def run(self, args: MarkArgs) -> BenchmarkConfigRunResult:
         start_time = time.perf_counter()
-        self.res_df: pd.DataFrame = (self._get_benchmark().run(
-            show_plots=False,
-            print_data=False,
-            return_df=True,
-            mark_args=args,
-        ) if self.res_df is None else self.res_df)
+        # FIXME: Eliminate mark_args argument
+        # This is useful for unit testing, composite becnhmark configs and results caching
+        self.res_df_list = (self.get_benchmark().run_constrained(shapes=self.selected_shapes, mark_args=args)
+                            if self.res_df_list is None else self.res_df_list)
         self.run_time = time.perf_counter() - start_time
         return self
 
     def build_report(self, reports_folder: str, tag: str = ""):
-        variant_cols_for_report_builder = [
-            column for column in self.res_df.select_dtypes(include=["number", "bool"]).columns
-            if column in self.variant_fields
+        res_df = pd.concat(self.res_df_list, axis=0, ignore_index=True)
+        shape_cols_for_report_builder = [
+            column for column in res_df.select_dtypes(include=["number", "bool"]).columns
+            if column in self.shape_dimensions
         ]
         for provider_key, provider_label in self.selected_providers.items():
             report_args = build_report.PassedArgs(
                 source=f"{reports_folder}/{self.plot_name}.csv",
                 target=f"{reports_folder}/{self.key}-{provider_key}-report.csv",
-                param_cols=",".join(variant_cols_for_report_builder),
+                param_cols=",".join(shape_cols_for_report_builder),
                 benchmark=self.key,
                 compiler=str(provider_key),
-                tflops_col=f"{provider_label}-{BenchmarkSummary.compute_metric}",
-                hbm_col=f"{provider_label}-{BenchmarkSummary.memory_metric}",
+                tflops_col=f"{provider_label}-{self.compute_metric}",
+                hbm_col=f"{provider_label}-{self.memory_metric}",
                 tag=tag,
                 mask=False,
             )
-            build_report.build_report(report_args)
+            build_report.build_report(report_args, res_df)

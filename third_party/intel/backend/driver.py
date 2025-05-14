@@ -610,6 +610,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
+    Py_DECREF(ret);
   }}
 
   void * pStream = PyLong_AsVoidPtr(py_obj_stream);
@@ -623,6 +624,9 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
 
   {newline.join(ptr_decls)}
   sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  if (PyErr_Occurred()) {{
+    return NULL;
+  }}
 
   if(launch_exit_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
@@ -630,9 +634,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
     Py_DECREF(args);
     if (!ret)
       return NULL;
-  }}
-  if (PyErr_Occurred()) {{
-    return NULL;
+    Py_DECREF(ret);
   }}
 
   Py_RETURN_NONE;
@@ -659,7 +661,7 @@ def serialize_args(args, constants, signature):
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
 
     cnt = 0
-    args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    args_dict = {"gridX": int(args[cnt]), "gridY": int(args[cnt + 1]), "gridZ": int(args[cnt + 2])}
     # 3: stream
     # 4: function
     # 5: packed kernel metadata

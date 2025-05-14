@@ -1,6 +1,5 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -831,7 +830,10 @@ struct LoadOpToBlockIOConversion
     auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
     SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
     size_t rank = threadOrder.size();
-    assert(rank == 2 && "only support rank of 2 for now");
+    if (rank != 2) {
+      // only support rank of 2 for now.
+      return failure();
+    }
     const bool valueRowMajor =
         (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
     assert((valueRowMajor ||
@@ -937,6 +939,12 @@ struct LoadOpToBlockIOConversion
       }
     } break;
     case DpasEncodingAttr::OpIdx::OperandC:
+      warpShape = std::move(dpasLayout.getShapeC());
+      dpasInstShape = std::move(dpasLayout.getDPASInstShapeC());
+      dimOuter = rank - 2;
+      dimInner = rank - 1;
+      usePackedType = false;
+      break;
     default:
       llvm_unreachable("unknown DPAS operands index type.");
       break;
@@ -1057,6 +1065,9 @@ struct LoadOpToBlockIOConversion
         numOperandsPer2DLoadN = repCluster[dimOuter];
         break;
       case DpasEncodingAttr::OpIdx::OperandC:
+        numOperandsPer2DLoadM = repCluster[dimOuter];
+        numOperandsPer2DLoadN = repCluster[dimInner];
+        break;
       default:
         llvm_unreachable("unknown DPAS operands index type.");
         break;
@@ -1138,6 +1149,10 @@ struct LoadOpToBlockIOConversion
       repInnerStride = warpShape[dimInner] * numOperandsInnerDimPerLoad;
       break;
     case DpasEncodingAttr::OpIdx::OperandC:
+      numRepOuter = numReps[dimOuter];
+      numRepInner = numReps[dimInner];
+      repInnerStride = warpShape[dimInner] * innerDimWarpNum;
+      break;
     default:
       llvm_unreachable("unknown DPAS operands index type.");
       break;
@@ -1321,6 +1336,7 @@ struct LoadOpToBlockIOConversion
 
                   // Save the decomposed vals to the map;
                   switch (opIdx) {
+                  case DpasEncodingAttr::OpIdx::OperandC:
                   case DpasEncodingAttr::OpIdx::OperandA: {
                     unsigned o = outer * numLoadPerOutRepCluster *
                                      numOperandsOuterDimPerLoad +
@@ -1344,7 +1360,6 @@ struct LoadOpToBlockIOConversion
                     loadVals[{o, i}] =
                         b.bitcast(loadVal, unpackedDPASOperandType);
                   } break;
-                  case DpasEncodingAttr::OpIdx::OperandC:
                   default: {
                     llvm_unreachable("unknown DPAS operands index type.");
                   } break;
@@ -2743,10 +2758,7 @@ struct AtomicCASOpConversion
 
       Value zero = (valueElemNBits == 32) ? b.i32_val(0) : b.i64_val(0);
       if (!atomicNeedsSharedMemory(op.getResult()))
-        rewriter.create<spirv::ControlBarrierOp>(
-            loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
-            spirv::MemorySemantics::SequentiallyConsistent |
-                spirv::MemorySemantics::CrossWorkgroupMemory);
+        rewriter.create<TritonGEN::BarrierOp>(loc, TritonGEN::MemFence::GLOBAL);
 
       auto createAtomicCASInstruction = [&]() -> SmallVector<Value, 1> {
         // casPtr = b.bitcast(casPtr, ptr_ty(ctx, 1));
@@ -2898,7 +2910,9 @@ struct AtomicRMWOpConversion
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-      if (valueElemNBits == 16) {
+      bool support16BitAtomics = moduleOp->hasAttr(
+          TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+      if (valueElemNBits == 16 && !support16BitAtomics) {
         op.emitWarning(
             "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "
@@ -2909,10 +2923,8 @@ struct AtomicRMWOpConversion
         ret = endBlock->getArgument(0);
       } else {
         if (!atomicNeedsSharedMemory(op.getResult()))
-          rewriter.create<spirv::ControlBarrierOp>(
-              loc, spirv::Scope::Workgroup, spirv::Scope::Workgroup,
-              spirv::MemorySemantics::SequentiallyConsistent |
-                  spirv::MemorySemantics::CrossWorkgroupMemory);
+          rewriter.create<TritonGEN::BarrierOp>(loc,
+                                                TritonGEN::MemFence::GLOBAL);
 
         auto createAtomicBinOpInstruction = [&]() -> SmallVector<Value, 1> {
           mlir::LLVM::AtomicBinOp rmwKind = matchAtomicOp(atomicRmwAttr);

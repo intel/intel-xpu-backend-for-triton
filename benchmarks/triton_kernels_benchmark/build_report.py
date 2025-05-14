@@ -1,10 +1,12 @@
+from typing import Optional
+from dataclasses import asdict, dataclass, fields
+
 import argparse
 import warnings
 import os
 import uuid
 import json
 import datetime
-from dataclasses import dataclass
 
 import pandas as pd
 
@@ -17,9 +19,28 @@ class PassedArgs:  # pylint: disable=too-many-instance-attributes
     benchmark: str
     compiler: str
     tflops_col: str
-    hbm_col: str
-    tag: str
-    mask: bool
+    hbm_col: Optional[str] = None
+    tag: str = ""
+    mask: bool = False
+
+
+@dataclass
+class HostInfo:
+    libigc1_version: str = ""
+    level_zero_version: str = ""
+    gpu_device: str = ""
+    agama_version: str = ""
+    torch_version: str = ""
+    compiler_version: str = ""
+    benchmarking_method: str = ""
+
+    @classmethod
+    def from_env(cls) -> "HostInfo":
+        kwargs = {f.name: os.getenv(f.name.upper(), "") for f in fields(cls)}
+        host_info_obj = cls(**kwargs)
+        if not host_info_obj.gpu_device:
+            raise ValueError("Could not find GPU device description, was `capture-hw-details.sh` called?")
+        return host_info_obj
 
 
 def parse_args() -> PassedArgs:
@@ -50,8 +71,8 @@ def check_cols(target_cols, all_cols):
         raise ValueError(f"Couldn't find required columns: '{diff}' among available '{all_cols}'")
 
 
-def build_report(args: PassedArgs):
-    df = pd.read_csv(args.source)
+def build_report(args: PassedArgs, results_df: Optional[pd.DataFrame] = None):
+    df = pd.read_csv(args.source) if results_df is None else results_df
     param_cols = args.param_cols.split(",")
     hbm_col = args.hbm_col
     check_cols(param_cols, df.columns)
@@ -92,21 +113,7 @@ def build_report(args: PassedArgs):
     df_results["compiler"] = args.compiler
     df_results["tag"] = args.tag
 
-    host_info = {
-        n: os.getenv(n.upper(), default="")
-        for n in [
-            "libigc1_version",
-            "level_zero_version",
-            "gpu_device",
-            "agama_version",
-            "torch_version",
-            "compiler_version",
-            "benchmarking_method",
-        ]
-    }
-    if not host_info["gpu_device"]:
-        raise RuntimeError("Could not find GPU device description, was `capture-hw-details.sh` called?")
-    for name, val in host_info.items():
+    for name, val in asdict(HostInfo.from_env()).items():
         df_results[name] = val
 
     df_results.to_csv(args.target, index=False)
