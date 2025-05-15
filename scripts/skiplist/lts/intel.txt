@@ -1,1 +1,0 @@
-python/test/unit/intel/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma

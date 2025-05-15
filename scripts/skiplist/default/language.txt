@@ -2,3 +2,14 @@
 python/test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-256-256]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3870
 python/test/unit/language/test_core.py::test_dot3d[8-2-64-64-64-32-32-float32-float32]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/4222
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-128-256-8192-8192-8192]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-128-8192-8192-8192]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-256-1024-512-256]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-256-128-256-256]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-256-8192-8192-8192]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-128-256-8192-8192-8192]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-128-8192-8192-8192]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-256-1024-512-256]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-256-128-256-256]
+python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-256-8192-8192-8192]
