@@ -5,14 +5,18 @@ import numpy as np
 import triton
 import triton.language as tl
 from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
+from triton._internal_testing import is_cuda, is_hip, is_xpu
 
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("num_ctas", [1])
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
-def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
+def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
+    if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
+        pytest.xfail("CTAs is unsupported for these cards")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -36,12 +40,12 @@ def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
         assert size == 128 * num_ctas
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
     M, N = M_BLOCK * 3, N_BLOCK * 4
-    inp = to_triton(numpy_random((M, N), dtype_str), device="xpu", dst_type=dtype_str)
+    inp = to_triton(numpy_random((M, N), dtype_str), device=device, dst_type=dtype_str)
     out = inp.new_empty((M_BLOCK, N_BLOCK))
 
     kernel[(1, )](out, inp, M, N, M_BLOCK, N_BLOCK, num_ctas=num_ctas)
@@ -52,9 +56,11 @@ def test_tensor_descriptor_load(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("num_ctas", [1])
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
-def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
+def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK, device):
+    if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
+        pytest.xfail("CTAs is unsupported for these cards")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -82,7 +88,7 @@ def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
         desc.store([moffset, noffset], val)
 
     M, N = 32, 128
-    inp = to_triton(numpy_random((M, N), dtype_str), device="xpu", dst_type=dtype_str)
+    inp = to_triton(numpy_random((M, N), dtype_str), device=device, dst_type=dtype_str)
     out = inp.new_empty((M, N))
 
     grid_m = M // M_BLOCK
@@ -92,7 +98,7 @@ def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
         assert size == 128 * (grid_m * grid_n) * num_ctas
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
@@ -104,7 +110,7 @@ def test_tensor_descriptor_store(dtype_str, num_ctas, M_BLOCK, N_BLOCK):
 # Exercise the functional load/store builtins once to ensure they map through.
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-def test_tensor_descriptor_functional_interface(dtype_str):
+def test_tensor_descriptor_functional_interface(dtype_str, device):
     """Copies an entire tensor blockwise using the descriptor builtins."""
 
     @triton.jit
@@ -127,7 +133,7 @@ def test_tensor_descriptor_functional_interface(dtype_str):
         tl.store_tensor_descriptor(out_desc, [moffset, noffset], block)
 
     M, N = 32, 128
-    inp = to_triton(numpy_random((M, N), dtype_str), device="xpu", dst_type=dtype_str)
+    inp = to_triton(numpy_random((M, N), dtype_str), device=device, dst_type=dtype_str)
 
     M_BLOCK = 8
     N_BLOCK = 32
@@ -140,7 +146,7 @@ def test_tensor_descriptor_functional_interface(dtype_str):
         assert size == 2 * 128 * (grid_m * grid_n)
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
@@ -151,7 +157,7 @@ def test_tensor_descriptor_functional_interface(dtype_str):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])
-def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
+def test_tensor_descriptor_load3d(dtype_str, K_BLOCK, device):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -176,11 +182,11 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
         tl.store(out_ptr + idx, block, mask)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
-    inp = to_triton(numpy_random((10, 64, 128), dtype_str), device="xpu", dst_type=dtype_str)
+    inp = to_triton(numpy_random((10, 64, 128), dtype_str), device=device, dst_type=dtype_str)
     inp.data = inp.data[:, :50, :119]
 
     if K_BLOCK * inp.element_size() < 32:
@@ -200,10 +206,9 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])
-def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
-
-    if dtype_str == 'bfloat16':
-        return pytest.skip("FIXME: issue #4137")
+def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
+    if is_xpu() and dtype_str == 'bfloat16':
+        pytest.skip("FIXME: issue #4137")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -228,11 +233,11 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
         desc.store(offs, block)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
-    inp = to_triton(numpy_random((10, 50, 119), dtype_str), device="xpu", dst_type=dtype_str)
+    inp = to_triton(numpy_random((10, 50, 119), dtype_str), device=device, dst_type=dtype_str)
 
     if K_BLOCK * inp.element_size() < 32:
         return pytest.xfail("Invalid last dim size")
@@ -249,13 +254,14 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
 
 
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("num_ctas", [1])
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
-def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
-
-    if ndim not in [1] or dtype_str not in ["uint16", "uint32"]:
-        return pytest.skip("FIXME: issue #4139")
+def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
+    if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
+        pytest.xfail("CTAs is unsupported for these cards")
+    if is_xpu() and ndim not in [1] or dtype_str not in ["uint16", "uint32"]:
+        pytest.skip("FIXME: issue #4139")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
@@ -285,12 +291,12 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
         tl.store(out_ptr + idx, block)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
     alloc_shape = (1, 1, 3, 7, INNER_BLOCK)[-ndim:]
-    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="xpu", dst_type=dtype_str)
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device=device, dst_type=dtype_str)
     inp.data = inp.data[..., :INNER_BLOCK - 3]
 
     if INNER_BLOCK * inp.element_size() < 32:
@@ -315,13 +321,14 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
 
 
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("num_ctas", [1])
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
-def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
-
-    if ndim not in [1]:
-        return pytest.skip("FIXME: issue #4140")
+def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
+    if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
+        pytest.xfail("CTAs is unsupported for these cards")
+    if is_xpu() and ndim not in [1]:
+        pytest.skip("FIXME: issue #4140")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
@@ -351,12 +358,12 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK):
         desc.store(offs, block)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
     BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
-    inp = to_triton(numpy_random(BLOCK_SHAPE, dtype_str), device="xpu", dst_type=dtype_str)
+    inp = to_triton(numpy_random(BLOCK_SHAPE, dtype_str), device=device, dst_type=dtype_str)
 
     if INNER_BLOCK * inp.element_size() < 32:
         return pytest.xfail("Invalid last dim size")
@@ -401,14 +408,14 @@ def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.cons
 
 
 @pytest.mark.interpreter
-def test_tensor_descriptor_in_function():
+def test_tensor_descriptor_in_function(device):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
         tensor_descriptor_in_function_helper(out_ptr, a_ptr, M, N, M_BLOCK, N_BLOCK)
 
     M, N = 32, 128
-    inp = torch.randn((M, N), device="xpu")
+    inp = torch.randn((M, N), device=device)
 
     M_BLOCK = 8
     N_BLOCK = 32
@@ -421,7 +428,7 @@ def test_tensor_descriptor_in_function():
         assert size == 2 * 128 * (grid_m * grid_n)
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
@@ -441,7 +448,8 @@ def tensor_descriptor_return_helper(ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: t
 
 
 @pytest.mark.interpreter
-def test_tensor_descriptor_return_value():
+@pytest.mark.skipif(is_hip(), reason="HIP devices don't correctly handle function calls with pointer arguments")
+def test_tensor_descriptor_return_value(device):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -453,14 +461,14 @@ def test_tensor_descriptor_return_value():
         out_desc.store([moffset, noffset], value.abs())
 
     M, N = 32, 128
-    inp = torch.randn((M, N), device="xpu")
+    inp = torch.randn((M, N), device=device)
 
     M_BLOCK = 8
     N_BLOCK = 32
     out = inp.new_zeros((M, N))
 
     def alloc_fn(size: int, align: int, stream: Optional[int]) -> torch.Tensor:
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
@@ -478,7 +486,8 @@ def tensor_descriptor_arg_helper(in_desc, out_desc, M_BLOCK: tl.constexpr, N_BLO
 
 
 @pytest.mark.interpreter
-def test_tensor_descriptor_argument():
+@pytest.mark.skipif(is_hip(), reason="HIP devices don't correctly handle function calls with pointer arguments")
+def test_tensor_descriptor_argument(device):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -487,14 +496,14 @@ def test_tensor_descriptor_argument():
         tensor_descriptor_arg_helper(in_desc, out_desc, M_BLOCK, N_BLOCK)
 
     M, N = 32, 128
-    inp = torch.randn((M, N), device="xpu")
+    inp = torch.randn((M, N), device=device)
 
     M_BLOCK = 8
     N_BLOCK = 32
     out = inp.new_zeros((M, N))
 
     def alloc_fn(size: int, align: int, stream: Optional[int]) -> torch.Tensor:
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
@@ -545,7 +554,7 @@ def matmul_kernel_make_tensor_descriptor(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("num_ctas", [1])
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, num_stages", [
     (128, 128, 16, 1),
     (256, 64, 32, 2),
@@ -555,14 +564,18 @@ def matmul_kernel_make_tensor_descriptor(a_ptr, b_ptr, c_ptr,  #
     (32, 32, 32, 4),
     (256, 128, 32, 4),
 ])
-def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, BLOCK_K):
-    device = "xpu"
+def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, BLOCK_K, device):
+    if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
+        pytest.xfail("CTAs is unsupported for these cards")
+    if is_hip() and (BLOCK_M, BLOCK_N, BLOCK_K, num_stages) == (256, 128, 32, 4):
+        pytest.skip("Insufficient shared memory on HIP devices")
+
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
     else:
         M, N, K = 1024, 512, 256
 
-    if (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 512, 32), (256, 128, 32)]:
+    if is_xpu() and (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 512, 32), (256, 128, 32)]:
         pytest.skip("FIXME: issue #3923")
 
     torch.manual_seed(42)
@@ -575,11 +588,11 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         assert size == 3 * 128 * grid[0] * grid[1] * num_ctas
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
-    matmul_kernel_make_tensor_descriptor[grid](
+    kernel = matmul_kernel_make_tensor_descriptor[grid](
         A,
         B,
         C,
@@ -595,6 +608,16 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
     )
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+    if not is_cuda():
+        return
+
+    if torch.cuda.get_device_capability(0)[0] >= 9:
+        assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm[
+            "ptx"]
+    if BLOCK_M >= 64 * num_ctas and BLOCK_N >= 64 and torch.cuda.get_device_capability()[0] == 9:
+        # TODO: The use of stmatrix for Blackwell is currently not supported.
+        # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
+        assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
 
 
 @triton.jit
@@ -643,10 +666,10 @@ def kernel_make_tensor_descriptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr
 
 
 @pytest.mark.interpreter
-def test_make_tensor_descriptor_loop_carried():
-    return pytest.skip("FIXME: issue #4132")
-
-    device = "xpu"
+@pytest.mark.skipif(is_hip(), reason="Currently unsupported by HIP devices")
+def test_make_tensor_descriptor_loop_carried(device):
+    if is_xpu():
+        pytest.skip("FIXME: issue #4132")
     M, N = 64, 512
     torch.manual_seed(42)
     A = torch.randn((M, N), dtype=torch.float32, device=device)
@@ -657,12 +680,12 @@ def test_make_tensor_descriptor_loop_carried():
         assert size == 128 * grid[0]
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
     ref_out = A + 15
-    kernel_make_tensor_descriptor_loop_carried[grid](
+    kernel = kernel_make_tensor_descriptor_loop_carried[grid](
         A,
         M,
         N,
@@ -670,6 +693,9 @@ def test_make_tensor_descriptor_loop_carried():
         NBLOCK,
     )
     torch.testing.assert_close(ref_out, A)
+    if is_cuda() and torch.cuda.get_device_capability(0)[0] in (9, 10):
+        assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm[
+            "ptx"]
 
 
 @triton.jit
@@ -736,11 +762,15 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.interpreter
-def test_tensor_descriptor_batched_gemm_2d_tma():
-    return pytest.skip("FIXME: issue #4132")
-
-    device = "xpu"
+def test_tensor_descriptor_batched_gemm_2d_tma(device):
+    if is_xpu():
+        pytest.skip("FIXME: issue #4132")
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
+
+    if is_hip():
+        # Insufficient share memory for the larger block size
+        BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64
+
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
     else:
@@ -761,7 +791,7 @@ def test_tensor_descriptor_batched_gemm_2d_tma():
         assert size == 128 * 3 * (num_stages + 1) * grid[0]
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
@@ -772,7 +802,10 @@ def test_tensor_descriptor_batched_gemm_2d_tma():
         BLOCK_M, BLOCK_N, BLOCK_K,  #
         NUM_SMS,  #
         num_stages=num_stages, num_warps=8)
-    torch.xpu.synchronize()
+    if is_cuda():
+        torch.cuda.synchronize()
+    elif is_xpu():
+        torch.xpu.synchronize()
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
 
@@ -837,9 +870,13 @@ def batched_gemm_3d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.interpreter
-def test_tensor_descriptor_batched_gemm_3d_tma():
-    device = "xpu"
+def test_tensor_descriptor_batched_gemm_3d_tma(device):
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
+
+    if is_hip():
+        # Insufficient share memory for the larger block size
+        BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 64
+
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
     else:
@@ -860,20 +897,82 @@ def test_tensor_descriptor_batched_gemm_3d_tma():
         assert size == 128 * 3 * grid[0]
         assert align == 128
         assert stream == 0
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
-    batched_gemm_3d_tma_kernel[grid](
+    h = batched_gemm_3d_tma_kernel[grid](
         a, b, c,  #
         B, M, N, K,  #
         tl.float16,  #
         BLOCK_M, BLOCK_N, BLOCK_K,  #
         NUM_SMS,  #
         num_stages=num_stages, num_warps=8)
-    torch.xpu.synchronize()
+    if is_cuda():
+        torch.cuda.synchronize()
+    elif is_xpu():
+        torch.xpu.synchronize()
+
+    if is_cuda() and (capability := torch.cuda.get_device_capability(0)[0]) in (9, 10):
+        dot_op = {9: "warp_group_dot", 10: "tc_gen5_mma"}
+        assert dot_op[capability] in h.asm["ttgir"]
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+@pytest.mark.parametrize("ndim", [3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK, device):
+    if is_xpu():
+        pytest.skip("FIXME: issue #4221")
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
+        desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=shape,
+            strides=strides,
+            block_shape=BLOCK_SHAPE,
+        )
+        ndim: tl.constexpr = len(BLOCK_SHAPE)
+
+        offs = (0, ) * ndim
+        M_BLOCK: tl.constexpr = BLOCK_SHAPE[-2]
+        N_BLOCK: tl.constexpr = BLOCK_SHAPE[-1]
+        block = desc.load(offs).reshape(M_BLOCK, N_BLOCK)
+
+        idx = tl.arange(0, M_BLOCK)[:, None] * strides[-2] + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    alloc_shape = (1, 1, 1, 7, INNER_BLOCK)[-ndim:]
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device=device, dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+
+    if INNER_BLOCK * inp.element_size() < 32:
+        return pytest.xfail("Invalid last dim size")
+
+    BLOCK_SHAPE = (1, 1, 1, 8, INNER_BLOCK)[-ndim:]
+    out = inp.new_empty(BLOCK_SHAPE)
+
+    constexpr_block_shape = tuple(tl.constexpr(v) for v in BLOCK_SHAPE)
+    kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape)
+
+    # Check in-bounds
+    actual = unwrap_tensor(out)
+    expect = unwrap_tensor(inp)
+    idx = [slice(None, s) for s in inp.shape]
+    torch.testing.assert_close(expect, actual[idx])
+
+    # Check out-of-bounds
+    actual[idx].zero_()
+    expect = expect.new_zeros(BLOCK_SHAPE)
+    torch.testing.assert_close(expect, actual)
 
 
 @triton.jit
@@ -946,15 +1045,15 @@ def matmul_kernel_rank_reducing(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32"])
-def test_tensor_descriptor_rank_reducing_matmul(dtype_str):
+def test_tensor_descriptor_rank_reducing_matmul(dtype_str, device):
     NUM_SMS = 4
     M, N, K = 256, 256, 64
-    A = to_triton(numpy_random((1, M, K), dtype_str), device="xpu", dst_type=dtype_str)
-    B = to_triton(numpy_random((1, N, K), dtype_str), device="xpu", dst_type=dtype_str)
+    A = to_triton(numpy_random((1, M, K), dtype_str), device=device, dst_type=dtype_str)
+    B = to_triton(numpy_random((1, N, K), dtype_str), device=device, dst_type=dtype_str)
     C = A.new_empty(1, M, N)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
     matmul_kernel_rank_reducing[(NUM_SMS, )](
@@ -1035,7 +1134,7 @@ def matmul_kernel_reshape(a_ptr, b_ptr, c_ptr,  #
 
 
 @pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32"])
-def test_tensor_descriptor_reshape_matmul(dtype_str):
+def test_tensor_descriptor_reshape_matmul(dtype_str, device):
     NUM_SMS = 4
     M, N, K = 256, 256, 128
     BLOCK_SIZE_M = 64
@@ -1061,21 +1160,21 @@ def test_tensor_descriptor_reshape_matmul(dtype_str):
         return X_reshaped
 
     A_reshaped = chunk(A, BLOCK_SIZE_M, BLOCK_SIZE_K)
-    A = to_triton(A, device="xpu", dst_type=dtype_str)
-    A_reshaped = to_triton(A_reshaped, device="xpu", dst_type=dtype_str)
+    A = to_triton(A, device=device, dst_type=dtype_str)
+    A_reshaped = to_triton(A_reshaped, device=device, dst_type=dtype_str)
 
     B = numpy_random((N, K), dtype_str)
     if dtype_str == "float32":
         B = trunc_to_tf32(B)
 
     B_reshaped = chunk(B, BLOCK_SIZE_N, BLOCK_SIZE_K)
-    B = to_triton(B, device="xpu", dst_type=dtype_str)
-    B_reshaped = to_triton(B_reshaped, device="xpu", dst_type=dtype_str)
+    B = to_triton(B, device=device, dst_type=dtype_str)
+    B_reshaped = to_triton(B_reshaped, device=device, dst_type=dtype_str)
 
     C = A.new_empty(M, N)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        return torch.empty(size, dtype=torch.int8, device="xpu")
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
     matmul_kernel_reshape[(NUM_SMS, )](
@@ -1094,3 +1193,119 @@ def test_tensor_descriptor_reshape_matmul(dtype_str):
     actual = unwrap_tensor(C)
     expect = torch.matmul(A, B.mT)
     torch.testing.assert_close(expect, actual, atol=1e-1, rtol=1e-4)
+
+
+def f8_to_f16(x, dtype):
+
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        tl.store(Y + offs, x, mask=mask)
+
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
+    dtype = getattr(tl, dtype)
+    kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+    return ret
+
+
+@triton.jit
+def mxfp8_mxfp4_matmul_tma(  #
+        a_ptr, b_ptr, output_ptr,  #
+        a_scale, b_scale,  #
+        M, N, K,  #
+        stride_scale,  #
+        stride_am, stride_ak,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M: tl.constexpr,  #
+        BLOCK_N: tl.constexpr,  #
+        BLOCK_K: tl.constexpr,  #
+        NUM_STAGES: tl.constexpr):  #
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_bn_tma = pid_n * BLOCK_N
+    offs_ak = tl.arange(0, BLOCK_K)
+    offs_scale_k = tl.arange(0, BLOCK_K // 32)
+    a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
+    b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak)
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
+    offs_bk = 0
+
+    b_desc = tl.make_tensor_descriptor(
+        b_ptr,
+        shape=[N, K // 2],
+        strides=[K // 2, 1],
+        block_shape=[BLOCK_N, BLOCK_K // 2],
+    )
+
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+        a = tl.load(a_ptrs)
+        b = b_desc.load([offs_bn_tma, offs_bk])
+
+        scale_a = tl.load(a_scale_ptr)
+        scale_b = tl.load(b_scale_ptr)
+        accumulator = tl.dot_scaled(a, scale_a, "e5m2", b.T, scale_b, "e2m1", accumulator)
+        a_ptrs += BLOCK_K * stride_ak
+
+        offs_bk += b_desc.block_shape[-1]
+        a_scale_ptr += BLOCK_K // 32
+        b_scale_ptr += BLOCK_K // 32
+
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(output_ptrs, accumulator, mask=c_mask)
+
+
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
+                                                       (128, 256, 256)])
+@pytest.mark.parametrize("NUM_STAGES", [1, 3])
+@pytest.mark.skipif(is_hip(), reason="HIP devices don't have full support for MX formats")
+def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
+    if BLOCK_N == 256 and BLOCK_K == 256:
+        NUM_STAGES = min(NUM_STAGES, 2)
+
+    if BLOCK_K < K and is_cuda() and torch.cuda.get_device_capability(0)[0] != 10:
+        pytest.skip("Currently broken on hopper")
+
+    a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
+
+    dtype_src_str = "float8e5"
+
+    b_mxfp4 = MXFP4Tensor(size=(N, K), device=device).random()
+    b = b_mxfp4.to_packed_tensor(dim=1)
+    b_ref = b_mxfp4.to(torch.float32).T
+
+    a_scale_mxfp4 = MXScaleTensor(size=(M, (K + 32 - 1) // 32), device=device).random(high=64.0)
+    b_scale_mxfp4 = MXScaleTensor(size=(N, (K + 32 - 1) // 32), device=device).random(high=64.0)
+    a_scale = a_scale_mxfp4.data
+    b_scale = b_scale_mxfp4.data
+
+    a_scale_ref = a_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1)[:M, :K]
+    b_scale_ref = b_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1).T.contiguous()[:K, :N]
+
+    output = a.new_empty((M, N), dtype=torch.float32)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    mxfp8_mxfp4_matmul_tma[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
+                                 output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
+
+    a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
+    ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
+
+    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
