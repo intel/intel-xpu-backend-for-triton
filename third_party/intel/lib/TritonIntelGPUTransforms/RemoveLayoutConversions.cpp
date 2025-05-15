@@ -710,8 +710,6 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
     } else if (auto nextAdvanceOp = dyn_cast<AdvanceOp>(user)) {
       // Recursive call to handle the next AdvanceOp in the chain.
       updateAdvanceOpChain(nextAdvanceOp, makeTensorPtrOp, data);
-    } else {
-      llvm_unreachable("Unexpected user of AdvanceOp");
     }
   }
 }
@@ -794,22 +792,19 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
 
 #if 1
   // Update the store operation with the new layout.
-  for (Operation *user : makeTensorPtrOp->getUsers()) {
+  SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
+  for (Operation *user : makeTensorPtrOpUsers) {
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
       storeOp.setOperand(0, newMakeTensorPtrOp);
       storeOp.setOperand(1, getValueAs(value, encoding));
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
       updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp,
                            getValueAs(value, encoding));
-    } else {
-      llvm_unreachable("Unexpected user of MakeTensorPtrOp");
     }
   }
 #else
-  // The encoding of the StoreOp is updated with the new
-  // operands:
-  // - the Ptr created by the MakeTensorPtrOp with the new data
-  // type
+  // The encoding of the StoreOp is updated with the new operands:
+  // - the Ptr created by the MakeTensorPtrOp with the new data type
   // - the forwarded DPAS encoding.
   Value newOperand = getValueAs(value, encoding);
   storeOp.setOperand(0, newMakeTensorPtrOp);
