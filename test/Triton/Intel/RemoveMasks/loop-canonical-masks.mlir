@@ -110,7 +110,6 @@ module {
   // CHECK: }
 
   tt.func public @test_kernel2(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
-    %c7_i32 = arith.constant 7 : i32
     %c8_i32 = arith.constant 8 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32>
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x256xf16>
@@ -165,7 +164,7 @@ module {
     %33 = arith.addi %31, %32 : tensor<64x256xi32>
     %34 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<64x256x!tt.ptr<f16>>
     %35 = tt.addptr %34, %33 : tensor<64x256x!tt.ptr<f16>>, tensor<64x256xi32>
-    %36:3 = scf.for %arg3 = %c0_i32 to %c7_i32 step %c1_i32 iter_args(%arg4 = %cst, %arg5 = %27, %arg6 = %35) -> (tensor<128x256xf32>, tensor<128x64x!tt.ptr<f16>>, tensor<64x256x!tt.ptr<f16>>)  : i32 {
+    %36:3 = scf.for %arg3 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg4 = %cst, %arg5 = %27, %arg6 = %35) -> (tensor<128x256xf32>, tensor<128x64x!tt.ptr<f16>>, tensor<64x256x!tt.ptr<f16>>)  : i32 {
       %51 = arith.muli %arg3, %c64_i32 : i32
       %52 = arith.subi %c512_i32, %51 : i32
       %53 = tt.splat %52 : i32 -> tensor<1x64xi32>
