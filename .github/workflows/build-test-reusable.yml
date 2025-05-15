@@ -320,14 +320,15 @@ jobs:
         if: matrix.suite == 'rest'
         run: |
           cat <<EOF | tee tutorials.txt
-          10i-experimental-block-pointer
+          01-vector-add
+          02-fused-softmax
           03-matrix-multiplication
           03i-matrix-multiplication
-          05-layer-norm
-          02-fused-softmax
           04-low-memory-dropout
-          01-vector-add
+          05-layer-norm
           07-extern-functions
+          09-persistent-matmul
+          10i-experimental-block-pointer
           EOF
 
       - name: Run Tutorials
