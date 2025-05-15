@@ -695,7 +695,7 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 // Recursively update the operands in a chain of AdvanceOps, after setting the
 // pointer operand of the first one.
 static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
-                                 Value data) {
+                                 Value dataToStore) {
   OpBuilder rewriter(advanceOp);
   auto newAdvanceOp =
       rewriter.create<AdvanceOp>(advanceOp.getLoc(), makeTensorPtrOp.getType(),
@@ -704,12 +704,10 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
   SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
   for (Operation *user : advanceOpUsers) {
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
-      // Update the StoreOp operands.
       storeOp.setOperand(0, newAdvanceOp);
-      storeOp.setOperand(1, data);
-    } else if (auto nextAdvanceOp = dyn_cast<AdvanceOp>(user)) {
-      // Recursive call to handle the next AdvanceOp in the chain.
-      updateAdvanceOpChain(nextAdvanceOp, makeTensorPtrOp, data);
+      storeOp.setOperand(1, dataToStore);
+    } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
+      updateAdvanceOpChain(advanceOp, makeTensorPtrOp, dataToStore);
     }
   }
 }
@@ -790,26 +788,17 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
       makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
       makeTensorPtrOp.getOffsets(), makeTensorPtrOp.getOrderAttr());
 
-#if 1
   // Update the store operation with the new layout.
   SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
+  auto dataToStore = getValueAs(value, encoding);
   for (Operation *user : makeTensorPtrOpUsers) {
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
       storeOp.setOperand(0, newMakeTensorPtrOp);
-      storeOp.setOperand(1, getValueAs(value, encoding));
+      storeOp.setOperand(1, dataToStore);
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
-      updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp,
-                           getValueAs(value, encoding));
+      updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp, dataToStore);
     }
   }
-#else
-  // The encoding of the StoreOp is updated with the new operands:
-  // - the Ptr created by the MakeTensorPtrOp with the new data type
-  // - the forwarded DPAS encoding.
-  Value newOperand = getValueAs(value, encoding);
-  storeOp.setOperand(0, newMakeTensorPtrOp);
-  storeOp.setOperand(1, newOperand);
-#endif
 
   // If the DPAS encoding is forwarded, we do not need the
   // convertOp anymore if the convertOp was only used by the
