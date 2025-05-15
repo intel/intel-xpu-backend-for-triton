@@ -695,7 +695,8 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 // Recursively update the operands in a chain of AdvanceOps, after setting the
 // pointer operand of the first one.
 static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
-                                 Value data, OpBuilder &rewriter) {
+                                 Value data) {
+  OpBuilder rewriter(advanceOp);
   auto newAdvanceOp =
       rewriter.create<AdvanceOp>(advanceOp.getLoc(), makeTensorPtrOp.getType(),
                                  makeTensorPtrOp, advanceOp.getOffsets());
@@ -708,7 +709,7 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
       storeOp.setOperand(1, data);
     } else if (auto nextAdvanceOp = dyn_cast<AdvanceOp>(user)) {
       // Recursive call to handle the next AdvanceOp in the chain.
-      updateAdvanceOpChain(nextAdvanceOp, makeTensorPtrOp, data, rewriter);
+      updateAdvanceOpChain(nextAdvanceOp, makeTensorPtrOp, data);
     } else {
       llvm_unreachable("Unexpected user of AdvanceOp");
     }
@@ -799,7 +800,7 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
       storeOp.setOperand(1, getValueAs(value, encoding));
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
       updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp,
-                           getValueAs(value, encoding), rewriter);
+                           getValueAs(value, encoding));
     } else {
       llvm_unreachable("Unexpected user of MakeTensorPtrOp");
     }
@@ -1648,6 +1649,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after propagating layouts forward:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
 
     cleanupConvertOps();
@@ -1658,6 +1660,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after backward remat:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
 
     // Cleanup dummy converts created during backward remat.
@@ -1669,6 +1672,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after hoisting converts:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
 
     // 4. Apply clean up patterns to remove remove dead convert and dead code
@@ -1684,6 +1688,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
   }
 };
