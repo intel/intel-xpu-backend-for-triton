@@ -387,6 +387,13 @@ jobs:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
 
+      - name: Upload tutorials test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports/tutorials.xml
+
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v4
         with:
