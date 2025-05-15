@@ -28,7 +28,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %4 = arith.addi %3, %2 : tensor<128xi32, #blocked0>
         %5 = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %7 = arith.cmpi slt, %4, %5: tensor<128xi32, #blocked0>
-        // CHECK: %[[mask:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
+        // CHECK: %[[mask:.*]] = llvm.icmp "slt"
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]]
         %ret = amdgpu.buffer_load %arg0[%offset], %7 stride = %c256_i32 : tensor<128xf32, #blocked0>
@@ -51,7 +51,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %5 = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %7 = arith.cmpi slt, %4, %5: tensor<128xi32, #blocked0>
         %other = arith.constant dense<0.00e+00> : tensor<128xf32, #blocked0>
-        // CHECK: %[[mask:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
+        // CHECK: %[[mask:.*]] = llvm.icmp "slt"
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]]
         // CHECK: llvm.select
@@ -90,7 +90,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %4 = arith.addi %3, %2 : tensor<128xi32, #blocked0>
         %5 = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %7 = arith.cmpi slt, %4, %5: tensor<128xi32, #blocked0>
-        // CHECK: %[[mask0:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
+        // CHECK: %[[mask0:.*]] = llvm.icmp "slt"
         // CHECK: %[[mask1:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[mask2:.*]] = llvm.and %[[mask1]], %[[mask0]]
         // CHECK: %[[offset:.*]] = llvm.select %[[mask2]]
@@ -216,7 +216,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %4 = arith.addi %3, %2 : tensor<128xi32, #blocked0>
         %5 = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %mask = arith.cmpi slt, %4, %5: tensor<128xi32, #blocked0>
-        // CHECK: %[[mask0:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
+        // CHECK: %[[mask0:.*]] = llvm.icmp "slt"
         // There should be a single release fence before any atomics
         // CHECK: llvm.fence syncscope("agent") release
         // CHECK: %[[mask1:.*]] = llvm.mlir.constant(true) : i1
