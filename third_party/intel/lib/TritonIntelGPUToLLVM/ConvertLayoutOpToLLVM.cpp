@@ -348,14 +348,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         b.mul(subGroupId, b.int_val(offsetBitWidth, rowLength * numRows));
     Value subGroupBasePtr =
         b.gep(ptrType, elementType, smemBase, ValueRange{subGroupOffset},
-              /*inbounds=*/true);
+              LLVM::GEPNoWrapFlags::inbounds);
     Value base = subGroupBasePtr;
     // Store in matrix, transposed
     for (Value val : inVals) {
       rewriter.create<TritonGEN::SubGroupBlockWriteOp>(loc, base, val);
       base = b.gep(base.getType(), elementType, base,
                    ArrayRef<LLVM::GEPArg>{rowLength},
-                   /*inbounds=*/true);
+                   LLVM::GEPNoWrapFlags::inbounds);
     }
 
     // Load from matrix, non-trasposed.
@@ -370,7 +370,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
               b.int_val(offsetBitWidth, numContiguousRows * rowLength));
     Value workItemBasePtr =
         b.gep(ptrType, elementType, subGroupBasePtr, ValueRange{workItemOffset},
-              /*inbounds=*/true);
+              LLVM::GEPNoWrapFlags::inbounds);
     int32_t rowsPerThread = numRows / threadsPerWarp;
     assert((numContiguousRows == 1 || numContiguousRows == rowsPerThread) &&
            "In case of more than one contiguous rows per thread, these must be "
@@ -385,15 +385,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     for (unsigned i = 0; i < rowsPerThread; ++i) {
       for (unsigned j = 0; j < threadsPerWarp; j += vecLoadWidth) {
         transposedVecs.push_back(b.load(vecType, workItemBasePtr));
-        workItemBasePtr = b.gep(workItemBasePtr.getType(), vecType,
-                                workItemBasePtr, ArrayRef<LLVM::GEPArg>{1},
-                                /*inbounds=*/true);
+        workItemBasePtr =
+            b.gep(workItemBasePtr.getType(), vecType, workItemBasePtr,
+                  ArrayRef<LLVM::GEPArg>{1}, LLVM::GEPNoWrapFlags::inbounds);
       }
       workItemBasePtr =
           b.gep(workItemBasePtr.getType(), elementType, workItemBasePtr,
                 // "Go back" to the first column and increment by the stride.
                 ArrayRef<LLVM::GEPArg>{workItemStride - threadsPerWarp},
-                /*inbounds=*/true);
+                LLVM::GEPNoWrapFlags::inbounds);
     }
     return unwrapFromVectors(loc, transposedVecs, rewriter);
   }
