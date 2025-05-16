@@ -10,7 +10,7 @@ if [ $? -ne 0 ]; then
     exit 125  # skip commit if build failed
 fi
 
-bash "$SCRIPTS_DIR/test-pytorch.sh" "$@"
+bash "$SCRIPTS_DIR/test-pytorch2.sh" "$@"
 if [ $? -ne 0 ]; then
     exit 1  # mark bad commit
 else
