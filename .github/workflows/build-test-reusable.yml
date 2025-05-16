@@ -306,6 +306,7 @@ jobs:
         run: |
           cat <<EOF | tee tutorials.txt
           06-fused-attention
+          09-persistent-matmul
           EOF
 
       - name: Select tutorials to run (scaled_dot)
@@ -327,7 +328,6 @@ jobs:
           04-low-memory-dropout
           05-layer-norm
           07-extern-functions
-          09-persistent-matmul
           10i-experimental-block-pointer
           EOF
 
