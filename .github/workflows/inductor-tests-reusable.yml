@@ -73,10 +73,12 @@ jobs:
       - name: Run inductor tests
         run: |
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
+          cp scripts/try-bisect.sh scripts/try-bisect2.sh
           git bisect start
           git bisect bad e4f83c9998a30036cf73124867bbdba177196ee4
           git bisect good 0bcc8265e677e5321606a3311bf71470f14456a8
-          git bisect run bash scripts/try-bisect.sh ${{ inputs.suite }}
+
+          git bisect run bash scripts/try-bisect2.sh ${{ inputs.suite }}
 
       - name: Report environment details
         if: always()
