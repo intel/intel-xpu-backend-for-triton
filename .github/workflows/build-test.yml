@@ -44,15 +44,6 @@ on:
         type: boolean
         default: false
 
-  pull_request:
-    branches:
-      - main
-      - release/**
-  push:
-    branches:
-      - main
-      - release/**
-
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
   group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
