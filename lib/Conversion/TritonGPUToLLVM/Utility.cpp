@@ -562,11 +562,22 @@ SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
     return {llvmStruct};
   ArrayRef<Type> types =
       cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
-  SmallVector<Value> results(types.size());
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  for (unsigned i = 0; i < types.size(); ++i) {
-    Type type = types[i];
-    results[i] = b.extract_val(type, llvmStruct, i);
+  unsigned remaining = types.size();
+  SmallVector<Value> results(remaining);
+  // If llvmStruct is an InsertValueOp, iterate up over the chain of
+  // InsertValueOps and get the inserted values instead of extracting
+  // from the struct.
+  for (auto ins = llvmStruct.getDefiningOp<LLVM::InsertValueOp>();
+       ins && ins.getPosition()[0] == remaining - 1;
+       ins = ins.getContainer().getDefiningOp<LLVM::InsertValueOp>()) {
+    results[--remaining] = ins.getValue();
+  }
+  if (remaining) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    for (unsigned i = 0; i < remaining; ++i) {
+      Type type = types[i];
+      results[i] = b.extract_val(type, llvmStruct, i);
+    }
   }
   return results;
 }
