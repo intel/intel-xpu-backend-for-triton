@@ -75,9 +75,9 @@ jobs:
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
           cp scripts/try-bisect.sh scripts/try-bisect2.sh
           cp scripts/test-pytorch.sh scripts/test-pytorch2.sh
-          git bisect start
-          git bisect bad 17ea9de07829e65c189434c87de1782fee15366b
-          git bisect good a7b48c81aaebf4d700e95c72531985a4e9ca456e
+          git bisect start --first-parent
+          git bisect bad f4eb3295c3cbc5764e6b9048425f01394bd12525
+          git bisect good bdec54eec150a8337fc680a90eecce1667035e55
 
           git bisect run bash scripts/try-bisect2.sh ${{ inputs.suite }}
 
