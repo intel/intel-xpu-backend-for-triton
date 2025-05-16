@@ -49,6 +49,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -71,7 +73,13 @@ jobs:
       - name: Run inductor tests
         run: |
           export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
-          bash scripts/test-pytorch.sh ${{ inputs.suite }}
+          cp scripts/try-bisect.sh scripts/try-bisect2.sh
+          cp scripts/test-pytorch.sh scripts/test-pytorch2.sh
+          git bisect start --first-parent
+          git bisect bad f4eb3295c3cbc5764e6b9048425f01394bd12525
+          git bisect good bdec54eec150a8337fc680a90eecce1667035e55
+
+          git bisect run bash scripts/try-bisect2.sh ${{ inputs.suite }}
 
       - name: Report environment details
         if: always()
