@@ -7,6 +7,10 @@ on:
         description: PyTorch ref, keep empty for default
         type: string
         default: ""
+      triton_ref:
+        description: Triton XPU ref, keep empty for default
+        type: string
+        default: ""
       suite:
         description: Test suite
         type: string
@@ -69,6 +73,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.triton_ref }}
 
       - name: Load pip cache
         id: pip-cache
