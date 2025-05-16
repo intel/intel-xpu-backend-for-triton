@@ -733,6 +733,9 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
          "MakeTensorPtrOp should be the only op that creates a tensor pointer");
   auto makeTensorPtrOp = cast<MakeTensorPtrOp>(defOp);
 
+//  llvm::errs() << "storeOp: " << storeOp << "\n";    
+//  llvm::errs() << "makeTensorPtrOp: " << makeTensorPtrOp << "\n";  
+
   // DPAS encoding have to be propagated if conversion from a DPAS layout to
   // another layout has been done before.
   auto convertOp = storeOp.getValue().getDefiningOp<ConvertLayoutOp>();
@@ -790,8 +793,14 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
 
   // Update the store operation with the new layout.
   SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
-  auto dataToStore = getValueAs(value, encoding);
+  Value dataToStore = getValueAs(value, encoding);
+  Block *storeBB = storeOp->getBlock();
+//  llvm::errs() << "dataToStore: " << dataToStore << "\n";
   for (Operation *user : makeTensorPtrOpUsers) {
+    Block *userBB = user->getBlock();
+    if (storeBB != userBB) 
+      continue;
+
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
       storeOp.setOperand(0, newMakeTensorPtrOp);
       storeOp.setOperand(1, dataToStore);
@@ -799,6 +808,10 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
       updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp, dataToStore);
     }
   }
+
+//  auto mod = makeTensorPtrOp->getParentOfType<ModuleOp>();
+//  llvm::errs() << "Module after rewriting store:\n"; mod.dump(); llvm::errs() << "\n";
+//  assert(succeeded(verify(mod)) && "Module verification failed");
 
   // If the DPAS encoding is forwarded, we do not need the
   // convertOp anymore if the convertOp was only used by the
