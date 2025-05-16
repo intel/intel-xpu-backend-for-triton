@@ -30,8 +30,8 @@ test-cpp:
 
 .PHONY: test-unit
 test-unit: all
-	cd python/test/unit && $(PYTEST) -s -n 8 --ignore=cuda/test_flashattention.py \
-		--ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
+	cd python/test/unit && $(PYTEST) -s -n 8 --ignore=language/test_line_info.py \
+		--ignore=language/test_subprocess.py --ignore=test_debug.py
 	$(PYTEST) -s -n 8 python/test/unit/language/test_subprocess.py
 	$(PYTEST) -s -n 8 python/test/unit/test_debug.py --forked
 	$(PYTEST) -s -n 8 python/triton_kernels/tests/
