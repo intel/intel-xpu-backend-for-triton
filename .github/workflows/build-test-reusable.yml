@@ -305,7 +305,6 @@ jobs:
         if: matrix.suite == 'mxfp'
         run: |
           cat <<EOF | tee tutorials.txt
-          06-fused-attention
           09-persistent-matmul
           EOF
 
@@ -313,8 +312,7 @@ jobs:
         if: matrix.suite == 'scaled_dot'
         run: |
           cat <<EOF | tee tutorials.txt
-          08-grouped-gemm
-          10-experimental-block-pointer
+          06-fused-attention
           EOF
 
       - name: Select tutorials to run (rest)
@@ -328,6 +326,8 @@ jobs:
           04-low-memory-dropout
           05-layer-norm
           07-extern-functions
+          08-grouped-gemm
+          10-experimental-block-pointer
           10i-experimental-block-pointer
           EOF
 
