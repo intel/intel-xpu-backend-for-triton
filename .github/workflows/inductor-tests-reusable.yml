@@ -76,7 +76,7 @@ jobs:
           cp scripts/try-bisect.sh scripts/try-bisect2.sh
           cp scripts/test-pytorch.sh scripts/test-pytorch2.sh
           git bisect start
-          git bisect bad e4f83c9998a30036cf73124867bbdba177196ee4
+          git bisect bad 17ea9de07829e65c189434c87de1782fee15366b
           git bisect good a7b48c81aaebf4d700e95c72531985a4e9ca456e
 
           git bisect run bash scripts/try-bisect2.sh ${{ inputs.suite }}
