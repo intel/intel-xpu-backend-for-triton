@@ -165,7 +165,7 @@ configs = [
     for w in [8, 16, 32] \
     ]
 
-tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL'])
+tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL', 'STAGE'])
 
 
 @triton.jit
