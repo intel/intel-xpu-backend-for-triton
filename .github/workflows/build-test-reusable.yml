@@ -299,10 +299,42 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
-      - name: Run Tutorials
+      # FIXME: make sure new tutorials are added to one of the groups (mxfp, scaled_dot, rest)
+
+      - name: Select tutorials to run (mxfp)
+        if: matrix.suite == 'mxfp'
+        run: |
+          cat <<EOF | tee tutorials.txt
+          09-persistent-matmul
+          EOF
+
+      - name: Select tutorials to run (scaled_dot)
+        if: matrix.suite == 'scaled_dot'
+        run: |
+          cat <<EOF | tee tutorials.txt
+          06-fused-attention
+          EOF
+
+      - name: Select tutorials to run (rest)
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial
+          cat <<EOF | tee tutorials.txt
+          01-vector-add
+          02-fused-softmax
+          03-matrix-multiplication
+          03i-matrix-multiplication
+          04-low-memory-dropout
+          05-layer-norm
+          07-extern-functions
+          08-grouped-gemm
+          10-experimental-block-pointer
+          10i-experimental-block-pointer
+          EOF
+
+      - name: Run Tutorials
+        if: matrix.suite == 'mxfp' || matrix.suite == 'scaled_dot' || matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
 
       - name: Get transformers version
         if: matrix.suite == 'rest'
