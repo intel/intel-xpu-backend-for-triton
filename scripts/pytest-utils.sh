@@ -59,7 +59,7 @@ pytest() {
 }
 
 run_tutorial_test() {
-    if [[ -v TRITON_TEST_SELECTFILE ]] && ! grep -qF "$1" "$TRITON_TEST_SELECTFILE"; then
+    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$1" "$TRITON_TEST_SELECTFILE"; then
         return
     fi
 
