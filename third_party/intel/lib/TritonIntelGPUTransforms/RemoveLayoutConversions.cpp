@@ -692,6 +692,26 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
   assertOp->setOperand(0, newOperand);
 }
 
+// Recursively update the operands in a chain of AdvanceOps, after setting the
+// pointer operand of the first one.
+static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
+                                 Value dataToStore) {
+  OpBuilder rewriter(advanceOp);
+  auto newAdvanceOp =
+      rewriter.create<AdvanceOp>(advanceOp.getLoc(), makeTensorPtrOp.getType(),
+                                 makeTensorPtrOp, advanceOp.getOffsets());
+
+  SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
+  for (Operation *user : advanceOpUsers) {
+    if (auto storeOp = dyn_cast<StoreOp>(user)) {
+      storeOp.setOperand(0, newAdvanceOp);
+      storeOp.setOperand(1, dataToStore);
+    } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
+      updateAdvanceOpChain(advanceOp, makeTensorPtrOp, dataToStore);
+    }
+  }
+}
+
 bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // Disable 2D block store on LTS.
   if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
@@ -705,13 +725,19 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   if (!isTensorPointerType(ptr.getType()))
     return false;
 
-  // 2D block store are preceeded by a MakeTensorPtrOp
-  auto makeTensorPtrOp = ptr.getDefiningOp<MakeTensorPtrOp>();
-  if (!makeTensorPtrOp)
-    return false;
+  // Locate the operation that created the block pointer.
+  Operation *defOp = ptr.getDefiningOp();
+  while (auto advanceOp = dyn_cast<AdvanceOp>(defOp))
+    defOp = advanceOp.getPtr().getDefiningOp();
+  assert(isa<MakeTensorPtrOp>(defOp) &&
+         "MakeTensorPtrOp should be the only op that creates a tensor pointer");
+  auto makeTensorPtrOp = cast<MakeTensorPtrOp>(defOp);
 
-  // DPAS encoding have to be propagate if conversion from DPAS to
-  // other has been done before.
+//  llvm::errs() << "storeOp: " << storeOp << "\n";    
+//  llvm::errs() << "makeTensorPtrOp: " << makeTensorPtrOp << "\n";  
+
+  // DPAS encoding have to be propagated if conversion from a DPAS layout to
+  // another layout has been done before.
   auto convertOp = storeOp.getValue().getDefiningOp<ConvertLayoutOp>();
   PointerType newPtrType;
   Attribute encoding;
@@ -758,21 +784,34 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
     encoding = convertOpSrcType.getEncoding();
   }
 
-  // We create a new MakeTensorPtrOp with the new data type.
+  // Create a new MakeTensorPtrOp with the new layout.
   OpBuilder rewriter(makeTensorPtrOp);
-  Value newStorePtr = rewriter.create<MakeTensorPtrOp>(
+  Value newMakeTensorPtrOp = rewriter.create<MakeTensorPtrOp>(
       makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
       makeTensorPtrOp.getShape(), makeTensorPtrOp.getStrides(),
-      makeTensorPtrOp.getOffsets(), rewriter.getDenseI32ArrayAttr({1, 0}));
+      makeTensorPtrOp.getOffsets(), makeTensorPtrOp.getOrderAttr());
 
-  // The encoding of the StoreOp is updated with the new
-  // operands:
-  // - the Ptr created by the MakeTensorPtrOp with the new data
-  // type
-  // - the forwarded DPAS encoding.
-  Value newOperand = getValueAs(value, encoding);
-  storeOp.setOperand(0, newStorePtr);
-  storeOp.setOperand(1, newOperand);
+  // Update the store operation with the new layout.
+  SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
+  Value dataToStore = getValueAs(value, encoding);
+  Block *storeBB = storeOp->getBlock();
+//  llvm::errs() << "dataToStore: " << dataToStore << "\n";
+  for (Operation *user : makeTensorPtrOpUsers) {
+    Block *userBB = user->getBlock();
+    if (storeBB != userBB) 
+      continue;
+
+    if (auto storeOp = dyn_cast<StoreOp>(user)) {
+      storeOp.setOperand(0, newMakeTensorPtrOp);
+      storeOp.setOperand(1, dataToStore);
+    } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
+      updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp, dataToStore);
+    }
+  }
+
+//  auto mod = makeTensorPtrOp->getParentOfType<ModuleOp>();
+//  llvm::errs() << "Module after rewriting store:\n"; mod.dump(); llvm::errs() << "\n";
+//  assert(succeeded(verify(mod)) && "Module verification failed");
 
   // If the DPAS encoding is forwarded, we do not need the
   // convertOp anymore if the convertOp was only used by the
@@ -1607,6 +1646,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after propagating layouts forward:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
 
     cleanupConvertOps();
@@ -1617,6 +1657,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after backward remat:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
 
     // Cleanup dummy converts created during backward remat.
@@ -1628,6 +1669,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after hoisting converts:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
 
     // 4. Apply clean up patterns to remove remove dead convert and dead code
@@ -1643,6 +1685,7 @@ public:
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";
       m.dump();
+      assert(succeeded(verify(m)) && "Module verification failed");
     });
   }
 };
