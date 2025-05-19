@@ -66,6 +66,7 @@ env:
   N_RUNS: ${{ inputs.n_runs || '1' }}
   IGC_VectorizerAllowEXP2: '1'
   IGC_VectorizerAllowFSUB: '1'
+  IGC_VectorizerAllowFMADMatching: '0'
 
 jobs:
   build:
