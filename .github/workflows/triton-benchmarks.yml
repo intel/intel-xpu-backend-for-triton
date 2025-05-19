@@ -130,6 +130,7 @@ jobs:
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           ls $PTI_LIBS_DIR
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python fused_softmax.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -141,6 +142,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           NEW_SHAPES=0 python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -154,6 +156,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-base.csv
@@ -167,6 +170,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_tensor_of_ptr_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -179,6 +183,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_tensor_desc_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -191,6 +196,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           TRANSPOSE_B=1 python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-bt.csv
@@ -204,6 +210,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           TRANSPOSE_A=1 python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/matmul-performance.csv $REPORTS/matmul-performance-at.csv
@@ -217,6 +224,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_streamk_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -228,6 +236,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_splitk_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -239,6 +248,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_preop_exp_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -249,6 +259,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_gelu_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -259,6 +270,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python gemm_postop_addmatrix_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -270,6 +282,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           INT8_ONLY=1 python gemm_postop_addmatrix_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -281,6 +294,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_benchmark.py --reports $REPORTS --n_runs $N_RUNS
 
@@ -293,6 +307,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           FA_KERNEL_MODE="bwd" \
             python flash_attention_benchmark.py --reports $REPORTS --n_runs $N_RUNS
@@ -307,6 +322,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_tensor_desc_benchmark.py --reports $REPORTS --n_runs $N_RUNS
           mv $REPORTS/attn-performance.csv $REPORTS/attn-tensor-desc-performance.csv
@@ -320,6 +336,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python prefix_sums.py --reports $REPORTS --n_runs $N_RUNS
           source ../../scripts/capture-hw-details.sh
@@ -330,6 +347,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/micro_benchmarks
           python run_benchmarks.py --reports $REPORTS
 
@@ -338,6 +356,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
 
@@ -349,6 +368,7 @@ jobs:
         run: |
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
+          export PTI_DEVICE_SYNC_DELTA=1
           cd benchmarks/triton_kernels_benchmark
           python flex_attention_benchmark_custom_masks.py --reports $REPORTS --n_runs $N_RUNS
 
