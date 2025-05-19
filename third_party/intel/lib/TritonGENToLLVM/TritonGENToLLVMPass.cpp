@@ -138,7 +138,6 @@ template <
                      bool> = true>
 static std::pair<Value, Value>
 computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
-  return {op.getBaseWidth(), op.getX()};
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value baseAddr =
@@ -151,9 +150,9 @@ computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
   // Adjust the base width to account for the byte offset.
   Value adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
   // Adjust the x-coordinate offset based on the number of scalar elements.
-  Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
+  Value elemSizeInBytes = b.i32_val(std::log2(op.getElemSizeInBits() / 8));
   Value adjustedXOffset =
-      b.add(op.getX(), b.udiv(offsetInBytes, elemSizeInBytes));
+      b.add(op.getX(), b.lshr(offsetInBytes, elemSizeInBytes));
   return {adjustedBaseWidth, adjustedXOffset};
 }
 
