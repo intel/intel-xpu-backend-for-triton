@@ -44,6 +44,10 @@ on:
         type: boolean
         default: false
 
+  pull_request:
+    branches:
+      - main
+      - release/**
   push:
     branches:
       - main
