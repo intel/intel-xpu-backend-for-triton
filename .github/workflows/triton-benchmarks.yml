@@ -133,17 +133,6 @@ jobs:
           python build_report.py $REPORTS/softmax-performance.csv $REPORTS/softmax-xetla-report.csv --benchmark softmax --compiler xetla --param_cols "N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
 
       - name: Run Triton GEMM kernel benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py') }}
-        run: |
-          cd benchmarks/triton_kernels_benchmark
-          NEW_SHAPES=0 python gemm_benchmark.py --reports $REPORTS --n_runs $N_RUNS
-          source ../../scripts/capture-hw-details.sh
-          python build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-triton-report.csv --benchmark gemm-legacy --compiler triton --param_cols "B,M,K,N" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
-          python build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-xetla-report.csv --benchmark gemm-legacy --compiler xetla --param_cols "B,M,K,N" --tflops_col XeTLA-TFlops --hbm_col "XeTLA-GB/s" --tag $TAG
-          python build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-onednn-report.csv --benchmark gemm-legacy --compiler onednn --param_cols "B,M,K,N" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG
-          python build_report.py $REPORTS/matmul-performance.csv $REPORTS/gemm-cutlass-report.csv --benchmark gemm-legacy --compiler cutlass --param_cols "B,M,K,N" --tflops_col CUTLASS-TFlops --hbm_col "CUTLASS-GB/s" --tag $TAG
-
-      - name: Run Triton GEMM kernel benchmark - new shapes
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'gemm_benchmark.py_newshapes')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'gemm_benchmark.py_newshapes') }}
         run: |
           cd benchmarks/triton_kernels_benchmark
