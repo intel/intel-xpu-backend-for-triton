@@ -317,6 +317,7 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    static SmallVector<unsigned, 3> getInstrShapeForLayout(DistributedEncodingTrait layout, ArrayRef<int64_t> shape, bool memoryRowMajor, unsigned kWidth, MLIRContext* context);
   }];
 
   let hasCustomAssemblyFormat = 1;
