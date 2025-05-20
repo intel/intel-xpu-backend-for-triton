@@ -1508,8 +1508,7 @@ struct LoadOpConversion
 
       Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
 
-      SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
-      int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
+      const unsigned elemsPerLane = tileWidth * tileHeight / threadsPerWarp;
       Type load2DGenXType =
           LLVM::getVectorType(IntegerType::get(ctx, elemSizeInBits),
                               elemsPerLane); // make it opaque type.
@@ -1559,12 +1558,12 @@ struct LoadOpConversion
           for (int repM = 0; repM < repCluster[0]; ++repM) {
 
             Value offsetY =
-                b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
-                                               repM * elemsPerInstr[0]));
+                b.add(warpId0Offset,
+                      b.i32_val(m * replicaStride[0] + repM * tileHeight));
             for (int repN = 0; repN < repCluster[1]; ++repN) {
               Value offsetX =
-                  b.add(warpId1Offset, b.i32_val(n * replicaStride[1] +
-                                                 repN * elemsPerInstr[1]));
+                  b.add(warpId1Offset,
+                        b.i32_val(n * replicaStride[1] + repN * tileWidth));
 
               auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
                   loc, load2DGenXType,
@@ -1575,9 +1574,9 @@ struct LoadOpConversion
                   /*x*/ b.trunc(i32_ty, offsetX),
                   /*y*/ b.trunc(i32_ty, offsetY),
                   /*elem_size_in_bits*/ elemSizeInBits,
-                  /*tile_width*/ elemsPerInstr[1],
-                  /*tile_height*/ elemsPerInstr[0],
-                  /*v_blocks*/ 1,
+                  /*tile_width*/ tileWidth,
+                  /*tile_height*/ tileHeight,
+                  /*v_blocks*/ vBlocks,
                   /*transpose*/ false,
                   /*vnni_transform*/ false);
               if (failed(load2dOp.verify())) {
