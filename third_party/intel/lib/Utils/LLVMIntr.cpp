@@ -13,9 +13,10 @@ LLVM::CallOp createDeviceFunctionCall(
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   MLIRContext *ctx = rewriter.getContext();
   Location loc = UnknownLoc::get(ctx);
+  OpBuilder b(ctx);
 
   LLVM::LLVMFuncOp funcOp =
-      LLVM::lookupOrCreateFn(moduleOp, funcName, argTypes, retType).value();
+      LLVM::lookupOrCreateFn(b, moduleOp, funcName, argTypes, retType).value();
   funcOp.setCConv(cc);
   funcOp.setConvergent(funcAttributeOptions.isConvergent);
   funcOp.setNoUnwind(funcAttributeOptions.isNoUnwind);

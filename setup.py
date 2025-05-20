@@ -15,6 +15,7 @@ from io import BytesIO
 from distutils.command.clean import clean
 from pathlib import Path
 from typing import Optional
+import warnings
 
 from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
@@ -40,6 +41,9 @@ except ImportError:
     class editable_wheel:
         pass
 
+
+# Too noisy: https://github.com/pypa/setuptools/blob/b74789e2aa3227e85d61b40708959b35d7f666cc/setuptools/command/build_py.py#L343
+warnings.filterwarnings("ignore", message="Package .* is absent from the `packages` configuration")
 
 sys.path.insert(0, os.path.dirname(__file__))
 

@@ -890,7 +890,7 @@ public:
         cast<RankedTensorType>(op.getSrc().getType()).getElementType();
     Value subGroupBasePtr =
         b.gep(ptrType, elementType, localBuffer, ValueRange{subGroupOffset},
-              /*inbounds=*/true);
+              LLVM::GEPNoWrapFlags::inbounds);
 
     // Store matrix in local memory.
     VectorType intVecTy =
@@ -905,7 +905,7 @@ public:
     Value workItemOffset = b.mul(wiStride, subGroupLocalId);
     Value workItemBasePtr =
         b.gep(ptrType, elementType, subGroupBasePtr, ValueRange{workItemOffset},
-              /*inbounds=*/true);
+              LLVM::GEPNoWrapFlags::inbounds);
     rewriter.replaceOp(op, b.load(src.getType(), workItemBasePtr));
     return success();
   }

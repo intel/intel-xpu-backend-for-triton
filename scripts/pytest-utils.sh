@@ -59,40 +59,26 @@ pytest() {
 }
 
 run_tutorial_test() {
+    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$1" "$TRITON_TEST_SELECTFILE"; then
+        return
+    fi
+
     echo
     echo "****** Running $1 test ******"
     echo
 
-    TUTORIAL_RESULT=TODO
-
-    if [[ -f $TRITON_TEST_SKIPLIST_DIR/tutorials.txt ]]; then
-        if grep --fixed-strings --quiet "$1" "$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"; then
-            TUTORIAL_RESULT=SKIP
-        fi
-    fi
+    run_tutorial_args=(
+        "--skip-list=$TRITON_TEST_SKIPLIST_DIR/tutorials.txt"
+        "$1.py"
+    )
 
     if [[ $TRITON_TEST_REPORTS = true ]]; then
-        RUN_TUTORIAL="python -u $SCRIPTS_DIR/run_tutorial.py --reports $TRITON_TEST_REPORTS_DIR $1.py"
-    else
-        RUN_TUTORIAL="python -u $1.py"
+        run_tutorial_args+=(
+            "--reports=$TRITON_TEST_REPORTS_DIR"
+        )
     fi
 
-    if [[ $TUTORIAL_RESULT = TODO ]]; then
-        if $RUN_TUTORIAL; then
-            TUTORIAL_RESULT=PASS
-        else
-            TUTORIAL_RESULT=FAIL
-        fi
-    fi
-
-    if [[ $TRITON_TEST_REPORTS = true ]]; then
-        mkdir -p "$TRITON_TEST_REPORTS_DIR"
-        echo $TUTORIAL_RESULT > "$TRITON_TEST_REPORTS_DIR/tutorial-$1.txt"
-    fi
-
-    if [[ $TUTORIAL_RESULT = FAIL && $TRITON_TEST_IGNORE_ERRORS = false ]]; then
-        exit 1
-    fi
+    python -u "$SCRIPTS_DIR/run_tutorial.py" "${run_tutorial_args[@]}" || $TRITON_TEST_IGNORE_ERRORS
 }
 
 capture_runtime_env() {

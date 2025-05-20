@@ -119,7 +119,7 @@ public:
       int64_t N =
           cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
       unsigned END = maskInfo.END;
-      bool cond = UB <= ((N + END - 1) / END) - 1;
+      bool cond = UB == ((N - END) / END) + 1;
       return builder.create<arith::ConstantIntOp>(forOp.getLoc(), cond,
                                                   builder.getI1Type());
     }
@@ -156,7 +156,8 @@ public:
       int64_t UB = cast<arith::ConstantIntOp>(defOp).value();
       int64_t N =
           cast<arith::ConstantIntOp>(maskInfo.N.getDefiningOp()).value();
-      return UB == ((N + maskInfo.END - 1) / maskInfo.END) - 1;
+      unsigned END = maskInfo.END;
+      return UB == ((N - END) / END) + 1;
     }
 
     if (!isa<arith::DivSIOp>(defOp))
