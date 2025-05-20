@@ -307,7 +307,7 @@ def get_benchmark(
     if not (transpose_a or transpose_b):
         if not new_shapes:
             supported_providers['xetla'] = 'XeTLA'
-        if "580" not in torch.xpu.get_device_name():
+        if '580' not in torch.xpu.get_device_name():
             # FIXME: enable cutlass on bmg
             supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
