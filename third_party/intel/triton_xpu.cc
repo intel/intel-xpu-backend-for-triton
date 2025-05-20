@@ -52,11 +52,6 @@ using ret = py::return_value_policy;
   m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
     pm.addPass(builder({val0, val1, val2}));                                   \
   })
-#define ADD_PASS_WRAPPER_OPT_6(name, builder, ty0, ty1, ty2, ty3, ty4, ty5)    \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2,          \
-                 ty3 val3, ty4 val4, ty5 val5) {                               \
-    pm.addPass(builder({val0, val1, val2, val3, val4, val5}));                 \
-  })
 
 static uint32_t findKernels(llvm::Module &M,
                             std::set<llvm::Function *> &functions) {
@@ -103,9 +98,30 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMatchTargetSize);
   ADD_PASS_WRAPPER_0("add_schedule_load",
                      gpu::intel::createTritonIntelGPUScheduleLoad);
-  ADD_PASS_WRAPPER_OPT_6("add_triton_annotate_module",
-                         gpu::intel::createTritonAnnotateModule, unsigned, bool,
-                         bool, bool, unsigned, const std::string &);
+
+  py::class_<gpu::intel::TritonAnnotateModuleOptions>(m,
+                                                      "AnnotateModuleOptions")
+      .def(py::init<>())
+      .def_readwrite("min_sg_size",
+                     &gpu::intel::TritonAnnotateModuleOptions::minSGSize)
+      .def_readwrite("support_sg_2d_block",
+                     &gpu::intel::TritonAnnotateModuleOptions::supportSG2DBlock)
+      .def_readwrite("support_dpas",
+                     &gpu::intel::TritonAnnotateModuleOptions::supportDPAS)
+      .def_readwrite(
+          "support_bf16_conversion",
+          &gpu::intel::TritonAnnotateModuleOptions::supportBF16Conversion)
+      .def_readwrite(
+          "support_16bit_atomics",
+          &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
+      .def_readwrite("threads_per_warp",
+                     &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
+      .def_readwrite("target_arch",
+                     &gpu::intel::TritonAnnotateModuleOptions::targetArch);
+  ADD_PASS_WRAPPER_OPT_1("add_triton_annotate_module",
+                         gpu::intel::createTritonAnnotateModule,
+                         gpu::intel::TritonAnnotateModuleOptions);
+
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_materialize_block_pointer",
@@ -289,9 +305,11 @@ void init_triton_intel(py::module &&m) {
           FastMathFlags FMF;
           // Default to allow contract when default fp fusion is not disabled.
           if ((!enableFpFusion.has_value() || enableFpFusion.value()) &&
-              !fastMath.has_value())
-            FMF.setAllowContract(true);
-          else if (fastMath.has_value() && fastMath.value())
+              !fastMath.has_value()) {
+            if (op->getOpcode() == Instruction::FAdd ||
+                op->getOpcode() == Instruction::FMul)
+              FMF.setAllowContract(true);
+          } else if (fastMath.has_value() && fastMath.value())
             FMF.setFast(true);
           inst.setFastMathFlags(FMF);
         }

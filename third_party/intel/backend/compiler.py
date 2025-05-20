@@ -219,11 +219,14 @@ class XPUBackend(BaseBackend):
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
-                                                        properties["has_subgroup_2d_block_io"],
-                                                        properties["has_subgroup_matrix_multiply_accumulate"],
-                                                        properties["has_bfloat16_conversions"], opt.threads_per_warp,
-                                                        target_arch)
+        module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
+        module_opts.min_sg_size = min(properties["sub_group_sizes"])
+        module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
+        module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
+        module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
+        module_opts.threads_per_warp = opt.threads_per_warp
+        module_opts.target_arch = target_arch
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod)
 
     @staticmethod

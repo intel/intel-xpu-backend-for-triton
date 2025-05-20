@@ -231,8 +231,9 @@ static void rewriteLoadWithSLM(ModuleOp &m, DenseSet<Value> &dotWithSLMOperands,
 
   auto ptrToSharedMemTy = tt::PointerType::get(
       type.getElementType(), TritonGEN::TritonGENMemorySpace::kWorkgroup);
-  func.insertArgument(func.getNumArguments(), ptrToSharedMemTy, {},
-                      func.getLoc());
+  LogicalResult inserted = func.insertArgument(
+      func.getNumArguments(), ptrToSharedMemTy, {}, func.getLoc());
+  assert(succeeded(inserted) && "failed to insert argument");
   b.setInsertionPointAfter(load);
   auto subgroupId =
       b.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr);
@@ -818,8 +819,9 @@ static Value hackAlloc(OpBuilder &b, Location loc, Type ptrTy, int64_t size) {
   constexpr StringLiteral SharedAttrName = "ttg.shared";
   if (!m->getAttr(SharedAttrName)) {
     m->setAttr(SharedAttrName, b.getIndexAttr(size));
-    func.insertArgument(func.getNumArguments(), ptrTy, b.getDictionaryAttr({}),
-                        loc);
+    LogicalResult inserted = func.insertArgument(func.getNumArguments(), ptrTy,
+                                                 b.getDictionaryAttr({}), loc);
+    assert(succeeded(inserted) && "failed to insert argument");
   }
   return func.getArguments().back();
 }

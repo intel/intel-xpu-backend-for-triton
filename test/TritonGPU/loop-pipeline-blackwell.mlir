@@ -8,28 +8,31 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @chained_dot_scaled_acc
   // CHECK-DAG: %[[C0_F:.+]] = arith.constant dense<0.000000e+00>
-  // CHECK-DAG: %[[C2_F:.+]] = arith.constant dense<2.000000e+00>
   // CHECK-DAG: %[[TRUE:.+]] = arith.constant true
-  // CHECK-DAG: %[[FALSE:.+]] = arith.constant false
   // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
   // CHECK-DAG: %[[C1:.+]] = arith.constant 1 : i32
-  // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc : ()
+  // CHECK-DAG: %[[C2:.+]] = arith.constant 2 : i32
+  // CHECK: %[[TMEM_BUF:.+]] = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32
   // CHECK: ttng.tmem_store %[[C0_F]], %[[TMEM_BUF]], %[[TRUE]]
-  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK: %[[BAR_BUF:.+]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[ACC1:.+]] = ttng.tmem_load %[[TMEM_BUF]]
+  // CHECK: %[[ACC2:.+]] = arith.mulf %[[ACC1]]
+  // CHECK: ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]]
   // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
-  // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
-  // CHECK: %[[FOR_RET:.+]]:8 = scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[WAIT_PRED:.+]] = %[[FALSE]]
-  // CHECK:   ttng.wait_barrier %[[BAR_BUF]], %[[PHASE]], %[[WAIT_PRED]]
-  // CHECK:   %[[ACC:.+]] = ttng.tmem_load %[[TMEM_BUF]]
-  // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC]], %[[C2_F]]
-  // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]], %[[TRUE]]
-  // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], %[[TRUE]], %[[BAR_BUF]]
+  // CHECK: ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], {{.*}}, %[[BAR_SLICE]]
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[BAR_IDX:.+]] = %[[C1]], {{.*}}, %[[BAR_PREV:.*]] = %[[BAR_SLICE]], %[[PHASE_PREV:.+]] = %[[C0]], %[[A_DEP:.+]] = %[[A_OP]], %[[B_DEP:.+]] = %[[B_OP]]
+  // CHECK:   ttng.wait_barrier %[[BAR_PREV]], %[[PHASE_PREV]] deps %[[A_DEP]], %[[B_DEP]]
+  // CHECK:   %[[ACC1:.+]] = ttng.tmem_load %[[TMEM_BUF]]
+  // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC1]]
+  // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]]
+  // CHECK:   %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[BAR_IDX]]]
+  // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], {{.*}}, %[[BAR_SLICE]]
   // CHECK:   %[[PHASE_NEG:.+]] = arith.xori %[[PHASE]], %[[C1]]
-  // CHECK:   %[[PHASE_NEXT:.+]] = arith.select %[[WAIT_PRED]], %[[PHASE_NEG]], %[[PHASE]]
-  // CHECK:   scf.yield %[[PHASE_NEXT]], %[[TRUE]]
-  // CHECK: ttng.wait_barrier %[[BAR_BUF]], %[[FOR_RET]]#0, %[[FOR_RET]]#1
-  // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C0]]]
-  // CHECK: ttng.inval_barrier %[[BAR_SLICE]]
+  // CHECK:   %[[BAR_IDX_P1:.+]] = arith.addi %[[BAR_IDX]], %[[C1]]
+  // CHECK:   %[[BAR_IDX_CMP:.+]] = arith.cmpi sge, %[[BAR_IDX_P1]], %[[C2]]
+  // CHECK:   %[[BAR_IDX_NEXT:.+]] = arith.select %[[BAR_IDX_CMP]], %[[C0]], %[[BAR_IDX_P1]]
+  // CHECK:   %[[PHASE_NEXT:.+]] = arith.select %[[BAR_IDX_CMP]], %[[PHASE_NEG]], %[[PHASE]]
+  // CHECK:   scf.yield %[[PHASE_NEXT]], %[[BAR_IDX_NEXT]], {{.*}}, %[[BAR_SLICE]], %[[PHASE]], %[[A_OP]], %[[B_OP]]
   // CHECK: ttg.local_dealloc %[[BAR_BUF]]
   // CHECK: ttng.tmem_load %[[TMEM_BUF]]
   tt.func public @chained_dot_scaled_acc(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg3: i32) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
@@ -111,10 +114,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.targ
                     %A : !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32},
                     %B : !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {
 // CHECK-LABEL: tt.func @matmul_loop_cast_load
-// CHECK: ttng.init_barrier
 // CHECK: scf.for
-// CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[BAR:.*]][%true] :
-// CHECK: ttng.wait_barrier %[[BAR]]
+// CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}
+// CHECK-NOT: ttng.wait_barrier
     %a_ptr_splat = tt.splat %A : !tt.ptr<f8E4M3FN> -> tensor<128x32x!tt.ptr<f8E4M3FN>, #AL>
     %a_tmp0 = tt.make_range {end = 32: i32, start = 0: i32} : tensor<32xi32, #ALs0>
     %a_tmp1 = tt.expand_dims %a_tmp0 {axis = 0 : i32} : tensor<32xi32, #ALs0> -> tensor<1x32xi32, #AL>
@@ -398,4 +400,59 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     } {tt.num_stages = 3 : i32}
      tt.return %99#0 : tensor<128x128xf32, #blocked4>
   }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#load_blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared_T = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+
+#smem = #ttg.shared_memory
+#tmem_acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+#tmem_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = false>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+// CHECK-LABEL: @load_into_async_mma
+tt.func public @load_into_async_mma(
+  %lhs_ptrs: tensor<128x64x!tt.ptr<f8E4M3FN>, #load_blocked>,
+  %scale_ptrs: tensor<128x8x!tt.ptr<i8>, #load_blocked>,
+  %tmem: !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
+  %barrier: !ttg.memdesc<1xi64, #shared, #smem, mutable>,
+  %rhs_shared: !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
+  %n_tiles: i32
+) {
+  %true = arith.constant true
+  %c0_i32 = arith.constant 0 : i32
+  %c64_i32 = arith.constant 64 : i32
+
+  %cst = arith.constant dense<0> : tensor<64x8xi8, #load_blocked>
+  %rhs_scales = ttng.tmem_alloc %cst : (tensor<64x8xi8, #load_blocked>) -> !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+  // CHECK-COUNT-6: ttg.async_copy_global_to_local
+  scf.for %i = %c0_i32 to %n_tiles step %c64_i32 : i32 {
+    %lhs_offs = tt.splat %i : i32 -> tensor<128x64xi32, #load_blocked>
+    %lhs_ptrs_i = tt.addptr %lhs_ptrs, %lhs_offs {tt.divisibility = dense<16> : tensor<128x64xi32>, tt.contiguity = dense<32> : tensor<128x64xi32>, tt.constancy = dense<1> : tensor<128x64xi32>} : tensor<128x64x!tt.ptr<f8E4M3FN>, #load_blocked>, tensor<128x64xi32, #load_blocked>
+    %lhs = tt.load %lhs_ptrs_i : tensor<128x64x!tt.ptr<f8E4M3FN>, #load_blocked>
+    %lhs_shared = ttg.local_alloc %lhs : (tensor<128x64xf8E4M3FN, #load_blocked>) -> !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>
+
+    %scales_offs = tt.splat %i : i32 -> tensor<128x8xi32, #load_blocked>
+    %scales_ptrs_i = tt.addptr %scale_ptrs, %scales_offs {tt.divisibility = dense<16> : tensor<128x8xi32>, tt.contiguity = dense<32> : tensor<128x8xi32>, tt.constancy = dense<1> : tensor<128x8xi32>} : tensor<128x8x!tt.ptr<i8>, #load_blocked>, tensor<128x8xi32, #load_blocked>
+    %scales = tt.load %scales_ptrs_i : tensor<128x8x!tt.ptr<i8>, #load_blocked>
+    %scales_tmem = ttng.tmem_alloc %scales : (tensor<128x8xi8, #load_blocked>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3, %barrier[%true] :
+      !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>,
+      !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
+      !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
+      !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
+      !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  }
+
+  tt.return
+}
+
 }
