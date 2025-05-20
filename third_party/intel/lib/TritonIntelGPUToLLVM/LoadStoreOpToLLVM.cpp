@@ -1471,7 +1471,6 @@ struct LoadOpConversion
     const unsigned tileWidth = tileParams[1];
     const unsigned vBlocks = tileParams[2];
 
-
     DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -1690,9 +1689,6 @@ struct LoadOpConversion
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
-    // unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
-    // unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
-
     MLIRContext *ctx = rewriter.getContext();
     const StringAttr dimOuterStr = S("dim" + std::to_string(dimOuter));
     const StringAttr dimInnerStr = S("dim" + std::to_string(dimInner));
@@ -1770,7 +1766,6 @@ struct LoadOpConversion
       llvm::dbgs() << "tile layout done\n";
     });
 
-    // unsigned vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
 
@@ -1797,27 +1792,19 @@ struct LoadOpConversion
         // operand per inst.
         // Note: the tileHeight and numOperandsPer2DLoadM are the column size
         // now.
-        numOperandsPer2DLoadM = tileHeight / elemsPerDPASInst[threadOrder[rank - 2]];
-            // (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+        numOperandsPer2DLoadM =
+            tileHeight / elemsPerDPASInst[threadOrder[rank - 2]];
       }
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
       numOperandsPer2DloadN = 1;
     }
 
-  #if 0
-    // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
-    // enlarging the tileHeight.
-    numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
-    tileHeight = tileHeight * numOperandsPer2DLoadM;
-#endif 
-
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
-    // vBlocks = numOperandsPer2DloadN;
 
     numOperandsOuterDimPerLoad =
         isOperandA ? numOperandsPer2DLoadM : numOperandsPer2DloadN;
@@ -1992,7 +1979,6 @@ struct LoadOpConversion
     if (isTransposeRequired) {
       // adjust the block io parameter to align HW's limitations on
       // transposing load.
-      // tileWidth = tileWidth / (32 / originalElemBits);
       elemSizeInBits = 32;
     }
     Value elemSizeInBytes = b.i32_val(originalElemBits / 8);
