@@ -8,6 +8,10 @@ on:
         description: PyTorch ref, keep empty for default
         type: string
         default: ""
+      triton_ref:
+        description: Triton XPU ref, keep empty for default
+        type: string
+        default: ""
       suite:
         description: Test suite
         type: choice
@@ -124,6 +128,7 @@ jobs:
     uses: ./.github/workflows/e2e-reusable.yml
     with:
       pytorch_ref: ${{ inputs.pytorch_ref }}
+      triton_ref: ${{ inputs.triton_ref }}
       suite: ${{ matrix.suite }}
       mode: ${{ matrix.mode }}
       test_mode: accuracy
