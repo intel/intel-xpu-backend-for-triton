@@ -12,6 +12,7 @@ add_triton_ut(
   NAME Dialect
   SRCS DialectTest.cpp
   LIBS
+    MLIRParser
     TritonGPUIR
     TritonGPUTransforms
     TritonIntelAnalysis

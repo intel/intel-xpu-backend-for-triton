@@ -59,6 +59,10 @@ pytest() {
 }
 
 run_tutorial_test() {
+    if [[ -f $TRITON_TEST_SELECTFILE ]] && ! grep -qF "$1" "$TRITON_TEST_SELECTFILE"; then
+        return
+    fi
+
     echo
     echo "****** Running $1 test ******"
     echo
