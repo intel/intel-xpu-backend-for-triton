@@ -161,33 +161,49 @@ static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
 ////////////////////////////////////////////////////////////////////////////////
 
 using Dim = std::tuple<int, int, int, int>;
+using GemmRunPtr = int (*)(const at::Tensor &A, const at::Tensor &B,
+                           at::Tensor &C, const int M, const int N, const int K,
+                           const int L);
 
-/// Hard‑coded shapes
-/// See link for more details
-/// https://github.com/codeplaysoftware/cutlass-fork/blob/sycl-develop/benchmarks/pvc/benchmarks.hpp
-using TileShape_RRR_1 = cute::Shape<cute::_256, cute::_256, cute::_32>;
-using TileShape_RRR_2 = cute::Shape<cute::_128, cute::_512, cute::_32>;
-using TileShape_RRR_3 = cute::Shape<cute::_256, cute::_128, cute::_32>;
-using TileShape_RRR_4 = cute::Shape<cute::_128, cute::_256, cute::_16>;
-using TileShape_RRR_5 = cute::Shape<cute::_8, cute::_128, cute::_32>;
+/// Each entry associates a specific problem dimension to their corresponding
+/// tile shape. For more details, see:
+/// https://github.com/codeplaysoftware/cutlass-sycl/tree/sycl-develop/benchmarks
+
+// clang-format off
+static constexpr std::array<std::pair<Dim, GemmRunPtr>, 18> tile_map = {{
+  { { 1,    1024, 8192,   28672 }, &gemm_run<cute::Shape<cute::_128, cute::_512, cute::_32>> },
+  { { 32,   4096, 128,    4096  }, &gemm_run<cute::Shape<cute::_256, cute::_128, cute::_32>> },
+  { { 4096, 8,    16384,  128   }, &gemm_run<cute::Shape<cute::_128, cute::_256, cute::_16>> },
+  { { 4096, 8,    128,    16384 }, &gemm_run<cute::Shape<cute::_8,   cute::_128, cute::_32>> },
+  { { 1,    1,    1024,   4096  }, &gemm_run<cute::Shape<cute::_8,   cute::_64,  cute::_32>> },
+  { { 1,    1,    4096,   4096  }, &gemm_run<cute::Shape<cute::_8,   cute::_128, cute::_32>> },
+  { { 1,    1,    6144,   4096  }, &gemm_run<cute::Shape<cute::_8,   cute::_128, cute::_32>> },
+  { { 1,    1,    14336,  4096  }, &gemm_run<cute::Shape<cute::_64,  cute::_256, cute::_32>> },
+  { { 1,    1,    28672,  4096  }, &gemm_run<cute::Shape<cute::_32,  cute::_128, cute::_32>> },
+  { { 1,    1,    128256, 4096  }, &gemm_run<cute::Shape<cute::_32,  cute::_512, cute::_32>> },
+  { { 1,    1,    4096,   14336 }, &gemm_run<cute::Shape<cute::_8,   cute::_128, cute::_32>> },
+  { { 1,    8,    1024,   4096  }, &gemm_run<cute::Shape<cute::_8,   cute::_64,  cute::_32>> },
+  { { 1,    8,    4096,   4096  }, &gemm_run<cute::Shape<cute::_256, cute::_256, cute::_32>> },
+  { { 1,    8,    6144,   4096  }, &gemm_run<cute::Shape<cute::_256, cute::_256, cute::_32>> },
+  { { 1,    8,    14336,  4096  }, &gemm_run<cute::Shape<cute::_64,  cute::_256, cute::_32>> },
+  { { 1,    8,    28672,  4096  }, &gemm_run<cute::Shape<cute::_32,  cute::_128, cute::_32>> },
+  { { 1,    8,    128256, 4096  }, &gemm_run<cute::Shape<cute::_32,  cute::_512, cute::_32>> },
+  { { 1,    8,    4096,   14336 }, &gemm_run<cute::Shape<cute::_256, cute::_256, cute::_32>> },
+}};
+// clang-format on
 
 auto gemm(const at::Tensor &A, const at::Tensor &B, at::Tensor &C, const int M,
           const int N, const int K, const int L) -> int {
   const Dim test_case{L, M, N, K};
 
-  /// Mapping rules
-  /// See link for more details
-  /// https://github.com/codeplaysoftware/cutlass-fork/blob/sycl-develop/benchmarks/pvc/input.in
-  if (test_case == Dim{1, 1024, 8192, 28672})
-    return gemm_run<TileShape_RRR_2>(A, B, C, M, N, K, L);
-  if (test_case == Dim{32, 4096, 128, 4096})
-    return gemm_run<TileShape_RRR_3>(A, B, C, M, N, K, L);
-  if (test_case == Dim{4096, 8, 128, 16384})
-    return gemm_run<TileShape_RRR_4>(A, B, C, M, N, K, L);
-  if (test_case == Dim{4096, 8, 16384, 128})
-    return gemm_run<TileShape_RRR_5>(A, B, C, M, N, K, L);
+  for (auto const &kv : tile_map) {
+    if (test_case == kv.first) {
+      return kv.second(A, B, C, M, N, K, L);
+    }
+  }
 
-  return gemm_run<TileShape_RRR_1>(A, B, C, M, N, K, L);
+  return gemm_run<cute::Shape<cute::_256, cute::_256, cute::_32>>(A, B, C, M, N,
+                                                                  K, L);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

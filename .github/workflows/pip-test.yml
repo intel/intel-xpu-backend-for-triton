@@ -26,8 +26,7 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: '3.9'
-  # FIXME: temporary initialize oneapi/ccl because our pytorch build requires it
-  TRITON_TEST_CMD: "source /opt/intel/oneapi/ccl/latest/env/vars.sh && scripts/test-triton.sh --skip-pytorch-install"
+  TRITON_TEST_CMD: scripts/test-triton.sh --skip-pytorch-install
 
 jobs:
   tests:
@@ -53,28 +52,15 @@ jobs:
           # transformers package is required for the inductor (e2e) test
           wheels_pattern: '{torch,transformers}-*.whl'
 
-      - name: Setup Triton
+      - name: Install Triton
         uses: ./.github/actions/setup-triton
 
-      - name: Attempt to get PyTorch XPU dependencies
+      - name: Install runtime dependencies
         run: |
-          set +e
-          curl -sSLO https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
+          curl -sSLO --retry 10 https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/.github/scripts/generate_binary_build_matrix.py
           sed -i '/^validate_nccl_dep_consistency.*/d' generate_binary_build_matrix.py
-          python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print(' '.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))"
-
-      # FIXME: dependencies for PyTorch XPU are currently maintained manually below.
-      # https://github.com/pytorch/pytorch/pull/151899/files#diff-c629948d2bb1c874955838190a9cd19f154709c0a36e071e5da91abb457d9b05
-      - name: Install Triton runtime dependencies
-        run: |
-          pip install \
-            intel-cmplr-lib-rt==2025.1.1 \
-            intel-cmplr-lib-ur==2025.1.1 \
-            intel-cmplr-lic-rt==2025.1.1 \
-            intel-sycl-rt==2025.1.1 \
-            tcmlib==1.3.0 \
-            umf==0.10.0 \
-            intel-pti==0.12.0
+          python -c "from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print('\n'.join(PYTORCH_EXTRA_INSTALL_REQUIREMENTS['xpu'].split(' | ')))" | tee /tmp/requirements.txt
+          pip install -r /tmp/requirements.txt
 
       - name: Run core tests
         run: |

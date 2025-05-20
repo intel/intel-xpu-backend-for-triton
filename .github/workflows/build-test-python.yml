@@ -58,9 +58,9 @@ jobs:
         id: matrix
         run: |
           if [[ -n "${{ inputs.runner_label }}" ]]; then
-            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"]}'
+            matrix='{"python": ["3.9", "3.10", "3.11", "3.12", "3.13"]}'
           else
-            matrix='{"python": ["3.9", "3.10", "3.11", "3.12"], "driver": ["rolling", "lts"]}'
+            matrix='{"python": ["3.9", "3.10", "3.11", "3.12", "3.13"], "driver": ["rolling", "lts"]}'
           fi
           echo "matrix=$matrix" | tee -a $GITHUB_OUTPUT
 
