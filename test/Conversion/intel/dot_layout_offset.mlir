@@ -6,7 +6,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset()
   tt.func public @dot_layout_emit_offset() {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot_operand_a>
-    // CHECK-COUNT-64:  {{.*}} = llvm.extractvalue {{.*}}
 
     // COM: Base index of the dot layout.
     // CHECK:           %[[THREAD_ID_I64:.*]] = llvm.call spir_funccc @_Z12get_local_idj
@@ -327,11 +326,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
   // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset()
   tt.func public @dot_layout_emit_offset() {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot_operand_b>
-    // CHECK-COUNT-64:           {{.*}} = llvm.extractvalue {{.*}}
-    // CHECK:           %[[VAL_142:.*]] = llvm.mlir.constant(0 : i32) : i32
-
     // COM: Base index of the dot layout.
-    // CHECK:           %[[THREAD_ID_I64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[VAL_142]])
+    // CHECK:           %[[THREAD_ID_I64:.*]] = llvm.call spir_funccc @_Z12get_local_idj
     // CHECK:           %[[THREAD_ID_I32:.*]] = llvm.trunc %[[THREAD_ID_I64]] : i64 to i32
     // CHECK:           %[[VAL_145:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:           %[[LANE_ID:.*]] = llvm.urem %[[THREAD_ID_I32]], %[[VAL_145]]  : i32

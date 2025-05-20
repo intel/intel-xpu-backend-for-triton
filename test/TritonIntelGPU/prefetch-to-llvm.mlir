@@ -39,8 +39,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_31:.*]] = llvm.add %[[VAL_30]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_32:.*]] = llvm.urem %[[VAL_31]], %[[CST_16]] : i32
     // CHECK:           %[[VAL_33:.*]] = llvm.add %[[VAL_32]], %[[CST_0]] : i32
-    // CHECK:           %[[ROW_MAJOR_OFFSET_Y:.*]] = llvm.trunc %[[VAL_33]] : i32 to i32
-    // CHECK:           %[[ROW_MAJOR_OFFSET_X:.*]] = llvm.trunc %[[VAL_29]] : i32 to i32
+    // CHECK-DAG:       %[[ROW_MAJOR_OFFSET_Y:.*]] = llvm.trunc %[[VAL_33]] : i32 to i32
+    // CHECK-DAG:       %[[ROW_MAJOR_OFFSET_X:.*]] = llvm.trunc %[[VAL_29]] : i32 to i32
 
     // CHECK:           %[[VAL_36:.*]] = llvm.insertelement {{.*}}, {{.*}} : i32] : vector<2xi32>
     // CHECK:           %[[ROW_MAJOR_OFFSETS:.*]] = llvm.insertelement %[[ROW_MAJOR_OFFSET_Y]], {{.*}} : i32] : vector<2xi32>
@@ -54,11 +54,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_35:.*]] = llvm.urem %[[VAL_34]], %[[CST_2_I32]] : i32
     // CHECK:           %[[VAL_36:.*]] = llvm.udiv %[[VAL_34]], %[[CST_2_I32]] : i32
     // CHECK:           %[[VAL_37:.*]] = llvm.urem %[[VAL_36]], %[[CST_4]] : i32
-    // CHECK:           %[[VAL_38:.*]] = llvm.mul %[[BASE_WIDTH]], %[[CST_2]] : i64
-    // CHECK:           %[[COL_MAJOR_BASE_WIDTH:.*]] = llvm.trunc %[[VAL_38]] : i64 to i32
-    // CHECK:           %[[COL_MAJOR_BASE_HEIGHT:.*]] = llvm.trunc %[[BASE_HEIGHT]] : i64 to i32
-    // CHECK:           %[[VAL_41:.*]] = llvm.mul %[[ROW_STRIDE]], %[[CST_2]] : i64
-    // CHECK:           %[[COL_MAJOR_PITCH:.*]] = llvm.trunc %[[VAL_41]] : i64 to i32
     // CHECK:           %[[VAL_43:.*]] = llvm.mul %[[VAL_35]], %[[CST_16]] : i32
     // CHECK:           %[[VAL_44:.*]] = llvm.add %[[VAL_43]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_45:.*]] = llvm.urem %[[VAL_44]], %[[CST_32]] : i32
@@ -67,11 +62,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_48:.*]] = llvm.add %[[VAL_47]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_49:.*]] = llvm.urem %[[VAL_48]], %[[CST_16]] : i32
     // CHECK:           %[[VAL_50:.*]] = llvm.add %[[VAL_49]], %[[CST_0]] : i32
-    // CHECK:           %[[COL_MAJOR_OFFSET_Y:.*]] = llvm.trunc %[[VAL_50]] : i32 to i32
-    // CHECK:           %[[COL_MAJOR_OFFSET_X:.*]] = llvm.trunc %[[VAL_46]] : i32 to i32
+    // CHECK-DAG:       %[[COL_MAJOR_OFFSET_Y:.*]] = llvm.trunc %[[VAL_50]] : i32 to i32
+    // CHECK-DAG:       %[[COL_MAJOR_OFFSET_X:.*]] = llvm.trunc %[[VAL_46]] : i32 to i32
     // CHECK:           %[[VAL_54:.*]] = llvm.insertelement %{{.*}}, {{.*}} : i32] : vector<2xi32>
     // CHECK:           %[[COL_MAJOR_OFFSETS:.*]] = llvm.insertelement %[[COL_MAJOR_OFFSET_Y]], {{.*}} : i32] : vector<2xi32>
-    // CHECK:           llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x1cPU3AS1viiiDv2_i(%[[BASE]], %{{.*}}, %[[COL_MAJOR_BASE_HEIGHT]], %[[COL_MAJOR_PITCH]], %[[COL_MAJOR_OFFSETS]]) {{.*}}
+    // CHECK:           llvm.call spir_funccc @_Z45intel_sub_group_2d_block_prefetch_16b_4r16x1cPU3AS1viiiDv2_i(%[[BASE]], %{{.*}}, %[[ROW_MAJOR_BASE_HEIGHT]], %[[ROW_MAJOR_PITCH]], %[[COL_MAJOR_OFFSETS]]) {{.*}}
     %columnMajorPtr = tt.make_tensor_ptr %arg0, [%arg4, %arg2], [%c1_i64, %arg5], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x16xf16>>
     triton_intel_gpu.prefetch %columnMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<32x16xf16>>
 
@@ -103,8 +98,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[ADDR_16:.*]] = llvm.extractvalue {{.*}}[16] : !llvm.struct<(ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>)>
     // CHECK: %[[ADDR_32:.*]] = llvm.extractvalue {{.*}}[32] : !llvm.struct<(ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>)>
     // CHECK: %[[ADDR_48:.*]] = llvm.extractvalue {{.*}}[48] : !llvm.struct<(ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>, ptr<1>)>
-    // CHECK: %[[VAL_13:.*]] = llvm.ptrtoint %[[ADDR_0]] : !llvm.ptr<1> to i64
-    // CHECK: %[[VAL_14:.*]] = llvm.ptrtoint %[[ADDR_1]] : !llvm.ptr<1> to i64
+    // CHECK-DAG: %[[VAL_13:.*]] = llvm.ptrtoint %[[ADDR_0]] : !llvm.ptr<1> to i64
+    // CHECK-DAG: %[[VAL_14:.*]] = llvm.ptrtoint %[[ADDR_1]] : !llvm.ptr<1> to i64
     // CHECK: %[[PITCH:.*]] = llvm.sub %[[VAL_14]], %[[VAL_13]] : i64
     // CHECK: %[[UNIFIED_PITCH:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[PITCH]], %[[CST_0]]) {convergent, no_unwind, will_return} : (i64, i32) -> i64
     // CHECK: %[[UNIFIED_PITCH_I32:.*]] = llvm.trunc %[[UNIFIED_PITCH]] : i64 to i32

@@ -499,13 +499,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_view_broadcast
   tt.func @basic_view_broadcast(%arg : tensor<256xf32,#blocked0>) {
-    // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0]
-    // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1]
-    // CHECK-NEXT: [[STRUCT:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32)>
-    // CHECK-NEXT: [[STRUCT1:%.*]] = llvm.insertvalue [[ARG0_0]], [[STRUCT]][0]
-    // CHECK-NEXT: [[STRUCT2:%.*]] = llvm.insertvalue [[ARG0_1]], [[STRUCT1]][1]
-    // CHECK-NEXT: [[T0:%.*]] = llvm.extractvalue [[STRUCT2]][0]
-    // CHECK-NEXT: [[T1:%.*]] = llvm.extractvalue [[STRUCT2]][1]
+    // CHECK:      [[T0:%.*]] = llvm.extractvalue %arg0[0]
+    // CHECK-NEXT: [[T1:%.*]] = llvm.extractvalue %arg0[1]
     %0 = tt.reshape %arg allow_reorder : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
     // CHECK:      [[RES:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // CHECK-NEXT: [[RES1:%.*]] = llvm.insertvalue [[T0]], [[RES]][0]
@@ -1889,13 +1884,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: convert_single_element_and_add
-  // CHECK-NOT: llvm.store
-  // CHECK-NOT: llvm.load
-  // CHECK: llvm.insertvalue
-  // CHECK: llvm.extractvalue
+  // CHECK: llvm.mlir.constant(1.000000e+03 : f32) : f32
+  // CHECK: llvm.mlir.constant(2.000000e+03 : f32) : f32
+  // CHECK: llvm.fadd %{{.*}}, %{{.*}} : f32
   tt.func public @convert_single_element_and_add() attributes {noinline = false} {
     %cst = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked1>
-    %cst2 = arith.constant dense<1.000000e+03> : tensor<1xf32, #blocked>
+    %cst2 = arith.constant dense<2.000000e+03> : tensor<1xf32, #blocked>
     %0 = ttg.convert_layout %cst : tensor<1xf32, #blocked1> -> tensor<1xf32, #blocked>
     %1 = arith.addf %0, %cst2 : tensor<1xf32, #blocked>
     tt.return
