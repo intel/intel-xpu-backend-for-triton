@@ -9,7 +9,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass, get_spvdis
-from .._utils import classproperty
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -431,24 +430,6 @@ class AsmDict(dict):
 
 
 class CompiledKernel:
-
-    # FIXME: remove launch_enter_hook/launch_exit_hook properties
-    # when pytorch has a compatible layer for the new API.
-    @classproperty
-    def launch_enter_hook(cls):
-        return knobs.runtime.launch_enter_hook
-
-    @launch_enter_hook.setter
-    def launch_enter_hook(cls, value):
-        knobs.runtime.launch_enter_hook = value
-
-    @classproperty
-    def launch_exit_hook(cls):
-        return knobs.runtime.launch_exit_hook
-
-    @launch_exit_hook.setter
-    def launch_exit_hook(cls, value):
-        knobs.runtime.launch_exit_hook = value
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
