@@ -662,6 +662,90 @@ Subgroup2DBlockEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return subgroup2DBlockToLinearLayout(shape, *this, getKWidth());
 }
 
+SmallVector<unsigned, 3> Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
+    DistributedEncodingTrait layout, ArrayRef<int64_t> tensorShape,
+    bool memoryRowMajor, unsigned kWidth, MLIRContext *context) {
+  llvm::errs() << "input layout: " << layout << "\n";
+
+  const auto rank = tensorShape.size();
+
+  std::optional<LinearLayout> llEncoding = layout.toLinearLayout(tensorShape);
+  assert(llEncoding.has_value() && "invalid dot layout to linear layout");
+  llvm::errs() << "llEncoding: " << *llEncoding << "\n";
+  LinearEncodingAttr llAttr = LinearEncodingAttr::get(context, *llEncoding);
+  SmallVector<unsigned> threadOrder = llAttr.getThreadOrder();
+
+  const bool valueRowMajor =
+      (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
+  assert((valueRowMajor ||
+          (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
+         "Only row_major or column_major is allowed");
+  const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+
+  auto dotEncodingAttr = dyn_cast<DotOperandEncodingAttr>(layout);
+  const unsigned opIdx = dotEncodingAttr ? dotEncodingAttr.getOpIdx() : 2;
+  const bool isOperandA = opIdx == 0;
+  DpasEncodingAttr dpasLayout =
+      dotEncodingAttr ? cast<DpasEncodingAttr>(dotEncodingAttr.getParent())
+                      : cast<DpasEncodingAttr>(layout);
+  assert(dpasLayout && "only dpas layout is supported");
+
+  llvm::errs() << "dpasLayout: " << dpasLayout << "\n";
+  const SmallVector<unsigned> dpasInstShape =
+      isOperandA ? dpasLayout.getDPASInstShapeA()
+                 : dpasLayout.getDPASInstShapeB();
+  const SmallVector<unsigned> elemsPerDPASInst = {dpasInstShape[0],
+                                                  dpasInstShape[1]};
+  ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
+  SmallVector<int64_t> numReps =
+      dpasLayout.getDPASRepetitions(tensorShape, opIdx);
+
+  // TODO: swap the order if transpose is required
+  unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
+  unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
+
+  const unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
+
+  unsigned dpasOperandsPerTileX =
+      isOperandA ? repCluster[dimOuter] : numReps[unsigned(opIdx) ? 1 : 2];
+  unsigned dpasOperandsPerTileY =
+      isOperandA ? numReps[unsigned(opIdx) ? 1 : 2] : repCluster[dimOuter];
+
+  if (isTransposeRequired) {
+    std::swap(tileWidth, tileHeight);
+
+    const unsigned threadsPerWarp = dpasLayout.getThreadsPerWarp();
+    llvm::errs() << "threadsPerWarp: " << threadsPerWarp << "\n";
+    dpasOperandsPerTileX =
+        (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+
+    // limit transpose loads to HW's limitations (what are those...?)
+    tileWidth = tileWidth / (32 / (kWidth * 8));
+
+    dpasOperandsPerTileY = 1;
+  }
+
+  // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
+  // by enlarging the vBlocks.
+  const unsigned totalBytesPerRowPerDPASOp = tileWidth * kWidth;
+  dpasOperandsPerTileY =
+      std::min(dpasOperandsPerTileY, 64 / totalBytesPerRowPerDPASOp);
+  const unsigned numBlocks = dpasOperandsPerTileY;
+
+  // loads support 32 rows at most
+  dpasOperandsPerTileX = std::min(dpasOperandsPerTileX, 32 / tileHeight);
+
+  // enlarge the tileHeight to cover all the DPAS repetitions up to maximum
+  // supported
+  tileHeight = tileHeight * dpasOperandsPerTileX;
+
+  llvm::errs() << "tileHeight: " << tileHeight << "\n";
+  llvm::errs() << "tileWidth: " << tileWidth << "\n";
+  llvm::errs() << "numBlocks: " << numBlocks << "\n";
+
+  return {tileHeight, tileWidth, numBlocks};
+}
+
 //===----------------------------------------------------------------------===//
 // Dialect Interface
 //===----------------------------------------------------------------------===//
