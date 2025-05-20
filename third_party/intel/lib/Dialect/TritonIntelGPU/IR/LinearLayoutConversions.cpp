@@ -546,30 +546,34 @@ static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
 
 using basisT = std::vector<std::vector<int32_t>>;
 
-// Creates a row major tile layout with register/lane in dimension according to
-// the provided height, width, and threadsPerWarp. The relationship between the
-// width and threadsPerWarp determines the packing of registers in lanes.
-// * if width == threadsPerWarp, registers are distributed to lanes in row major
-// order, i.e. one column per lane
-// * if width < threadsPerWarp, rows are distributed to lanes according to
-// rowToLaneration, i.e. width * rowToLaneRatio = threadsPerWarp
-// * if width > threadsPerWarp, row values are packed in lanes such that
-// packedElementsPerLane row values exist in consecutive registers for each lane
+// Creates a row major tile layout with register/lane input dimensions according
+// to the provided height, width, and threadsPerWarp. The relationship between
+// the width and threadsPerWarp determines the packing of rows across lanes:
+//  - if width == threadsPerWarp:
+//      block row elements are mapped to registers in row major order, i.e. one
+//      column per lane
+// - if width < threadsPerWarp:
+//      multiple rows are mapped to the first register to fill the warp, i.e.
+//      width * rowsPerWarp = threadsPerWarp
+// - if width > threadsPerWarp:
+//      multiple elements of each row are assigned to registers such that
+//      packedElementsPerLane row values exist in consecutive registers for each
+//      lane
 std::pair<basisT, basisT>
 createRegisterLaneBases(const int height, const int width,
                         const unsigned threadsPerWarp) {
-  const unsigned packedElementsPerLane =
-      mlir::ceil<unsigned>(width, threadsPerWarp);
+  const int packedElementsPerLane =
+      mlir::ceil<int>(width, static_cast<int>(threadsPerWarp));
 
   basisT laneBases;
   for (int i = packedElementsPerLane; i < width; i = i << 1) {
     laneBases.push_back({0, i});
   }
 
-  const int rowsToLaneRatio =
+  const int rowsPerWarp =
       mlir::ceil<int>(threadsPerWarp, 1 << laneBases.size());
   // Place subsequent rows into adjacent lanes until all lanes have been filled
-  for (int i = 1; i < rowsToLaneRatio; i = i << 1) {
+  for (int i = 1; i < rowsPerWarp; i = i << 1) {
     laneBases.push_back({i, 0});
   }
 
@@ -580,8 +584,8 @@ createRegisterLaneBases(const int height, const int width,
     regBases.push_back({0, i});
   }
 
-  for (int i = 1; i < height / rowsToLaneRatio; i = i << 1) {
-    regBases.push_back({i * rowsToLaneRatio, 0});
+  for (int i = 1; i < height / rowsPerWarp; i = i << 1) {
+    regBases.push_back({i * rowsPerWarp, 0});
   }
 
   return std::make_pair(regBases, laneBases);
