@@ -17,16 +17,15 @@ DPASAnalysis::DPASAnalysis(Operation *root) {
 
   // Populate the maps.
   mod.walk([&](FunctionOpInterface funcOp) {
+    if (funcToDotMap.find(funcOp) == funcToDotMap.end())
+      funcToDotMap[funcOp] = {};
     auto it = funcToDotMap.find(funcOp);
 
     funcOp.walk([&](Operation *op) {
       if (!isa<DotOp, DotScaledOp>(op))
         return;
 
-      if (it != funcToDotMap.end())
-        it->second.push_back(op);
-      else
-        funcToDotMap[funcOp] = {op};
+      it->second.push_back(op);
 
       DPASEngineType dpasEngineType = supportDPAS
                                           ? DPASAnalysis::getDPASType(op)
