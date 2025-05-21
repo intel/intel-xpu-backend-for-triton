@@ -117,7 +117,7 @@ if [ "$BUILD_PYTORCH" = false ]; then
   fi
   echo "**** Download nightly builds. ****"
   PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-  RUN_ID=$(gh run list -w "Triton wheels" -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
+  RUN_ID=$(gh run list --workflow nightly-wheels.yml --branch main -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
   TEMP_DIR=$(mktemp -d)
   WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
   gh run download $RUN_ID \
