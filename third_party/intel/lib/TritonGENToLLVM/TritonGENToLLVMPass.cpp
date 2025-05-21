@@ -876,3 +876,13 @@ void registerConvertTritonTritonGENToLLVMInterface(DialectRegistry &registry) {
         dialect->addInterfaces<TritonGENToLLVMDialectInterface>();
       });
 }
+
+namespace mlir {
+namespace triton {
+
+std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGENToLLVM() {
+  return std::make_unique<::ConvertTritonGENToLLVM>();
+}
+
+} // namespace triton
+} // namespace mlir
