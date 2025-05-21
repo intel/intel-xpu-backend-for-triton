@@ -11,11 +11,14 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ConvertTritonGENToLLVM : Pass<"convert-tritongen-to-llvm"> {
+def ConvertTritonGENToLLVM : Pass<"convert-tritongen-to-llvm", "mlir::ModuleOp"> {
   let summary = "Convert the Triton GEN dialect to the LLVM dialect";
   let description = [{
     This pass converts the TritonGEN dialect operations to LLVM dialect operations.
   }];
+  // TODO: do we need this? 
+  let constructor = "mlir::triton::createConvertTritonGENToLLVM()";
+
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 
