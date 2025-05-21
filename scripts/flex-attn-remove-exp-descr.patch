@@ -1,0 +1,95 @@
+diff --git a/torch/_inductor/kernel/flex_attention.py b/torch/_inductor/kernel/flex_attention.py
+index 5e010e4ce9d..f20e7ff7bc8 100644
+--- a/torch/_inductor/kernel/flex_attention.py
++++ b/torch/_inductor/kernel/flex_attention.py
+@@ -395,41 +395,7 @@ compute_flex_attention = r"""
+     desc_k = None
+     desc_v = None
+     if USE_TMA:
+-        TMA_SIZE = 128
+-        workspace_base = ws_ptr + TMA_SIZE * 3 * (
+-            tl.program_id(1) + tl.program_id(0) * tl.num_programs(1)
+-        )
+-        desc_q = workspace_base
+-        desc_v = workspace_base + TMA_SIZE
+-        desc_k = workspace_base + 2 * TMA_SIZE
+-
+-        triton.language.extra.cuda.experimental_device_tensormap_create2d(
+-            desc_ptr=desc_q,
+-            global_address=Q,
+-            load_size=[BLOCK_M, QK_HEAD_DIM_ROUNDED],
+-            global_size=[Q_LEN*HQ*ZQ, QK_HEAD_DIM],
+-            element_ty=Q.dtype.element_ty,
+-        )
+-        triton.language.extra.cuda.experimental_device_tensormap_create2d(
+-            desc_ptr=desc_v,
+-            global_address=V,
+-            load_size=[BLOCK_N, V_HEAD_DIM_ROUNDED],
+-            global_size=[KV_LEN*ZKV*HQ, V_HEAD_DIM],
+-            element_ty=K.dtype.element_ty,
+-        )
+-
+-        triton.language.extra.cuda.experimental_device_tensormap_create2d(
+-            desc_ptr=desc_k,
+-            global_address=K,
+-            load_size=[BLOCK_N, QK_HEAD_DIM_ROUNDED],
+-            global_size=[KV_LEN*ZKV*HQ, QK_HEAD_DIM],
+-            element_ty=K.dtype.element_ty,
+-        )
+-
+-
+-        tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(desc_q)
+-        tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(desc_k)
+-
++        pass
+ 
+     # We support two cases for batch dimension. a) (ZKV == ZQ) where off_zkv = off_zq.
+     # b) (ZKV == 1 and ZQ > 1) where KV is broadcasted along the batch dimension and off_zkv=0.
+@@ -484,12 +450,7 @@ compute_flex_attention = r"""
+         )
+ 
+     if USE_TMA:
+-        q = tl._experimental_descriptor_load(  # load in row major
+-            desc_q,
+-            [(q_start * BLOCK_M).to(tl.int32), 0],
+-            [BLOCK_M, QK_HEAD_DIM_ROUNDED],
+-            Q.dtype.element_ty,
+-        )
++        pass
+     else:
+         q = load_checked_block(Q_block_ptr, IS_DIVISIBLE, SAFE_HEAD_DIM)
+ 
+@@ -710,17 +671,12 @@ def forward_block_mn(
+     # -- load k --
+     # NB reversed order to since K is transposed
+     if USE_TMA:
+-       k = tl._experimental_descriptor_load(  # load in row major
+-                desc_k,
+-                [start_n.to(tl.int32) , kv_start],
+-                [BLOCK_N, QK_HEAD_DIM_ROUNDED],
+-                MATMUL_PRECISION,
+-            )
++       pass
+     else:
+         k = load_checked_block(K_block_ptr, SAFE_HEAD_DIM, IS_DIVISIBLE)
+ 
+     if USE_TMA:
+-        k = tl.trans(k)
++        pass
+     # -- compute qk ---
+     qk = tl.dot(q, k, input_precision=FLOAT32_PRECISION) # TODO: use cuda matmul when q_len <= 2.
+     if not PRESCALE_QK:
+@@ -785,12 +741,7 @@ def forward_block_mn(
+     # # -- scale and update acc --
+     acc = acc * alpha[:, None]
+     if USE_TMA:
+-        v = tl._experimental_descriptor_load(  # load in row major
+-                    desc_v,
+-                    [kv_start.to(tl.int32) + start_n.to(tl.int32),0],
+-                    [BLOCK_N, V_HEAD_DIM_ROUNDED],
+-                    MATMUL_PRECISION,
+-                )
++        pass
+     else:
+         v = load_checked_block(V_block_ptr, IS_DIVISIBLE, SAFE_HEAD_DIM)
+     acc = tl.dot(p.to(MATMUL_PRECISION), v, acc, input_precision=FLOAT32_PRECISION)
