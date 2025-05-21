@@ -87,8 +87,8 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
         # Decode shapes of Deepseek-v3 (Rope)
         [],
         line_arg='provider',
-        line_vals=['triton'],
-        line_names=['Triton'],
+        line_vals=['triton', 'torch'],
+        line_names=['Triton', 'Torch'],
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
@@ -105,12 +105,16 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         sm_scale = 1.3
 
     quantiles = [0.5, 0.0, 1.0]
-    if provider == 'triton':
+    block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device='xpu')
+    torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
+
+    if provider == 'torch':
+        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+
+    elif provider == 'triton':
         kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD_qk == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
-        block_mask = create_block_mask_cached(causal_mask, 1, 1, N_CTX_q, N_CTX_kv, device='xpu')
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
-        torch_fn = lambda: flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=not H_q == H_kv)
         if MODE == 'bwd':
             triton_o = triton_fn()
             triton_do = torch.randn_like(triton_o)
