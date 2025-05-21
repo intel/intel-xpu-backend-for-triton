@@ -314,3 +314,25 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
         tt.return
     }
 }
+
+// -----
+
+// COM: B matrix, transposed, 16x16 w/ repCluster=1 --> 1x 16x8x1 (32-bit) loads 
+#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+    tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
+        %0 = tt.get_program_id x : i32
+        %M_i64 = arith.constant 16 : i64
+        %N_i64 = arith.constant 16 : i64
+        %c1_i64 = arith.constant 1 : i64
+        %c0_i32 = arith.constant 0 : i32
+
+        // CHECK-COUNT-1: llvm.call spir_funccc @_Z51intel_sub_group_2d_block_read_transpose_32b_16r8x1cPU3AS1viiiDv2_iPj 
+        // CHECK-NOT: llvm.call spir_funccc @_Z51intel_sub_group_2d_block_read_transpose_32b_16r8x1cPU3AS1viiiDv2_iPj
+        %4 = tt.make_tensor_ptr %arg2, [%N_i64, %M_i64], [%c1_i64, %N_i64], [%c0_i32, %0] {order = array<i32: 1, 0>} : <tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [1, 1]}>, kWidth = 2}>>>
+        %5 = tt.load %4 {boundaryCheck = array<i32: 0, 1>, triton_intel_gpu.block_io = "column_major" } : !tt.ptr<tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [1, 1]}>, kWidth = 2}>>>
+
+        tt.return
+    }
+}
+
