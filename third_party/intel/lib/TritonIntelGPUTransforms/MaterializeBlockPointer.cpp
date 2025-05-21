@@ -2,6 +2,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
@@ -26,115 +27,147 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-struct TritonIntelGPUMaterializeBlockPointerPass
-    : public triton::gpu::intel::impl::
-          TritonIntelGPUMaterializeBlockPointerBase<
-              TritonIntelGPUMaterializeBlockPointerPass> {
+class BlockedToSubgroup2DBlock : public mlir::OpRewritePattern<tt::LoadOp> {
+  private:
+    tt::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
+
 public:
-  using triton::gpu::intel::impl::TritonIntelGPUMaterializeBlockPointerBase<
-      TritonIntelGPUMaterializeBlockPointerPass>::
-      TritonIntelGPUMaterializeBlockPointerBase;
+  BlockedToSubgroup2DBlock(mlir::MLIRContext *context,
+                           tt::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+                           int benefit)
+      : OpRewritePattern<tt::LoadOp>(context, benefit), axisAnalysisPass(axisAnalysisPass) {}
 
-  void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    if (!mod->hasAttr(
-            ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
-      return;
+  mlir::LogicalResult
+  matchAndRewrite(triton::LoadOp loadOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    LDBG("Considering op: " << loadOp);
 
-    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    Value ptr = loadOp.getPtr();
+    if (!tt::isTensorPointerType(ptr.getType()))
+      return MaterializeTensorOfPointers(loadOp);
 
-    MLIRContext *context = &getContext();
-    mod.walk([&](tt::LoadOp loadOp) {
-      LDBG("Considering op: " << loadOp);
+    if (!isa<RankedTensorType>(loadOp.getResult().getType())) {
+      loadOp.emitError() << "Expected 'loadOp' to load a tensor value.";
+      return failure();
+    }
 
-      Value ptr = loadOp.getPtr();
-      if (!tt::isTensorPointerType(ptr.getType()))
-        return MaterializeTensorOfPointers(loadOp, axisInfoAnalysis);
+    // Find the make tensor ptr operation that created the base ptr.
+    tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
+    if (!makeTensorPtrOp) {
+      LDBG("Could not find make tensor ptr op for: " << loadOp);
+      return success();
+    }
+    LDBG("Make tensor ptr op: " << makeTensorPtrOp);
 
-      assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
-             "Expected 'loadOp' to load a tensor value.");
+    Operation::operand_range shape = makeTensorPtrOp.getShape();
+    unsigned rank = shape.size();
+    LDBG("Rank: " << rank);
+    if (rank == 1)
+      return success();
 
-      // Find the make tensor ptr operation that created the base ptr.
-      tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-      if (!makeTensorPtrOp) {
-        LDBG("Could not find make tensor ptr op for: " << loadOp);
-        return;
-      }
-      LDBG("Make tensor ptr op: " << makeTensorPtrOp);
+    if (!satisfies2DBlockReadAlignment(loadOp)) {
+      LDBG("Alignment checks failed for: " << loadOp);
+      return success();
+    }
 
-      Operation::operand_range shape = makeTensorPtrOp.getShape();
-      unsigned rank = shape.size();
-      LDBG("Rank: " << rank);
-      if (rank == 1)
-        return;
+    auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    unsigned elementWidth = tensorType.getElementTypeBitWidth();
+    LDBG("elementWidth: " << elementWidth);
 
-      if (!satisfies2DBlockReadAlignment(loadOp, axisInfoAnalysis)) {
-        LDBG("Alignment checks failed for: " << loadOp);
-        return;
-      }
+    Operation::operand_range strides = makeTensorPtrOp.getStrides();
+    std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
+    assert((strideOneDim && strideOneDim.value() < strides.size()) &&
+           "Expected strideOneDim to be set and less than strides.size()");
+    unsigned strideOneDimVal = strideOneDim.value();
 
-      auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
-      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      unsigned elementWidth = tensorType.getElementTypeBitWidth();
-      LDBG("elementWidth: " << elementWidth);
+    if (strideOneDimVal == rank - 2 && elementWidth == 8) {
+      // TODO: column major layout w/ fp8 has performance regression
+      return success();
+    }
 
-      Operation::operand_range strides = makeTensorPtrOp.getStrides();
-      std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
-      assert((strideOneDim && strideOneDim.value() < strides.size()) &&
-             "Expected strideOneDim to be set and less than strides.size()");
-      unsigned strideOneDimVal = strideOneDim.value();
+    if (strideOneDimVal >= (rank - 2)) {
+      // HW 2D block read instruction only supports contiguous access.
+      Value fastChangeStride = strides[strideOneDimVal];
+      if (!tt::intel::isConstant(fastChangeStride, 1))
+        return success();
 
-      if (strideOneDimVal == rank - 2 && elementWidth == 8) {
-        // TODO: column major layout w/ fp8 has performance regression
-        return;
-      }
+      // Across Intel platforms, the strictest pitch restriction is to be a
+      // multiple of OWord(128 bits).
+      Value pitch =
+          strides[(strideOneDimVal == rank - 1) ? rank - 2 : rank - 1];
+      LDBG("Pitch: " << pitch);
+      if (!ttgi::isDivisible(pitch, 128 / elementWidth))
+        return success();
 
-      if (strideOneDimVal >= (rank - 2)) {
-        // HW 2D block read instruction only supports contiguous access.
-        Value fastChangeStride = strides[strideOneDimVal];
-        if (!tt::intel::isConstant(fastChangeStride, 1))
-          return;
-
-        // Across Intel platforms, the strictest pitch restriction is to be a
-        // multiple of OWord(128 bits).
-        Value pitch =
-            strides[(strideOneDimVal == rank - 1) ? rank - 2 : rank - 1];
-        LDBG("Pitch: " << pitch);
-        if (!ttgi::isDivisible(pitch, 128 / elementWidth))
-          return;
-
-        const bool isRowMajor = (strideOneDimVal == rank - 1);
-        std::optional<ttg::DotOperandEncodingAttr> dotLayout =
-            getDotLayout(loadOp);
-        if (dotLayout) {
-          // Check if the load is being used by a tt.dot operation, and if so is
-          // this the first operand and is it a transposed row major matrix. If
-          // so, skip the block ptr attribute as performance is worse than if we
-          // remove the tensor pointer.
-          LDBG("dotLayout: " << *dotLayout);
-          auto opIdx =
-              static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-          auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-          const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
-          if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
-              valueRowMajor ^ isRowMajor) {
-            LDBG("Skipping block pointer attribute for transposed A matrix in "
-                 "dot operation");
-            return;
-          }
+      const bool isRowMajor = (strideOneDimVal == rank - 1);
+      std::optional<ttg::DotOperandEncodingAttr> dotLayout =
+          getDotLayout(loadOp);
+      if (dotLayout) {
+        // Check if the load is being used by a tt.dot operation, and if so is
+        // this the first operand and is it a transposed row major matrix. If
+        // so, skip the block ptr attribute as performance is worse than if we
+        // remove the tensor pointer.
+        LDBG("dotLayout: " << *dotLayout);
+        auto opIdx =
+            static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
+        auto dotOrder = tt::gpu::getThreadOrder(tensorType);
+        const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
+        if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
+            valueRowMajor ^ isRowMajor) {
+          LDBG("Skipping block pointer attribute for transposed A matrix in "
+               "dot operation");
+          return success();
         }
-
-        loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                        StringAttr::get(context, isRowMajor ? "row_major"
-                                                            : "column_major"));
+      } else {
+        llvm::errs() << "loadOp: " << loadOp << "\n";
+        assert(false && "missing dot layout?");
       }
-    });
+
+      llvm::errs() << "dotLayout: " << dotLayout << "\n";
+      auto dpasLayout =
+          dyn_cast<ttgi::DpasEncodingAttr>(dotLayout->getParent());
+      if (dpasLayout) {
+        llvm::errs() << "dpasLayout: " << dpasLayout << "\n";
+
+        Type eltTy = tensorType.getElementType();
+        unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+        auto tileParams =
+            ttgi::Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
+                *dotLayout, tensorType.getShape(), isRowMajor,
+                elemSizeInBits / 8, loadOp.getContext());
+        auto subgroup2DBlockLayout = ttgi::Subgroup2DBlockEncodingAttr::get(
+            loadOp.getContext(), dpasLayout.getWarpsPerCTA(),
+            mlir::triton::gpu::getCTALayout(dpasLayout),
+            {tileParams[0], tileParams[1]}, tileParams[2],
+            mlir::triton::gpu::getOrderForDotOperand(dotLayout->getOpIdx(),
+                                                     /*rank*/ 2,
+                                                     /*kContig*/ true),
+            elemSizeInBits / 8, dpasLayout.getThreadsPerWarp());
+        llvm::errs() << "subgroup2DBlockLayout: " << subgroup2DBlockLayout
+                     << "\n";
+        auto attrs = loadOp->getAttrs();
+        llvm::errs() << "oldLoad: " << loadOp << "\n";
+        // TODO: replace the load or add a layout conversion? 
+        // auto newLoad = rewriter.create<LoadOp>(loadOp.getLoc(),
+        // loadOp.getArgs(), attrs); llvm::errs() << "newLoad: " << newLoad <<
+        // "\n";
+      } else {
+        llvm::errs() << "Failed to find dpas layout for : " << dotLayout << "\n";
+      }
+      #if 0
+      loadOp->setAttr(
+          ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+          StringAttr::get(loadOp.getContext(), isRowMajor ? "row_major" : "column_major"));
+      #endif 
+    }
+    return success();
   }
 
 private:
-  void MaterializeTensorOfPointers(
-      tt::LoadOp loadOp,
-      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+  mlir::LogicalResult MaterializeTensorOfPointers(
+      tt::LoadOp loadOp) const {
     MLIRContext *context = loadOp.getContext();
     Value ptr = loadOp.getPtr();
     assert(!tt::isTensorPointerType(ptr.getType()) &&
@@ -142,13 +175,13 @@ private:
 
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
-      return;
+      return success();
 
     LDBG("Considering tensor of pointer load op: " << loadOp);
 
     if (loadOp.getMask()) {
       LDBG("Load op has mask, skip block IO attribute");
-      return;
+      return success();
     }
 
     // The axis info gives the information about the value of the indices
@@ -162,11 +195,11 @@ private:
     // Then the global memory refer by the tensor pointer is row-major
     // contiguous. And the axis info will be: stride: [16, 1],
     // contiguity: [1, 16], divisibility: [1, 16], constancy: [1, 1].
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    const tt::AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
     unsigned rank = axisInfo->getRank();
     if (rank != 2) {
       LDBG("Rank is not 2, skip block IO attribute");
-      return;
+      return success();
     }
 
     // Determine if LoadOp is row-major or column-major.
@@ -218,6 +251,7 @@ private:
     }
 
     // TODO: set column_major attribute
+    return success();
   }
 
   // Return the load layout if it is a dot layout. If it is not, check if the
@@ -280,8 +314,7 @@ private:
   }
 
   bool satisfies2DBlockReadAlignment(
-      tt::LoadOp loadOp,
-      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+      tt::LoadOp loadOp) const {
     Value ptr = loadOp.getPtr();
     assert(tt::isTensorPointerType(ptr.getType()) &&
            "Expected a ptr to a tensor of ptrs.");
@@ -312,7 +345,7 @@ private:
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    const tt::AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
     if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
       LDBG("Found non 4 bytes aligned base: "
            << axisInfo->getDivisibility(strideOneDimVal));
@@ -384,6 +417,34 @@ private:
       return checkUsers(blockArg.getUsers());
 
     return true;
+  }
+};
+
+struct TritonIntelGPUMaterializeBlockPointerPass
+    : public triton::gpu::intel::impl::
+          TritonIntelGPUMaterializeBlockPointerBase<
+              TritonIntelGPUMaterializeBlockPointerPass> {
+public:
+  using triton::gpu::intel::impl::TritonIntelGPUMaterializeBlockPointerBase<
+      TritonIntelGPUMaterializeBlockPointerPass>::
+      TritonIntelGPUMaterializeBlockPointerBase;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    if (!mod->hasAttr(
+            ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
+      return;
+    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+
+    MLIRContext *context = &getContext();
+    constexpr int benefitDefault = 1;
+
+    mlir::RewritePatternSet patterns(context);
+    patterns.add<BlockedToSubgroup2DBlock>(context, axisInfoAnalysis,
+                                           benefitDefault);
+    if (applyPatternsGreedily(mod, std::move(patterns)).failed()) {
+      signalPassFailure();
+    }
   }
 };
 
