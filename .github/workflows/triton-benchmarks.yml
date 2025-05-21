@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 720
     defaults:
       run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; export LD_LIBRARY_PATH=\$PTI_LIBS_DIR:\$LD_LIBRARY_PATH; source {0}"
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH; source {0}"
     steps:
       - name: Print inputs
         run: |
