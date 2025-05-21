@@ -1,13 +1,12 @@
 set(CUTLASS_KERNEL_FLAGS ${CUTLASS_KERNEL_FLAGS}
   -fsycl
-  -fsycl-targets=intel_gpu_pvc
   -fsycl-device-code-split=per_kernel
   -Xspirv-translator -spirv-ext=+SPV_INTEL_split_barrier
 )
 
 Python3_add_library(cutlass_kernel MODULE WITH_SOABI python_main.cpp)
 
-target_compile_options(cutlass_kernel PRIVATE "-fsycl" "-fsycl-targets=intel_gpu_pvc" "-fpreview-breaking-changes")
+target_compile_options(cutlass_kernel PRIVATE "-fsycl" "-fpreview-breaking-changes")
 target_compile_options(cutlass_kernel PRIVATE "-DCUTLASS_ENABLE_SYCL")
 target_compile_options(cutlass_kernel PRIVATE "-DSYCL_INTEL_TARGET")
 
