@@ -51,7 +51,6 @@ jobs:
           python_version: ${{ env.PYTHON_VERSION }}
           # transformers package is required for the inductor (e2e) test
           wheels_pattern: '{torch,transformers}-*.whl'
-          branch: main
 
       - name: Install Triton
         uses: ./.github/actions/setup-triton

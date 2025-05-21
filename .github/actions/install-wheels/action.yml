@@ -9,8 +9,8 @@ inputs:
     description: Repository name with owner
     default: intel/intel-xpu-backend-for-triton
   branch:
-    description: Filter runs by branch
-    default: ''
+    description: Filter runs by branch (use empty string for all branches)
+    default: main
   wheels_pattern:
     # Example of specifying only some packages to install: '{intel_extension_for_pytorch-*,torch-*}'
     # Extended globbing is enabled for this pattern so for example to exclude intel_extension_for_pytorch use pattern
