@@ -117,7 +117,6 @@ def get_benchmark(
     providers_filter: Optional[List[str]] = None,
     transpose_a=False,
     transpose_b=False,
-    new_shapes=True,
 ):
     return gemm_benchmark.get_benchmark(
         providers_filter=providers_filter,
@@ -126,7 +125,6 @@ def get_benchmark(
         plot_name='matmul-tensor-desc-performance',
         transpose_a=transpose_a,
         transpose_b=transpose_b,
-        new_shapes=new_shapes,
     )
 
 
@@ -134,6 +132,5 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         transpose_a=(os.getenv('TRANSPOSE_A', '0') == '1'),
         transpose_b=(os.getenv('TRANSPOSE_B', '0') == '1'),
-        new_shapes=(os.getenv('NEW_SHAPES', '1') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)
