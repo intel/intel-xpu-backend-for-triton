@@ -1337,7 +1337,9 @@ def torch_gather_rows(input, idx, y, block_y):
                     reason="TMA Gather not supported on Hopper")
 def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
-        pytest.skip()
+        pytest.xfail()
+    if is_xpu():
+        pytest.skip("FIXME: issue #4267")
 
     torch.manual_seed(42)
     if dtype != torch.int8:
@@ -1389,6 +1391,8 @@ def tma_gather_dot_pipeline(  #
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 9,
                     reason="TMA Gather not supported on hopper")
 def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
+    if is_xpu():
+        pytest.skip("FIXME: issue #4267")
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -1436,18 +1440,20 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 @pytest.mark.parametrize("y", [0, 32, 48])
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 9,
                     reason="TMA Scatter not supported on hopper")
-def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
+def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
-        pytest.skip()
+        pytest.xfail()
+    if is_xpu():
+        pytest.skip("FIXME: issue #4267")
 
     torch.manual_seed(42)
-    input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device='cuda').reshape(BLOCK_X, BLOCK_Y)
-    output = torch.zeros((X, Y), dtype=dtype, device='cuda')
+    input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device=device).reshape(BLOCK_X, BLOCK_Y)
+    output = torch.zeros((X, Y), dtype=dtype, device=device)
 
-    idx = torch.randperm(BLOCK_X, dtype=torch.int32, device='cuda')
+    idx = torch.randperm(BLOCK_X, dtype=torch.int32, device=device)
 
     def alloc_fn(size: int, align: int, steam):
-        return torch.empty(size, dtype=torch.int8, device='cuda')
+        return torch.empty(size, dtype=torch.int8, device=device)
 
     triton.set_allocator(alloc_fn)
 
