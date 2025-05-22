@@ -1,0 +1,31 @@
+diff --git a/python/sglang/srt/utils.py b/python/sglang/srt/utils.py
+index 884e715f..580e2364 100644
+--- a/python/sglang/srt/utils.py
++++ b/python/sglang/srt/utils.py
+@@ -77,12 +77,20 @@ from torch.func import functional_call
+ from torch.library import Library
+ from torch.profiler import ProfilerActivity, profile, record_function
+ from torch.utils._contextlib import _DecoratorContextManager
+-from triton.runtime.cache import (
+-    FileCacheManager,
+-    default_cache_dir,
+-    default_dump_dir,
+-    default_override_dir,
+-)
++try:
++    from triton.runtime.cache import (
++        FileCacheManager,
++        default_cache_dir,
++        default_dump_dir,
++       default_override_dir,
++   )
++except ImportError:
++    from triton.runtime.cache import FileCacheManager
++    from triton.knobs import cache as tt_cache
++
++    default_cache_dir = lambda: tt_cache.dir
++    default_dump_dir = lambda: tt_cache.dump_dir
++    default_override_dir = lambda: tt_cache.override_dir
+ 
+ logger = logging.getLogger(__name__)
+ 
