@@ -413,16 +413,17 @@ struct TritonMatrixDPASLowering
     if (cOrigTy != cTy)
       c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
 
-    std::string fnName =
-        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
-        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-        std::to_string(8 /*systolic depth*/ *
-                       getNumOperandsPerDword(precisionA));
-
-    SmallVector<Type> argTypes{aTy, bTy, cTy};
+    std::string fnName = "__spirv_SubgroupMatrixMultiplyAccumulateINTEL";
+    SmallVector<Type> argTypes{int32Ty, aTy, bTy, cTy, int32Ty};
     fnName = intel::mangle(fnName, argTypes);
 
-    SmallVector<Value> args{a, b, c};
+    TritonLLVMOpBuilder builder(loc, rewriter);
+    Value kDim = builder.i32_val(8 /*systolic depth*/ *
+                                 getNumOperandsPerDword(precisionA));
+    SmallVector<Value> args{
+        kDim, a, b, c,
+        builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
+            cOrigTy.getElementType(), precisionA))};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
@@ -455,6 +456,30 @@ private:
       llvm_unreachable("unsupported TritonGEN::PrecisionType");
     }
   }
+
+  // Values are defined in
+  // https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate.html.
+  static unsigned
+  getMatrixMultiplyAccumulateOperandsVal(Type cTy,
+                                         TritonGEN::PrecisionType pTy) {
+    unsigned res = 0;
+    if (cTy.isBF16())
+      res |= 0x4 | 0x8;
+    switch (pTy) {
+    case TritonGEN::PrecisionType::TF32:
+      return res | 0x100 | 0x200;
+    case TritonGEN::PrecisionType::BF16:
+      return res | 0x1000 | 0x2000;
+    case TritonGEN::PrecisionType::FP16:
+      return res | 0x400 | 0x800;
+    case TritonGEN::PrecisionType::U8:
+      return res | 0x10 | 0x20;
+    case TritonGEN::PrecisionType::S8:
+      return res | 0x1 | 0x2 | 0x10 | 0x20;
+    default:
+      llvm_unreachable("unsupported TritonGEN::PrecisionType");
+    }
+  }
 };
 
 struct TritonMatrix2DBlockLoadLowering
@@ -479,43 +504,46 @@ struct TritonMatrix2DBlockLoadLowering
     auto dest = rewriter.create<LLVM::AllocaOp>(
         loc, ptr_ty(ctx), resType.getElementType(),
         b.i32_val(resType.getNumElements()));
-    std::string fnName = "intel_sub_group_2d_block_read_";
+    std::string fnName = "__spirv_Subgroup2DBlockLoad";
     if (op.getVnniTransform())
-      fnName += "transform_";
+      fnName += "Transform";
     else if (op.getTranspose())
-      fnName += "transpose_";
-    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
-              std::to_string(op.getTileHeight()) + "r" +
-              std::to_string(op.getTileWidth()) + "x" +
-              std::to_string(op.getVBlocks()) + "c";
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
-    fnName +=
-        intel::getTypeMangling(resType.getElementType(), /*isUnsigned=*/true);
+      fnName += "Transpose";
+    fnName += "INTEL";
+    VectorType vecType = vec_ty(i32_ty, 2);
+    SmallVector<Type> argTypes{i32_ty, i32_ty, i32_ty, i32_ty,  ptr_ty(ctx, 1),
+                               i32_ty, i32_ty, i32_ty, vecType, ptr_ty(ctx)};
+    fnName = intel::mangle(fnName, argTypes);
 
     auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
 
-    VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = b.insert_element(
         vecType,
         b.insert_element(vecType, b.undef(vecType), offsetX, b.i32_val(0)),
         op.getY(), b.i32_val(1));
-    SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty,  i32_ty,
-                               i32_ty,         vecType, ptr_ty(ctx)};
 
-    SmallVector<Value> args{op.getPtr(),       baseWidth, op.getBaseHeight(),
-                            op.getBasePitch(), byteCoord, dest};
+    SmallVector<Value> args{b.i32_val(op.getElemSizeInBits() / 8),
+                            b.i32_val(op.getTileWidth()),
+                            b.i32_val(op.getTileHeight()),
+                            b.i32_val(op.getVBlocks()),
+                            op.getPtr(),
+                            baseWidth,
+                            op.getBaseHeight(),
+                            op.getBasePitch(),
+                            byteCoord,
+                            dest};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 4> paramAttrs{
-        std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(0, LLVM::LLVMDialect::getReadonlyAttrName()),
-        std::make_pair(5, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(5, LLVM::LLVMDialect::getWriteOnlyAttrName()),
+        std::make_pair(4, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(4, LLVM::LLVMDialect::getReadonlyAttrName()),
+        std::make_pair(9, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(9, LLVM::LLVMDialect::getWriteOnlyAttrName()),
     };
 
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs,
         intel::noUnwindWillReturnAttrs);
-    constexpr uint32_t ptrOperandIndex = 0;
+    constexpr uint32_t ptrOperandIndex = 4;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
                                             ptrOperandIndex)) {

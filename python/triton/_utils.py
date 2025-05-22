@@ -35,26 +35,3 @@ def find_paths_if(iterable: Union[IterableType, Any], pred: Callable[[ObjPath, A
     _impl((), iterable)
 
     return list(ret.keys())
-
-
-class ClassPropertyDescriptor:
-
-    def __init__(self, fget, fset=None):
-        self.fget = fget
-        self.fset = fset
-
-    def __get__(self, obj, cls):
-        return self.fget(cls)
-
-    def __set__(self, obj, value):
-        if self.fset is None:
-            raise AttributeError("can't set attribute")
-        self.fset(obj.__class__, value)
-
-    def setter(self, fset):
-        self.fset = fset
-        return self
-
-
-def classproperty(func):
-    return ClassPropertyDescriptor(func)

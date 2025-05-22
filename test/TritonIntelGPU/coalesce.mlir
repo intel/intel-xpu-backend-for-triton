@@ -470,3 +470,55 @@ module attributes {triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 :
     tt.return
   }
 }
+
+// -----
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [2, 4, 4], warpsPerCTA = [2, 1, 1], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 1, 4], warpsPerCTA = [2, 1, 1], order = [2, 1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 8, 4], warpsPerCTA = [1, 2, 1], order = [0, 1, 2]}>
+module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: [[BLOCKED_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [2, 4, 4], warpsPerCTA = [2, 1, 1], order = [2, 1, 0]}>
+  // CHECK-DAG: [[BLOCKED_LAYOUT1:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+  // CHECK-DAG: [[BLOCKED_LAYOUT2:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 1, 4], warpsPerCTA = [2, 1, 1], order = [2, 1, 0]}>
+  // CHECK-DAG: [[BLOCKED_LAYOUT3:#.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 8, 4], warpsPerCTA = [1, 2, 1], order = [0, 1, 2]}>
+  // CHECK: @triton_red_fused_prod_0
+  tt.func public @triton_red_fused_prod_0(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) attributes {noinline = false} {
+    %c4_i32 = arith.constant 4 : i32
+    %cst = arith.constant dense<1.000000e+00> : tensor<1x4x4xf32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %0 = arith.extsi %arg2 : i32 to i64
+    %1 = arith.extsi %arg3 : i32 to i64
+    // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>
+    %2 = tt.make_tensor_ptr %arg0, [%0, %0], [%1, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<4x4xf32, #blocked1>>
+    %3 = tt.splat %arg5 : i32 -> tensor<1x1x4xi32, #blocked2>
+    // CHECK: [[RES1:%.*]]:2 = scf.for {{.*}} iter_args([[ARG7:%.*]] = %cst, [[ARG8:%.*]] = [[PTR]]) -> (tensor<1x4x4xf32, [[BLOCKED_LAYOUT]]>, !tt.ptr<tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>)
+    %4:2 = scf.for %arg6 = %c0_i32 to %arg4 step %c4_i32 iter_args(%arg7 = %cst, %arg8 = %2) -> (tensor<1x4x4xf32, #blocked>, !tt.ptr<tensor<4x4xf32, #blocked1>>)  : i32 {
+    // CHECK: [[RES2:%.*]]:2 = scf.for {{.*}} iter_args([[ARG10:%.*]] = [[ARG7:%.*]], [[ARG11:%.*]] = [[ARG8:%.*]]) -> (tensor<1x4x4xf32, [[BLOCKED_LAYOUT]]>, !tt.ptr<tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>)
+      %5:2 = scf.for %arg9 = %c0_i32 to %arg5 step %c4_i32 iter_args(%arg10 = %arg7, %arg11 = %arg8) -> (tensor<1x4x4xf32, #blocked>, !tt.ptr<tensor<4x4xf32, #blocked1>>)  : i32 {
+        %7 = tt.splat %arg9 : i32 -> tensor<1x1x4xi32, #blocked2>
+        %8 = arith.cmpi slt, %7, %3 : tensor<1x1x4xi32, #blocked2>
+        // CHECK-DAG: [[LOAD:%.*]] = tt.load [[ARG11]] {{.*}} : !tt.ptr<tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>
+        // CHECK: [[CONVERT_LAYOUT_0:%.*]] = ttg.convert_layout [[LOAD]] : tensor<4x4xf32, [[BLOCKED_LAYOUT1]]> -> tensor<4x4xf32, #ttg.slice<{dim = 0, parent = [[BLOCKED_LAYOUT3]]}>>
+        // CHECK: [[CONVERT_LAYOUT_1:%.*]] = ttg.convert_layout {{.*}}  : tensor<1x4x4xf32, [[BLOCKED_LAYOUT3]]> -> tensor<1x4x4xf32, [[BLOCKED_LAYOUT]]>
+        // CHECK: [[CONVERT_LAYOUT_2:%.*]] = ttg.convert_layout {{.*}}  : tensor<1x4x4xi1, [[BLOCKED_LAYOUT2]]> -> tensor<1x4x4xi1, [[BLOCKED_LAYOUT]]>
+        %9 = tt.load %arg11 evictionPolicy = evict_first {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<4x4xf32, #blocked1>>
+        %10 = ttg.convert_layout %9 : tensor<4x4xf32, #blocked1> -> tensor<4x4xf32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+        %11 = tt.expand_dims %10 {axis = 0 : i32} : tensor<4x4xf32, #ttg.slice<{dim = 0, parent = #blocked3}>> -> tensor<1x4x4xf32, #blocked3>
+        %12 = ttg.convert_layout %11 : tensor<1x4x4xf32, #blocked3> -> tensor<1x4x4xf32, #blocked>
+        %13 = tt.broadcast %8 : tensor<1x1x4xi1, #blocked2> -> tensor<1x4x4xi1, #blocked2>
+        %14 = ttg.convert_layout %13 : tensor<1x4x4xi1, #blocked2> -> tensor<1x4x4xi1, #blocked>
+        %15 = arith.select %14, %12, %arg10 : tensor<1x4x4xi1, #blocked>, tensor<1x4x4xf32, #blocked>
+        // CHECK-DAG: [[ADVANCE1:%.*]] = tt.advance [[ARG11]], {{.*}} : <tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>
+        // CHECK: scf.yield {{.*}} : tensor<1x4x4xf32, [[BLOCKED_LAYOUT]]>, !tt.ptr<tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>
+        %16 = tt.advance %arg11, [%c0_i32, %c4_i32] : <tensor<4x4xf32, #blocked1>>
+        scf.yield %15, %16 : tensor<1x4x4xf32, #blocked>, !tt.ptr<tensor<4x4xf32, #blocked1>>
+      }
+      // CHECK-DAG: [[ADVANCE2:%.*]] = tt.advance [[RES2]]#1, {{.*}} : <tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>
+      // CHECK: scf.yield [[RES2]]#0, [[ADVANCE2]] : tensor<1x4x4xf32, [[BLOCKED_LAYOUT]]>, !tt.ptr<tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>
+      %6 = tt.advance %5#1, [%c4_i32, %c4_i32] : <tensor<4x4xf32, #blocked1>>
+      scf.yield %5#0, %6 : tensor<1x4x4xf32, #blocked>, !tt.ptr<tensor<4x4xf32, #blocked1>>
+    }
+    tt.return
+  }
+}
