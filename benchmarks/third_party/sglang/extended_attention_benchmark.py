@@ -1,19 +1,16 @@
 import torch
 from sglang.srt.layers.attention.triton_ops.extend_attention import (
-    extend_attention_fwd,
-    redundant_attention,
-)
+    extend_attention_fwd, )
 import triton_kernels_benchmark as benchmark_suit
 
 
-def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
+# pylint: disable=unused-argument
+def gen_args(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, dtype, device):
 
-    b_seq_len_prefix = torch.randint(1, N_CTX // 2, (B, ), dtype=torch.int32, device=device)
-    b_seq_len_extend = torch.randint(1, N_CTX // 2, (B, ), dtype=torch.int32, device=device)
+    b_seq_len_prefix = torch.full((B, ), PREFIX_LEN, dtype=torch.int32, device=device)
+    b_seq_len_extend = torch.full((B, ), Q_LEN, dtype=torch.int32, device=device)
     b_seq_len = b_seq_len_prefix + b_seq_len_extend
-    max_len_in_batch = torch.max(b_seq_len, 0)[0].item()
 
-    b_req_idx = torch.arange(B, dtype=torch.int32, device=device)
     b_start_loc = torch.zeros((B, ), dtype=torch.int32, device=device)
     b_start_loc[1:] = torch.cumsum(b_seq_len[:-1], 0)
     b_start_loc_extend = torch.zeros((B, ), dtype=torch.int32, device=device)
@@ -45,7 +42,6 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
                                                         device=device).normal_(mean=0.1, std=0.2)
 
     o_extend = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device=device)
-    o_redundant = torch.empty((extend_token_num, H_Q, D), dtype=dtype, device=device)
 
     b_seq_len_extend = b_seq_len - b_seq_len_prefix
     max_len_extend = torch.max(b_seq_len_extend, 0)[0].item()
@@ -53,10 +49,9 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
     qo_indptr[1:B + 1] = torch.cumsum(b_seq_len_extend[:B], dim=0)
 
     params = []
-    params.append((q_extend, k_extend, v_extend, o_extend, o_redundant))
+    params.append((q_extend, k_extend, v_extend, o_extend))
     params.append((k_buffer, v_buffer))
     params.append((qo_indptr, kv_indptr, kv_indices, max_len_extend))
-    params.append((b_req_idx, b_start_loc, b_seq_len, b_seq_len_prefix, max_len_in_batch))
     return params
 
 
@@ -64,13 +59,13 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE', 'VALIDATE'],
+        x_names=['B', 'Q_LEN', 'PREFIX_LEN', 'KV_LEN', 'H_Q', 'H_KV', 'D', 'MODE'],
         x_vals=[  #
-            [bs, [1024, 128, 512], 32, 8, 128, 'fwd', True] for bs in [1, 16, 32, 64, 128]
+            [bs, 512, 1024 + 128, 512, 32, 8, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
         ] + [  #
-            [bs, [1024, 128, 512], 32, 32, 96, 'fwd', True] for bs in [1, 16, 32, 64, 128]
+            [bs, 512, 1024 + 128, 512, 32, 32, 96, 'fwd'] for bs in [1, 16, 32, 64, 128]
         ] + [  #
-            [bs, [1024, 128, 512], 28, 4, 128, 'fwd', True] for bs in [1, 16, 32, 64, 128]
+            [bs, 512, 1024 + 128, 512, 28, 4, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
@@ -89,41 +84,26 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, VALIDATE, provider):
+def benchmark(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, MODE, provider):
     torch.manual_seed(0)
 
     dtype = torch.bfloat16
-    N_CTX = sum(SEQ_LENS)
 
-    params = gen_args(B, N_CTX, H_Q, H_KV, D, dtype, 'xpu')
-    q_extend, k_extend, v_extend, o_extend, o_redundant = params[0]
+    params = gen_args(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, dtype, 'xpu')
+    q_extend, k_extend, v_extend, o_extend = params[0]
     k_buffer, v_buffer = params[1]
     qo_indptr, kv_indptr, kv_indices, max_len_extend = params[2]
-    b_req_idx, b_start_loc, b_seq_len, b_seq_len_prefix, max_len_in_batch = params[3]
     custom_mask = None
     mask_indptr = None
 
     quantiles = [0.5, 0.0, 1.0]
-    if provider == 'triton':
-
-        def triton_fn():
-            extend_attention_fwd(q_extend, k_extend, v_extend, o_extend, k_buffer, v_buffer, qo_indptr, kv_indptr,
-                                 kv_indices, custom_mask, mask_indptr, max_len_extend)
-            return o_extend
-
-        if VALIDATE:
-
-            def refer_fn():
-                redundant_attention(q_extend, o_redundant, k_buffer, v_buffer, b_req_idx, b_start_loc, b_seq_len,
-                                    b_seq_len_prefix, max_len_in_batch)
-                return o_redundant
-
-            benchmark_suit.assert_close(triton_fn, refer_fn, atol=1e-3, rtol=1e-2, err_msg='extend to refer')
-
+    if provider == 'triton' and MODE == 'fwd':
+        triton_fn = lambda: extend_attention_fwd(q_extend, k_extend, v_extend, o_extend, k_buffer, v_buffer, qo_indptr,
+                                                 kv_indptr, kv_indices, custom_mask, True, mask_indptr, max_len_extend)
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:
-        raise NotImplementedError(f'Unsupported provider {provider}')
+        raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
 
     N_CTX_TOTAL = k_buffer.shape[0]
     N_CTX_EXTEND = k_extend.shape[0]

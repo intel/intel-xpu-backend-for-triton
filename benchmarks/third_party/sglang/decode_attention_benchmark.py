@@ -47,13 +47,13 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE', 'VALIDATE'],
+        x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE'],
         x_vals=[  #
-            [bs, [1024, 64], 32, 8, 128, 'fwd', False] for bs in [1, 16, 32, 64, 128]
+            [bs, 1024 + 64, 32, 8, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
         ] + [  #
-            [bs, [1024, 64], 32, 32, 96, 'fwd', False] for bs in [1, 16, 32, 64, 128]
+            [bs, 1024 + 64, 32, 32, 96, 'fwd'] for bs in [1, 16, 32, 64, 128]
         ] + [  #
-            [bs, [1024, 64], 28, 4, 128, 'fwd', False] for bs in [1, 16, 32, 64, 128]
+            [bs, 1024 + 64, 28, 4, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
         ],
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
@@ -72,27 +72,22 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, VALIDATE, provider):
+def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, provider):
     torch.manual_seed(0)
     dtype = torch.bfloat16
     quantiles = [0.5, 0.0, 1.0]
-    N_CTX = sum(SEQ_LENS)
+    N_CTX = SEQ_LENS
 
     q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse, num_kv_splits, max_kv_splits, sm_scale = gen_args(
         B, N_CTX, H_Q, H_KV, D, dtype, 'xpu')
 
-    if provider == 'triton':
+    if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse,
                                                  num_kv_splits, max_kv_splits, sm_scale)
-
-        # TODO: decode attention should have the validation function
-        if VALIDATE:
-            raise NotImplementedError('Validation is not implemented for decode stage')
-
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:
-        raise NotImplementedError(f'Unsupported provider {provider}')
+        raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
 
     tflops = lambda ms: 2 * B * (H_Q + H_KV) * N_CTX * D * (1e-12) / (ms * 1e-3)
     gbps = lambda ms: 2 * B * (H_Q + H_KV * N_CTX) * D * 2 * (1e-9) / (ms * 1e-3)
