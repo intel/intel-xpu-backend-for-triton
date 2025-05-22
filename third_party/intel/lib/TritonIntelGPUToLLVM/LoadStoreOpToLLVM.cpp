@@ -557,8 +557,9 @@ struct PrefetchOpConversion
             /*v_blocks*/ vBlocks,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
         if (failed(newOp.verify())) {
-          // Explicitly invoke verifier because `triton_gen` ops are immediately
-          // lowered further to a builtin call.
+          // delete the op so that the verifier will not abort the pass pipeline
+          // later. fail this path and retry with gather load.
+          rewriter.eraseOp(newOp);
           return failure();
         }
       }
@@ -757,8 +758,9 @@ struct PrefetchOpConversion
                 /*v_blocks*/ vBlocks,
                 /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
             if (failed(newOp.verify())) {
-              // Explicitly invoke verifier because `triton_gen` ops are
-              // immediately lowered further to a builtin call.
+              // delete the op so that the verifier will not abort the pass
+              // pipeline later. fail this path and retry with gather load.
+              rewriter.eraseOp(newOp);
               return failure();
             }
           }
@@ -1573,8 +1575,9 @@ struct LoadOpConversion
                   /*transpose*/ false,
                   /*vnni_transform*/ false);
               if (failed(load2dOp.verify())) {
-                // Explicitly invoke verifier because `triton_gen` ops are
-                // immediately lowered further to a builtin call.
+                // delete the op so that the verifier will not abort the pass
+                // pipeline later. fail this path and retry with gather load.
+                rewriter.eraseOp(load2dOp);
                 return failure();
               }
 
@@ -2086,8 +2089,9 @@ struct LoadOpConversion
               (usePackedType && !isOperandA && !isTransposeRequired &&
                originalElemBits != 32));
           if (failed(load2dOp.verify())) {
-            // Explicitly invoke verifier because `triton_gen` ops are
-            // immediately lowered further to a builtin call.
+            // delete the op so that the verifier will not abort the pass
+            // pipeline later. fail this path and retry with gather load.
+            rewriter.eraseOp(load2dOp);
             return failure();
           }
           LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
@@ -2520,8 +2524,9 @@ struct StoreOpConversion
                 /*stored_val*/ b.bitcast(storeVal, store2DGenXType));
 
             if (failed(newOp.verify())) {
-              // Explicitly invoke verifier because `triton_gen` ops are
-              // immediately lowered further to a builtin call.
+              // delete the op so that the verifier will not abort the pass
+              // pipeline later. fail this path and retry with gather load.
+              rewriter.eraseOp(newOp);
               return failure();
             }
           }
