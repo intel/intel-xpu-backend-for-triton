@@ -12,6 +12,7 @@
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -37,6 +38,7 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGENTOLLVM
@@ -818,15 +820,19 @@ struct ConvertTritonGENToLLVM
 
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
-    RewritePatternSet pattern(ctx);
+    RewritePatternSet patterns(ctx);
     LowerToLLVMOptions options(ctx);
-    LLVMTypeConverter converter(ctx, options);
+    LLVMTypeConverter typeConverter(ctx, options);
     LLVMConversionTarget target(*ctx);
 
-    populateTritonGENToLLVMConversionPatterns(converter, pattern);
+    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
 
-    if (failed(
-            applyPartialConversion(getOperation(), target, std::move(pattern))))
+    populateTritonGENToSPIRVConversionPatterns(patterns);
+    populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
+                                          spirv::ClientAPI::OpenCL);
+
+    if (failed(applyPartialConversion(getOperation(), target,
+                                      std::move(patterns))))
       signalPassFailure();
   }
 };
