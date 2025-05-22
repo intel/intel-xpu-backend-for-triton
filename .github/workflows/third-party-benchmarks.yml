@@ -113,6 +113,14 @@ jobs:
         id: install
         run: |
           pip install transformers 'pandas<3.0' pytest
+          
+          cd benchmarks
+          pip install .
+          pip install intel-pti==0.12.2
+          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
+          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.2` and `libpti_view.so.0.12.2`
+          ls $PTI_LIBS_DIR
+          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
       - name: Install benchmarks
         id: install-benchmarks
@@ -221,11 +229,22 @@ jobs:
       - name: Install SGLANG
         run: |
           git clone https://github.com/sgl-project/sglang.git
-          pip install sglang/python[dev_xpu]
+          cd sglang
+          git apply ../benchmarks/third_party/sglang/sglang.patch
+          pip install ./python[dev_xpu]
+
+      # Reinstallation since SGLang installation will force overrides current PyTorch and Triton
+      - name: Reinstall PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Reinstall Triton
+        run: |
+          pip install ./dist/*.whl
 
       - name: Run SGLANG attention prefill stage benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/third_party/sglang
           python prefill_attention_benchmark.py --reports $REPORTS
 
@@ -235,6 +254,7 @@ jobs:
       - name: Run SGLANG attention decode stage benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/third_party/sglang
           python decode_attention_benchmark.py --reports $REPORTS
 
@@ -244,20 +264,22 @@ jobs:
       - name: Run SGLANG attention append stage benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/third_party/sglang
           python extended_attention_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
-          python ../../triton_kernels_benchmark/build_report.py $REPORTS/extended-attn-performance.csv $REPORTS/attn-append-triton-report.csv --benchmark sglang-extended-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/extended-attn-performance.csv $REPORTS/attn-append-triton-report.csv --benchmark sglang-extended-attn --compiler triton --param_cols "B,Q_LEN,PREFIX_LEN,KV_LEN,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run SGLANG Block FP8 GEMM benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'block_fp8_gemm_benchmark.py') }}
         run: |
+          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/third_party/sglang
           python block_fp8_gemm_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
-          python ../../../scripts/build_report.py $REPORTS/sglang-fp8-gemm-performance.csv $REPORTS/sglang-fp8-gemm-triton-report.csv --benchmark sglang-block-fp8-gemm --compiler triton --param_cols "M,N,K" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-fp8-gemm-performance.csv $REPORTS/sglang-fp8-gemm-triton-report.csv --benchmark sglang-block-fp8-gemm --compiler triton --param_cols "M,N,K" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
