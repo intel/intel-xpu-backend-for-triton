@@ -417,6 +417,7 @@ def make_launcher(constants, signature):
         if ty[0] == "*"
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
+    params.append("&global_scratch")
     num_params = len(params)
     params_decl = ""
     if num_params:
@@ -526,7 +527,7 @@ static inline void set_scalar_arg(sycl::handler &cgh, int index, const void *val
   cgh.set_arg(index, *static_cast<const T *>(value));
 }}
 
-static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr {', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, int num_warps, int threads_per_warp, int shared_memory, sycl::queue& stream, sycl::kernel& kernel_ptr, void* global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
 
   std::string kernel_name = kernel_ptr.get_info<sycl::info::kernel::function_name>();
   { 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if COMPILATION_HELPER.inject_pytorch_dep else "" }
@@ -565,6 +566,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
 
 extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   int gridX, gridY, gridZ;
+  void* global_scratch = 0;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
@@ -623,7 +625,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   sycl::kernel kernel = *kernel_ptr;
 
   {newline.join(ptr_decls)}
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel {',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, global_scratch{',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   if (PyErr_Occurred()) {{
     return NULL;
   }}
