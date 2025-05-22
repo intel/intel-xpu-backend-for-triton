@@ -17,8 +17,6 @@ def ConvertTritonGENToLLVM : Pass<"convert-tritongen-to-llvm", "mlir::ModuleOp">
     This pass converts the TritonGEN dialect operations to LLVM dialect operations.
   }];
 
-  let constructor = "mlir::triton::createConvertTritonGENToLLVM()";
-
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 }
 

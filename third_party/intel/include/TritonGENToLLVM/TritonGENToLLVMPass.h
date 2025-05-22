@@ -26,8 +26,6 @@ void populateTritonGENToLLVMConversionPatterns(LLVMTypeConverter &converter,
 
 void registerConvertTritonGENToLLVMInterface(DialectRegistry &registry);
 
-std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonGENToLLVM();
-
 } // namespace triton
 } // namespace mlir
 
