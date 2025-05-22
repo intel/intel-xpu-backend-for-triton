@@ -415,8 +415,8 @@ class CMakeBuild(build_ext):
 
         match = re.search(r"version\s*(?P<major>\d+)\.(?P<minor>\d+)([\d.]+)?", out.decode())
         cmake_major, cmake_minor = int(match.group("major")), int(match.group("minor"))
-        if (cmake_major, cmake_minor) < (3, 18):
-            raise RuntimeError("CMake >= 3.18.0 is required")
+        if (cmake_major, cmake_minor) < (3, 20):
+            raise RuntimeError("CMake >= 3.20 is required")
 
         for ext in self.extensions:
             self.build_extension(ext)
@@ -778,7 +778,7 @@ def get_git_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.3.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+TRITON_VERSION = "3.3.1" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 9)
@@ -832,7 +832,7 @@ setup(
     test_suite="tests",
     extras_require={
         "build": [
-            "cmake>=3.20",
+            "cmake>=3.20,<4.0",
             "lit",
         ],
         "tests": [
