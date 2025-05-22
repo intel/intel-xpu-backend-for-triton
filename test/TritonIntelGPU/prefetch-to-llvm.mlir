@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm --cse -canonicalize | FileCheck %s
 
 // CHECK: llvm.func spir_funccc @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i(i32, i32, i32, i32, !llvm.ptr<1> {llvm.nonnull}, i32, i32, i32, vector<2xi32>) attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none>, no_unwind}
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
