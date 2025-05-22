@@ -67,6 +67,7 @@ env:
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
   IGC_DisableCodeScheduling: '1'
+  IGC_ShaderDumpEnable: '1'
 
 jobs:
   build:
@@ -269,6 +270,7 @@ jobs:
       - name: Run Triton FA fwd kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'flash_attention_benchmark.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'flash_attention_benchmark.py') }}
         run: |
+          export IGC_DumpToCustomDir=$REPORTS/mm_dumps
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
           python flash_attention_benchmark.py --reports $REPORTS --n_runs $N_RUNS
