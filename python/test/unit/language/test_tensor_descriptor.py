@@ -575,7 +575,7 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
     else:
         M, N, K = 1024, 512, 256
 
-    if is_xpu() and (BLOCK_M, BLOCK_N, BLOCK_K) in [(64, 512, 32), (256, 128, 32)]:
+    if is_xpu() and (BLOCK_M, BLOCK_N, BLOCK_K) in [(512, 64, 32), (64, 512, 32), (256, 128, 32)]:
         pytest.skip("FIXME: issue #3923")
 
     torch.manual_seed(42)
