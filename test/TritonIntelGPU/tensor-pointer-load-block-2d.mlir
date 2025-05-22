@@ -60,7 +60,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK-32: llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C8]], [[C2]], {{.*}})
+    // CHECK-COUNT-16: llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C8]], [[C2]], {{.*}})
     %68 = tt.load %60, %67, %cst_3 {triton_intel_gpu.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %74 = tt.addptr %60, %cst_0 : tensor<128x64x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>, tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %76 = arith.addi %58, %c1_i32 : i32
@@ -133,7 +133,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     // CHECK: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK: [[C32:%.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK-16: llvm.call spir_funccc @_Z41__spirv_Subgroup2DBlockLoadTransformINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C32]], [[C1]], {{.*}})
+    // CHECK-COUNT-8: llvm.call spir_funccc @_Z41__spirv_Subgroup2DBlockLoadTransformINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C32]], [[C1]], {{.*}})
     %72 = tt.load %61, %71, %cst_4 {triton_intel_gpu.block_io = "row_major"} : tensor<64x256x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %75 = tt.addptr %61, %57 : tensor<64x256x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, tensor<64x256xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %76 = arith.addi %58, %c1_i32 : i32
