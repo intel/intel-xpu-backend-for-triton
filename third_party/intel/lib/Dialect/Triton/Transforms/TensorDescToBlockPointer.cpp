@@ -162,11 +162,9 @@ private:
 
     for (Operation *user : tensorPtr.getUsers()) {
       if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        for (auto it :
+        for (auto [initArg, rgnInitArg, loopRes, yieldVal] :
              llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs(),
                        forOp.getResults(), forOp.getYieldedValues())) {
-          Value initArg = std::get<0>(it), rgnInitArg = std::get<1>(it),
-                loopRes = std::get<2>(it), yieldVal = std::get<3>(it);
           assert(rgnInitArg.getType() == loopRes.getType() &&
                  rgnInitArg.getType() == yieldVal.getType() && "Type mismatch");
           if (rgnInitArg.getType() != initArg.getType()) {

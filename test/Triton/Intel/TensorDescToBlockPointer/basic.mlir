@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -triton-intel-tdesc-to-block-pointer  | FileCheck %s
 
-module attributes {"ttg.num-warps" = 4 : i32} {
+module {
   tt.func public @test_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
     %c1_i64 = arith.constant 1 : i64
     %c64_i32 = arith.constant 64 : i32
