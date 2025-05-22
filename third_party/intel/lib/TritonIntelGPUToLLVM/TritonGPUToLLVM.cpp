@@ -76,7 +76,8 @@ struct ConvertTritonGPUToLLVM
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect, spirv::SPIRVDialect>();
+    registry.insert<LLVM::LLVMDialect, TritonGEN::TritonGENDialect,
+                    spirv::SPIRVDialect>();
   }
 
   void runOnOperation() override {
