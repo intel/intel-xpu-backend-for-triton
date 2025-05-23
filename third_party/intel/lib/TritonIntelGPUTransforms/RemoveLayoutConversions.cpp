@@ -710,7 +710,7 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
       updateAdvanceOpChain(advanceOp, makeTensorPtrOp, dataToStore);
     } else {
       llvm::errs() << "user: " << *user << "\n";
-      assert(false && "Unexpected user");
+      llvm_unreachable("Unexpected user");
     }
   }
 }
