@@ -138,6 +138,7 @@ template <
                      bool> = true>
 static std::pair<Value, Value>
 computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
+  return {op.getBaseWidth(), op.getX()};
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value baseAddr =
