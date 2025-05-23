@@ -708,6 +708,9 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
       storeOp.setOperand(1, dataToStore);
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
       updateAdvanceOpChain(advanceOp, makeTensorPtrOp, dataToStore);
+    } else {
+      llvm::errs() << "user: " << *user << "\n";
+      llvm_unreachable("Unexpected user");
     }
   }
 }
@@ -794,9 +797,6 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   Block *storeBB = storeOp->getBlock();
   for (Operation *user : makeTensorPtrOpUsers) {
     Block *userBB = user->getBlock();
-    if (storeBB != userBB)
-      continue;
-
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
       storeOp.setOperand(0, newMakeTensorPtrOp);
       storeOp.setOperand(1, dataToStore);
