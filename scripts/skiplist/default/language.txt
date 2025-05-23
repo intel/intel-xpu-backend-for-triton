@@ -1,5 +1,3 @@
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/3556
-python/test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-256-256]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3870
 python/test/unit/language/test_core.py::test_dot3d[8-2-64-64-64-32-32-float32-float32]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/4222
