@@ -114,7 +114,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
       ctx);
   std::string kernel_name = sycl_kernel.get_info<sycl::info::kernel::function_name>();
   std::string driver_version = stream.get_device().get_info<sycl::info::device::driver_version>();
-  void* global_scratch = 0;
+  void* global_scratch = nullptr;
   void *params[] = {{ {arg_pointers} }};
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = sycl_kernel.get_info<sycl::info::kernel::num_args>();
