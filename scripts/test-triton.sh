@@ -20,6 +20,7 @@ TEST:
     --attention
     --instrumentation
     --inductor
+    --sglang
 
 OPTION:
     --unskip
@@ -490,6 +491,15 @@ run_sglang_tests() {
   cd sglang
   git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang.patch
   pip install ./python[dev-xpu]
+
+  # reinstallation since sglang installation would overrides current PyTorch and Triton
+  $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv") --force-reinstall
+  if ls $TRITON_PROJ/dist/*.whl 1> /dev/null 2>&1; then
+    pip install $TRITON_PROJ/dist/*.whl
+  else
+    $SCRIPTS_DIR/compile-triton.sh --triton
+  fi
+
   run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} test/srt/test_triton_attention_kernels.py
 }
 
