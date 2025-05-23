@@ -25,16 +25,15 @@ module {
   // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
   // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
   // CHECK-DAG:    [[CST:%.+]] = arith.constant dense<0.000000e+00> : tensor<16x32xf16>
-  // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
-  // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK-DAG:    [[CST_0_i32:%.+]] = arith.constant 0 : i32
-  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x32xf16>>
-  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]], [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>) {
-  // CHECK:          [[IDX_CAST:%.+]] = arith.index_cast [[IV]] : index to i32
-  // CHECK:          [[TENSOR_PTR_1:%.+]] = tt.advance [[VAR_arg1]], {{\[}}[[CST_8_i32]], [[IDX_CAST]]] : <tensor<16x32xf16>>
-  // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR_1]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK-DAG:    [[EXTSI_PARAM_2a:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
+  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = {{.*}}, [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.tensordesc<tensor<16x32xf16>>, tensor<16x32xf16>) {
+  // CHECK-DAG:      [[IDX_CAST_1:%.+]] = arith.index_cast [[IV]] : index to i32
+  // CHECK-DAG:      [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
+  // CHECK-DAG:      [[EXTSI_PARAM_2b:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
+  // CHECK:          [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2b]]], {{\[}}[[EXTSI_PARAM_2a]], [[CST_1_i64]]], {{\[}}[[CST_8_i32]], [[IDX_CAST_1]]] {{.*}} : <tensor<16x32xf16>>
+  // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR]] : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[LOAD]] : tensor<16x32xf16>
-  // CHECK:          scf.yield [[VAR_arg1]], [[ADD]] : !tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>
+  // CHECK:          scf.yield {{.*}}, [[ADD]] : !tt.tensordesc<tensor<16x32xf16>>, tensor<16x32xf16>
   // CHECK:        }
   // CHECK:        tt.return
   // CHECK:      }
@@ -61,27 +60,12 @@ module {
     tt.return
   }
   // CHECK:      tt.func public @load_in_loop2({{.*}}) {
-  // CHECK-NOT:    tt.make_tensor_descriptor
-  // CHECK-NOT:    tt.descriptor_load
-  // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
-  // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
-  // CHECK-DAG:    [[CST:%.+]] = arith.constant dense<0.000000e+00> : tensor<16x32xf16>
-  // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
-  // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK-DAG:    [[CST_0_i32:%.+]] = arith.constant 0 : i32
-  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x32xf16>>
-  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]], [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>) {
-  // CHECK:          [[IDX_CAST:%.+]] = arith.index_cast [[IV]] : index to i32
-  // CHECK:          [[TENSOR_PTR_1:%.+]] = tt.advance [[VAR_arg1]], {{\[}}[[CST_8_i32]], [[IDX_CAST]]] : <tensor<16x32xf16>>
-  // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR_1]] : !tt.ptr<tensor<16x32xf16>>
-  // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[LOAD]] : tensor<16x32xf16>
-  // CHECK-DAG:      [[EXTSI_PARAM_1a:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
-  // CHECK-DAG:      [[EXTSI_PARAM_2a:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK-DAG:      [[CST_0_i32_1:%.+]] = arith.constant 0 : i32
-  // CHECK:          [[TENSOR_PTR2:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_2a]], [[EXTSI_PARAM_1a]]], {{\[}}[[CST_1_i64]], [[EXTSI_PARAM_2]]], {{\[}}[[CST_0_i32_1]], [[CST_0_i32_1]]] {{.*}} : <tensor<16x32xf16>>
-  // CHECK:          [[CMP:%.+]] = arith.cmpi eq, [[IDX_CAST]], [[CST_8_i32]] : i32
-  // CHECK:          [[TENSOR_PTR3:%.+]] = arith.select [[CMP]], [[VAR_arg1]], [[TENSOR_PTR:%.+]] : !tt.ptr<tensor<16x32xf16>>
-  // CHECK:          scf.yield [[TENSOR_PTR3]], [[ADD]] : !tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>
+  // CHECK-NOT:    tt.make_tensor_ptr
+  // CHECK-NOT:    tt.load
+  // CHECK:        tt.make_tensor_descriptor
+  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} -> (!tt.tensordesc<tensor<16x32xf16>>, tensor<16x32xf16>) {
+  // CHECK:          tt.descriptor_load
+  // CHECK:          tt.make_tensor_descriptor
   // CHECK:        }
   // CHECK:        tt.return
   // CHECK:      }
@@ -103,12 +87,10 @@ module {
     tt.return
   }
   // CHECK:      tt.func public @load_uses_loop_result({{.*}}) {
+  // CHECK-NOT:    tt.make_tensor_ptr
   // CHECK-NOT:    tt.load
-  // CHECK-NOT:    tt.make_tensor_descriptor
-  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr {{.*}} : <tensor<16x32xf16>>
-  // CHECK:        [[FOR_RES:%.+]] = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]]) -> (!tt.ptr<tensor<16x32xf16>>)
-  // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[FOR_RES]], {{.*}} : <tensor<16x32xf16>>
-  // CHECK:        tt.load [[TENSOR_PTR1]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK:        tt.make_tensor_descriptor
+  // CHECK:        tt.descriptor_load
   // CHECK:        tt.return
   // CHECK:      }
 
@@ -133,19 +115,18 @@ module {
   // CHECK:      tt.func public @store_in_loop1([[PARAM_0:%.+]]: !tt.ptr<f16>, [[PARAM_1:%.+]]: i32, [[PARAM_2:%.+]]: i32) {
   // CHECK-NOT:    tt.make_tensor_descriptor
   // CHECK-NOT:    tt.descriptor_store
-  // CHECK-DAG:    [[CST_0_i32:%.+]] = arith.constant 0 : i32
   // CHECK-DAG:    [[CST_1_i64:%.+]] = arith.constant 1 : i64
   // CHECK-DAG:    [[CST_8_i32:%.+]] = arith.constant 8 : i32
   // CHECK-DAG:    [[CST:%.+]] = arith.constant dense<0.000000e+00> : tensor<16x32xf16>
-  // CHECK-DAG:    [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
-  // CHECK-DAG:    [[EXTSI_PARAM_2:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
-  // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2]]], {{\[}}[[EXTSI_PARAM_2]], [[CST_1_i64]]], {{\[}}[[CST_0_i32]], [[CST_0_i32]]] {{.*}} : <tensor<16x32xf16>>
-  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]], [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>) {
-  // CHECK:          [[IDX_CAST_1:%.+]] = arith.index_cast [[IV]] : index to i32
-  // CHECK:          [[TENSOR_PTR_1:%.+]] = tt.advance [[VAR_arg1]], {{\[}}[[CST_8_i32]], [[IDX_CAST]]] : <tensor<16x32xf16>>
-  // CHECK:          tt.store [[TENSOR_PTR_1]], [[VAR_arg2]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK-DAG:    [[EXTSI_PARAM_2a:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
+  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = {{.*}}, [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.tensordesc<tensor<16x32xf16>>, tensor<16x32xf16>) {
+  // CHECK-DAG:      [[IDX_CAST_1:%.+]] = arith.index_cast [[IV]] : index to i32
+  // CHECK-DAG:      [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
+  // CHECK-DAG:      [[EXTSI_PARAM_2b:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
+  // CHECK:          [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2b]]], {{\[}}[[EXTSI_PARAM_2a]], [[CST_1_i64]]], {{\[}}[[CST_8_i32]], [[IDX_CAST_1]]] {{.*}} : <tensor<16x32xf16>>
+  // CHECK:          tt.store [[TENSOR_PTR]], [[VAR_arg2]] : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[CST]] : tensor<16x32xf16>
-  // CHECK:          scf.yield [[VAR_arg1]], [[ADD]] : !tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>
+  // CHECK:          scf.yield {{.*}}, [[ADD]] : !tt.tensordesc<tensor<16x32xf16>>, tensor<16x32xf16>
   // CHECK:        }
   // CHECK:        tt.return
   // CHECK:      }
@@ -172,12 +153,12 @@ module {
     tt.return
   }
   // CHECK:      tt.func public @store_in_loop2({{.*}}) {
-  // CHECK-NOT:    tt.make_tensor_descriptor
-  // CHECK-NOT:    tt.descriptor_store
-  // CHECK:        tt.make_tensor_ptr
-  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} -> (!tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>) {
-  // CHECK:          tt.advance
-  // CHECK:          tt.store
+  // CHECK-NOT:    tt.make_tensor_ptr
+  // CHECK-NOT:    tt.store
+  // CHECK:        tt.make_tensor_descriptor
+  // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} -> (!tt.tensordesc<tensor<16x32xf16>>, tensor<16x32xf16>) {
+  // CHECK:          tt.descriptor_store
+  // CHECK:          tt.make_tensor_descriptor
   // CHECK:        }
   // CHECK:        tt.return
   // CHECK:      }
@@ -200,11 +181,10 @@ module {
     tt.return
   }
   // CHECK:      tt.func public @store_uses_loop_result({{.*}}) {
-  // CHECK-NOT:    tt.make_tensor_descriptor
-  // CHECK-NOT:    tt.descriptor_store
-  // CHECK:        tt.make_tensor_ptr
-  // CHECK:        tt.advance
-  // CHECK:        tt.store
+  // CHECK-NOT:    tt.make_tensor_ptr
+  // CHECK-NOT:    tt.store
+  // CHECK:        tt.make_tensor_descriptor
+  // CHECK:        tt.descriptor_store
   // CHECK:        tt.return
   // CHECK:      }
 
