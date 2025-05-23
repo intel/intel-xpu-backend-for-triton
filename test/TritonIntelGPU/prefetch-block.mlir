@@ -15,21 +15,21 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 1 : i32}
 
     // COM: Prefetch the 1st operand of the `tl.dot` operation 3 iterations in advance
     // CHECK:      [[A0:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<256x32xf16, #blocked1>>
-    // CHECK-NEXT: triton_intel_gpu.prefetch [[A0]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
+    // CHECK-NEXT: ttig.prefetch [[A0]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
     // CHECK:      [[A1:%.*]] = tt.advance [[A0]], {{.*}} : <tensor<256x32xf16, #blocked1>>
-    // CHECK-NEXT: triton_intel_gpu.prefetch [[A1]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
+    // CHECK-NEXT: ttig.prefetch [[A1]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
     // CHECK:      [[A2:%.*]] = tt.advance [[A1]], {{.*}} : <tensor<256x32xf16, #blocked1>>
-    // CHECK-NEXT: triton_intel_gpu.prefetch [[A2]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
+    // CHECK-NEXT: ttig.prefetch [[A2]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
     // CHECK-NEXT: [[A3:%.*]] = tt.advance [[A2]], {{.*}} : <tensor<256x32xf16, #blocked1>>
     // CHECK-NEXT: [[A4:%.*]] = tt.make_tensor_ptr %arg0, {{.*}} : <tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>>
 
     // COM: Prefetch the 2nd operand of the `tl.dot` operation 3 iterations in advance
     // CHECK:      [[B0:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #blocked2>>
-    // CHECK-NEXT: triton_intel_gpu.prefetch [[B0]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
+    // CHECK-NEXT: ttig.prefetch [[B0]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK:      [[B1:%.*]] = tt.advance [[B0]], {{.*}} : <tensor<32x256xf16, #blocked2>>
-    // CHECK-NEXT: triton_intel_gpu.prefetch [[B1]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
+    // CHECK-NEXT: ttig.prefetch [[B1]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK:      [[B2:%.*]] = tt.advance [[B1]], {{.*}} : <tensor<32x256xf16, #blocked2>>
-    // CHECK-NEXT: triton_intel_gpu.prefetch [[B2]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
+    // CHECK-NEXT: ttig.prefetch [[B2]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT: [[B3:%.*]] = tt.advance [[B2]], {{.*}} : <tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT: [[B4:%.*]] = tt.make_tensor_ptr %arg1, {{.*}} : <tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>>
 
@@ -38,8 +38,8 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 1 : i32}
     // CHECK-SAME:      iter_args([[CST:%.*]] = {{.*}}, [[A6:%.*]] = [[A4]], [[B6:%.*]] = [[B4]], [[A5:%.*]] = [[A3]], [[B5:%.*]] = [[B3]])
     // CHECK-NEXT:   [[LD_A:%.*]] = tt.load [[A6]]
     // CHECK-NEXT:   [[LD_B:%.*]] = tt.load [[B6]]
-    // CHECK:        triton_intel_gpu.prefetch [[A5]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
-    // CHECK:        triton_intel_gpu.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
+    // CHECK:        ttig.prefetch [[A5]] {{.*}} : !tt.ptr<tensor<256x32xf16, #blocked1>>
+    // CHECK:        ttig.prefetch [[B5]] {{.*}} : !tt.ptr<tensor<32x256xf16, #blocked2>>
     // CHECK-NEXT:   [[DOT:%.*]] = tt.dot [[LD_A]], [[LD_B]], [[CST]]
     // CHECK-NEXT:   tt.advance [[A5]], {{.*}} : <tensor<256x32xf16, #blocked1>>
     // CHECK-DAG:    tt.advance [[A6]], {{.*}} : <tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>>
