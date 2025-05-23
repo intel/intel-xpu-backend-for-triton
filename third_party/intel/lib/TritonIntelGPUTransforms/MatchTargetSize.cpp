@@ -22,15 +22,15 @@
 /// is splits it into 32 `tt.dot` operations with tensor sizes matching the
 /// target architecture 'dot' size of <8x16xf32>:
 ///
-///   %tile_a0 = triton_intel_gpu.extract %a[0] : tensor<32x32xf16>
+///   %tile_a0 = ttig.extract %a[0] : tensor<32x32xf16>
 ///            -> tensor<8x16xf16>
-///   %tile_b0 = triton_intel_gpu.extract %b[0] : tensor<32x32xf16>
+///   %tile_b0 = ttig.extract %b[0] : tensor<32x32xf16>
 ///            -> tensor<16x16xf16>
 ///   %dot_0 = tt.dot %tile_a0, %tile_b0 : tensor<8x16xf16>, tensor<16x16xf16>
 ///          -> tensor<8x16xf32>
-///   %tile_a4 = triton_intel_gpu.extract %a[4] : tensor<32x32xf16>
+///   %tile_a4 = ttig.extract %a[4] : tensor<32x32xf16>
 ///            -> tensor<8x16xf16>
-///   %tile_b1 = triton_intel_gpu.extract %b[1] : tensor<32x32xf16>
+///   %tile_b1 = ttig.extract %b[1] : tensor<32x32xf16>
 ///            -> tensor<16x16xf16>
 ///   %dot_1 = tt.dot %tile_a4, %tile_b1 : tensor<8x16xf16>, tensor<16x16xf16>
 ///          -> tensor<8x16xf32>
@@ -446,10 +446,10 @@ public:
 
 /// Simplify SCF for loops.
 /// Before:
-///   %glue = triton_intel_gpu.glue %a, %b : tensor<4x4xf32>, tensor<4x4xf32>
+///   %glue = ttig.glue %a, %b : tensor<4x4xf32>, tensor<4x4xf32>
 ///         -> tensor<8x4xf32>
 ///   scf.for %i = %lb to %ub step %step (%arg = %glue) {
-///     %extract = triton_intel_gpu.extract %arg[0] : tensor<8x4xf32>
+///     %extract = ttig.extract %arg[0] : tensor<8x4xf32>
 ///              -> tensor<4x4xf32>
 ///     use %extract
 ///     scf.yield
