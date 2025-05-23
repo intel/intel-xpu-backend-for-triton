@@ -20,6 +20,7 @@ TEST:
     --attention
     --instrumentation
     --inductor
+    --sglang
 
 OPTION:
     --unskip
@@ -57,6 +58,7 @@ TEST_BENCHMARK_GEMM=false
 TEST_BENCHMARK_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
+TEST_SGLANG=false
 VENV=false
 TRITON_TEST_REPORTS=false
 TRITON_TEST_WARNING_REPORTS=false
@@ -138,6 +140,11 @@ while (( $# != 0 )); do
       ;;
     --inductor)
       TEST_INDUCTOR=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang)
+      TEST_SGLANG=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -476,6 +483,26 @@ run_inductor_tests() {
   grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
 }
 
+run_sglang_tests() {
+  echo "***************************************************"
+  echo "******   Running Triton SGLang tests          ******"
+  echo "***************************************************"
+  git clone https://github.com/sgl-project/sglang.git
+  cd sglang
+  git apply $TRITON_PROJ/benchmarks/third_party/sglang/sglang.patch
+  pip install ./python[dev-xpu]
+
+  # reinstallation since sglang installation would overrides current PyTorch and Triton
+  $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv") --force-reinstall
+  if ls $TRITON_PROJ/dist/*.whl 1> /dev/null 2>&1; then
+    pip install $TRITON_PROJ/dist/*.whl
+  else
+    $SCRIPTS_DIR/compile-triton.sh --triton
+  fi
+
+  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} test/srt/test_triton_attention_kernels.py
+}
+
 test_triton() {
   if [ "$TEST_UNIT" = true ]; then
     run_unit_tests
@@ -522,6 +549,9 @@ test_triton() {
   fi
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
+  fi
+  if [ "$TEST_SGLANG" == true ]; then
+    run_sglang_tests
   fi
 }
 
