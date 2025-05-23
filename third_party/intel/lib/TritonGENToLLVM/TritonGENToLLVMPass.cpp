@@ -111,13 +111,6 @@ loadCacheControlToCacheControls(Builder &builder,
 }
 
 static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  // The following signature is not valid in OCL interface.
-  // _Z42intel_sub_group_2d_block_read_16b_16r16x2cPU3AS1viiiDv2_iPDh
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2) {
-    return false;
-  }
-
   if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
       op.getVBlocks() != 4 && !op.getVnniTransform()) {
     // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
