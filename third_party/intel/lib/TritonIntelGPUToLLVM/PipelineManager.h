@@ -254,10 +254,8 @@ public:
     // to help convert scalar expression to LLVM.
     arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    triton::populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
-    populateTritonGENToSPIRVConversionPatterns(patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
     populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
                                           spirv::ClientAPI::OpenCL);
