@@ -23,7 +23,10 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
   const char *arch = "";
   switch (sycl_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_arl_h:
-    arch = "arl";
+    arch = "arl_h";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_arl_s:
+    arch = "arl_s";
     break;
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_bmg_g21:
     arch = "bmg";
