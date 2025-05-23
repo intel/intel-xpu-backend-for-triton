@@ -566,7 +566,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
 
 extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   int gridX, gridY, gridZ;
-  void* global_scratch = 0;
+  void* global_scratch = nullptr;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
