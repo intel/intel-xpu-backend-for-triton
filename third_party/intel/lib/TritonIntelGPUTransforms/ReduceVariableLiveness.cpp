@@ -37,7 +37,10 @@ using TensorValue = TypedValue<RankedTensorType>;
 namespace {
 
 #define TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES 32768
-#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES 128 * 64 * 2
+#define LARGE_TENSOR_MINOR_SHAPE_THRESHOLD 128
+#define LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD 128
+#define LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES                                   \
+  LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD *LARGE_TENSOR_MINOR_SHAPE_THRESHOLD * 2
 
 static unsigned getSizeInBytes(RankedTensorType &tensorType) {
   Type elType = tensorType.getElementType();
@@ -72,14 +75,18 @@ static bool isLongLifeSpanVariable(Value v,
                                    unsigned LiveInSizeInBytes) {
   // The variable is considered as a long life span elected for being moved if:
   // The live-in variables of the forOp consist in a large amount of bytes and
-  // The variable defined by `v` is a large tensor and
-  // The variable liveness of `v` expends before the dot block.
-  // i.e. used in a block - loaded in another block
+  // The variable defined by `v` is a large tensor (with large amount of element
+  // in the minor dimenssion) and The variable liveness of `v` expends before
+  // the dot block. i.e. used in a block - loaded in another block
   if (TensorValue tensorV = dyn_cast<TensorValue>(v)) {
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
+    auto tensorOrder = triton::gpu::getOrder(tensorType);
     return (
-        (LiveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
+        (tensorOrder.size() == 2) &&
         (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
+        (tensorType.getShape()[tensorOrder[1]] >=
+         LARGE_TENSOR_MINOR_SHAPE_THRESHOLD) &&
+        (LiveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
         livenessBlockInfo->isLiveIn(v));
   }
   return false;
