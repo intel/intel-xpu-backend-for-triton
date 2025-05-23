@@ -63,7 +63,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
            -> (tensor<8x16xf32>, tensor<8x16xf32>, !tt.ptr<tensor<16x16xf16>>, !tt.ptr<tensor<16x16xf16>>) : i32 {
       // CHECK:      [[LOAD_A]] = tt.load %arg6 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       // CHECK-NEXT: [[LOAD_B]] = tt.load %arg7 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
-      // CHECK-NEXT: [[EXTRACT]] = triton_intel_gpu.extract %16[0] : tensor<16x32xf16> -> tensor<8x16xf16>
+      // CHECK-NEXT: [[EXTRACT]] = ttig.extract %16[0] : tensor<16x32xf16> -> tensor<8x16xf16>
       // CHECK-NEXT: [[DOT1]] = tt.dot [[EXTRACT]], [[LOAD_A]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       // CHECK-NEXT: [[DOT2]] = tt.dot [[EXTRACT]], [[LOAD_B]], %cst, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       // CHECK-NEXT: [[ADVANCE1]] = tt.advance %arg6, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
@@ -72,7 +72,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 
       %75 = tt.load %arg21 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
       %79 = tt.load %arg25 {DotIdx = 1 : i32} : !tt.ptr<tensor<16x16xf16>>
-      %91 = triton_intel_gpu.extract %58[0] : tensor<16x32xf16> -> tensor<8x16xf16>
+      %91 = ttig.extract %58[0] : tensor<16x32xf16> -> tensor<8x16xf16>
       %92 = tt.dot %91, %75, %cst_2, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %107 = tt.dot %91, %79, %cst_2, inputPrecision = tf32 : tensor<8x16xf16> * tensor<16x16xf16> -> tensor<8x16xf32>
       %321 = tt.advance %arg21, [%c0_i32, %c64_i32] : <tensor<16x16xf16>>
