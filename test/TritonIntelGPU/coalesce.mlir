@@ -472,6 +472,7 @@ module attributes {ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.n
 }
 
 // -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [2, 4, 4], warpsPerCTA = [2, 1, 1], order = [2, 1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [8, 1, 4], warpsPerCTA = [2, 1, 1], order = [2, 1, 0]}>
@@ -518,6 +519,44 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64", "tt
       // CHECK: scf.yield [[RES2]]#0, [[ADVANCE2]] : tensor<1x4x4xf32, [[BLOCKED_LAYOUT]]>, !tt.ptr<tensor<4x4xf32, [[BLOCKED_LAYOUT1]]>>
       %6 = tt.advance %5#1, [%c4_i32, %c4_i32] : <tensor<4x4xf32, #blocked1>>
       scf.yield %5#0, %6 : tensor<1x4x4xf32, #blocked>, !tt.ptr<tensor<4x4xf32, #blocked1>>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Ensure layout propagation works for a while loop.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK: [[BLOCKED_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK: kernel_make_tensor_descriptor_loop_carried
+  tt.func public @kernel_make_tensor_descriptor_loop_carried(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i64 {tt.divisibility = 16 : i32}, %arg2: i64 {tt.divisibility = 16 : i32}) {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr {{.*}} {order = array<i32: 1, 0>} : <tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>
+    // CHECK: [[ADV_PTR:%.*]] = tt.advance [[PTR]], {{.*}} : <tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>
+    %4 = tt.make_tensor_ptr %arg0, [%arg1, %arg2], [%arg2, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x128xf32, #blocked>>
+    %5 = tt.advance %4, [%c2_i32, %c0_i32] : <tensor<8x128xf32, #blocked>>
+    %7 = arith.cmpi slt, %arg1, %arg2 : i64
+    // CHECK: scf.while ([[ARG3:%.*]] = [[PTR]], [[ARG4:%.*]] = [[ADV_PTR]]) : (!tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>, !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>) -> (!tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>, !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>) {
+    %6:2 = scf.while (%arg3 = %4, %arg4 = %5) : (!tt.ptr<tensor<8x128xf32, #blocked>>, !tt.ptr<tensor<8x128xf32, #blocked>>) -> (!tt.ptr<tensor<8x128xf32, #blocked>>, !tt.ptr<tensor<8x128xf32, #blocked>>) {
+      // CHECK: scf.condition({{.*}}) [[ARG3]], [[ARG4]] : !tt.ptr<tensor<8x128xf32, #blocked>>, !tt.ptr<tensor<8x128xf32, #blocked>>
+      scf.condition(%7) %arg3, %arg4 : !tt.ptr<tensor<8x128xf32, #blocked>>, !tt.ptr<tensor<8x128xf32, #blocked>>
+    } do {
+    // CHECK: ^bb0({{.*}}: !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>, {{.*}}: !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>):
+    ^bb0(%arg3: !tt.ptr<tensor<8x128xf32, #blocked>>, %arg4: !tt.ptr<tensor<8x128xf32, #blocked>>):
+      // CHECK: [[PTR1:%.*]] = arith.select {{.*}} : !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>
+      // CHECK: [[PTR2:%.*]] = tt.advance [[PTR1]], {{.*}} : <tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>
+      // CHECK: [[LOAD:%.*]] = tt.load [[PTR1]] : !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>
+      // CHECK: tt.store [[PTR2]], {{.*}} : !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>
+      // CHECK: scf.yield [[PTR1]], [[PTR2]] : !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>, !tt.ptr<tensor<8x128xf32, [[BLOCKED_LAYOUT]]>>
+      %12 = arith.select %7, %arg4, %arg3 : !tt.ptr<tensor<8x128xf32, #blocked>>
+      %13 = tt.advance %12, [%c0_i32, %c2_i32] : <tensor<8x128xf32, #blocked>>
+      %15 = tt.load %12 : !tt.ptr<tensor<8x128xf32, #blocked>>
+      tt.store %13, %15 : !tt.ptr<tensor<8x128xf32, #blocked>>
+      scf.yield %12, %13 : !tt.ptr<tensor<8x128xf32, #blocked>>, !tt.ptr<tensor<8x128xf32, #blocked>>
     }
     tt.return
   }
