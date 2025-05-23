@@ -32,7 +32,7 @@ jobs:
     name: Triton benchmarks
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'rolling' }}
     timeout-minutes: 720
     defaults:
       run:
@@ -86,6 +86,29 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
+      - name: Install SGLang
+        id: install-sglang
+        run: |
+          git clone https://github.com/sgl-project/sglang.git
+          cd sglang
+          git apply ../benchmarks/third_party/sglang/sglang.patch
+          pip install ./python[dev_xpu]
+
+      # Reinstall PyTorch since SGLang installation breaks current dependencies
+      - name: Reinstall PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      # Reinstall Triton since SGLang installation breaks current dependencies
+      - name: Reinstall Triton
+        uses: ./.github/actions/setup-triton
+
+      - name: Run SGLANG tests
+        if: ${{ steps.install.outcome == 'success' && steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+            pip install pytest pytest-xdist
+            cd sglang
+            pytest -vvv -n 4 test/srt/test_triton_attention_kernels.py
+
       - name: Run Liger-Kernel tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
@@ -95,11 +118,6 @@ jobs:
           pip install transformers datasets -e Liger-Kernel
 
           pytest Liger-Kernel/test/
-
-      - name: Run SGLANG tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          scripts/test-triton.sh --sglang --skip-pytorch-install --skip-pip-install
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
