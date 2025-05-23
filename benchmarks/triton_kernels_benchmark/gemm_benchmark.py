@@ -232,15 +232,13 @@ def get_shapes(B, M, N, K, transpose_a, transpose_b):
     return a_shape, b_shape
 
 
-NEW_X_VALS = [  #
+X_VALS = [  #
+    [1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]
+] + [  #
     [1, m, n, 4096] for m in [1, 8] for n in [1024, 4096, 6144, 14336, 28672, 128256]
 ] + [  #
     [1, m, 4096, 14336] for m in [1, 8]
 ] + [  #
-    [1, 8192, 4096, 4096]  #
-]
-
-X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
     [1, 1, 13824, 5120],
     [1, 4, 12288, 4096],
     [1, 512, 8192, 8192],
@@ -261,6 +259,7 @@ X_VALS = [[1, 1024 * i, 1024 * i, 1024 * i] for i in [1, 2, 4, 8]] + [
     [32, 4096, 128, 4096],
     [4096, 8, 128, 16384],
     [4096, 8, 16384, 128],
+    [1, 8192, 4096, 4096],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -281,8 +280,6 @@ def is_enough_memory(x_val):
     return enough_memory
 
 
-if os.getenv('NEW_SHAPES', '1') == '1':
-    X_VALS += NEW_X_VALS
 X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
@@ -290,7 +287,6 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     transpose_a=False,
     transpose_b=False,
-    new_shapes=False,
     matmul_kernel=matmul_kernel_with_block_pointers,
     matmul_kernel_batched=matmul_kernel_with_block_pointers_batched,
     plot_name='matmul-performance',
@@ -303,10 +299,8 @@ def get_benchmark(
         'triton': 'Triton',
         'onednn': 'OneDNN',
     }
-    # use_xetla and use_cutlass
+    # use_cutlass
     if not (transpose_a or transpose_b):
-        if not new_shapes:
-            supported_providers['xetla'] = 'XeTLA'
         supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -457,6 +451,5 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         transpose_a=(os.getenv('TRANSPOSE_A', '0') == '1'),
         transpose_b=(os.getenv('TRANSPOSE_B', '0') == '1'),
-        new_shapes=(os.getenv('NEW_SHAPES', '1') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)

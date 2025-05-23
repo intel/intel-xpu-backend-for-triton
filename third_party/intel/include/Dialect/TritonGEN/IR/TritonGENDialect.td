@@ -24,12 +24,6 @@ def TritonGEN_Dialect : Dialect {
   let dependentDialects = ["mlir::LLVM::LLVMDialect"];
 
   let extraClassDeclaration = [{
-    /// Get the name of the attribute used to annotate max work group size
-    /// required for kernels.
-    static constexpr ::llvm::StringLiteral getMaxWorkGroupSizeAttrName() {
-      return ::llvm::StringLiteral("triton_gen.max_work_group_size");
-    }
-
     /// Get the name for the attribute used to specify cache control
     /// decorations.
     static constexpr ::llvm::StringRef getCacheControlsAttrName() {

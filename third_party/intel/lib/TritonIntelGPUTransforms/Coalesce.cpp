@@ -210,8 +210,8 @@ private:
   // to its users.
   void changeAndPropagateLayout(Operation *op, Attribute layout,
                                 IRRewriter &rewriter) const {
-    assert(op && op->getNumResults() == 1 &&
-           "Expecting operation yielding a result");
+    assert(op && op->getNumResults() != 0 &&
+           "Expecting operation yielding results");
 
     LLVM_DEBUG({
       llvm::dbgs() << "[" DEBUG_TYPE "]: " << "ChangeAndPropagateLayout for: ";
@@ -219,14 +219,15 @@ private:
     });
 
     rewriter.modifyOpInPlace(op, [&]() {
-      Value res = op->getOpResult(0);
-      assert(tt::isTensorPointerType(res.getType()) &&
-             "Expecting a block pointer");
+      for (Value res : op->getResults()) {
+        if (!tt::isTensorPointerType(res.getType()))
+          continue;
 
-      auto ptrType = cast<tt::PointerType>(res.getType());
-      auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
-      res.setType(tt::PointerType::get(getNewType(tensorType, layout),
-                                       ptrType.getAddressSpace()));
+        auto ptrType = cast<tt::PointerType>(res.getType());
+        auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+        res.setType(tt::PointerType::get(getNewType(tensorType, layout),
+                                         ptrType.getAddressSpace()));
+      }
     });
 
     LLVM_DEBUG({
