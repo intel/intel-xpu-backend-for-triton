@@ -122,7 +122,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
   // Loads that use a block pointer are expensive if they cannot be lowered to
   // 2D block read operations. Temporarily leverage the
-  // "triton_intel_gpu.block_io" attribute to filter out inexpensive loads.
+  // "ttig.block_io" attribute to filter out inexpensive loads.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr)

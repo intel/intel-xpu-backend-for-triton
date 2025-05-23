@@ -301,9 +301,7 @@ def get_benchmark(
     }
     # use_cutlass
     if not (transpose_a or transpose_b):
-        if '580' not in torch.xpu.get_device_name():
-            # FIXME: enable cutlass on bmg
-            supported_providers['cutlass'] = 'CUTLASS'
+        supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
