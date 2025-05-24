@@ -494,6 +494,7 @@ class intel_knobs(base_knobs):
     advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     reduce_transpose: env_bool = env_bool("TRITON_INTEL_REDUCE_TRANSPOSE", False)
+    disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
     raise_block_pointer: env_str = env_str("TRITON_INTEL_RAISE_BLOCK_POINTER", "0")
     dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
