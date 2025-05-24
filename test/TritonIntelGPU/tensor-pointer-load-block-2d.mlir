@@ -158,7 +158,14 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
     // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK: [[C16:%.*]] = llvm.mlir.constant(16 : i32) : i32
 
-    // CHECK-COUNT-4: llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v32f16
+    // CHECK: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C16]], [[C2]], {{.*}})
+    // CHECK: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C16]], [[C2]], {{.*}})
+    // CHECK: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C16]], [[C2]], {{.*}})
+    // CHECK: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK: llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[C2]], [[C16]], [[C16]], [[C2]], {{.*}})
     %0 = tt.load %arg0 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
 
     // CHECK: [[C2:%.*]] = llvm.mlir.constant(2 : i32) : i32

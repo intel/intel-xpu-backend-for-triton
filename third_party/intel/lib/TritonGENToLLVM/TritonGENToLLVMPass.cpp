@@ -110,18 +110,28 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  // The following signature is not valid in OCL interface.
-  // _Z42intel_sub_group_2d_block_read_16b_16r16x2cPU3AS1viiiDv2_iPDh
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2) {
-    return false;
-  }
-
-  if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
-      op.getVBlocks() != 4 && !op.getVnniTransform()) {
-    // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
-    // vBlock reads
+static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  // FIXME: The following signatures are not valid in SPV interface.
+  // intel_sub_group_2d_block_read_8b_32r16x1c
+  // intel_sub_group_2d_block_read_8b_32r16x2c
+  // intel_sub_group_2d_block_read_8b_16r16x2c
+  // intel_sub_group_2d_block_read_8b_8r16x1c
+  // intel_sub_group_2d_block_read_8b_8r16x2c
+  if ((op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 1 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 1 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
+       !op.getVnniTransform())) {
     return false;
   }
 
@@ -490,7 +500,7 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isOCLBuiltinAvailable(op)) {
+    if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
