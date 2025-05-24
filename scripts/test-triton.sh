@@ -437,7 +437,7 @@ run_benchmarks() {
   pip install .
   for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
     benchmark=$(basename -- "$file" .py)
-    if [[ $benchmark = @("__init__"|"benchmark_driver"|"benchmark_testing") ]]; then
+    if [[ $benchmark = @("__init__"|"benchmark_shapes_parser"|"benchmark_testing"|"benchmark_utils"|"build_report") ]]; then
       continue
     fi
     echo
