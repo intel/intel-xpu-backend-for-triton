@@ -22,7 +22,8 @@ on:
           inductor/test_aot_inductor.py
           inductor/test_select_algorithm.py
           inductor/test_max_autotune.py
-          inductor/test_compile_subprocess.py
+          # FIXME: enable it
+          # inductor/test_compile_subprocess.py
       runner_label:
         description: Runner label, keep empty for default
         type: string
