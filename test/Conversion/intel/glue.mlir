@@ -1,7 +1,7 @@
 // RUN: env TRITON_INTEL_ADVANCED_PATH=1 \
 // RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
-module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "ttg.num-warps" = 4 : i32} {
+module attributes {"ttig.support_sg_2d_block", "ttig.support_dpas", "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @test_scalar(
 // CHECK-SAME:                                         %[[VAL_0:.*]]: f32, %[[VAL_1:.*]]: f32, %[[VAL_2:.*]]: f32, %[[VAL_3:.*]]: f32) -> vector<4xf32>
 // CHECK:           %[[VAL_8:.*]] = llvm.mlir.poison : vector<4xf32>
@@ -16,7 +16,7 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
 // CHECK:           llvm.return %[[VAL_16]] : vector<4xf32>
 // CHECK:         }
   tt.func @test_scalar(%arg0: tensor<1x16xf32>, %arg1: tensor<1x16xf32>, %arg2: tensor<1x16xf32>, %arg3: tensor<1x16xf32>) -> tensor<4x16xf32> {
-    %0 = triton_intel_gpu.glue %arg0, %arg1, %arg2, %arg3 : (tensor<1x16xf32>, tensor<1x16xf32>, tensor<1x16xf32>, tensor<1x16xf32>) -> tensor<4x16xf32>
+    %0 = ttig.glue %arg0, %arg1, %arg2, %arg3 : (tensor<1x16xf32>, tensor<1x16xf32>, tensor<1x16xf32>, tensor<1x16xf32>) -> tensor<4x16xf32>
     tt.return %0 : tensor<4x16xf32>
   }
 
@@ -26,7 +26,7 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
 // CHECK:           llvm.return %[[VAL_4]] : vector<8xf32>
 // CHECK:         }
   tt.func @test_vec_2(%arg0: tensor<4x16xf32>, %arg1: tensor<4x16xf32>) -> tensor<8x16xf32> {
-    %0 = triton_intel_gpu.glue %arg0, %arg1 : (tensor<4x16xf32>, tensor<4x16xf32>) -> tensor<8x16xf32>
+    %0 = ttig.glue %arg0, %arg1 : (tensor<4x16xf32>, tensor<4x16xf32>) -> tensor<8x16xf32>
     tt.return %0 : tensor<8x16xf32>
   }
 
@@ -38,7 +38,7 @@ module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.sup
 // CHECK:           llvm.return %[[VAL_10]] : vector<16xf32>
 // CHECK:         }
   tt.func @test_vec_4(%arg0: tensor<4x16xf32>, %arg1: tensor<4x16xf32>, %arg2: tensor<4x16xf32>, %arg3: tensor<4x16xf32>) -> tensor<16x16xf32> {
-    %0 = triton_intel_gpu.glue %arg0, %arg1, %arg2, %arg3 : (tensor<4x16xf32>, tensor<4x16xf32>, tensor<4x16xf32>, tensor<4x16xf32>) -> tensor<16x16xf32>
+    %0 = ttig.glue %arg0, %arg1, %arg2, %arg3 : (tensor<4x16xf32>, tensor<4x16xf32>, tensor<4x16xf32>, tensor<4x16xf32>) -> tensor<16x16xf32>
     tt.return %0 : tensor<16x16xf32>
   }
 }

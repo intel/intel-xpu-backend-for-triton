@@ -27,7 +27,7 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
     The `alloc` operation allocates a region of memory as specified by its type.
     Example:
       ```mlir
-      %0 = triton_intel_gpu.alloc() : <8x64xf32, 3>
+      %0 = ttig.alloc() : <8x64xf32, 3>
       ```
   }];
   let results = (outs TT_Ptr:$result);
@@ -47,17 +47,17 @@ def TTIG_GlueOp : TTIG_Op<"glue", [Pure]> {
 
     Examples:
       ```mlir
-      %res1 = triton_intel_gpu.glue %t1, %t2 : (tensor<16x8xf16>, tensor<16x8xf16>)
+      %res1 = ttig.glue %t1, %t2 : (tensor<16x8xf16>, tensor<16x8xf16>)
             -> tensor<32x8xf16>
-      %res2 = triton_intel_gpu.glue %t1, %t2, %t3, %t4
+      %res2 = ttig.glue %t1, %t2, %t3, %t4
             : (tensor<16x8xf16>, tensor<16x8xf16>, tensor<16x8xf16>, tensor<16x8xf16>)
             -> tensor<32x16xf16>
-      %res3 = triton_intel_gpu.glue %p1, %p2, %p3
+      %res3 = ttig.glue %p1, %p2, %p3
             : (ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>, ptr<tensor<16x8xf16>>)
             -> ptr<tensor<16x24xf16>>
-      %res4 = triton_intel_gpu.glue %f1, %f2 : (f16, f16) -> tensor<2xf16>
-      %res5 = triton_intel_gpu.glue %t1, %t2 : (tensor<8xf16>, tensor<8xf16>) -> tensor<2x8xf16>
-      %res6 = triton_intel_gpu.glue %t1, %t2 : (tensor<8xf16>, tensor<8xf16>) -> tensor<16xf16>
+      %res4 = ttig.glue %f1, %f2 : (f16, f16) -> tensor<2xf16>
+      %res5 = ttig.glue %t1, %t2 : (tensor<8xf16>, tensor<8xf16>) -> tensor<2x8xf16>
+      %res6 = ttig.glue %t1, %t2 : (tensor<8xf16>, tensor<8xf16>) -> tensor<16xf16>
       ```
   }];
   let arguments = (ins Variadic<TT_Type>:$operands);
@@ -81,14 +81,14 @@ def TTIG_ExtractOp : TTIG_Op<"extract", [Pure]> {
      ```mlir
       // Partition tensor<32x32xf16> into 4 16x16xf16 subtensors and extract the
       // 3rd one (column major order)
-      %val = triton_intel_gpu.extract %tensor1[2] : tensor<32x32xf16>
+      %val = ttig.extract %tensor1[2] : tensor<32x32xf16>
            -> tensor<16x16xf16>
       // Same as above but with ptr to tensor.
-      %ptr = triton_intel_gpu.extract %ptr1[2] : !tt.ptr<tensor<32x32xf16>>
+      %ptr = ttig.extract %ptr1[2] : !tt.ptr<tensor<32x32xf16>>
            -> !tt.ptr<tensor<16x16xf16>>
       // Partition tensor<32x32xf16> into 32x2 16xf16 subtensors and extract the
       // 3rd one (column major order).
-      %val1 = triton_intel_gpu.extract %tensor1[2] : tensor<32x32xf16>
+      %val1 = ttig.extract %tensor1[2] : tensor<32x32xf16>
            -> tensor<16xf16>
       ```
 
@@ -116,7 +116,7 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
     The `prefetch` operation prefetches an input tensor.
     Example:
       ```mlir
-      triton_intel_gpu.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
+      ttig.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
           : !tt.ptr<tensor<256x32xf16>
       ```
   }];
@@ -202,7 +202,7 @@ def TTIG_SubGroupTransposeOp
 
     Example:
       ```
-%matrix_t = triton_intel_gpu.sub_group_transpose %local_buffer, %src : tensor<256x32xf16>
+%matrix_t = ttig.sub_group_transpose %local_buffer, %src : tensor<256x32xf16>
       ```
 
     This operation only supports tranposing tensors of shape
