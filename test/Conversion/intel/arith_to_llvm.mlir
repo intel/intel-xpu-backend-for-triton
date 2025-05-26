@@ -8,7 +8,7 @@
 // CHECK-LABEL:   llvm.func spir_kernelcc @float_to_bfloat_conversion(
 // CHECK-SCALAR:                                             %[[VAL_0:.*]]: !llvm.struct<(f32, f32, f32, f32)>) -> !llvm.struct<(bf16, bf16, bf16, bf16)>
 // CHECK-VECTOR:                                             %[[VAL_0:.*]]: vector<32xf32>) -> vector<32xbf16>
-module attributes {"triton_intel_gpu.support_sg_2d_block", "triton_intel_gpu.support_dpas", "triton_intel_gpu.support_bf16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+module attributes {"ttig.support_sg_2d_block", "ttig.support_dpas", "ttig.support_bf16_conversion", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @float_to_bfloat_conversion(%arg0 : tensor<512xf32, #blocked>) ->  tensor<512xbf16, #blocked>{
 // CHECK-SCALAR:    %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f32, f32, f32, f32)>
 // CHECK-SCALAR:    %[[VAL_3:.*]] = llvm.extractvalue %[[VAL_0]][1] : !llvm.struct<(f32, f32, f32, f32)>

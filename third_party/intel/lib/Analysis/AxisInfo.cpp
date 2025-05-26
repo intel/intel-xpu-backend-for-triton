@@ -400,7 +400,11 @@ private:
       return lhs.getStride(dim) * rhs.getConstantValue().value();
     if (rhs.getStride(dim) > 0 && lhs.getConstantValue().has_value())
       return lhs.getConstantValue().value() * rhs.getStride(dim);
-    if (lhs.getStride(dim) == 0 || rhs.getStride(dim) == 0)
+    auto strideZero = [&](const AxisInfo axisInfo) {
+      return axisInfo.getConstantValue().has_value() ||
+             axisInfo.getStride(dim) == 0 || !isa<TensorType>(op.getType());
+    };
+    if (strideZero(lhs) && strideZero(rhs))
       return 0;
     return -1;
   }
