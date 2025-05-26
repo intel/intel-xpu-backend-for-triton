@@ -401,6 +401,13 @@ class XPUBackend(BaseBackend):
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"
 
+        igc_shader_dump = os.environ.get("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", "0")
+        if igc_shader_dump == "1":
+            shader_dump_opt = f" -igc_opts ',DumpToCustomDir={metadata['cache_dir']},ShaderDumpEnable=1'"
+            options.generate_native_code = True
+        else:
+            shader_dump_opt = ""
+
         metadata["generate_native_code"] = options.generate_native_code
 
         if options.generate_native_code:
@@ -412,7 +419,7 @@ class XPUBackend(BaseBackend):
 
                 ocloc_cmd = [
                     'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options',
-                    metadata["build_flags"]
+                    metadata["build_flags"] + shader_dump_opt
                 ]
 
                 try:
@@ -428,7 +435,7 @@ class XPUBackend(BaseBackend):
                                 """
                                 metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
                                 # re-run with new build flags
-                                ocloc_cmd[-1] = metadata["build_flags"]
+                                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                                 subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog,
                                                stderr=subprocess.STDOUT)
                         os.remove(flog.name)
