@@ -209,8 +209,6 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK, device):
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])
 def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
-    if is_xpu() and dtype_str == 'bfloat16':
-        pytest.skip("FIXME: issue #4137")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,

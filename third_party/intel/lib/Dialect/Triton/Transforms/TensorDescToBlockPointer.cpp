@@ -204,15 +204,22 @@ private:
 
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
+      SmallVector<int32_t> boundaryCheck;
+      for (size_t i = 0; i < makeTensorDescOp.getShape().size(); ++i)
+        boundaryCheck.push_back(i);
       auto loadOp = builder.createOrFold<tt::LoadOp>(
-          loc, makeTensorPtrOp, op.getCache(), op.getEvict(),
+          loc, makeTensorPtrOp, boundaryCheck, /*padding*/ std::nullopt,
+          op.getCache(), op.getEvict(),
           /*volatile*/ false);
       LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
       op.replaceAllUsesWith(loadOp);
     } else {
+      SmallVector<int32_t> boundaryCheck;
+      for (size_t i = 0; i < makeTensorDescOp.getShape().size(); ++i)
+        boundaryCheck.push_back(i);
       [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
-          loc, makeTensorPtrOp, op.getSrc(), tt::CacheModifier::NONE,
-          tt::EvictionPolicy::NORMAL);
+          loc, makeTensorPtrOp, op.getSrc(), boundaryCheck,
+          tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL);
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }
 
