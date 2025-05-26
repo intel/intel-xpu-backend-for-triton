@@ -889,7 +889,7 @@ struct TritonIntelGPUInferLayoutInterface
     auto dst = src.transposeOuts(srcOutDims)
                    .reshapeOuts(newOutDims)
                    .transposeOuts(standardOutDimNames(ctx, newRank));
-    dstEnc = LinearEncodingAttr::get(ctx, dst);
+    dstEnc = LinearEncodingAttr::get(ctx, std::move(dst));
     return success();
   }
 
