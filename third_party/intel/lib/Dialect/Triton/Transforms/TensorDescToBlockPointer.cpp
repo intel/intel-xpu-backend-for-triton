@@ -3,6 +3,7 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "llvm/ADT/STLExtras.h"
@@ -87,9 +88,10 @@ private:
   // Otherwise, return the existing one. The function takes the base, shape,
   // strides, offsets, sizes of the block pointer to create/lookup and its
   // tensor element type (to ensure the block pointer has the tensor layout).
-  Value findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
-                                  ValueRange strides, ValueRange offsets,
-                                  ArrayRef<int32_t> sizes, OpBuilder &builder) {
+  tt::MakeTensorPtrOp
+  findOrCreateMakeTensorPtr(Location loc, Value base, ValueRange shape,
+                            ValueRange strides, ValueRange offsets,
+                            ArrayRef<int32_t> sizes, OpBuilder &builder) {
     Block *block = builder.getInsertionBlock();
     const Block::iterator insertPoint = builder.getInsertionPoint();
     auto it = std::find_if(block->begin(), insertPoint, [&](Operation &op) {
@@ -114,7 +116,7 @@ private:
     });
 
     auto makeTensorPtrOp = [&]() {
-      Value makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
+      auto makeTensorPtr = builder.create<tt::MakeTensorPtrOp>(
           loc, base, shape, strides, offsets, sizes,
           builder.getDenseI32ArrayAttr({1, 0}));
       return makeTensorPtr;
@@ -122,6 +124,24 @@ private:
 
     return (it != insertPoint) ? cast<tt::MakeTensorPtrOp>(*it)
                                : makeTensorPtrOp();
+  }
+
+  void propagateToLoops(tt::MakeTensorPtrOp op) {
+    for (Operation *user : op->getUsers()) {
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
+        for (auto [initArg, rgnInitArg, loopRes, yieldVal] :
+             llvm::zip(loopOp.getInits(), loopOp.getRegionIterArgs(),
+                       loopOp->getResults(), loopOp.getYieldedValues())) {
+          assert(rgnInitArg.getType() == loopRes.getType() &&
+                 rgnInitArg.getType() == yieldVal.getType() && "Type mismatch");
+          if (rgnInitArg.getType() != initArg.getType()) {
+            rgnInitArg.setType(initArg.getType());
+            loopRes.setType(initArg.getType());
+            yieldVal.setType(initArg.getType());
+          }
+        }        
+      }
+    }
   }
 
   LogicalResult rewriteMakeTensorDescriptorOp(tt::MakeTensorDescOp op) {
@@ -150,31 +170,18 @@ private:
       sizes.push_back(static_cast<int32_t>(size));
     }
 
-    Value tensorPtr = findOrCreateMakeTensorPtr(
+    auto tensorPtr = findOrCreateMakeTensorPtr(
         loc, op.getBase(), shapes, strides, offsets, sizes, builder);
     LLVM_DEBUG({
       llvm::dbgs() << "With:\n";
       llvm::dbgs().indent(2) << tensorPtr << "\n";
     });
 
-    op.replaceAllUsesWith(tensorPtr);
+    op->replaceAllUsesWith(tensorPtr);
     cleanUp.insert(op);
 
-    for (Operation *user : tensorPtr.getUsers()) {
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        for (auto [initArg, rgnInitArg, loopRes, yieldVal] :
-             llvm::zip(forOp.getInitArgs(), forOp.getRegionIterArgs(),
-                       forOp.getResults(), forOp.getYieldedValues())) {
-          assert(rgnInitArg.getType() == loopRes.getType() &&
-                 rgnInitArg.getType() == yieldVal.getType() && "Type mismatch");
-          if (rgnInitArg.getType() != initArg.getType()) {
-            rgnInitArg.setType(initArg.getType());
-            loopRes.setType(initArg.getType());
-            yieldVal.setType(initArg.getType());
-          }
-        }
-      }
-    }
+    // Propagate the `tensorPtr` type to loops init args, etc...
+    propagateToLoops(tensorPtr);
 
     return success();
   }
