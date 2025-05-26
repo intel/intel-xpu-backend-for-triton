@@ -22,7 +22,7 @@ if (NOT XeTLALibrary_FOUND)
 
     FetchContent_GetProperties(xetla-library)
     if(NOT xetla-library_POPULATED)
-       FetchContent_MakeAvailable(xetla-library)
+       FetchContent_Populate(xetla-library)
     endif()
 
     set(XeTLALibrary_INCLUDE_DIR "${XeTLALibrary_SOURCE_DIR}/include"
