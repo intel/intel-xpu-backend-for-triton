@@ -1262,6 +1262,9 @@ struct LoadOpToBlockIOConversion
               other_ = rewriter.create<LLVM::ConstantOp>(
                   loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
             }
+            if (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
+                !isTransposeRequired && originalElemBits != 32)
+              return failure();
 
             // Create a predicated load operation.
             Block &endBlock = LLVM::intel::createPredicatedBlock(
