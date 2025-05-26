@@ -634,30 +634,24 @@ struct TritonMatrix2DBlockPrefetchLowering
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    std::string fnName = "__spirv_Subgroup2DBlockPrefetchINTEL";
+    std::string fnName = "intel_sub_group_2d_block_prefetch_";
+    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
+              std::to_string(op.getTileHeight()) + "r" +
+              std::to_string(op.getTileWidth()) + "x" +
+              std::to_string(op.getVBlocks()) + "c";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_i";
     auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
     VectorType vecType = vec_ty(i32_ty, 2);
-    SmallVector<Type> argTypes{i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx, 1),
-                               i32_ty, i32_ty, i32_ty, vecType};
-    fnName = intel::mangle(fnName, argTypes);
-
     Value byteCoord = b.insert_element(
         vecType,
         b.insert_element(vecType, b.undef(vecType), offsetX, b.i32_val(0)),
         op.getY(), b.i32_val(1));
-
-    SmallVector<Value> args{b.i32_val(op.getElemSizeInBits() / 8),
-                            b.i32_val(op.getTileWidth()),
-                            b.i32_val(op.getTileHeight()),
-                            b.i32_val(op.getVBlocks()),
-                            op.getPtr(),
-                            baseWidth,
-                            op.getBaseHeight(),
-                            op.getBasePitch(),
-                            byteCoord};
+    SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty, i32_ty, i32_ty, vecType};
+    SmallVector<Value> args{op.getPtr(), baseWidth, op.getBaseHeight(),
+                            op.getBasePitch(), byteCoord};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 1> paramAttrs{
-        std::make_pair(4, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName()),
     };
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
@@ -669,7 +663,7 @@ struct TritonMatrix2DBlockPrefetchLowering
 
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs, funcAttrs);
-    constexpr uint32_t ptrOperandIndex = 4;
+    constexpr uint32_t ptrOperandIndex = 0;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
                                             ptrOperandIndex)) {
