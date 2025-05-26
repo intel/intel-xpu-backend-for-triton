@@ -2541,18 +2541,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-DAG: [[PTR2:%.*]] = tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #[[$BLOCKED]]>>
     %3 = tt.make_tensor_ptr %arg0, [%2, %1], [%1, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #blocked>>
     %4 = arith.cmpi eq, %0, %c0_i32 : i32
-    scf.if %4 {
+    // CHECK: tt.store [[PTR2]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$BLOCKED]]>>
+    tt.store %3, %cst : !tt.ptr<tensor<64x64xf32, #blocked>>
+    %29 = scf.for %arg6 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg11 = %cst_0) -> (tensor<64x64xf32, #mma>)  : i32 {
+      %65 = ttg.convert_layout %arg11 : tensor<64x64xf32, #mma> -> tensor<64x64xf32, #blocked>
       // CHECK-NOT: ttg.convert_layout
-      // CHECK: tt.store [[PTR2]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$BLOCKED]]>>
-      tt.store %3, %cst : !tt.ptr<tensor<64x64xf32, #blocked>>
-    } else {
-      %29 = scf.for %arg6 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg11 = %cst_0) -> (tensor<64x64xf32, #mma>)  : i32 {
-        %65 = ttg.convert_layout %arg11 : tensor<64x64xf32, #mma> -> tensor<64x64xf32, #blocked>
-        // CHECK-NOT: ttg.convert_layout
-        // CHECK: tt.store [[PTR1]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$DPAS]]>>
-        tt.store %3, %65 : !tt.ptr<tensor<64x64xf32, #blocked>>
-        scf.yield %cst_0 : tensor<64x64xf32, #mma>
-      }
+      // CHECK: tt.store [[PTR1]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$DPAS]]>>
+      tt.store %3, %65 : !tt.ptr<tensor<64x64xf32, #blocked>>
+      scf.yield %cst_0 : tensor<64x64xf32, #mma>
     }
     tt.return
   }
