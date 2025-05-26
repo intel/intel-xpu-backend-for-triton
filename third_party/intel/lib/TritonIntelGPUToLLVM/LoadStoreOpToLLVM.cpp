@@ -1164,6 +1164,8 @@ struct LoadOpToBlockIOConversion
       return failure();
 
     Value baseHeight = b.i32_val(tileHeight);
+    baseWidth = b.i32_val(0);
+    baseHeight = b.i32_val(0);
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
