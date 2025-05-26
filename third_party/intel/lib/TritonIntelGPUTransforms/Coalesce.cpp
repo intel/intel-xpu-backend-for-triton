@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
 
@@ -140,8 +141,10 @@ private:
       Value loopArg;
       if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
         loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-      if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
+      else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
         loopArg = whileOp.getInits()[arg.getArgNumber()];
+      else
+        llvm_unreachable("Unexpected parent operator");
 
       return findDefiningMakeTensorPtrOp(loopArg);
     }
