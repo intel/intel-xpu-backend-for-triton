@@ -111,6 +111,7 @@ loadCacheControlToCacheControls(Builder &builder,
 }
 
 static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  return false;
   // FIXME: The following signatures are not valid in SPV interface.
   // intel_sub_group_2d_block_read_8b_32r16x1c
   // intel_sub_group_2d_block_read_8b_32r16x2c
