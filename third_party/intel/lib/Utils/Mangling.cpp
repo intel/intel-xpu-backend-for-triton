@@ -1,6 +1,5 @@
 #include "Mangling.h"
 
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 
@@ -14,11 +13,6 @@ std::string getTypeMangling(Type ty, bool isUnsigned) {
       .Case([isUnsigned](VectorType ty) -> std::string {
         return "Dv" + std::to_string(ty.getNumElements()) + "_" +
                getTypeMangling(ty.getElementType(), isUnsigned);
-      })
-      .Case([](LLVM::LLVMPointerType ty) -> std::string {
-        if (ty.getAddressSpace() == 0)
-          return "Pv";
-        return "PU3AS" + std::to_string(ty.getAddressSpace()) + "v";
       })
       .Case([](Float16Type) -> std::string { return "Dh"; })
       .Case([](Float32Type) -> std::string { return "f"; })

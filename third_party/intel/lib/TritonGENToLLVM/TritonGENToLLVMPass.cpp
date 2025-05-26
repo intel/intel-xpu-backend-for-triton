@@ -504,46 +504,43 @@ struct TritonMatrix2DBlockLoadLowering
     auto dest = rewriter.create<LLVM::AllocaOp>(
         loc, ptr_ty(ctx), resType.getElementType(),
         b.i32_val(resType.getNumElements()));
-    std::string fnName = "__spirv_Subgroup2DBlockLoad";
+    std::string fnName = "intel_sub_group_2d_block_read_";
     if (op.getVnniTransform())
-      fnName += "Transform";
+      fnName += "transform_";
     else if (op.getTranspose())
-      fnName += "Transpose";
-    fnName += "INTEL";
-    VectorType vecType = vec_ty(i32_ty, 2);
-    SmallVector<Type> argTypes{i32_ty, i32_ty, i32_ty, i32_ty,  ptr_ty(ctx, 1),
-                               i32_ty, i32_ty, i32_ty, vecType, ptr_ty(ctx)};
-    fnName = intel::mangle(fnName, argTypes);
+      fnName += "transpose_";
+    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
+              std::to_string(op.getTileHeight()) + "r" +
+              std::to_string(op.getTileWidth()) + "x" +
+              std::to_string(op.getVBlocks()) + "c";
+    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
+    fnName +=
+        intel::getTypeMangling(resType.getElementType(), /*isUnsigned=*/true);
 
     auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
 
+    VectorType vecType = vec_ty(i32_ty, 2);
     Value byteCoord = b.insert_element(
         vecType,
         b.insert_element(vecType, b.undef(vecType), offsetX, b.i32_val(0)),
         op.getY(), b.i32_val(1));
+    SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty,  i32_ty,
+                               i32_ty,         vecType, ptr_ty(ctx)};
 
-    SmallVector<Value> args{b.i32_val(op.getElemSizeInBits() / 8),
-                            b.i32_val(op.getTileWidth()),
-                            b.i32_val(op.getTileHeight()),
-                            b.i32_val(op.getVBlocks()),
-                            op.getPtr(),
-                            baseWidth,
-                            op.getBaseHeight(),
-                            op.getBasePitch(),
-                            byteCoord,
-                            dest};
+    SmallVector<Value> args{op.getPtr(),       baseWidth, op.getBaseHeight(),
+                            op.getBasePitch(), byteCoord, dest};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 4> paramAttrs{
-        std::make_pair(4, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(4, LLVM::LLVMDialect::getReadonlyAttrName()),
-        std::make_pair(9, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(9, LLVM::LLVMDialect::getWriteOnlyAttrName()),
+        std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(0, LLVM::LLVMDialect::getReadonlyAttrName()),
+        std::make_pair(5, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(5, LLVM::LLVMDialect::getWriteOnlyAttrName()),
     };
 
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs,
         intel::noUnwindWillReturnAttrs);
-    constexpr uint32_t ptrOperandIndex = 4;
+    constexpr uint32_t ptrOperandIndex = 0;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
                                             ptrOperandIndex)) {
