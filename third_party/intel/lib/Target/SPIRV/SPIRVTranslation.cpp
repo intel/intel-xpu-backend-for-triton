@@ -107,7 +107,7 @@ public:
 
 static SPIRV::TranslatorOpts getSPIRVOpts() {
   SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
-  static constexpr std::array<SPIRV::ExtensionID, 17> AllowedExtensions{
+  static constexpr std::array<SPIRV::ExtensionID, 16> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
       SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
@@ -118,7 +118,6 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
       SPIRV::ExtensionID::SPV_INTEL_split_barrier,
-      SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
       SPIRV::ExtensionID::SPV_INTEL_tensor_float32_conversion,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
