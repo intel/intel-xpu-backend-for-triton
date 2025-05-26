@@ -55,7 +55,8 @@ class XPUOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         if self.num_warps <= 0 or (self.num_warps & (self.num_warps - 1)) != 0:
             raise AssertionError("num_warps must be a power of 2")
-        self.generate_native_code = knobs.intel.gen_native_code or self.generate_native_code
+        self.generate_native_code = (knobs.intel.gen_native_code
+                                     or knobs.intel.dump_shader_info) or self.generate_native_code
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -390,6 +391,13 @@ class XPUBackend(BaseBackend):
         if knobs.intel.disable_igc_opt:
             metadata["build_flags"] += " -cl-opt-disable"
 
+        shader_dump_opt = ""
+        if knobs.intel.dump_shader_info:
+            # The IGC (Intel Graphic Compiler) only parses the options at first time in JIT-ing the binary per process.
+            # Have to use the `ocloc` to generate the binary in sub-process to work around the limitation.
+            assert options.generate_native_code, "Only support native code generation with shader dump"
+            shader_dump_opt = f" -igc_opts ',DumpToCustomDir={metadata['cache_dir']},ShaderDumpEnable=1'"
+
         metadata["generate_native_code"] = options.generate_native_code
 
         if options.generate_native_code:
@@ -401,7 +409,7 @@ class XPUBackend(BaseBackend):
 
                 ocloc_cmd = [
                     'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options',
-                    metadata["build_flags"]
+                    metadata["build_flags"] + shader_dump_opt
                 ]
 
                 try:
@@ -417,7 +425,7 @@ class XPUBackend(BaseBackend):
                                 """
                                 metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
                                 # re-run with new build flags
-                                ocloc_cmd[-1] = metadata["build_flags"]
+                                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                                 subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog,
                                                stderr=subprocess.STDOUT)
                         os.remove(flog.name)
