@@ -327,8 +327,6 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
 def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.xfail("CTAs is unsupported for these cards")
-    if is_xpu() and ndim not in [1]:
-        pytest.skip("FIXME: issue #4140")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
@@ -924,8 +922,6 @@ def test_tensor_descriptor_batched_gemm_3d_tma(device):
 @pytest.mark.parametrize("ndim", [3, 4, 5])
 @pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
 def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK, device):
-    if is_xpu():
-        pytest.skip("FIXME: issue #4221")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
