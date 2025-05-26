@@ -40,19 +40,6 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 using namespace mlir::triton;
 using ret = py::return_value_policy;
 
-// Macros to create a pass that takes pass options.
-#define ADD_PASS_WRAPPER_OPT_1(name, builder, ty0)                             \
-  m.def(name,                                                                  \
-        [](mlir::PassManager &pm, ty0 val0) { pm.addPass(builder({val0})); })
-#define ADD_PASS_WRAPPER_OPT_2(name, builder, ty0, ty1)                        \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1) {                  \
-    pm.addPass(builder({val0, val1}));                                         \
-  })
-#define ADD_PASS_WRAPPER_OPT_3(name, builder, ty0, ty1, ty2)                   \
-  m.def(name, [](mlir::PassManager &pm, ty0 val0, ty1 val1, ty2 val2) {        \
-    pm.addPass(builder({val0, val1, val2}));                                   \
-  })
-
 static uint32_t findKernels(llvm::Module &M,
                             std::set<llvm::Function *> &functions) {
   assert(functions.empty() && "Expecting an empty set");
@@ -69,29 +56,30 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
                      intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
-  ADD_PASS_WRAPPER_OPT_1("add_raise_block_pointer",
-                         intel::createTritonRaiseBlockPointer, bool);
-  ADD_PASS_WRAPPER_OPT_1("add_convert_to_ttgpuir_warp",
-                         intel::createConvertTritonToTritonGPUWarp, unsigned);
+  ADD_PASS_OPTION_WRAPPER_1("add_raise_block_pointer",
+                            intel::createTritonRaiseBlockPointer, bool);
+  ADD_PASS_OPTION_WRAPPER_1("add_convert_to_ttgpuir_warp",
+                            intel::createConvertTritonToTritonGPUWarp,
+                            unsigned);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_OPT_3("add_to_llvmir",
-                         gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
-                         bool, bool);
+  ADD_PASS_OPTION_WRAPPER_3("add_to_llvmir",
+                            gpu::intel::createConvertTritonIntelGPUToLLVM, bool,
+                            bool, bool);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
-  ADD_PASS_WRAPPER_OPT_2("add_pipeline",
-                         gpu::intel::createTritonIntelGPUPipeline, int,
-                         enum gpu::intel::SplitBarrierScope);
+  ADD_PASS_OPTION_WRAPPER_2("add_pipeline",
+                            gpu::intel::createTritonIntelGPUPipeline, int,
+                            enum gpu::intel::SplitBarrierScope);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
-  ADD_PASS_WRAPPER_OPT_2("add_prefetch_block",
-                         gpu::intel::createTritonIntelGPUPrefetchBlock, int,
-                         bool);
+  ADD_PASS_OPTION_WRAPPER_2("add_prefetch_block",
+                            gpu::intel::createTritonIntelGPUPrefetchBlock, int,
+                            bool);
   ADD_PASS_WRAPPER_0("add_distribute_to_warps",
                      gpu::intel::createTritonIntelGPUDistributeToWarps);
   ADD_PASS_WRAPPER_0("add_match_target_size",
@@ -118,9 +106,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
                      &gpu::intel::TritonAnnotateModuleOptions::targetArch);
-  ADD_PASS_WRAPPER_OPT_1("add_triton_annotate_module",
-                         gpu::intel::createTritonAnnotateModule,
-                         gpu::intel::TritonAnnotateModuleOptions);
+  ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
+                            gpu::intel::createTritonAnnotateModule,
+                            gpu::intel::TritonAnnotateModuleOptions);
 
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);

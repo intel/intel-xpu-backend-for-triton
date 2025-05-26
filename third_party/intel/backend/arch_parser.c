@@ -22,20 +22,26 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
   // FIXME: Add support for more architectures.
   const char *arch = "";
   switch (sycl_arch) {
-  case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
-    arch = "pvc";
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_arl_h:
+    arch = "arl_h";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_arl_s:
+    arch = "arl_s";
     break;
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_bmg_g21:
     arch = "bmg";
     break;
-  case sycl::ext::oneapi::experimental::architecture::intel_gpu_lnl_m:
-    arch = "lnl";
-    break;
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_dg2_g10:
     arch = "dg2";
     break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_lnl_m:
+    arch = "lnl";
+    break;
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_mtl_h:
     arch = "mtl";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
+    arch = "pvc";
     break;
   default:
     std::cerr << "sycl_arch not recognized: " << (int)sycl_arch << std::endl;
