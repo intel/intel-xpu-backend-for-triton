@@ -694,8 +694,8 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 
 // Recursively update the operands in a chain of AdvanceOps, after setting the
 // pointer operand of the first one.
-static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
-                                 Value dataToStore) {
+static void updateAdvanceOpChain(AdvanceOp advanceOp, StoreOp storeOp,
+                                 Value makeTensorPtrOp, Value dataToStore) {
   OpBuilder rewriter(advanceOp);
   auto newAdvanceOp =
       rewriter.create<AdvanceOp>(advanceOp.getLoc(), makeTensorPtrOp.getType(),
@@ -703,11 +703,13 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
 
   SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
   for (Operation *user : advanceOpUsers) {
-    if (auto storeOp = dyn_cast<StoreOp>(user)) {
-      storeOp.setOperand(0, newAdvanceOp);
-      storeOp.setOperand(1, dataToStore);
+    if (auto storeUser = dyn_cast<StoreOp>(user)) {
+      if (storeUser == storeOp) {
+        storeOp.setOperand(0, newAdvanceOp);
+        storeOp.setOperand(1, dataToStore);
+      }
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
-      updateAdvanceOpChain(advanceOp, makeTensorPtrOp, dataToStore);
+      updateAdvanceOpChain(advanceOp, storeOp, makeTensorPtrOp, dataToStore);
     } else {
       llvm::errs() << "user: " << *user << "\n";
       llvm_unreachable("Unexpected user");
@@ -794,16 +796,27 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // Update the store operation with the new layout.
   SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
   Value dataToStore = getValueAs(value, encoding);
-  Block *storeBB = storeOp->getBlock();
   for (Operation *user : makeTensorPtrOpUsers) {
-    Block *userBB = user->getBlock();
-    if (storeBB != userBB)
-      continue;
-    if (auto storeOp = dyn_cast<StoreOp>(user)) {
-      storeOp.setOperand(0, newMakeTensorPtrOp);
-      storeOp.setOperand(1, dataToStore);
+    if (auto storeUser = dyn_cast<StoreOp>(user)) {
+      if (storeUser == storeOp) {
+        storeOp.setOperand(0, newMakeTensorPtrOp);
+        storeOp.setOperand(1, dataToStore);
+      }
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
-      updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp, dataToStore);
+      auto chainIsTerminatedByCurrentStore = [&](AdvanceOp advanceOp) {
+        AdvanceOp currentAdvOp = advanceOp;
+        for (Operation *user : currentAdvOp->getUsers()) {
+          if (isa<StoreOp>(user) && cast<StoreOp>(user) == storeOp)
+            return true;
+          if (isa<AdvanceOp>(user))
+            currentAdvOp = cast<AdvanceOp>(user);
+        }
+        return false;
+      };
+
+      if (chainIsTerminatedByCurrentStore(advanceOp))
+        updateAdvanceOpChain(advanceOp, storeOp, newMakeTensorPtrOp,
+                             dataToStore);
     }
   }
 
