@@ -2518,3 +2518,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 1], A = [32, 8], B = [8, 16], C = [32, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 1], A = [32, 8], B = [8, 16], C = [32, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+  // CHECK-LABEL: if_with_store
+  tt.func public @if_with_store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c1_i32 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.extsi %arg2 : i32 to i64
+    %2 = arith.extsi %arg1 : i32 to i64
+    // CHECK-DAG: [[PTR1:%.*]] = tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #[[$DPAS]]>>
+    // CHECK-DAG: [[PTR2:%.*]] = tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #[[$BLOCKED]]>>
+    %3 = tt.make_tensor_ptr %arg0, [%2, %1], [%1, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #blocked>>
+    %4 = arith.cmpi eq, %0, %c0_i32 : i32
+    scf.if %4 {
+      // CHECK-NOT: ttg.convert_layout
+      // CHECK: tt.store [[PTR2]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$BLOCKED]]>>
+      tt.store %3, %cst : !tt.ptr<tensor<64x64xf32, #blocked>>
+    } else {
+      %29 = scf.for %arg6 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg11 = %cst_0) -> (tensor<64x64xf32, #mma>)  : i32 {
+        %65 = ttg.convert_layout %arg11 : tensor<64x64xf32, #mma> -> tensor<64x64xf32, #blocked>
+        // CHECK-NOT: ttg.convert_layout
+        // CHECK: tt.store [[PTR1]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$DPAS]]>>
+        tt.store %3, %65 : !tt.ptr<tensor<64x64xf32, #blocked>>
+        scf.yield %cst_0 : tensor<64x64xf32, #mma>
+      }
+    }
+    tt.return
+  }
+}

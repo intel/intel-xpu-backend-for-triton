@@ -797,6 +797,8 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   Block *storeBB = storeOp->getBlock();
   for (Operation *user : makeTensorPtrOpUsers) {
     Block *userBB = user->getBlock();
+    if (storeBB != userBB)
+      continue;
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
       storeOp.setOperand(0, newMakeTensorPtrOp);
       storeOp.setOperand(1, dataToStore);
