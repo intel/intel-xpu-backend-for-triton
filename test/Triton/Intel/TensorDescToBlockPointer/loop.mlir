@@ -209,7 +209,7 @@ module {
   // CHECK:      }
 
   tt.func public @load_in_while_loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
-    %c0_i32 = arith.constant 0 : i32    
+    %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %0 = tt.get_program_id x : i32
     %3 = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%c1_i64, %c1_i64] : <f32>, <tensor<8x128xf32>>
@@ -229,7 +229,7 @@ module {
   // CHECK:        [[PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32>
   // CHECK:        scf.while ([[ARG3:%.*]] = [[PTR]]) : (!tt.ptr<tensor<8x128xf32>>) -> !tt.ptr<tensor<8x128xf32>> {
   // CHECK:          scf.condition({{.*}}) [[ARG3]] : !tt.ptr<tensor<8x128xf32>>
-  // CHECK:        } do { 
+  // CHECK:        } do {
   // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32>>):
   // CHECK:          [[PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32>
   // CHECK:          tt.load [[PTR1]] : !tt.ptr<tensor<8x128xf32>>

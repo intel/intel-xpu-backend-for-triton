@@ -139,7 +139,7 @@ private:
             loopRes.setType(initArg.getType());
             yieldVal.setType(initArg.getType());
           }
-        }        
+        }
       }
     }
   }
