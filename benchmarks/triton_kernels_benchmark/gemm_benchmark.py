@@ -297,11 +297,7 @@ def get_benchmark(
     """
     supported_providers = {
         'triton': 'Triton',
-        'onednn': 'OneDNN',
     }
-    # use_cutlass
-    if not (transpose_a or transpose_b):
-        supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance
@@ -326,6 +322,7 @@ def get_benchmark(
             args={},
         ))
     def benchmark(B, M, N, K, provider):
+        print("Benchmarking with parameters: ", B, M, N, K, provider)
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
         torch.manual_seed(0)
