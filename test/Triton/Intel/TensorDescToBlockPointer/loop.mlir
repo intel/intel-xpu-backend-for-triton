@@ -124,7 +124,7 @@ module {
   // CHECK-DAG:      [[EXTSI_PARAM_1:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
   // CHECK-DAG:      [[EXTSI_PARAM_2b:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
   // CHECK:          [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr [[PARAM_0]], {{\[}}[[EXTSI_PARAM_1]], [[EXTSI_PARAM_2b]]], {{\[}}[[EXTSI_PARAM_2a]], [[CST_1_i64]]], {{\[}}[[CST_8_i32]], [[IDX_CAST_1]]] {{.*}} : <tensor<16x32xf16>>
-  // CHECK:          tt.store [[TENSOR_PTR]], [[VAR_arg2]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK:          tt.store [[TENSOR_PTR]], [[VAR_arg2]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[CST]] : tensor<16x32xf16>
   // CHECK:          scf.yield {{.*}}, [[ADD]] : !tt.tensordesc<tensor<16x32xf16>>, tensor<16x32xf16>
   // CHECK:        }
