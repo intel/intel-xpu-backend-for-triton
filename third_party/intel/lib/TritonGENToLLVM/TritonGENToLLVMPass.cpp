@@ -148,12 +148,14 @@ template <
                                      TritonGEN::Matrix2DBlockStoreOp,
                                      TritonGEN::Matrix2DBlockPrefetchOp>::value,
                      bool> = true>
-static std::pair<Value, Value>
+static std::tuple<Value, Value, Value>
 computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value baseAddr =
-      rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), op.getPtr());
+  Value baseAddr = b.ptrtoint(int_ty(64), op.getPtr());
+  // Clear the lower 6 bits.
+  Value adjustedBasePtr = b.and_(baseAddr, b.i64_val(~0x3f));
+  adjustedBasePtr = b.inttoptr(op.getPtr().getType(), adjustedBasePtr);
   // A mask for 64-byte alignment (0x3f = 63).
   constexpr int64_t ALIGNMENT_MASK = 0x3f;
   // Calculate the byte offset of the base address from a 64-byte alignment.
@@ -165,7 +167,7 @@ computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
   Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
   Value adjustedXOffset =
       b.add(op.getX(), b.udiv(offsetInBytes, elemSizeInBytes));
-  return {adjustedBaseWidth, adjustedXOffset};
+  return {adjustedBasePtr, adjustedBaseWidth, adjustedXOffset};
 }
 
 [[maybe_unused]] static Value
@@ -176,7 +178,6 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  Value ptr = op.getPtr();
   Value baseHeight = op.getBaseHeight();
   Value basePitch = op.getBasePitch();
   Value y = op.getY();
@@ -187,11 +188,11 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   IntegerType int32Ty = rewriter.getIntegerType(32);
   IntegerType int64Ty = rewriter.getIntegerType(64);
 
+  Value one = b.i32_val(1);
+  auto [ptr, baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
-
-  Value one = b.i32_val(1);
-  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
@@ -286,9 +287,6 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // The IGC intrinsic requires the first argument be int64
-  Value ptr = op.getPtr();
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
   Value baseHeight = op.getBaseHeight();
   Value basePitch = op.getBasePitch();
   Value y = op.getY();
@@ -298,7 +296,10 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   std::string funcName =
       "llvm.genx.GenISA.LSC2DBlockWrite." + getGenISATypeMangling(storeValType);
   Value one = b.i32_val(1);
-  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto [ptr, baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+
+  // The IGC intrinsic requires the first argument be int64
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -334,14 +335,14 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // The IGC intrinsic requires the first argument be int64
-  Value ptr = op.getPtr();
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
   Value baseHeight = op.getBaseHeight();
   Value basePitch = op.getBasePitch();
   Value y = op.getY();
   Value one = b.i32_val(1);
-  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto [ptr, baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+
+  // The IGC intrinsic requires the first argument be int64
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -527,7 +528,8 @@ struct TritonMatrix2DBlockLoadLowering
                                i32_ty, i32_ty, i32_ty, vecType, ptr_ty(ctx)};
     fnName = intel::mangle(fnName, argTypes);
 
-    auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
+    auto [ptr, baseWidth, offsetX] =
+        computeAlignedBaseWidthAndOffset(op, rewriter);
 
     Value byteCoord = b.insert_element(
         vecType,
@@ -538,7 +540,7 @@ struct TritonMatrix2DBlockLoadLowering
                             b.i32_val(op.getTileWidth()),
                             b.i32_val(op.getTileHeight()),
                             b.i32_val(op.getVBlocks()),
-                            op.getPtr(),
+                            ptr,
                             baseWidth,
                             op.getBaseHeight(),
                             op.getBasePitch(),
@@ -588,7 +590,8 @@ struct TritonMatrix2DBlockStoreLowering
 
     std::string fnName = "__spirv_Subgroup2DBlockStoreINTEL";
 
-    auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
+    auto [ptr, baseWidth, offsetX] =
+        computeAlignedBaseWidthAndOffset(op, rewriter);
 
     VectorType vecType = vec_ty(i32_ty, 2);
     SmallVector<Type> argTypes{i32_ty,      i32_ty,         i32_ty, i32_ty,
@@ -606,7 +609,7 @@ struct TritonMatrix2DBlockStoreLowering
                             b.i32_val(op.getTileHeight()),
                             b.i32_val(op.getVBlocks()),
                             storeValPtr,
-                            op.getPtr(),
+                            ptr,
                             baseWidth,
                             op.getBaseHeight(),
                             op.getBasePitch(),
@@ -647,7 +650,8 @@ struct TritonMatrix2DBlockPrefetchLowering
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::string fnName = "__spirv_Subgroup2DBlockPrefetchINTEL";
-    auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
+    auto [ptr, baseWidth, offsetX] =
+        computeAlignedBaseWidthAndOffset(op, rewriter);
     VectorType vecType = vec_ty(i32_ty, 2);
     SmallVector<Type> argTypes{i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx, 1),
                                i32_ty, i32_ty, i32_ty, vecType};
@@ -662,7 +666,7 @@ struct TritonMatrix2DBlockPrefetchLowering
                             b.i32_val(op.getTileWidth()),
                             b.i32_val(op.getTileHeight()),
                             b.i32_val(op.getVBlocks()),
-                            op.getPtr(),
+                            ptr,
                             baseWidth,
                             op.getBaseHeight(),
                             op.getBasePitch(),
