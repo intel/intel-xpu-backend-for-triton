@@ -62,7 +62,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
-        k = K_desc.load([0,off_k])
+        k = K_desc.load([0, off_k])
         qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
         qk += tl.dot(q, k)
         if STAGE == 2:
@@ -191,7 +191,6 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         strides=(stride_qm, stride_qk),
         block_shape=(BLOCK_M, HEAD_DIM),
     )
-    v_order: tl.constexpr = (0, 1) if V.dtype.element_ty == tl.float8e5 else (1, 0)
     V_desc = tl.make_tensor_descriptor(
         base=V + qvk_offset,
         shape=(N_CTX, HEAD_DIM),
