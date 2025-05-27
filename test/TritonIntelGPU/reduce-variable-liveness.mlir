@@ -1,10 +1,10 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse -cse | FileCheck %s
 
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
-module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_small_tensor(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL:   tt.func public @matmul_kernel_small_tensor
     %cst = arith.constant dense<0.000000e+00> : tensor<16x256xf32, #dpas>
@@ -16,12 +16,12 @@ module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 32 : 
     %1 = tt.make_tensor_ptr %arg1, [%c0_i64, %c0_i64], [%c0_i64, %c0_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x256xf16, #dot1>>
     %2 = tt.load %0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x64xf16, #dot0>>
     %3 = arith.muli %c64_i32, %c0_i32 : i32
-    triton_intel_gpu.prefetch %1 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<64x256xf16, #dot1>>
+    ttig.prefetch %1 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<64x256xf16, #dot1>>
     %4:2 = scf.for %arg2 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg3 = %cst, %arg4 = %1) -> (tensor<16x256xf32, #dpas>, !tt.ptr<tensor<64x256xf16, #dot1>>)  : i32 {
       // CHECK:  scf.for
       // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<16x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
       %7 = tt.advance %arg4, [%c64_i32, %c0_i32] : <tensor<64x256xf16, #dot1>>
-      triton_intel_gpu.prefetch %7 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<64x256xf16, #dot1>>
+      ttig.prefetch %7 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<64x256xf16, #dot1>>
       %8 = tt.load %arg4 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x256xf16, #dot1>>
       %9 = tt.dot %2, %8, %arg3, inputPrecision = tf32 : tensor<16x64xf16, #dot0> * tensor<64x256xf16, #dot1> -> tensor<16x256xf32, #dpas>
       scf.yield %9, %7 : tensor<16x256xf32, #dpas>, !tt.ptr<tensor<64x256xf16, #dot1>>
@@ -32,11 +32,11 @@ module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 32 : 
 
 // -----
 
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
-module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @matmul_kernel_no_candidate_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL:   tt.func public @matmul_kernel_no_candidate_load
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
@@ -48,12 +48,12 @@ module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 32 : 
     %1 = tt.make_tensor_ptr %arg1, [%c0_i64, %c0_i64], [%c0_i64, %c0_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x256xf16, #dot1>>
     %2 = tt.load %0 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<128x256xf16, #dot0>>
     %3 = arith.muli %c64_i32, %c0_i32 : i32
-    triton_intel_gpu.prefetch %1 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<256x256xf16, #dot1>>
+    ttig.prefetch %1 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<256x256xf16, #dot1>>
     %4:2 = scf.for %arg2 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg3 = %cst, %arg4 = %1) -> (tensor<128x256xf32, #dpas>, !tt.ptr<tensor<256x256xf16, #dot1>>)  : i32 {
       // CHECK:  scf.for
       // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x256xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
       %7 = tt.advance %arg4, [%c64_i32, %c0_i32] : <tensor<256x256xf16, #dot1>>
-      triton_intel_gpu.prefetch %7 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<256x256xf16, #dot1>>
+      ttig.prefetch %7 {boundaryCheck = array<i32: 0, 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>} : !tt.ptr<tensor<256x256xf16, #dot1>>
       %8 = tt.load %arg4 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x256xf16, #dot1>>
       %9 = tt.dot %2, %8, %arg3, inputPrecision = tf32 : tensor<128x256xf16, #dot0> * tensor<256x256xf16, #dot1> -> tensor<128x256xf32, #dpas>
       scf.yield %9, %7 : tensor<128x256xf32, #dpas>, !tt.ptr<tensor<256x256xf16, #dot1>>
@@ -65,9 +65,9 @@ module attributes {triton_intel_gpu.support_sg_2d_block, "ttg.num-warps" = 32 : 
 
 // -----
 
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func public @_attn_fwd
     %c8192_i64 = arith.constant 8192 : i64
@@ -95,15 +95,15 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %11 = tt.addptr %arg5, %3 : !tt.ptr<f32>, i64
     %12 = tt.make_tensor_ptr %11, [%c128_i64, %c64_i64], [%c64_i64, %c1_i64], [%5, %c0_i32] {order = array<i32: 1, 0>} : <tensor<512x128xf32, #mma>>
     %13 = arith.mulf %arg3, %cst : f32
-    // CHECK:      triton_intel_gpu.prefetch {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-    %14 = tt.load %6 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    %14 = tt.load %6 {ttig.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
     %15 = tt.splat %13 : f32 -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %16 = tt.splat %13 : f32 -> tensor<512x128xf32, #mma>
     %17:5 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %10, %arg11 = %8) -> (tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<512x128xf32, #mma>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
       // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-      %21 = tt.load %arg10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %21 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %22 = tt.dot %14, %21, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
       %23 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
       ^bb0(%arg12: f32, %arg13: f32):
@@ -129,7 +129,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %36 = tt.expand_dims %33 {axis = 1 : i32} : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<512x1xf32, #mma>
       %37 = tt.broadcast %36 : tensor<512x1xf32, #mma> -> tensor<512x128xf32, #mma>
       %38 = arith.mulf %arg8, %37 : tensor<512x128xf32, #mma>
-      %39 = tt.load %arg11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %39 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %40 = arith.truncf %30 : tensor<512x128xf32, #mma> to tensor<512x128xf16, #mma>
       %41 = ttg.convert_layout %40 : tensor<512x128xf16, #mma> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %42 = tt.dot %41, %39, %38, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
@@ -147,12 +147,12 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
 
 // -----
 
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [16], warpsPerCTA = [8], order = [0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
-module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd_tensor_of_pointers(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32 {tt.divisibility = 16 : i32}, %arg12: i32 {tt.divisibility = 16 : i32}, %arg13: i32 {tt.divisibility = 16 : i32}, %arg14: i32 {tt.divisibility = 16 : i32}, %arg15: i32 {tt.divisibility = 16 : i32}, %arg16: i32 {tt.divisibility = 16 : i32}, %arg17: i32 {tt.divisibility = 16 : i32}, %arg18: i32, %arg19: i32 {tt.divisibility = 16 : i32}, %arg20: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func public @_attn_fwd_tensor_of_pointers
     %c256_i32 = arith.constant 256 : i32
@@ -201,12 +201,12 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %34 = arith.addi %32, %33 : tensor<256x128xi32, #blocked>
     %35 = tt.splat %24 : !tt.ptr<f16> -> tensor<256x128x!tt.ptr<f16>, #blocked>
     %36 = tt.addptr %35, %34 : tensor<256x128x!tt.ptr<f16>, #blocked>, tensor<256x128xi32, #blocked>
-    // CHECK:      triton_intel_gpu.prefetch {{.*}} : tensor<256x128x!tt.ptr<f16>, #blocked>
-    // CHECK-NOT:  tt.load {{.*}} {triton_intel_gpu.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
+    // CHECK:      ttig.prefetch {{.*}} : tensor<256x128x!tt.ptr<f16>, #blocked>
+    // CHECK-NOT:  tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
     %37 = tt.addptr %arg1, %10 : !tt.ptr<f16>, i64
     %38 = tt.addptr %arg2, %10 : !tt.ptr<f16>, i64
     %39 = arith.mulf %arg3, %cst : f32
-    %40 = tt.load %36 {triton_intel_gpu.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
+    %40 = tt.load %36 {ttig.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
     %41 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
     %42 = tt.expand_dims %41 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<128x1xi32, #blocked2>
     %43 = tt.splat %arg11 : i32 -> tensor<1x128xi32, #blocked2>
@@ -220,7 +220,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %51 = tt.splat %38 : !tt.ptr<f16> -> tensor<128x128x!tt.ptr<f16>, #blocked2>
     %52:3 = scf.for %arg21 = %c0_i32 to %arg20 step %c64_i32 iter_args(%arg22 = %cst_0, %arg23 = %cst_2, %arg24 = %cst_1) -> (tensor<256xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<256x128xf32, #mma>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #mma}>>)  : i32 {
       // CHECK:  scf.for
-      // CHECK:  tt.load {{.*}} {triton_intel_gpu.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
+      // CHECK:  tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<256x128x!tt.ptr<f16>, #blocked>
       %65 = arith.muli %arg21, %c64_i32 : i32
       %66 = tt.splat %65 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
       %67 = tt.splat %65 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
@@ -231,7 +231,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %72 = tt.broadcast %71 : tensor<1x128xi32, #blocked2> -> tensor<128x128xi32, #blocked2>
       %73 = arith.addi %44, %72 : tensor<128x128xi32, #blocked2>
       %74 = tt.addptr %45, %73 : tensor<128x128x!tt.ptr<f16>, #blocked2>, tensor<128x128xi32, #blocked2>
-      %75 = tt.load %74 {triton_intel_gpu.block_io = "column_major"} : tensor<128x128x!tt.ptr<f16>, #blocked2>
+      %75 = tt.load %74 {ttig.block_io = "column_major"} : tensor<128x128x!tt.ptr<f16>, #blocked2>
       %76 = ttg.convert_layout %40 : tensor<256x128xf16, #blocked> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %77 = ttg.convert_layout %75 : tensor<128x128xf16, #blocked2> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %78 = tt.dot %76, %77, %cst_2, inputPrecision = tf32 : tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x128xf32, #mma>
@@ -263,7 +263,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %96 = tt.broadcast %95 : tensor<128x1xi32, #blocked2> -> tensor<128x128xi32, #blocked2>
       %97 = arith.addi %96, %50 : tensor<128x128xi32, #blocked2>
       %98 = tt.addptr %51, %97 : tensor<128x128x!tt.ptr<f16>, #blocked2>, tensor<128x128xi32, #blocked2>
-      %99 = tt.load %98 {triton_intel_gpu.block_io = "row_major"} : tensor<128x128x!tt.ptr<f16>, #blocked2>
+      %99 = tt.load %98 {ttig.block_io = "row_major"} : tensor<128x128x!tt.ptr<f16>, #blocked2>
       %100 = arith.truncf %86 : tensor<256x128xf32, #mma> to tensor<256x128xf16, #mma>
       %101 = ttg.convert_layout %100 : tensor<256x128xf16, #mma> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %102 = ttg.convert_layout %99 : tensor<128x128xf16, #blocked2> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
@@ -291,9 +291,9 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
 
 // -----
 
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd_other_use_before_loop(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func public @_attn_fwd_other_use_before_loop
     %c8192_i64 = arith.constant 8192 : i64
@@ -322,16 +322,16 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %12 = tt.make_tensor_ptr %11, [%c128_i64, %c64_i64], [%c64_i64, %c1_i64], [%5, %c0_i32] {order = array<i32: 1, 0>} : <tensor<512x128xf32, #mma>>
     %13 = arith.mulf %arg3, %cst : f32
     // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-    %14 = tt.load %6 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    %14 = tt.load %6 {ttig.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
     %15 = tt.splat %13 : f32 -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %16 = tt.splat %13 : f32 -> tensor<512x128xf32, #mma>
-    %100 = tt.load %10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    %100 = tt.load %10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %101 = tt.dot %14, %100, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
     tt.store %12, %101 : !tt.ptr<tensor<512x128xf32, #mma>>
     %17:5 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %10, %arg11 = %8) -> (tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<512x128xf32, #mma>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
       // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-      %21 = tt.load %arg10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %21 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %22 = tt.dot %14, %21, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
       %23 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
       ^bb0(%arg12: f32, %arg13: f32):
@@ -357,7 +357,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %36 = tt.expand_dims %33 {axis = 1 : i32} : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<512x1xf32, #mma>
       %37 = tt.broadcast %36 : tensor<512x1xf32, #mma> -> tensor<512x128xf32, #mma>
       %38 = arith.mulf %arg8, %37 : tensor<512x128xf32, #mma>
-      %39 = tt.load %arg11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %39 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %40 = arith.truncf %30 : tensor<512x128xf32, #mma> to tensor<512x128xf16, #mma>
       %41 = ttg.convert_layout %40 : tensor<512x128xf16, #mma> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %42 = tt.dot %41, %39, %38, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
@@ -376,9 +376,9 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
 
 // -----
 
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd_other_use_after_loop(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func public @_attn_fwd_other_use_after_loop
     %c8192_i64 = arith.constant 8192 : i64
@@ -406,15 +406,15 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %11 = tt.addptr %arg5, %3 : !tt.ptr<f32>, i64
     %12 = tt.make_tensor_ptr %11, [%c128_i64, %c64_i64], [%c64_i64, %c1_i64], [%5, %c0_i32] {order = array<i32: 1, 0>} : <tensor<512x128xf32, #mma>>
     %13 = arith.mulf %arg3, %cst : f32
-    // CHECK:      triton_intel_gpu.prefetch {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-    %14 = tt.load %6 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    %14 = tt.load %6 {ttig.block_io = "row_major"} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
     %15 = tt.splat %13 : f32 -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %16 = tt.splat %13 : f32 -> tensor<512x128xf32, #mma>
     %17:5 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %10, %arg11 = %8) -> (tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<512x128xf32, #mma>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
       // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-      %21 = tt.load %arg10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %21 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %22 = tt.dot %14, %21, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
       %23 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
       ^bb0(%arg12: f32, %arg13: f32):
@@ -440,7 +440,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %36 = tt.expand_dims %33 {axis = 1 : i32} : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<512x1xf32, #mma>
       %37 = tt.broadcast %36 : tensor<512x1xf32, #mma> -> tensor<512x128xf32, #mma>
       %38 = arith.mulf %arg8, %37 : tensor<512x128xf32, #mma>
-      %39 = tt.load %arg11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %39 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %40 = arith.truncf %30 : tensor<512x128xf32, #mma> to tensor<512x128xf16, #mma>
       %41 = ttg.convert_layout %40 : tensor<512x128xf16, #mma> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %42 = tt.dot %41, %39, %38, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
@@ -450,7 +450,7 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     } {tt.divisibility_arg1 = dense<64> : tensor<1xi32>}
     // CHECK:  scf.yield
     // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
-    %100 = tt.load %10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    %100 = tt.load %10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %101 = tt.dot %14, %100, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<512x128xf32, #mma>
     tt.store %12, %101 : !tt.ptr<tensor<512x128xf32, #mma>>
     %18 = tt.expand_dims %17#0 {axis = 1 : i32} : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<512x1xf32, #mma>
@@ -464,9 +464,9 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
 
 // -----
 
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd_with_block_pointers_causal(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func public @_attn_fwd_with_block_pointers_causal
     %cst = arith.constant dense<1.000000e+00> : tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
@@ -505,16 +505,16 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %18 = tt.splat %9 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma}>>
     %19 = arith.addi %18, %17 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma}>>
     %20 = arith.mulf %arg3, %cst_2 : f32
-    %21 = tt.load %10 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
-    // CHECK:      triton_intel_gpu.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
+    %21 = tt.load %10 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
     %22 = tt.splat %20 : f32 -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %23 = tt.splat %20 : f32 -> tensor<128x128xf32, #mma>
     %24 = arith.cmpi sgt, %9, %c0_i32 : i32
     %25 = tt.splat %24 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    triton_intel_gpu.prefetch %14, %25 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %14, %25 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %26 = tt.splat %24 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    triton_intel_gpu.prefetch %12, %26 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %12, %26 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %27:5 = scf.for %arg6 = %c0_i32 to %9 step %c64_i32 iter_args(%arg7 = %cst, %arg8 = %cst_1, %arg9 = %cst_0, %arg10 = %14, %arg11 = %12) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
       // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
@@ -523,11 +523,11 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %46 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %47 = tt.advance %arg10, [%c0_i32, %c64_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %48 = tt.splat %45 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      triton_intel_gpu.prefetch %47, %48 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %47, %48 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %49 = tt.splat %45 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      triton_intel_gpu.prefetch %46, %49 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %50 = tt.load %arg10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %51 = tt.load %arg11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %46, %49 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %50 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %51 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %52 = tt.dot %21, %50, %cst_3, inputPrecision = tf32 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
       %53 = "tt.reduce"(%52) <{axis = 1 : i32}> ({
       ^bb0(%arg12: f32, %arg13: f32):
@@ -569,9 +569,9 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %36 = tt.broadcast %33 : tensor<128x1xi32, #mma> -> tensor<128x128xi32, #mma>
     %37 = arith.cmpi slt, %28, %30 : i32
     %38 = tt.splat %37 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    triton_intel_gpu.prefetch %31, %38 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %31, %38 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %39 = tt.splat %37 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    triton_intel_gpu.prefetch %32, %39 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %32, %39 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %40:5 = scf.for %arg6 = %28 to %30 step %c64_i32 iter_args(%arg7 = %27#0, %arg8 = %27#1, %arg9 = %27#2, %arg10 = %31, %arg11 = %32) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
       // CHECK:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$DPAS]], kWidth = 1}>>>
@@ -580,11 +580,11 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %46 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %47 = tt.advance %arg10, [%c0_i32, %c64_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %48 = tt.splat %45 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      triton_intel_gpu.prefetch %47, %48 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %47, %48 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %49 = tt.splat %45 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      triton_intel_gpu.prefetch %46, %49 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %50 = tt.load %arg10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %51 = tt.load %arg11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %46, %49 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %50 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %51 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %52 = tt.dot %21, %50, %cst_3, inputPrecision = tf32 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
       %53 = tt.splat %arg6 : i32 -> tensor<1x128xi32, #mma>
       %54 = arith.addi %53, %35 : tensor<1x128xi32, #mma>
@@ -631,10 +631,10 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
 // -----
 
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd_with_block_pointers_other_users_in_loop_before(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func public @_attn_fwd_with_block_pointers_other_users_in_loop_before
     %c1984_i32 = arith.constant 1984 : i32
@@ -670,13 +670,13 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %16 = tt.addptr %arg5, %7 : !tt.ptr<f32>, i64
     %17 = tt.make_tensor_ptr %16, [%c2048_i64, %c64_i64], [%c64_i64, %c1_i64], [%9, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x128xf32, #mma>>
     %18 = arith.mulf %arg3, %cst : f32
-    %20 = tt.load %11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #blocked>>
-    // CHECK:      triton_intel_gpu.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16,  #[[$BLOCKED]]>>
+    %20 = tt.load %11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #blocked>>
+    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16,  #[[$BLOCKED]]>>
     // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
     %21 = tt.splat %18 : f32 -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %22 = tt.splat %18 : f32 -> tensor<128x128xf32, #mma>
-    triton_intel_gpu.prefetch %15 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-    triton_intel_gpu.prefetch %13 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %15 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %13 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %23:5 = scf.for %arg6 = %c0_i32 to %c2048_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %15, %arg11 = %13) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
       // CHECK:  %[[LOAD1:.*]] = tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
@@ -684,10 +684,10 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %28 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %29 = tt.advance %arg10, [%c0_i32, %c64_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %30 = tt.splat %27 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      triton_intel_gpu.prefetch %29, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      triton_intel_gpu.prefetch %28, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %31 = tt.load %arg10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %32 = tt.load %arg11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %29, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %28, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %31 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %32 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       // CHECK: tt.store {{.*}}, %[[LOAD1]] : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
       tt.store %11, %20 : !tt.ptr<tensor<128x128xf16, #blocked>>
       %100 = ttg.convert_layout %20 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
@@ -733,10 +733,10 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
 // -----
 
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-// CHECK: #[[$DPAS:.+]] = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
-#mma = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
-module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_bf16_conversion, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block, triton_intel_gpu.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @_attn_fwd_with_block_pointers_other_users_in_loop_after(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL:   tt.func public @_attn_fwd_with_block_pointers_other_users_in_loop_after
     %c1984_i32 = arith.constant 1984 : i32
@@ -772,13 +772,13 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
     %16 = tt.addptr %arg5, %7 : !tt.ptr<f32>, i64
     %17 = tt.make_tensor_ptr %16, [%c2048_i64, %c64_i64], [%c64_i64, %c1_i64], [%9, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x128xf32, #mma>>
     %18 = arith.mulf %arg3, %cst : f32
-    %20 = tt.load %11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #blocked>>
-    // CHECK:      triton_intel_gpu.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16,  #[[$BLOCKED]]>>
+    %20 = tt.load %11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #blocked>>
+    // CHECK:      ttig.prefetch {{.*}} : !tt.ptr<tensor<128x128xf16,  #[[$BLOCKED]]>>
     // CHECK-NOT:  tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
     %21 = tt.splat %18 : f32 -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>
     %22 = tt.splat %18 : f32 -> tensor<128x128xf32, #mma>
-    triton_intel_gpu.prefetch %15 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-    triton_intel_gpu.prefetch %13 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %15 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+    ttig.prefetch %13 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
     %23:5 = scf.for %arg6 = %c0_i32 to %c2048_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %15, %arg11 = %13) -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, tensor<128x128xf32, #mma>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>, !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>)  : i32 {
       // CHECK:  scf.for
       // CHECK:  %[[LOAD1:.*]] = tt.load {{.*}} : !tt.ptr<tensor<128x128xf16, #[[$BLOCKED]]>>
@@ -786,10 +786,10 @@ module attributes {triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.sup
       %28 = tt.advance %arg11, [%c64_i32, %c0_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %29 = tt.advance %arg10, [%c0_i32, %c64_i32] : <tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %30 = tt.splat %27 : i1 -> tensor<128x128xi1, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      triton_intel_gpu.prefetch %29, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      triton_intel_gpu.prefetch %28, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %31 = tt.load %arg10 {triton_intel_gpu.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
-      %32 = tt.load %arg11 {triton_intel_gpu.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %29, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      ttig.prefetch %28, %30 {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %31 = tt.load %arg10 {ttig.block_io = "column_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
+      %32 = tt.load %arg11 {ttig.block_io = "row_major"} : !tt.ptr<tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>>
       %100 = ttg.convert_layout %20 : tensor<128x128xf16, #blocked> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
       %33 = tt.dot %100, %31, %cst_2, inputPrecision = tf32 : tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
       %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
