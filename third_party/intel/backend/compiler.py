@@ -382,6 +382,9 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
+        if knobs.intel.disable_igc_opt:
+            metadata["build_flags"] += " -cl-opt-disable"
+
         metadata["generate_native_code"] = options.generate_native_code
 
         if options.generate_native_code:
