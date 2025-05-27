@@ -38,7 +38,7 @@ module {
   // CHECK-DAG:       [[VAR_8:%.+]] = arith.cmpi sgt, [[PARAM_3]], [[CST_1023]] : i32
   // CHECK-DAG:       [[CST_511:%.+]] = arith.constant 511 : i32
   // CHECK-DAG:       [[VAR_9:%.+]] = arith.cmpi sgt, [[PARAM_3]], [[CST_511]] : i32
-  // CHECK:           [[VAR_10:%.+]] = arith.andi [[VAR_8]], [[VAR_9]] : i1 | [[VAR_10:%.+]] = arith.andi [[VAR_9]], [[VAR_8]] : i1
+  // CHECK:           [[VAR_10:%.+]] = arith.andi [[VAR_8]], [[VAR_9]] : i1
   // CHECK:           scf.if [[VAR_10]] {
   // CHECK:             scf.for {{.+}} = {{.+}} to {{.+}} step {{.+}} : i32 {
   // CHECK-NOT:           tt.load {{.*}}, {{.*}}, {{.*}}
