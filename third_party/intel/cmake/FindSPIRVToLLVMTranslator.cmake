@@ -20,6 +20,11 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
 
     FetchContent_GetProperties(spirv-llvm-translator)
     if(NOT spirv-llvm-translator_POPULATED)
+
+            set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
+            set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
+            set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
+
             FetchContent_MakeAvailable(spirv-llvm-translator)
 
             # FIXME: Don't apply patch when Agama driver is updated.
@@ -32,9 +37,6 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
                 message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
             endif()
 
-            set(LLVM_CONFIG ${LLVM_LIBRARY_DIR}/../bin/llvm-config)
-            set(LLVM_DIR "${LLVM_LIBRARY_DIR}/cmake/llvm" CACHE PATH "Path to LLVM build dir " FORCE)
-            set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
     endif()
 
     set(SPIRVToLLVMTranslator_INCLUDE_DIR "${SPIRVToLLVMTranslator_SOURCE_DIR}/include"
