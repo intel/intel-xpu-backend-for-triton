@@ -1158,20 +1158,23 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    Value baseWidth = b.i32_val(vBlocks * tileWidth * (elemSizeInBits / 8));
+    const unsigned originalElemBits = elemSizeInBits;
+    const bool isTransform =
+        (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
+         !isTransposeRequired && originalElemBits != 32);
+    unsigned baseWidthVal = vBlocks * tileWidth * (elemSizeInBits / 8);
+    if (isTransform)
+      baseWidthVal *= 2;
+    Value baseWidth = b.i32_val(baseWidthVal);
     Value pitch = getPitch(rewriter, ptr, ptrs, baseWidth, elemSizeInBits);
     if (!pitch)
       return failure();
 
     Value baseHeight = b.i32_val(tileHeight);
-    baseWidth = b.i32_val(0);
-    baseHeight = b.i32_val(0);
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
-
-    const unsigned originalElemBits = elemSizeInBits;
 
     LDBG("Block io tile shape: ["
          << tileHeight << ", " << tileWidth << "], vblocks: " << vBlocks
@@ -1264,9 +1267,9 @@ struct LoadOpToBlockIOConversion
               other_ = rewriter.create<LLVM::ConstantOp>(
                   loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
             }
-             if (!(usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
-                 !isTransposeRequired && originalElemBits != 32))
-               return failure();
+            if (!(usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
+                  !isTransposeRequired && originalElemBits != 32))
+              return failure();
 
             // Create a predicated load operation.
             Block &endBlock = LLVM::intel::createPredicatedBlock(
