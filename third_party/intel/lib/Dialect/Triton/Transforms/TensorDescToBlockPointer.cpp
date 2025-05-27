@@ -219,20 +219,29 @@ private:
     Value ptr = op.getOperand(0);
     assert(triton::isTensorPointerType(ptr.getType()) &&
            "Expecting a block ptr");
-
+    auto ptrType = cast<tt::PointerType>(ptr.getType());
+    auto tensorType = cast<RankedTensorType>(ptrType.getPointeeType());
+    
     ptr =
         builder.create<tt::AdvanceOp>(loc, ptr.getType(), ptr, op.getIndices());
 
+    SmallVector<int32_t> boundaryCheck;
+    for (size_t i = 0; i < tensorType.getRank(); ++i)
+      boundaryCheck.push_back(i);
+
+//    for (size_t i = 0; i < makeTensorDescOp.getShape().size(); ++i)
+//      boundaryCheck.push_back(i);
     constexpr bool isLoad = std::is_same_v<OpTy, tt::DescriptorLoadOp>;
     if constexpr (isLoad) {
-      auto loadOp = builder.createOrFold<tt::LoadOp>(loc, ptr, op.getCache(),
-                                                     op.getEvict(),
+      auto loadOp = builder.createOrFold<tt::LoadOp>(loc, ptr, boundaryCheck,
+                                                     /*padding*/ std::nullopt,
+                                                     op.getCache(), op.getEvict(),
                                                      /*volatile*/ false);
       LLVM_DEBUG(llvm::dbgs().indent(2) << loadOp << "\n");
       op.replaceAllUsesWith(loadOp);
     } else {
       [[maybe_unused]] auto storeOp = builder.createOrFold<tt::StoreOp>(
-          loc, ptr, op.getSrc(), tt::CacheModifier::NONE,
+          loc, ptr, op.getSrc(), boundaryCheck, tt::CacheModifier::NONE,
           tt::EvictionPolicy::NORMAL);
       LLVM_DEBUG(llvm::dbgs().indent(2) << storeOp << "\n");
     }

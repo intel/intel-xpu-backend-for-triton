@@ -2518,3 +2518,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 1], A = [32, 8], B = [8, 16], C = [32, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 1], A = [32, 8], B = [8, 16], C = [32, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+  // CHECK-LABEL: matmul_kernel_reshape
+  tt.func public @matmul_kernel_reshape(%arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %c32_i32 = arith.constant 32 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #mma>
+    %1 = arith.extsi %arg4 : i32 to i64
+    %2 = arith.extsi %arg3 : i32 to i64
+
+    // CHECK-DAG: [[PTR1:%.*]] = tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #[[$DPAS]]>>
+    // CHECK-DAG: [[PTR2:%.*]] = tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #[[$DPAS]]>>
+    // CHECK-DAG: [[PTR3:%.*]] = tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #[[$BLOCKED]]>>
+
+    // CHECK-NOT: separator of consecutive DAGs
+    // CHECK-DAG: [[ADV_PTR2:%.*]] = tt.advance [[PTR2]], {{.*}} : <tensor<64x64xf32, #[[$DPAS]]>>
+    // CHECK-DAG: [[ADV_PTR3:%.*]] = tt.advance [[PTR3]], {{.*}} : <tensor<64x64xf32, #[[$BLOCKED]]>>
+    %3 = tt.make_tensor_ptr %arg2, [%2, %1], [%1, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<64x64xf32, #blocked>>
+    %4 = tt.advance %3, [%c0_i32, %c32_i32] : !tt.ptr<tensor<64x64xf32, #blocked>>
+
+    // The following 2 stores should use blocked layout.
+    // CHECK-NOT: separator of consecutive DAGs
+    // CHECK-DAG: tt.store [[PTR3]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$BLOCKED]]>>
+    // CHECK-DAG: tt.store [[ADV_PTR3]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$BLOCKED]]>>
+    tt.store %3, %cst : !tt.ptr<tensor<64x64xf32, #blocked>>
+    tt.store %4, %cst : !tt.ptr<tensor<64x64xf32, #blocked>>
+
+    // The following 2 stores should use mma layout
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK-DAG: tt.store [[PTR1]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$DPAS]]>>
+    // CHECK-DAG: tt.store [[ADV_PTR2]], {{.*}} : !tt.ptr<tensor<64x64xf32, #[[$DPAS]]>>
+    %5 = ttg.convert_layout %cst_0 : tensor<64x64xf32, #mma> -> tensor<64x64xf32, #blocked>
+    tt.store %3, %5 : !tt.ptr<tensor<64x64xf32, #blocked>>
+    tt.store %4, %5 : !tt.ptr<tensor<64x64xf32, #blocked>>
+    tt.return
+  }
+}

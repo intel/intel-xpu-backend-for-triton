@@ -32,7 +32,7 @@ module {
   // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]], [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>) {
   // CHECK:          [[IDX_CAST:%.+]] = arith.index_cast [[IV]] : index to i32
   // CHECK:          [[TENSOR_PTR_1:%.+]] = tt.advance [[VAR_arg1]], {{\[}}[[CST_8_i32]], [[IDX_CAST]]] : <tensor<16x32xf16>>
-  // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR_1]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR_1]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[LOAD]] : tensor<16x32xf16>
   // CHECK:          scf.yield [[VAR_arg1]], [[ADD]] : !tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>
   // CHECK:        }
@@ -73,7 +73,7 @@ module {
   // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]], [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>) {
   // CHECK:          [[IDX_CAST:%.+]] = arith.index_cast [[IV]] : index to i32
   // CHECK:          [[TENSOR_PTR_1:%.+]] = tt.advance [[VAR_arg1]], {{\[}}[[CST_8_i32]], [[IDX_CAST]]] : <tensor<16x32xf16>>
-  // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR_1]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK:          [[LOAD:%.+]] = tt.load [[TENSOR_PTR_1]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[LOAD]] : tensor<16x32xf16>
   // CHECK-DAG:      [[EXTSI_PARAM_1a:%.+]] = arith.extsi [[PARAM_1]] : i32 to i64
   // CHECK-DAG:      [[EXTSI_PARAM_2a:%.+]] = arith.extsi [[PARAM_2]] : i32 to i64
@@ -108,7 +108,7 @@ module {
   // CHECK:        [[TENSOR_PTR:%.+]] = tt.make_tensor_ptr {{.*}} : <tensor<16x32xf16>>
   // CHECK:        [[FOR_RES:%.+]] = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]]) -> (!tt.ptr<tensor<16x32xf16>>)
   // CHECK:        [[TENSOR_PTR1:%.+]] = tt.advance [[FOR_RES]], {{.*}} : <tensor<16x32xf16>>
-  // CHECK:        tt.load [[TENSOR_PTR1]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK:        tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x32xf16>>
   // CHECK:        tt.return
   // CHECK:      }
 
@@ -143,7 +143,7 @@ module {
   // CHECK:        [[FOR_RES:%.+]]:2 = scf.for [[IV:%.+]] = {{.*}} iter_args([[VAR_arg1:%.+]] = [[TENSOR_PTR]], [[VAR_arg2:%.+]] = [[CST]]) -> (!tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>) {
   // CHECK:          [[IDX_CAST_1:%.+]] = arith.index_cast [[IV]] : index to i32
   // CHECK:          [[TENSOR_PTR_1:%.+]] = tt.advance [[VAR_arg1]], {{\[}}[[CST_8_i32]], [[IDX_CAST]]] : <tensor<16x32xf16>>
-  // CHECK:          tt.store [[TENSOR_PTR_1]], [[VAR_arg2]] : !tt.ptr<tensor<16x32xf16>>
+  // CHECK:          tt.store [[TENSOR_PTR_1]], [[VAR_arg2]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<16x32xf16>>
   // CHECK:          [[ADD:%.+]] = arith.addf [[VAR_arg2]], [[CST]] : tensor<16x32xf16>
   // CHECK:          scf.yield [[VAR_arg1]], [[ADD]] : !tt.ptr<tensor<16x32xf16>>, tensor<16x32xf16>
   // CHECK:        }
@@ -233,7 +233,7 @@ module {
   // CHECK:        } do {
   // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32>>):
   // CHECK:          [[PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32>
-  // CHECK:          tt.load [[PTR1]] : !tt.ptr<tensor<8x128xf32>>
+  // CHECK:          tt.load [[PTR1]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x128xf32>>
   // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32>>
   // CHECK:        }
 
@@ -271,7 +271,7 @@ module {
   // CHECK:        } do {
   // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32>>):
   // CHECK:          [[TENSOR_PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32>
-  // CHECK:          tt.load [[TENSOR_PTR1]] : !tt.ptr<tensor<8x128xf32>>
+  // CHECK:          tt.load [[TENSOR_PTR1]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x128xf32>>
   // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32>>
   // CHECK:        }
 
@@ -315,7 +315,7 @@ module {
   // CHECK:            scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32>>
   // CHECK:          }
   // CHECK:          [[TENSOR_PTR2:%.*]] = tt.advance [[IF_RES]], {{.*}} : <tensor<8x128xf32>
-  // CHECK:          tt.load [[TENSOR_PTR2]] : !tt.ptr<tensor<8x128xf32>>
+  // CHECK:          tt.load [[TENSOR_PTR2]] {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x128xf32>>
   // CHECK:          scf.yield [[IF_RES]] : !tt.ptr<tensor<8x128xf32>>
   // CHECK:        }
 
