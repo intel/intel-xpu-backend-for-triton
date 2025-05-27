@@ -36,7 +36,7 @@ module {
   // CHECK-DAG:       [[VAR_7:%.+]] = arith.cmpi slt, [[VAR_5]], [[VAR_6]] : tensor<512xi32>
   // CHECK-DAG:       [[CST_1023:%.+]] = arith.constant 1023 : i32
   // CHECK:           [[VAR_8:%.+]] = arith.cmpi sgt, [[PARAM_3]], [[CST_1023]] : i32
-  // CHECK:           [[CST_511:%.+]] = arith.constant 511 : i32
+  // CHECK-DAG:       [[CST_511:%.+]] = arith.constant 511 : i32
   // CHECK:           [[VAR_9:%.+]] = arith.cmpi sgt, [[PARAM_3]], [[CST_511]] : i32
   // CHECK:           [[VAR_10:%.+]] = arith.andi [[VAR_8]], [[VAR_9]] : i1
   // CHECK:           scf.if [[VAR_10]] {
