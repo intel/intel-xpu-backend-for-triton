@@ -5,7 +5,7 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
   // As the assert message is shared, a single instance is emitted.
 
   // CHECK-DAG:         llvm.mlir.global internal constant @assertFunc_("unknown\00") {addr_space = 1 : i32}
-  // CHECK-DAG:         llvm.mlir.global internal constant @assertFile_("{{.*}}tritonintelgpu_to_llvm.mlir\00") {addr_space = 1 : i32}
+  // CHECK-DAG:         llvm.mlir.global internal constant @assertFile_("{{.*}}tritonintelgpu_to_llvm.mlir{{.*}}\00") {addr_space = 1 : i32}
   // CHECK-DAG:         llvm.mlir.global internal constant @assertMessage_("assert text\00") {addr_space = 1 : i32}
   // CHECK-DAG:         llvm.mlir.global internal constant @assertMessage_3("different assert text\00") {addr_space = 1 : i32}
   // CHECK-DAG:         llvm.func spir_funccc @__assert_fail(!llvm.ptr<4>, !llvm.ptr<4>, i32, !llvm.ptr<4>)
