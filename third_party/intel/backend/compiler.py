@@ -347,7 +347,7 @@ class XPUBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
+        intel.optimize_module(llvm_mod, llvm.OPTIMIZE_O0)
         intel.post_process_llir(llvm_mod)
 
         # Get some metadata
@@ -378,8 +378,8 @@ class XPUBackend(BaseBackend):
         else:
             metadata["build_flags"] = ""
 
-        if knobs.intel.disable_igc_opt:
-            metadata["build_flags"] += " -cl-opt-disable"
+        #if knobs.intel.disable_igc_opt:
+        metadata["build_flags"] += " -cl-opt-disable"
 
         metadata["generate_native_code"] = options.generate_native_code
 
