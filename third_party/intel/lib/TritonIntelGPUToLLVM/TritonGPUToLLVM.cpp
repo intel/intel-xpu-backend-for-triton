@@ -101,7 +101,7 @@ struct ConvertTritonGPUToLLVM
     TritonIntelGPUToLLVMTypeConverter typeConverter(
         context, option, *targetInfo, isAdvancedPathEnabled);
     TritonLLVMConversionTarget convTarget(*context);
-    int numWarps = triton::gpu::lookupNumWarps(&*mod.getOps().begin());
+    int numWarps = triton::gpu::lookupNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 

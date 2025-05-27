@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
 module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32 } {
@@ -84,3 +84,8 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     tt.return
   }
 }
+
+// -----
+
+// Sanity check for the conversion pass to correctly process even empty modules
+module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32 } {}
