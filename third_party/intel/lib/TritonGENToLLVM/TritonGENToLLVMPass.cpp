@@ -158,6 +158,7 @@ computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
   // Calculate the byte offset of the base address from a 64-byte alignment.
   Value offsetInBytes =
       b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
+  offsetInBytes = b.i32_val(0);
   // Adjust the base width to account for the byte offset.
   Value adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
   // Adjust the x-coordinate offset based on the number of scalar elements.
