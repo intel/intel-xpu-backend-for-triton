@@ -190,7 +190,9 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
 
   Value one = b.i32_val(1);
-  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  //auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto baseWidth = op.getBaseWidth();
+  auto x = op.getX();
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
