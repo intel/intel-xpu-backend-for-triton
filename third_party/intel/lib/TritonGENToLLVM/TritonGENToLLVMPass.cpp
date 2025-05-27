@@ -160,7 +160,7 @@ computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
       b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
   // Adjust the base width to account for the byte offset.
   Value adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
-  return {adjustedBaseWidth, op.getX()};
+  //return {adjustedBaseWidth, op.getX()};
   // Adjust the x-coordinate offset based on the number of scalar elements.
   Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
   Value adjustedXOffset =
