@@ -1164,7 +1164,7 @@ struct LoadOpToBlockIOConversion
          !isTransposeRequired && originalElemBits != 32);
     unsigned baseWidthVal = vBlocks * tileWidth * (elemSizeInBits / 8);
     llvm::errs() << "baseWidth " << baseWidthVal << "\n";
-    baseWidthVal = std::min<unsigned>(baseWidthVal, 64);
+    baseWidthVal = std::max<unsigned>(baseWidthVal, 64);
     Value baseWidth = b.i32_val(baseWidthVal);
     Value pitch = getPitch(rewriter, ptr, ptrs, baseWidth, elemSizeInBits);
     if (!pitch)
