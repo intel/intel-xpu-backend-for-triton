@@ -207,8 +207,8 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
                              int32Ty};
 
   SmallVector<Value> args{ptr,
-                          b.sub(baseWidth, one),
-                          b.sub(baseHeight, one),
+                          b.sub(b.i32_val(0), one),
+                          b.sub(b.i32_val(0), one),
                           b.sub(basePitch, one),
                           x,
                           y,
