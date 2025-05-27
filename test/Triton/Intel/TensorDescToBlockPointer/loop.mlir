@@ -208,6 +208,7 @@ module {
   // CHECK:        tt.return
   // CHECK:      }
 
+  // COM: While loop contains a descriptor load operation.
   tt.func public @load_in_while_loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
@@ -226,8 +227,46 @@ module {
   // CHECK: tt.func public @load_in_while_loop({{.*}}) {
   // CHECK-NOT:    tt.make_tensor_descriptor
   // CHECK-NOT:    tt.descriptor_load
-  // CHECK:        [[PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32>
-  // CHECK:        scf.while ([[ARG3:%.*]] = [[PTR]]) : (!tt.ptr<tensor<8x128xf32>>) -> !tt.ptr<tensor<8x128xf32>> {
+  // CHECK:        [[TENSOR_PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32>
+  // CHECK:        scf.while ([[ARG3:%.*]] = [[TENSOR_PTR]]) : (!tt.ptr<tensor<8x128xf32>>) -> !tt.ptr<tensor<8x128xf32>> {
+  // CHECK:          scf.condition({{.*}}) [[ARG3]] : !tt.ptr<tensor<8x128xf32>>
+  // CHECK:        } do {
+  // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32>>):
+  // CHECK:          [[PTR1:%.*]] = tt.advance [[ARG4]], {{.*}} : <tensor<8x128xf32>
+  // CHECK:          tt.load [[PTR1]] : !tt.ptr<tensor<8x128xf32>>
+  // CHECK:          scf.yield [[ARG4]] : !tt.ptr<tensor<8x128xf32>>
+  // CHECK:        }
+
+  // COM: For loop yields a tensor descriptor used by a while loop.
+  tt.func public @while_uses_tdesc_yielded_by_for_loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) {
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %0 = tt.get_program_id x : i32
+    %2 = arith.extsi %arg2 : i32 to i64
+    %3 = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%2, %c1_i64] : <f32>, <tensor<8x128xf32>>
+    %4 = scf.for %arg3 = %c0_i32 to %arg2 step %c128_i32 iter_args(%arg4 = %3) -> (!tt.tensordesc<tensor<8x128xf32>>) : i32 {
+      scf.yield %arg4 : !tt.tensordesc<tensor<8x128xf32>>
+    }
+    %5 = scf.while (%arg3 = %4) : (!tt.tensordesc<tensor<8x128xf32>>) -> (!tt.tensordesc<tensor<8x128xf32>>) {
+      %6 = arith.cmpi slt, %0, %arg2 : i32
+      scf.condition(%6) %arg3 : !tt.tensordesc<tensor<8x128xf32>>
+    } do {
+    ^bb0(%arg3: !tt.tensordesc<tensor<8x128xf32>>):
+      %12 = tt.descriptor_load %arg3[%c8_i32, %c8_i32] : !tt.tensordesc<tensor<8x128xf32>> -> tensor<8x128xf32>
+      scf.yield %arg3 : !tt.tensordesc<tensor<8x128xf32>>
+    }
+    tt.return
+  }
+  // CHECK:      tt.func public @while_uses_tdesc_yielded_by_for_loop({{.*}}) {
+  // CHECK-NOT:    tt.make_tensor_descriptor
+  // CHECK-NOT:    tt.descriptor_load
+  // CHECK:        [[TENSOR_PTR:%.*]] = tt.make_tensor_ptr {{.*}} : <tensor<8x128xf32>
+  // CHECK:        [[FOR_RES:%.+]] = scf.for [[IV:%.+]] = {{.*}} iter_args([[ARG3:%.*]] = [[TENSOR_PTR]]) -> (!tt.ptr<tensor<8x128xf32>>) : i32 {
+  // CHECK:          scf.yield {{.*}} : !tt.ptr<tensor<8x128xf32>>
+  // CHECK:        }
+  // CHECK:        scf.while ([[ARG3:%.*]] = [[FOR_RES]]) : (!tt.ptr<tensor<8x128xf32>>) -> !tt.ptr<tensor<8x128xf32>> {
   // CHECK:          scf.condition({{.*}}) [[ARG3]] : !tt.ptr<tensor<8x128xf32>>
   // CHECK:        } do {
   // CHECK:        ^bb0([[ARG4:%.*]]: !tt.ptr<tensor<8x128xf32>>):

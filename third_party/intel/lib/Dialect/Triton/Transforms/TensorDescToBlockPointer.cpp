@@ -126,21 +126,28 @@ private:
                                : makeTensorPtrOp();
   }
 
-  void propagateToLoops(tt::MakeTensorPtrOp op) {
-    for (Operation *user : op->getUsers()) {
-      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
-        for (auto [initArg, rgnInitArg, loopRes, yieldVal] :
-             llvm::zip(loopOp.getInits(), loopOp.getRegionIterArgs(),
-                       loopOp->getResults(), loopOp.getYieldedValues())) {
-          assert(rgnInitArg.getType() == loopRes.getType() &&
-                 rgnInitArg.getType() == yieldVal.getType() && "Type mismatch");
-          if (rgnInitArg.getType() != initArg.getType()) {
-            rgnInitArg.setType(initArg.getType());
-            loopRes.setType(initArg.getType());
-            yieldVal.setType(initArg.getType());
-          }
+  void propagateToLoops(Operation *op) {
+    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op)) {
+      bool updated = false;
+      for (auto [initArg, rgnInitArg, loopRes, yieldVal] :
+           llvm::zip(loopOp.getInits(), loopOp.getRegionIterArgs(),
+                     loopOp->getResults(), loopOp.getYieldedValues())) {
+        Type initArgType = initArg.getType();
+        Type rgnInitArgType = rgnInitArg.getType();
+        assert(rgnInitArgType == loopRes.getType() &&
+               rgnInitArgType == yieldVal.getType() && "Type mismatch");
+        if (rgnInitArgType != initArgType) {
+          rgnInitArg.setType(initArgType);
+          yieldVal.setType(initArgType);
+          loopRes.setType(initArgType);
+          updated = true;
         }
       }
+      if (!updated)
+        return;
+
+      for (Operation *user : loopOp->getUsers())
+        propagateToLoops(user);
     }
   }
 
@@ -180,8 +187,10 @@ private:
     op->replaceAllUsesWith(tensorPtr);
     cleanUp.insert(op);
 
-    // Propagate the `tensorPtr` type to loops init args, etc...
-    propagateToLoops(tensorPtr);
+    // Propagate the `tensorPtr` type to loops init args, yielded values,
+    // results, ... (if necessary).
+    for (Operation *user : tensorPtr->getUsers())
+      propagateToLoops(user);
 
     return success();
   }
