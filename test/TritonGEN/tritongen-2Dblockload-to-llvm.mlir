@@ -338,7 +338,13 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 // -----
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK:      llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v32i16({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %arg5, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) -> vector<32xi16>
+  // CHECK:      llvm.mlir.constant(2 : i32) : i32
+  // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT: [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT: [[TileHeight:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT: [[VBlocks:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT: llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], %arg0, [[ADD_0]], %arg2, %arg3, {{.*}}, [[DEST:%.*]]) {{.*}} : (i32, i32, i32, i32, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
+  // CHECK-NEXT: llvm.load [[DEST]] : !llvm.ptr -> vector<32xi16>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=16, v_blocks=2, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<32xi16>
   llvm.return
 }
@@ -469,7 +475,13 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 // -----
 
 llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK:      llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockRead.v16i32({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %arg5, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}) -> vector<16xi32>
+  // CHECK:      llvm.mlir.constant(2 : i32) : i32
+  // CHECK:      [[ElemSize:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT: [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT: [[TileHeight:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK-NEXT: [[VBlocks:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-NEXT: llvm.call spir_funccc @_Z41__spirv_Subgroup2DBlockLoadTransformINTELiiiiPU3AS1viiiDv2_iPv([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], %arg0, [[ADD_0]], %arg2, %arg3, {{.*}}, [[DEST:%.*]]) {{.*}} : (i32, i32, i32, i32, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
+  // CHECK-NEXT: llvm.load [[DEST]] : !llvm.ptr -> vector<16xi32>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=16, tile_height=16, v_blocks=2, transpose=false, vnni_transform=true, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<16xi32>
   llvm.return
 }
