@@ -558,7 +558,8 @@ struct PrefetchOpConversion
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
         if (failed(newOp.verify())) {
           // delete the op so that the verifier will not abort the pass
-          // pipeline later, as we can fail this path and retry.
+          // pipeline later, as we can fail this path and try a different
+          // approach.
           rewriter.eraseOp(newOp);
           return failure();
         }
@@ -759,7 +760,8 @@ struct PrefetchOpConversion
                 /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
             if (failed(newOp.verify())) {
               // delete the op so that the verifier will not abort the pass
-              // pipeline later, as we can fail this path and retry.
+              // pipeline later, as we can fail this path and try a different
+              // approach.
               rewriter.eraseOp(newOp);
               return failure();
             }
@@ -1576,7 +1578,8 @@ struct LoadOpConversion
                   /*vnni_transform*/ false);
               if (failed(load2dOp.verify())) {
                 // delete the op so that the verifier will not abort the pass
-                // pipeline later, as we can fail this path and retry.
+                // pipeline later, as we can fail this path and try a different
+                // approach.
                 rewriter.eraseOp(load2dOp);
                 return failure();
               }
@@ -2090,7 +2093,8 @@ struct LoadOpConversion
                originalElemBits != 32));
           if (failed(load2dOp.verify())) {
             // delete the op so that the verifier will not abort the pass
-            // pipeline later, as we can fail this path and retry.
+            // pipeline later, as we can fail this path and try a different
+            // approach.
             rewriter.eraseOp(load2dOp);
             return failure();
           }
@@ -2525,7 +2529,8 @@ struct StoreOpConversion
 
             if (failed(newOp.verify())) {
               // delete the op so that the verifier will not abort the pass
-              // pipeline later, as we can fail this path and retry.
+              // pipeline later, as we can fail this path and try a different
+              // approach.
               rewriter.eraseOp(newOp);
               return failure();
             }
