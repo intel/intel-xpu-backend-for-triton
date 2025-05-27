@@ -1163,8 +1163,6 @@ struct LoadOpToBlockIOConversion
         (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
          !isTransposeRequired && originalElemBits != 32);
     unsigned baseWidthVal = vBlocks * tileWidth * (elemSizeInBits / 8);
-    if (isTransform)
-      baseWidthVal *= 2;
     Value baseWidth = b.i32_val(baseWidthVal);
     Value pitch = getPitch(rewriter, ptr, ptrs, baseWidth, elemSizeInBits);
     if (!pitch)
