@@ -160,6 +160,7 @@ computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
       b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
   // Adjust the base width to account for the byte offset.
   Value adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
+  return {adjustedBaseWidth, op.getX()};
   // Adjust the x-coordinate offset based on the number of scalar elements.
   Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
   Value adjustedXOffset =
@@ -190,9 +191,9 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
 
   Value one = b.i32_val(1);
-  //auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
-  auto baseWidth = op.getBaseWidth();
-  auto x = op.getX();
+  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  //auto baseWidth = op.getBaseWidth();
+  //auto x = op.getX();
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
