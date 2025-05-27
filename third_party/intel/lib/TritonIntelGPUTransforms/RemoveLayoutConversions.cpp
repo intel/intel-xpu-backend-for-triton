@@ -13,8 +13,10 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
@@ -731,12 +733,11 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
     return false;
 
   // Locate the operation that created the block pointer.
-  Operation *defOp = ptr.getDefiningOp();
-  while (auto advanceOp = dyn_cast<AdvanceOp>(defOp))
-    defOp = advanceOp.getPtr().getDefiningOp();
-  assert(isa<MakeTensorPtrOp>(defOp) &&
+  std::optional<triton::MakeTensorPtrOp> defOp =
+      triton::intel::findDefiningMakeTensorPtrOp(ptr);
+  assert(defOp &&
          "MakeTensorPtrOp should be the only op that creates a tensor pointer");
-  auto makeTensorPtrOp = cast<MakeTensorPtrOp>(defOp);
+  auto makeTensorPtrOp = *defOp;
 
   // DPAS encoding have to be propagated if conversion from a DPAS layout to
   // another layout has been done before.
@@ -1618,8 +1619,9 @@ void hoistConvert(ModuleOp module) {
 }
 
 class TritonIntelGPURemoveLayoutConversionsPass
-    : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
-          TritonIntelGPURemoveLayoutConversionsPass> {
+    : public triton::gpu::intel::impl::
+          TritonIntelGPURemoveLayoutConversionsBase<
+              TritonIntelGPURemoveLayoutConversionsPass> {
 public:
   // Cleanup convert ops.
   void cleanupConvertOps() {

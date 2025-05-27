@@ -2564,3 +2564,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-NOT: #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_sg_2d_block} {
+  // CHECK-LABEL: while_using_advanced_ptr
+  tt.func public @while_using_advanced_ptr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<5.000000e+00> : tensor<8x128xf32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.get_program_id x : i32
+    %2 = arith.extsi %arg2 : i32 to i64
+    %3 = arith.extsi %arg1 : i32 to i64
+    // CHECK: [[PTR:%.*]] = tt.make_tensor_ptr {{.*}}, {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}], {{\[}}{{.*}}, {{.*}}] {order = array<i32: 1, 0>} : <tensor<8x128xf32, #[[$BLOCKED]]>>
+    %4 = tt.make_tensor_ptr %arg0, [%3, %2], [%2, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x128xf32, #blocked1>>
+    %8 = arith.cmpi eq, %0, %c0_i32 : i32
+    %6 = scf.while (%arg3 = %4) : (!tt.ptr<tensor<8x128xf32, #blocked1>>) -> (!tt.ptr<tensor<8x128xf32, #blocked1>>) {
+      %7 = arith.cmpi slt, %0, %c0_i32 : i32
+      scf.condition(%7) %arg3 : !tt.ptr<tensor<8x128xf32, #blocked1>>
+    } do {
+    ^bb0(%arg3: !tt.ptr<tensor<8x128xf32, #blocked1>>):
+      // CHECK-NOT: ttg.convert_layout
+      // CHECK: [[SEL:%.*]] = arith.select {{.*}} : !tt.ptr<tensor<8x128xf32, #[[$BLOCKED]]>>
+      // CHECK: [[PTR1:%.*]] = tt.advance [[SEL]], {{.*}} : <tensor<8x128xf32, #[[$BLOCKED]]>>
+      // CHECK: tt.store [[PTR1]], {{.*}} : !tt.ptr<tensor<8x128xf32, #[[$BLOCKED]]>>
+      %12 = arith.select %8, %4, %arg3 : !tt.ptr<tensor<8x128xf32, #blocked1>>
+      %14 = tt.advance %12, [%0, %0] : <tensor<8x128xf32, #blocked1>>
+      %18 = ttg.convert_layout %cst : tensor<8x128xf32, #blocked> -> tensor<8x128xf32, #blocked1>
+      tt.store %14, %18 : !tt.ptr<tensor<8x128xf32, #blocked1>>
+      scf.yield %12 : !tt.ptr<tensor<8x128xf32, #blocked1>>
+    }
+    tt.return
+  }
+}
