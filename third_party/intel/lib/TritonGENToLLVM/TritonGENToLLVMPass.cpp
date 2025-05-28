@@ -149,13 +149,14 @@ template <
                                      TritonGEN::Matrix2DBlockPrefetchOp>::value,
                      bool> = true>
 static std::tuple<Value, Value, Value>
-computeAlignedBasePtrWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
+computeAlignedBasePtrWidthAndOffset(OpTy op,
+                                    ConversionPatternRewriter &rewriter) {
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value baseAddr = b.ptrtoint(int_ty(64), op.getPtr());
   // A mask for 64-byte alignment (0x3f = 63).
   constexpr int64_t ALIGNMENT_MASK = 0x3f;
-  // Clear the lower 6 bits.
+  // Clear the lower 6 bits to make the base address 64-byte align.
   Value adjustedBasePtr = b.and_(baseAddr, b.i64_val(~ALIGNMENT_MASK));
   adjustedBasePtr = b.inttoptr(op.getPtr().getType(), adjustedBasePtr);
   // Calculate the byte offset of the base address from a 64-byte alignment.
