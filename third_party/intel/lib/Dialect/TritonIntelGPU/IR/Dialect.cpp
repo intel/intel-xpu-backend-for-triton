@@ -1203,6 +1203,67 @@ struct TritonIntelGPUInferLayoutInterface
   }
 };
 
+struct TritonIntelGPUVerifyTensorLayoutInterface
+    : public triton::DialectVerifyTensorLayoutInterface {
+  using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
+
+  LogicalResult verifyTensorLayout(
+      Attribute layout, RankedTensorType rankedTy, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+
+    // Verify that the DPAS layout opsPerChannel param matches the A and B
+    // operand types. Because the DotOperand layout is not part of the Triton
+    // Intel GPU dialect, we need to first check for a TT.Dot operation. Then,
+    // we can compare the type of each operand to the Dot operation with the
+    // DPAS layout attached to the Dot operation.
+    if (auto dpasEncoding = dyn_cast<DpasEncodingAttr>(layout)) {
+
+      auto validateDotDpasLayout = [&](Type elemTy) -> LogicalResult {
+        if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+          elemTy = ptrTy.getPointeeType();
+        }
+        const auto elemTyBitWidth = elemTy.getIntOrFloatBitWidth();
+
+        // We know opsPerChannel is either 1, 4, or 8 because of the DPAS
+        // verifier when the DPAS attribute is created. Here we verify that
+        // opsPerChannel matches the tensor type.
+        if (dpasEncoding.getOpsPerChannel() == 4 && elemTyBitWidth != 8) {
+          return makeErr() << layout << ".\nLayout has opsPerChannel = "
+                           << dpasEncoding.getOpsPerChannel()
+                           << " but tensor element type is " << elemTy
+                           << ". Expected 8 bit type.";
+        } else if (dpasEncoding.getOpsPerChannel() == 2 &&
+                   elemTyBitWidth != 16) {
+          return makeErr() << layout << ".\nLayout has opsPerChannel = "
+                           << dpasEncoding.getOpsPerChannel()
+                           << " but tensor element type is " << elemTy
+                           << ". Expected 16 bit type.";
+        } else if (dpasEncoding.getOpsPerChannel() == 1 &&
+                   elemTyBitWidth != 32) {
+          return makeErr() << layout << ".\nLayout has opsPerChannel = "
+                           << dpasEncoding.getOpsPerChannel()
+                           << " but tensor element type is " << elemTy
+                           << ". Expected 32 bit type.";
+        }
+        return success();
+      };
+
+      if (isa<DotOp>(op)) {
+        auto dotOp = cast<DotOp>(op);
+        auto aElemTy = dotOp.getA().getType().getElementType();
+        auto result = validateDotDpasLayout(aElemTy);
+        if (result.failed())
+          return result;
+
+        auto bElemTy = dotOp.getB().getType().getElementType();
+        return validateDotDpasLayout(bElemTy);
+      }
+    }
+
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 
 void TritonIntelGPUDialect::initialize() {
@@ -1212,6 +1273,7 @@ void TritonIntelGPUDialect::initialize() {
       >();
 
   addInterfaces<TritonIntelGPUInferLayoutInterface>();
+  addInterfaces<TritonIntelGPUVerifyTensorLayoutInterface>();
 
   addOperations<
 #define GET_OP_LIST
