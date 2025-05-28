@@ -55,7 +55,8 @@ public:
              "Expected 'loadOp' to load a tensor value.");
 
       // Find the make tensor ptr operation that created the base ptr.
-      std::optional<tt::MakeTensorPtrOp> defOp = tt::intel::findDefiningMakeTensorPtrOp(ptr);
+      std::optional<tt::MakeTensorPtrOp> defOp =
+          tt::intel::findDefiningMakeTensorPtrOp(ptr);
       if (!defOp) {
         LDBG("Could not find make tensor ptr op for: " << loadOp);
         return;
