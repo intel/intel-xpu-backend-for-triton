@@ -2,12 +2,13 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
@@ -124,62 +125,6 @@ private:
                                      Attribute encoding) {
     return RankedTensorType::get(tensorType.getShape(),
                                  tensorType.getElementType(), encoding);
-  }
-
-  // Find the defining makeTensorPtrOp operation of the given value.
-  static std::optional<tt::MakeTensorPtrOp>
-  findDefiningMakeTensorPtrOp(Value val) {
-    LLVM_DEBUG({
-      llvm::dbgs() << "[" DEBUG_TYPE "]: \t"
-                   << "Attempting to find `makeTensorPtrOp` defining: " << val
-                   << "\n";
-    });
-
-    if (auto arg = dyn_cast<BlockArgument>(val)) {
-      Operation *parentOp = arg.getParentBlock()->getParentOp();
-
-      Value loopArg;
-      if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
-        loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-      else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
-        loopArg = whileOp.getInits()[arg.getArgNumber()];
-      else
-        llvm_unreachable("Unexpected parent operator");
-
-      return findDefiningMakeTensorPtrOp(loopArg);
-    }
-
-    if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
-      return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
-    if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
-      return makePtrOp;
-    if (auto opRes = dyn_cast<OpResult>(val)) {
-      Operation *defOp = opRes.getOwner();
-      if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-        Value val = forOp.getYieldedValues()[opRes.getResultNumber()];
-        return findDefiningMakeTensorPtrOp(val);
-      }
-      if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
-        Value val = whileOp.getYieldedValues()[opRes.getResultNumber()];
-        return findDefiningMakeTensorPtrOp(val);
-      }
-      if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
-        // Give up if the 2 possible definitions aren't the same.
-        Value trueVal = selectOp.getTrueValue(),
-              falseVal = selectOp.getFalseValue();
-        std::optional<tt::MakeTensorPtrOp> trueDef =
-            findDefiningMakeTensorPtrOp(trueVal);
-        std::optional<tt::MakeTensorPtrOp> falseDef =
-            findDefiningMakeTensorPtrOp(falseVal);
-        if (!trueDef || !falseDef || *trueDef != *falseDef)
-          return std::nullopt;
-        return trueDef;
-      }
-
-      assert(false && "unhandled operation");
-    }
-
-    return std::nullopt;
   }
 
   static bool filterUser(Operation *op) {
@@ -446,10 +391,11 @@ private:
         newArgs.push_back(builder.create<ttg::ConvertLayoutOp>(
             op->getLoc(), newType, operand));
       } else {
-        assert(isa<tt::PointerType>(operand.getType()) &&
+        assert(tt::isTensorPointerType(operand.getType()) &&
                "Expecting operand to have blocked pointer type");
-        auto defOp = findDefiningMakeTensorPtrOp(operand);
-        assert(defOp && "Expected a make_tensor_ptr operation");
+        std::optional<tt::MakeTensorPtrOp> defOp =
+            triton::intel::findDefiningMakeTensorPtrOp(operand);
+        assert(defOp && "Expecting a MakeTensorPtr operation");
         LLVM_DEBUG({
           llvm::dbgs() << "[" DEBUG_TYPE "]: Found definition: " << defOp
                        << "\n";
