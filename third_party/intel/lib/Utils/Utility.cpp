@@ -33,6 +33,54 @@ Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
              : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
 }
 
+std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
+  if (auto arg = dyn_cast<BlockArgument>(val)) {
+    Operation *parentOp = arg.getParentBlock()->getParentOp();
+
+    Value loopArg;
+    if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
+      loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
+    else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
+      loopArg = whileOp.getInits()[arg.getArgNumber()];
+    else
+      llvm_unreachable("Unexpected parent operator");
+
+    return findDefiningMakeTensorPtrOp(loopArg);
+  }
+
+  if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
+    return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
+  if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
+    return makePtrOp;
+  if (auto opRes = dyn_cast<OpResult>(val)) {
+    Operation *defOp = opRes.getOwner();
+    if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+      Value val = forOp.getYieldedValues()[opRes.getResultNumber()];
+      return findDefiningMakeTensorPtrOp(val);
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+      Value val = whileOp.getYieldedValues()[opRes.getResultNumber()];
+      return findDefiningMakeTensorPtrOp(val);
+    }
+    if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+      // Give up if the 2 possible definitions aren't the same.
+      Value trueVal = selectOp.getTrueValue(),
+            falseVal = selectOp.getFalseValue();
+      std::optional<tt::MakeTensorPtrOp> trueDef =
+          findDefiningMakeTensorPtrOp(trueVal);
+      std::optional<tt::MakeTensorPtrOp> falseDef =
+          findDefiningMakeTensorPtrOp(falseVal);
+      if (!trueDef || !falseDef || *trueDef != *falseDef)
+        return std::nullopt;
+      return trueDef;
+    }
+
+    assert(false && "unhandled operation");
+  }
+
+  return std::nullopt;
+}
+
 std::optional<int64_t> getFoldedConstantValue(Operation *op) {
   SmallVector<OpFoldResult> results;
   if (failed(op->fold(results)))
