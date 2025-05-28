@@ -735,9 +735,10 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // Locate the operation that created the block pointer.
   std::optional<triton::MakeTensorPtrOp> defOp =
       triton::intel::findDefiningMakeTensorPtrOp(ptr);
-  assert(defOp &&
-         "MakeTensorPtrOp should be the only op that creates a tensor pointer");
-  auto makeTensorPtrOp = *defOp;
+  if (!defOp)
+    return false;
+
+  triton::MakeTensorPtrOp makeTensorPtrOp = *defOp;
 
   // DPAS encoding have to be propagated if conversion from a DPAS layout to
   // another layout has been done before.
