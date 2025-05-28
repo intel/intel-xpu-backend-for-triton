@@ -42,7 +42,7 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   // CHECK-DAG:     [[TileWidth:%.*]] = llvm.mlir.constant(32 : i32) : i32
   // CHECK-DAG:     [[TileHeight:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-DAG:     [[VBlocks:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:    llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[DEST:%.*]], [[BASE_ALIGNED]], %{{.*}}, %arg2, %arg3, {{.*}}) {{.*}} : (i32, i32, i32, i32, !llvm.ptr{{.*}}, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
+  // CHECK-NEXT:    llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[DEST:%.*]], {{.*}}, %arg2, %arg3, {{.*}}) {{.*}} : (i32, i32, i32, i32, !llvm.ptr{{.*}}, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
   llvm.return
 }
@@ -55,7 +55,7 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   // CHECK-DAG:   [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
   // CHECK-DAG:   [[TileHeight:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-DAG:   [[VBlocks:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:  llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[DEST:%.*]], [[BASE_ALIGNED]], %{{.*}}, %arg2, %arg3, {{.*}}) {{.*}} : (i32, i32, i32, i32, !llvm.ptr{{.*}}, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
+  // CHECK-NEXT:  llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[DEST:%.*]], {{.*}}, %arg2, %arg3, {{.*}}) {{.*}} : (i32, i32, i32, i32, !llvm.ptr{{.*}}, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=16, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
   llvm.return
 }
@@ -68,7 +68,7 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   // CHECK-DAG:   [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
   // CHECK-DAG:   [[TileHeight:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-DAG:   [[VBlocks:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:  llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[DEST:%.*]], [[BASE_ALIGNED]], %{{.*}}, %arg2, %arg3, {{.*}}) {{.*}} : (i32, i32, i32, i32, !llvm.ptr{{.*}}, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
+  // CHECK-NEXT:  llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[DEST:%.*]], {{.*}}, %arg2, %arg3, {{.*}}) {{.*}} : (i32, i32, i32, i32, !llvm.ptr{{.*}}, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi32>)
   llvm.return
 }
