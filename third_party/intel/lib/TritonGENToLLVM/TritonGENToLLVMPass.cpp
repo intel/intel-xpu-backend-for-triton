@@ -158,6 +158,7 @@ computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
   Value offsetInBytes =
       b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
   // Adjust the base width to account for the byte offset.
+  // If base width is zero, then we want to keep it as zero.
   Value adjustedBaseWidth = op.getBaseWidth();
   llvm::APInt baseWidthVal;
   if (!matchPattern(op.getBaseWidth(), m_ConstantInt(&baseWidthVal)) ||

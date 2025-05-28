@@ -33,6 +33,19 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
 
 // -----
 
+// COM: If base width and base height are zeros, then we want to ensure that they continue to be zeros.
+llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi8>) {
+  // CHECK-DAG: [[BaseWidth:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG: [[BaseHeight:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK:     llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, [[BaseWidth]], [[BaseHeight]], {{.*}})
+  %base_width = llvm.mlir.constant(0 : i32) : i32
+  %base_height = llvm.mlir.constant(0 : i32) : i32
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=1, cache_control=L1UC_L3UC} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi8>)
+  llvm.return
+}
+
+// -----
+
 llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi16>) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
