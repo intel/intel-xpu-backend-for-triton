@@ -165,7 +165,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_160:.*]] = llvm.extractvalue %[[VAL_71]][63]
 
     // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
-    // CHECK:           %[[WIDTH_i32:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
+    // CHECK:           %[[baseHeight:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
     // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
     // CHECK:           %[[baseWidth:.*]] = llvm.mul %[[HEIGHT_i32]], %[[CST_2]] : i32
     // CHECK:           %[[basePitch:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[CST_2]] : i32
@@ -204,7 +204,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_197:.*]] = llvm.bitcast %[[VAL_196]] : vector<8xf16> to vector<8xi16>
     // CHECK:           %[[VAL_198:.*]] = llvm.trunc %[[offsetY]] : i32 to i32
     // CHECK:           %[[VAL_199:.*]] = llvm.trunc %[[offsetX]] : i32 to i32
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], %[[VAL_199]], %[[VAL_198]], %[[VAL_197]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], %[[VAL_199]], %[[VAL_198]], %[[VAL_197]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [0, 1]
     // CHECK:           %[[VAL_207:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -219,7 +219,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_223:.*]] = llvm.insertelement %[[VAL_111]], %[[VAL_221]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_225:.*]] = llvm.insertelement %[[VAL_112]], %[[VAL_223]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_226:.*]] = llvm.bitcast %[[VAL_225]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_226]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], {{.*}}, %[[VAL_226]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [1, 0]
     // CHECK:           %[[VAL_236:.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -236,7 +236,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_254:.*]] = llvm.insertelement %[[VAL_119]], %[[VAL_252]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_256:.*]] = llvm.insertelement %[[VAL_120]], %[[VAL_254]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_257:.*]] = llvm.bitcast %[[VAL_256]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_257]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], {{.*}}, %[[VAL_257]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [1, 1]
     // CHECK:           %[[VAL_267:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -251,7 +251,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_283:.*]] = llvm.insertelement %[[VAL_127]], %[[VAL_281]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_285:.*]] = llvm.insertelement %[[VAL_128]], %[[VAL_283]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_286:.*]] = llvm.bitcast %[[VAL_285]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_286]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], {{.*}}, %[[VAL_286]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [2, 0]
     // CHECK:           %[[VAL_296:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -268,7 +268,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_314:.*]] = llvm.insertelement %[[VAL_135]], %[[VAL_312]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_316:.*]] = llvm.insertelement %[[VAL_136]], %[[VAL_314]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_317:.*]] = llvm.bitcast %[[VAL_316]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_317]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], {{.*}}, %[[VAL_317]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [2, 1]
     // CHECK:           %[[VAL_327:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -283,7 +283,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_343:.*]] = llvm.insertelement %[[VAL_143]], %[[VAL_341]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_345:.*]] = llvm.insertelement %[[VAL_144]], %[[VAL_343]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_346:.*]] = llvm.bitcast %[[VAL_345]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_346]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], {{.*}}, %[[VAL_346]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [3, 0]
     // CHECK:           %[[VAL_356:.*]] = llvm.mlir.constant(24 : i32) : i32
@@ -300,7 +300,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_374:.*]] = llvm.insertelement %[[VAL_151]], %[[VAL_372]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_376:.*]] = llvm.insertelement %[[VAL_152]], %[[VAL_374]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_377:.*]] = llvm.bitcast %[[VAL_376]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_377]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], {{.*}}, %[[VAL_377]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [3, 1]
     // CHECK:           %[[VAL_387:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -315,7 +315,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_403:.*]] = llvm.insertelement %[[VAL_159]], %[[VAL_401]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_405:.*]] = llvm.insertelement %[[VAL_160]], %[[VAL_403]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_406:.*]] = llvm.bitcast %[[VAL_405]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_406]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], {{.*}}, %[[VAL_406]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     tt.store %13, %cst {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x32xf16, #dpas>>
     tt.return
