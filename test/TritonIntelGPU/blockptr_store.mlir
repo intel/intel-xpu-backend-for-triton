@@ -1,6 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
-// CHECK: llvm.func spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i(i32, i32, i32, i32, !llvm.ptr {llvm.nonnull, llvm.readonly}, !llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>) attributes {no_unwind, will_return}
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
@@ -39,16 +38,16 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: llvm.mul %[[VAL_1]], %[[CST_16]] : i32
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i{{.*}}
+    // CHECK: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i{{.*}}
+    // CHECK: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i{{.*}}
+    // CHECK: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     // CHECK: llvm.mlir.undef : vector<8xf16>
     // CHECK-COUNT-8: llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
-    // CHECK: llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i{{.*}}
+    // CHECK: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
     tt.store %13, %12 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<64x64xf16, #dpas>>
     tt.return
   }
@@ -56,7 +55,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i(i32, i32, i32, i32, !llvm.ptr {llvm.nonnull, llvm.readonly}, !llvm.ptr<1> {llvm.nonnull, llvm.writeonly}, i32, i32, i32, vector<2xi32>) attributes {no_unwind, will_return}
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @dpas_layout_2d_store_rep_cluster_4_2(
@@ -206,15 +204,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_197:.*]] = llvm.bitcast %[[VAL_196]] : vector<8xf16> to vector<8xi16>
     // CHECK:           %[[VAL_198:.*]] = llvm.trunc %[[offsetY]] : i32 to i32
     // CHECK:           %[[VAL_199:.*]] = llvm.trunc %[[offsetX]] : i32 to i32
-    // CHECK:           %[[VAL_200:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_201:.*]] = llvm.alloca %[[VAL_200]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_197]], %[[VAL_201]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           %[[VAL_202:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK:           %[[VAL_203:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:           %[[VAL_204:.*]] = llvm.mlir.undef : vector<2xi32>
-    // CHECK:           %[[VAL_205:.*]] = llvm.insertelement %{{.*}}, %[[VAL_204]]{{\[}}%[[VAL_203]] : i32] : vector<2xi32>
-    // CHECK:           %[[VAL_206:.*]] = llvm.insertelement %[[VAL_198]], %[[VAL_205]]{{\[}}%[[VAL_202]] : i32] : vector<2xi32>
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_201]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], %[[VAL_206]])
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], %[[VAL_199]], %[[VAL_198]], %[[VAL_197]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [0, 1]
     // CHECK:           %[[VAL_207:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -229,10 +219,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_223:.*]] = llvm.insertelement %[[VAL_111]], %[[VAL_221]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_225:.*]] = llvm.insertelement %[[VAL_112]], %[[VAL_223]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_226:.*]] = llvm.bitcast %[[VAL_225]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_229:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_230:.*]] = llvm.alloca %[[VAL_229]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_226]], %[[VAL_230]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_230]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}})
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_226]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [1, 0]
     // CHECK:           %[[VAL_236:.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -249,10 +236,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_254:.*]] = llvm.insertelement %[[VAL_119]], %[[VAL_252]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_256:.*]] = llvm.insertelement %[[VAL_120]], %[[VAL_254]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_257:.*]] = llvm.bitcast %[[VAL_256]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_260:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_261:.*]] = llvm.alloca %[[VAL_260]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_257]], %[[VAL_261]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_261]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}})
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_257]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [1, 1]
     // CHECK:           %[[VAL_267:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -267,10 +251,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_283:.*]] = llvm.insertelement %[[VAL_127]], %[[VAL_281]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_285:.*]] = llvm.insertelement %[[VAL_128]], %[[VAL_283]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_286:.*]] = llvm.bitcast %[[VAL_285]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_289:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_290:.*]] = llvm.alloca %[[VAL_289]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_286]], %[[VAL_290]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_290]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}})
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_286]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [2, 0]
     // CHECK:           %[[VAL_296:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -287,10 +268,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_314:.*]] = llvm.insertelement %[[VAL_135]], %[[VAL_312]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_316:.*]] = llvm.insertelement %[[VAL_136]], %[[VAL_314]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_317:.*]] = llvm.bitcast %[[VAL_316]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_320:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_321:.*]] = llvm.alloca %[[VAL_320]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_317]], %[[VAL_321]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_321]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}})
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_317]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [2, 1]
     // CHECK:           %[[VAL_327:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -305,10 +283,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_343:.*]] = llvm.insertelement %[[VAL_143]], %[[VAL_341]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_345:.*]] = llvm.insertelement %[[VAL_144]], %[[VAL_343]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_346:.*]] = llvm.bitcast %[[VAL_345]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_349:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_350:.*]] = llvm.alloca %[[VAL_349]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_346]], %[[VAL_350]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_350]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}})
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_346]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [3, 0]
     // CHECK:           %[[VAL_356:.*]] = llvm.mlir.constant(24 : i32) : i32
@@ -325,10 +300,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_374:.*]] = llvm.insertelement %[[VAL_151]], %[[VAL_372]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_376:.*]] = llvm.insertelement %[[VAL_152]], %[[VAL_374]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_377:.*]] = llvm.bitcast %[[VAL_376]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_380:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_381:.*]] = llvm.alloca %[[VAL_380]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_377]], %[[VAL_381]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_381]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}})
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_377]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [3, 1]
     // CHECK:           %[[VAL_387:.*]] = llvm.mlir.constant(16 : i32) : i32
@@ -343,10 +315,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_403:.*]] = llvm.insertelement %[[VAL_159]], %[[VAL_401]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_405:.*]] = llvm.insertelement %[[VAL_160]], %[[VAL_403]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_406:.*]] = llvm.bitcast %[[VAL_405]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_409:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK:           %[[VAL_410:.*]] = llvm.alloca %[[VAL_409]] x i16 : (i32) -> !llvm.ptr
-    // CHECK:           llvm.store %[[VAL_406]], %[[VAL_410]] : vector<8xi16>, !llvm.ptr
-    // CHECK:           llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, %[[VAL_410]], %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}})
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %{{.*}}, %[[WIDTH_i32]], %[[basePitch]], {{.*}}, %[[VAL_406]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     tt.store %13, %cst {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<32x32xf16, #dpas>>
     tt.return
