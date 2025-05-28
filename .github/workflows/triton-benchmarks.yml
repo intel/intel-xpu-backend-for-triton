@@ -60,6 +60,8 @@ permissions: read-all
 
 env:
   PYTHON_VERSION: "3.10"
+  # FIXME: in the next versions of pti (most likely 0.12.3) this will not need to be done
+  PTI_DEVICE_SYNC_DELTA: "1"
   BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
   VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
