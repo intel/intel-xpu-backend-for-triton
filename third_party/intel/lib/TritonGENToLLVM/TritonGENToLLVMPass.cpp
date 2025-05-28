@@ -149,15 +149,15 @@ template <
                                      TritonGEN::Matrix2DBlockPrefetchOp>::value,
                      bool> = true>
 static std::tuple<Value, Value, Value>
-computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
+computeAlignedBasePtrWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value baseAddr = b.ptrtoint(int_ty(64), op.getPtr());
-  // Clear the lower 6 bits.
-  Value adjustedBasePtr = b.and_(baseAddr, b.i64_val(~0x3f));
-  adjustedBasePtr = b.inttoptr(op.getPtr().getType(), adjustedBasePtr);
   // A mask for 64-byte alignment (0x3f = 63).
   constexpr int64_t ALIGNMENT_MASK = 0x3f;
+  // Clear the lower 6 bits.
+  Value adjustedBasePtr = b.and_(baseAddr, b.i64_val(~ALIGNMENT_MASK));
+  adjustedBasePtr = b.inttoptr(op.getPtr().getType(), adjustedBasePtr);
   // Calculate the byte offset of the base address from a 64-byte alignment.
   Value offsetInBytes =
       b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
@@ -189,7 +189,7 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   IntegerType int64Ty = rewriter.getIntegerType(64);
 
   Value one = b.i32_val(1);
-  auto [ptr, baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
@@ -296,7 +296,7 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   std::string funcName =
       "llvm.genx.GenISA.LSC2DBlockWrite." + getGenISATypeMangling(storeValType);
   Value one = b.i32_val(1);
-  auto [ptr, baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
@@ -339,7 +339,7 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Value basePitch = op.getBasePitch();
   Value y = op.getY();
   Value one = b.i32_val(1);
-  auto [ptr, baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
@@ -529,7 +529,7 @@ struct TritonMatrix2DBlockLoadLowering
     fnName = intel::mangle(fnName, argTypes);
 
     auto [ptr, baseWidth, offsetX] =
-        computeAlignedBaseWidthAndOffset(op, rewriter);
+        computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
     Value byteCoord = b.insert_element(
         vecType,
@@ -591,7 +591,7 @@ struct TritonMatrix2DBlockStoreLowering
     std::string fnName = "__spirv_Subgroup2DBlockStoreINTEL";
 
     auto [ptr, baseWidth, offsetX] =
-        computeAlignedBaseWidthAndOffset(op, rewriter);
+        computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
     VectorType vecType = vec_ty(i32_ty, 2);
     SmallVector<Type> argTypes{i32_ty,      i32_ty,         i32_ty, i32_ty,
@@ -651,7 +651,7 @@ struct TritonMatrix2DBlockPrefetchLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::string fnName = "__spirv_Subgroup2DBlockPrefetchINTEL";
     auto [ptr, baseWidth, offsetX] =
-        computeAlignedBaseWidthAndOffset(op, rewriter);
+        computeAlignedBasePtrWidthAndOffset(op, rewriter);
     VectorType vecType = vec_ty(i32_ty, 2);
     SmallVector<Type> argTypes{i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx, 1),
                                i32_ty, i32_ty, i32_ty, vecType};
