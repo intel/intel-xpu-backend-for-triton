@@ -51,7 +51,7 @@ public:
   explicit TritonLLVMConversionTarget(MLIRContext &ctx)
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
-    addIllegalDialect<triton::TritonGEN::TritonGENDialect>();
+    addLegalDialect<triton::TritonGEN::TritonGENDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::gpu::intel::TritonIntelGPUDialect>();
