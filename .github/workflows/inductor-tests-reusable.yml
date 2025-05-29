@@ -40,7 +40,7 @@ jobs:
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'rolling' }}
-    timeout-minutes: ${{ inputs.timeout }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout) }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"

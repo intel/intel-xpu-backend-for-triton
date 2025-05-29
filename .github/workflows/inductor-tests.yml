@@ -53,4 +53,5 @@ jobs:
       runner_label: ${{ inputs.runner_label }}
       suite: ${{ inputs.suite }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
-      timeout: ${{ inputs.timeout }}
+      # Workaround for "Unexpected value" error
+      timeout: ${{ fromJSON(inputs.timeout) }}
