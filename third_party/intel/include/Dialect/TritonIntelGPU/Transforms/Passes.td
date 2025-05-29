@@ -396,4 +396,16 @@ def TritonIntelGPUReduceVariableLiveness
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
 }
+
+def TritonIntelGPUOptimizeBlockLoadEncodingPass : Pass<"tritonintelgpu-optimize-block-load-encoding", "mlir::ModuleOp"> {
+  let summary = "Set encodings for Subgroup 2D Block IO ops";
+
+  let description = [{
+    Set Subgroup 2D Block IO Encodings on LoadOps with block_io attribute
+    // TODO: rename to BlockIOEncoding?
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect", "mlir::triton::gpu::intel::TritonIntelGPUDialect", "mlir::triton::TritonDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
