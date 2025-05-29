@@ -36,7 +36,7 @@ jobs:
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'rolling' }}
-    timeout-minutes: 960
+    timeout-minutes: 1440
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
