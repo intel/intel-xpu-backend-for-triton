@@ -1,7 +1,6 @@
 import importlib.util
 import itertools
 import os
-import shutil
 import pathlib
 
 import pytest
@@ -495,7 +494,6 @@ def test_preload(device, fresh_triton_cache) -> None:
     assert specialization_data is not None
 
     # clear the cache
-    shutil.rmtree(fresh_triton_cache)
     kernel_add.device_caches[device][0].clear()
 
     # preload the kernel
