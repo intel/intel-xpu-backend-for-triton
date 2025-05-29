@@ -106,3 +106,32 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     tt.return
   }
 }
+
+// -----
+
+// COM: Ensure load is annotated when its base ptr is the result of a `tt.advance` operation fed by a select operation.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_sg_2d_block} {
+  tt.func public @load_fed_by_advance_op_in_loop(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) {
+    %c8_i32 = arith.constant 8 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c384_i32 = arith.constant 384 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c8_i32 : i32
+    %2 = arith.extsi %arg2 : i32 to i64
+    %3 = arith.extsi %arg1 : i32 to i64
+    %4 = tt.make_tensor_ptr %arg0, [%3, %2], [%2, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<8x128xf32, #blocked>>
+    %5 = scf.for %arg3 = %c0_i32 to %arg2 step %c128_i32 iter_args(%arg4 = %4) -> (!tt.ptr<tensor<8x128xf32, #blocked>>) : i32 {
+      %7 = arith.remsi %arg3, %c384_i32 : i32
+      %8 = arith.cmpi eq, %7, %c0_i32 : i32
+      %12 = arith.select %8, %4, %arg4 : !tt.ptr<tensor<8x128xf32, #blocked>>
+      %14 = tt.advance %12, [%1, %arg3] : <tensor<8x128xf32, #blocked>>
+      // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"}
+      %15 = tt.load %14 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x128xf32, #blocked>>
+      scf.yield %12 : !tt.ptr<tensor<8x128xf32, #blocked>>
+    }
+    tt.return
+  }
+}

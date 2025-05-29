@@ -4,6 +4,7 @@ set(CUTLASS_KERNEL_FLAGS ${CUTLASS_KERNEL_FLAGS}
   -fsycl-targets=intel_gpu_pvc,intel_gpu_bmg_g21
   "SHELL:-Xspirv-translator=intel_gpu_pvc --spirv-ext=+SPV_INTEL_split_barrier"
   "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 --spirv-ext=+SPV_INTEL_split_barrier"
+  -Xs "-options \"-igc_opts 'VISAOptions=-perfmodel,VectorAliasBBThreshold=1000,ExtraOCLOptions=-cl-intel-256-GRF-per-thread'\" -options -ze-opt-large-register-file"
 )
 
 Python3_add_library(cutlass_kernel MODULE WITH_SOABI python_main.cpp)

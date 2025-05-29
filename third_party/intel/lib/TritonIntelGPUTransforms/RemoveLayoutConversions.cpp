@@ -13,8 +13,10 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "intel/include/Utils/Utility.h"
 
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
@@ -694,8 +696,8 @@ void LayoutPropagation::rewriteAssertOp(AssertOp assertOp) {
 
 // Recursively update the operands in a chain of AdvanceOps, after setting the
 // pointer operand of the first one.
-static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
-                                 Value dataToStore) {
+static void updateAdvanceOpChain(AdvanceOp advanceOp, StoreOp storeOp,
+                                 Value makeTensorPtrOp, Value dataToStore) {
   OpBuilder rewriter(advanceOp);
   auto newAdvanceOp =
       rewriter.create<AdvanceOp>(advanceOp.getLoc(), makeTensorPtrOp.getType(),
@@ -703,11 +705,13 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, Value makeTensorPtrOp,
 
   SmallVector<Operation *> advanceOpUsers(advanceOp->getUsers());
   for (Operation *user : advanceOpUsers) {
-    if (auto storeOp = dyn_cast<StoreOp>(user)) {
-      storeOp.setOperand(0, newAdvanceOp);
-      storeOp.setOperand(1, dataToStore);
+    if (auto storeUser = dyn_cast<StoreOp>(user)) {
+      if (storeUser == storeOp) {
+        storeOp.setOperand(0, newAdvanceOp);
+        storeOp.setOperand(1, dataToStore);
+      }
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
-      updateAdvanceOpChain(advanceOp, makeTensorPtrOp, dataToStore);
+      updateAdvanceOpChain(advanceOp, storeOp, makeTensorPtrOp, dataToStore);
     } else {
       llvm::errs() << "user: " << *user << "\n";
       llvm_unreachable("Unexpected user");
@@ -729,12 +733,12 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
     return false;
 
   // Locate the operation that created the block pointer.
-  Operation *defOp = ptr.getDefiningOp();
-  while (auto advanceOp = dyn_cast<AdvanceOp>(defOp))
-    defOp = advanceOp.getPtr().getDefiningOp();
-  assert(isa<MakeTensorPtrOp>(defOp) &&
-         "MakeTensorPtrOp should be the only op that creates a tensor pointer");
-  auto makeTensorPtrOp = cast<MakeTensorPtrOp>(defOp);
+  std::optional<triton::MakeTensorPtrOp> defOp =
+      triton::intel::findDefiningMakeTensorPtrOp(ptr);
+  if (!defOp)
+    return false;
+
+  triton::MakeTensorPtrOp makeTensorPtrOp = *defOp;
 
   // DPAS encoding have to be propagated if conversion from a DPAS layout to
   // another layout has been done before.
@@ -794,14 +798,27 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // Update the store operation with the new layout.
   SmallVector<Operation *> makeTensorPtrOpUsers(makeTensorPtrOp->getUsers());
   Value dataToStore = getValueAs(value, encoding);
-  Block *storeBB = storeOp->getBlock();
   for (Operation *user : makeTensorPtrOpUsers) {
-    Block *userBB = user->getBlock();
-    if (auto storeOp = dyn_cast<StoreOp>(user)) {
-      storeOp.setOperand(0, newMakeTensorPtrOp);
-      storeOp.setOperand(1, dataToStore);
+    if (auto storeUser = dyn_cast<StoreOp>(user)) {
+      if (storeUser == storeOp) {
+        storeOp.setOperand(0, newMakeTensorPtrOp);
+        storeOp.setOperand(1, dataToStore);
+      }
     } else if (auto advanceOp = dyn_cast<AdvanceOp>(user)) {
-      updateAdvanceOpChain(advanceOp, newMakeTensorPtrOp, dataToStore);
+      auto chainIsTerminatedByCurrentStore = [&](AdvanceOp advanceOp) {
+        AdvanceOp currentAdvOp = advanceOp;
+        for (Operation *user : currentAdvOp->getUsers()) {
+          if (isa<StoreOp>(user) && cast<StoreOp>(user) == storeOp)
+            return true;
+          if (isa<AdvanceOp>(user))
+            currentAdvOp = cast<AdvanceOp>(user);
+        }
+        return false;
+      };
+
+      if (chainIsTerminatedByCurrentStore(advanceOp))
+        updateAdvanceOpChain(advanceOp, storeOp, newMakeTensorPtrOp,
+                             dataToStore);
     }
   }
 
@@ -1369,7 +1386,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (result.failed())
     return;
 
-  Operation *extOrBroadcatOp = nullptr;
+  Operation *extOrBroadcastOp = nullptr;
   unsigned sliceSize = slice.size();
   for (unsigned i = 0; i < sliceSize; i++) {
     Value v = slice[i];
@@ -1393,37 +1410,37 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
-      if (extOrBroadcatOp != nullptr)
+      if (extOrBroadcastOp != nullptr)
         return;
-      extOrBroadcatOp = op;
+      extOrBroadcastOp = op;
     }
   }
 
-  if (extOrBroadcatOp == nullptr)
+  if (extOrBroadcastOp == nullptr)
     return;
-  Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
-  Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcatOp, dstEncoding);
+  Attribute dstEncoding = layout[extOrBroadcastOp->getResult(0)];
+  Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
-  OpBuilder builder(extOrBroadcatOp);
+  OpBuilder builder(extOrBroadcastOp);
   auto tensorType =
-      cast<RankedTensorType>(extOrBroadcatOp->getOperand(0).getType());
+      cast<RankedTensorType>(extOrBroadcastOp->getOperand(0).getType());
   auto newType = RankedTensorType::get(
       tensorType.getShape(), tensorType.getElementType(), srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
-      convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
-  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);
+      convertOp.getLoc(), newType, extOrBroadcastOp->getOperand(0));
+  Operation *newExtOrBroadcast = builder.clone(*extOrBroadcastOp);
   newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
   auto oldExtOrBroadcastType =
-      cast<RankedTensorType>(extOrBroadcatOp->getResult(0).getType());
+      cast<RankedTensorType>(extOrBroadcastOp->getResult(0).getType());
   Type newExtOrBroadcasrType = RankedTensorType::get(
       oldExtOrBroadcastType.getShape(), oldExtOrBroadcastType.getElementType(),
       dstEncoding);
   newExtOrBroadcast->getResult(0).setType(newExtOrBroadcasrType);
   IRMapping mapping;
-  mapping.map(extOrBroadcatOp->getResult(0), newExtOrBroadcast->getResult(0));
-  slice.remove(extOrBroadcatOp->getResult(0));
+  mapping.map(extOrBroadcastOp->getResult(0), newExtOrBroadcast->getResult(0));
+  slice.remove(extOrBroadcastOp->getResult(0));
   // 3. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp, mapping);
 }
@@ -1443,27 +1460,19 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // These are the conditional edges above which conversions should be hoisted.
   // The value represents the `scf.if` op result and the operand represents the
   // edge into one of the branches.
-  SmallVector<std::pair<OpResult, OpOperand *>> hoistAbove;
+  SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
 
   // The list of `scf.if` op results in the slice that are not rematerializable.
   // Hoisting is terminated at these values.
   SmallVector<OpResult> terminals;
 
-  // Process the whole backward slice in subslices that stop at each condtional.
-  // This is so we can apply more specific rules about when to hoist.
-  struct Subslice {
-    OpResult v;
-    OpOperand *edge;
-    SetVector<Value> slice;
-    DenseMap<Value, Attribute> layout;
-  };
-  SmallVector<Subslice> subslices;
-
-  // Check a value in the subslice.
-  auto visitValue = [&](OpResult v) {
+  // This loop recurses through the subslices of the backwards dependencies, so
+  // re-query the size of `slice`.
+  for (unsigned i = 0; i != slice.size(); ++i) {
+    Value v = slice[i];
     auto ifOp = v.getDefiningOp<scf::IfOp>();
     if (!ifOp)
-      return;
+      continue;
 
     Attribute rootLayout = layout.at(v);
     unsigned resIdx = cast<OpResult>(v).getResultNumber();
@@ -1492,65 +1501,40 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
       slice.insert(elseSlice.begin(), elseSlice.end());
       layout.insert(thenLayout.begin(), thenLayout.end());
       layout.insert(elseLayout.begin(), elseLayout.end());
-      return;
+      continue;
     }
 
     // If propagation across both edges failed, then this conditional
     // terminates backwards rematerialization.
     if (failed(thenResult) && failed(elseResult)) {
-      terminals.push_back(v);
-      return;
+      terminals.push_back(cast<OpResult>(v));
+      continue;
+    }
+
+    // Only hoist into conditionals inside loops. The assumption is that an if
+    // inside a loop executes fewer than the total number of loop iterations,
+    // making this hoist profitable.
+    if (!isa<scf::ForOp>(ifOp->getParentOp())) {
+      terminals.push_back(cast<OpResult>(v));
+      continue;
     }
 
     // The layout conversion can be rematerialized along one edge but not the
     // other. We can hoist the conversion into the other branch. Push this
     // into the subslice list for analysis.
     if (succeeded(thenResult)) {
-      subslices.push_back(
-          {v, &elseRes, std::move(thenSlice), std::move(thenLayout)});
+      hoistAbove.emplace_back(v, &elseRes);
+      slice.insert(thenSlice.begin(), thenSlice.end());
+      layout.insert(thenLayout.begin(), thenLayout.end());
     } else {
-      subslices.push_back(
-          {v, &thenRes, std::move(elseSlice), std::move(elseLayout)});
+      hoistAbove.emplace_back(v, &thenRes);
+      slice.insert(elseSlice.begin(), elseSlice.end());
+      layout.insert(elseLayout.begin(), elseLayout.end());
     }
-  };
-
-  // Process the whole slice in subslices.
-  unsigned i = 0;
-  bool isLoneHoist = false;
-  do {
-    // Visit values in the current subslice.
-    for (; i != slice.size(); ++i) {
-      if (auto v = dyn_cast<OpResult>(slice[i]))
-        visitValue(v);
-    }
-    // Check the next chunk of subslices. When a condtional is marked as being
-    // valid to be hoisted across, we have to recurse on a new subslice rooted
-    // at the corresopnding yield operand.
-    //
-    // Hoist across condtionals when:
-    // 1. The conditional is directly inside a loop.
-    // 2. The whole slice contains only one conditional.
-    for (auto &[v, edge, subslice, layouts] : subslices) {
-      bool oneHoist = false;
-      if (isa<LoopLikeOpInterface>(v.getDefiningOp()->getParentOp()) ||
-          (oneHoist = subslices.size() == 1 && hoistAbove.empty())) {
-        isLoneHoist |= oneHoist;
-        hoistAbove.push_back({v, edge});
-        // Recurse on the subslice.
-        slice.insert(subslice.begin(), subslice.end());
-        layout.insert(layouts.begin(), layouts.end());
-      } else {
-        terminals.push_back(v);
-      }
-    }
-    subslices.clear();
-  } while (i != slice.size());
+  }
 
   // Exit early if there is nothing to do.
   if (hoistAbove.empty())
-    return;
-  // Check if this is a lone hoist. There should be no other terminals.
-  if (isLoneHoist && !terminals.empty())
     return;
 
   // Rematerialize failed hoists right before the condtional, and hoist those
@@ -1603,8 +1587,9 @@ void hoistConvert(ModuleOp module) {
 }
 
 class TritonIntelGPURemoveLayoutConversionsPass
-    : public intel::impl::TritonIntelGPURemoveLayoutConversionsBase<
-          TritonIntelGPURemoveLayoutConversionsPass> {
+    : public triton::gpu::intel::impl::
+          TritonIntelGPURemoveLayoutConversionsBase<
+              TritonIntelGPURemoveLayoutConversionsPass> {
 public:
   // Cleanup convert ops.
   void cleanupConvertOps() {

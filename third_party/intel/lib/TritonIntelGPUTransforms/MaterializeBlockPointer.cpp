@@ -55,11 +55,14 @@ public:
              "Expected 'loadOp' to load a tensor value.");
 
       // Find the make tensor ptr operation that created the base ptr.
-      tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-      if (!makeTensorPtrOp) {
+      std::optional<tt::MakeTensorPtrOp> defOp =
+          tt::intel::findDefiningMakeTensorPtrOp(ptr);
+      if (!defOp) {
         LDBG("Could not find make tensor ptr op for: " << loadOp);
         return;
       }
+
+      tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
       LDBG("Make tensor ptr op: " << makeTensorPtrOp);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
@@ -290,9 +293,12 @@ private:
 
     // Find the make tensor ptr operation that created the base ptr for the load
     // operation.
-    tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-    assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
+    std::optional<tt::MakeTensorPtrOp> defOp =
+        tt::intel::findDefiningMakeTensorPtrOp(ptr);
+    if (!defOp)
+      return false;
 
+    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
     Operation::operand_range shape = makeTensorPtrOp.getShape();
     if (shape.size() == 1)
       return false;

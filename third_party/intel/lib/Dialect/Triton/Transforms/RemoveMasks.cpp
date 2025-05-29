@@ -444,7 +444,7 @@ public:
            "Expecting a non-empty collection of masked operations");
 
     // Collect the (loop invariant) mask conditions.
-    std::set<Operation *> maskConds;
+    SmallPtrSet<Operation *, 8> maskConds;
     for (Operation *maskedOp : collector.getMaskedOps()) {
       if (auto loadOp = dyn_cast<tt::LoadOp>(maskedOp))
         maskConds.insert(loadOp.getMask().getDefiningOp());

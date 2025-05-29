@@ -1,4 +1,4 @@
-name: Third party tests
+name: Third party SGLang tests
 
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
     name: Triton benchmarks
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'rolling' }}
     timeout-minutes: 720
     defaults:
       run:
@@ -68,37 +68,29 @@ jobs:
         run: |
           pip install wheel cmake
 
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Build Triton wheels
-        uses: ./.github/actions/setup-triton
-        with:
-          command: DEBUG=1 python setup.py bdist_wheel
-
-      - name: Install Triton
-        id: install
-        run: |
-          pip install dist/*.whl
-
       - name: Create reports dir
         run: |
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Run Liger-Kernel tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+      - name: Install SGLang
+        id: install-sglang
         run: |
-          pip install transformers pandas pytest
+          git clone https://github.com/sgl-project/sglang.git
+          cd sglang
+          git apply ../benchmarks/third_party/sglang/sglang.patch
+          pip install ./python[dev_xpu]
 
-          git clone https://github.com/linkedin/Liger-Kernel
-          pip install transformers datasets -e Liger-Kernel
+      # Install Pytorch and Triton after SGLANG to ensure that the correct versions are used
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
 
-          pytest Liger-Kernel/test/
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
 
-      - name: Upload test report
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-reports
-          path: reports
+      - name: Run SGLANG tests
+        if: ${{ steps.install.outcome == 'success' && steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+            pip install pytest pytest-xdist
+            cd sglang
+            pytest -vvv -n 4 test/srt/test_triton_attention_kernels.py
