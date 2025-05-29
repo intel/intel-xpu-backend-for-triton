@@ -120,7 +120,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if EPILOGUE_SUBTILE and not is_xpu() and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
         pytest.skip("creates convert layout too big to fit in smem")
     if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
-        pytest.skip("skip forcing tmem layout on non blackwell targets.")
+        pytest.xfail("skip forcing tmem layout on non blackwell targets.")
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"

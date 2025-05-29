@@ -6016,7 +6016,7 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 @pytest.mark.parametrize("dst_layout", filter_layouts(layouts))
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if str(src_layout) == str(dst_layout):
-        pytest.skip()
+        pytest.xfail("Do not convert same layout")
     if is_hip() or is_xpu():
         try:
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
