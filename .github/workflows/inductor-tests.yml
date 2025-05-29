@@ -36,6 +36,10 @@ on:
         description: Custom run name
         type: string
         default: "PyTorch inductor tests on Linux"
+      timeout:
+        description: Timeout
+        type: number
+        default: 960
 
 permissions: read-all
 
@@ -49,3 +53,4 @@ jobs:
       runner_label: ${{ inputs.runner_label }}
       suite: ${{ inputs.suite }}
       pytorch_ref: ${{ inputs.pytorch_ref }}
+      timeout: ${{ inputs.timeout }}

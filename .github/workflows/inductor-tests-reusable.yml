@@ -23,6 +23,10 @@ on:
         description: PyTorch repo (e.g. user/repo)
         type: string
         default: "pytorch/pytorch"
+      timeout:
+        description: Timeout
+        type: number
+        default: 960
 
 permissions: read-all
 
@@ -36,7 +40,7 @@ jobs:
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'rolling' }}
-    timeout-minutes: 1440
+    timeout-minutes: ${{ inputs.timeout }}
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
