@@ -120,8 +120,8 @@ jobs:
         run: |
           git clone https://github.com/sgl-project/sglang.git
           cd sglang
-          git apply ../benchmarks/third_party/sglang/sglang.patch
-          pip install ./python[dev_xpu]
+          git apply ../benchmarks/third_party/sglang/sglang-fix.patch
+          pip install "./python[dev_xpu]"
 
       # Reinstallation since SGLang installation will force overrides current PyTorch and Triton
       - name: Reinstall PyTorch
@@ -139,7 +139,7 @@ jobs:
           python prefill_attention_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
-          python ../../triton_kernels_benchmark/build_report.py $REPORTS/prefill-attn-performance.csv $REPORTS/attn-prefill-triton-report.csv --benchmark sglang-prefill-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-prefill-attn-performance.csv $REPORTS/sglang-prefill-attn-triton-report.csv --benchmark sglang-prefill-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D,CAUSAL" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run SGLANG attention decode stage benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
@@ -149,7 +149,7 @@ jobs:
           python decode_attention_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
-          python ../../triton_kernels_benchmark/build_report.py $REPORTS/decode-attn-performance.csv $REPORTS/attn-decode-triton-report.csv --benchmark sglang-decode-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-decode-attn-performance.csv $REPORTS/sglang-decode-attn-triton-report.csv --benchmark sglang-decode-attn --compiler triton --param_cols "B,SEQ_LENS,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run SGLANG attention append stage benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
@@ -159,10 +159,10 @@ jobs:
           python extended_attention_benchmark.py --reports $REPORTS
 
           source ../../../scripts/capture-hw-details.sh
-          python ../../triton_kernels_benchmark/build_report.py $REPORTS/extended-attn-performance.csv $REPORTS/attn-append-triton-report.csv --benchmark sglang-extended-attn --compiler triton --param_cols "B,Q_LEN,PREFIX_LEN,KV_LEN,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
+          python ../../triton_kernels_benchmark/build_report.py $REPORTS/sglang-extended-attn-performance.csv $REPORTS/sglang-append-attn-triton-report.csv --benchmark sglang-extended-attn --compiler triton --param_cols "B,Q_LEN,PREFIX_LEN,KV_LEN,H_Q,H_KV,D" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
 
       - name: Run SGLANG Block FP8 GEMM benchmark
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'block_fp8_gemm_benchmark.py') }}
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/third_party/sglang

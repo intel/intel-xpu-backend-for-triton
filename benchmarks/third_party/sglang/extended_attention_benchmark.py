@@ -5,10 +5,10 @@ import triton_kernels_benchmark as benchmark_suit
 
 
 # pylint: disable=unused-argument
-def gen_args(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, dtype, device):
+def gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, device):
 
     b_seq_len_prefix = torch.full((B, ), PREFIX_LEN, dtype=torch.int32, device=device)
-    b_seq_len_extend = torch.full((B, ), Q_LEN, dtype=torch.int32, device=device)
+    b_seq_len_extend = torch.full((B, ), EXTEND_LEN, dtype=torch.int32, device=device)
     b_seq_len = b_seq_len_prefix + b_seq_len_extend
 
     b_start_loc = torch.zeros((B, ), dtype=torch.int32, device=device)
@@ -55,18 +55,31 @@ def gen_args(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, dtype, device):
     return params
 
 
+def get_dtype(dtype_str: str):
+    if dtype_str == 'bfloat16':
+        return torch.bfloat16
+    if dtype_str == 'float16':
+        return torch.float16
+    if dtype_str == 'float32':
+        return torch.float32
+    raise ValueError(f'Unsupported dtype: {dtype_str}')
+
+
+X_VALS = [[bs, *sizes, mode, dtype]
+          for sizes in [(512, 1024 + 128, 32, 8, 128),  #
+                        (512, 1024 + 128, 32, 32, 96),  #
+                        (512, 1024 + 128, 28, 4, 128)]
+          for bs in [1, 16, 32, 64, 128]
+          for mode in ['fwd']
+          for dtype in ['bfloat16']]
+
+
 # pylint: disable=unused-argument
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['B', 'Q_LEN', 'PREFIX_LEN', 'KV_LEN', 'H_Q', 'H_KV', 'D', 'MODE'],
-        x_vals=[  #
-            [bs, 512, 1024 + 128, 512, 32, 8, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
-        ] + [  #
-            [bs, 512, 1024 + 128, 512, 32, 32, 96, 'fwd'] for bs in [1, 16, 32, 64, 128]
-        ] + [  #
-            [bs, 512, 1024 + 128, 512, 28, 4, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
-        ],
+        x_names=['B', 'EXTEND_LEN', 'PREFIX_LEN', 'H_Q', 'H_KV', 'D', 'MODE', 'DTYPE'],
+        x_vals=X_VALS,
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -80,16 +93,15 @@ def gen_args(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, dtype, device):
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='extended-attn-performance',
+        plot_name='sglang-extended-attn-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, MODE, provider):
+def benchmark(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, MODE, DTYPE, provider):
     torch.manual_seed(0)
+    dtype = get_dtype(DTYPE)
 
-    dtype = torch.bfloat16
-
-    params = gen_args(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, dtype, 'xpu')
+    params = gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, 'xpu')
     q_extend, k_extend, v_extend, o_extend = params[0]
     k_buffer, v_buffer = params[1]
     qo_indptr, kv_indptr, kv_indices, max_len_extend = params[2]
@@ -105,10 +117,12 @@ def benchmark(B, Q_LEN, PREFIX_LEN, KV_LEN, H_Q, H_KV, D, MODE, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
 
-    N_CTX_TOTAL = k_buffer.shape[0]
-    N_CTX_EXTEND = k_extend.shape[0]
-    tflops = lambda ms: (H_Q + H_KV) * (N_CTX_EXTEND + N_CTX_TOTAL) * N_CTX_TOTAL * D * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: 2 * (N_CTX_EXTEND * (H_Q + H_KV) + N_CTX_TOTAL * H_KV) * D * 2 * (1e-9) / (ms * 1e-3)
+    N_CTX_TOTAL = PREFIX_LEN + EXTEND_LEN
+    N_CTX_EXTEND = EXTEND_LEN
+
+    tflops = lambda ms: B * (N_CTX_EXTEND + N_CTX_TOTAL) * H_Q * D * H_KV * 2 * 2 * (1e-12) / (ms * 1e-3)
+    gbps = lambda ms: B * ((H_Q * N_CTX_EXTEND) + H_KV *
+                           (N_CTX_EXTEND + N_CTX_TOTAL) * 2) * D * 2 * (1e-9) / (ms * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 

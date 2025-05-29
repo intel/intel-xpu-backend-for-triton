@@ -43,18 +43,29 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
             sm_scale)
 
 
+def get_dtype(dtype_str: str):
+    if dtype_str == 'bfloat16':
+        return torch.bfloat16
+    if dtype_str == 'float16':
+        return torch.float16
+    if dtype_str == 'float32':
+        return torch.float32
+    raise ValueError(f'Unsupported dtype: {dtype_str}')
+
+
+X_VALS = [[bs, *sizes, mode, dtype]
+          for sizes in [(1024 + 64, 32, 8, 128), (1024 + 64, 32, 32, 96), (1024 + 64, 28, 4, 128)]
+          for bs in [1, 16, 32, 64, 128]
+          for mode in ['fwd']
+          for dtype in ['bfloat16']]
+
+
 # pylint: disable=unused-argument
 @benchmark_suit.perf_report(
     benchmark_suit.Benchmark(
         # argument names to use as an x-axis for the plot
-        x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE'],
-        x_vals=[  #
-            [bs, 1024 + 64, 32, 8, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
-        ] + [  #
-            [bs, 1024 + 64, 32, 32, 96, 'fwd'] for bs in [1, 16, 32, 64, 128]
-        ] + [  #
-            [bs, 1024 + 64, 28, 4, 128, 'fwd'] for bs in [1, 16, 32, 64, 128]
-        ],
+        x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE', 'DTYPE'],
+        x_vals=X_VALS,
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
@@ -68,19 +79,19 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='decode-attn-performance',
+        plot_name='sglang-decode-attn-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
-def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, provider):
+def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, DTYPE, provider):
     torch.manual_seed(0)
-    dtype = torch.bfloat16
-    quantiles = [0.5, 0.0, 1.0]
-    N_CTX = SEQ_LENS
+    dtype = get_dtype(DTYPE)
 
+    N_CTX = SEQ_LENS
     q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse, num_kv_splits, max_kv_splits, sm_scale = gen_args(
         B, N_CTX, H_Q, H_KV, D, dtype, 'xpu')
 
+    quantiles = [0.5, 0.0, 1.0]
     if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse,
                                                  num_kv_splits, max_kv_splits, sm_scale)
@@ -89,8 +100,8 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
 
-    tflops = lambda ms: 2 * B * (H_Q + H_KV) * N_CTX * D * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: 2 * B * (H_Q + H_KV * N_CTX) * D * 2 * (1e-9) / (ms * 1e-3)
+    tflops = lambda ms: B * N_CTX * H_Q * D * H_KV * 2 * 2 * (1e-12) / (ms * 1e-3)
+    gbps = lambda ms: B * (H_Q + 2 * N_CTX * H_KV) * D * 2 * (1e-9) / (ms * 1e-3)
 
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
