@@ -16,12 +16,12 @@ extern "C" {
 #endif
 
 #if !defined(PTI_VERSION)
-#define PTI_VERSION 0.10.0
+#define PTI_VERSION 0.12.0
 #endif
 
-#define PTI_VERSION_STRING "0.10.0"
+#define PTI_VERSION_STRING "0.12.0"
 #define PTI_VERSION_MAJOR 0
-#define PTI_VERSION_MINOR 10
+#define PTI_VERSION_MINOR 12
 #define PTI_VERSION_PATCH 0
 
 typedef struct pti_version {
@@ -31,16 +31,16 @@ typedef struct pti_version {
 } pti_version;
 
 /**
- * @brief Returns the compiled version of PTI
+ * @brief Returns the compiled version of Intel(R) PTI
  *
- * @return c-string with compiled version of PTI
+ * @return c-string with compiled version of Intel(R) PTI
  */
 PTI_EXPORT const char* ptiVersionString();
 
 /**
- * @brief Returns the compiled version of PTI
+ * @brief Returns the compiled version of Intel(R) PTI
  *
- * @return pti_version struct with compiled version of PTI
+ * @return pti_version struct with compiled version of Intel(R) PTI
  */
 pti_version PTI_EXPORT ptiVersion();
 
