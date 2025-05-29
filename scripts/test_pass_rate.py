@@ -53,7 +53,6 @@ JUNIT_XML_REPORT2 = """\
 """
 
 
-
 def test_get_warnings_empty_file(tmp_path):
     warnings_path = tmp_path / 'suite-warnings.json'
     warnings_path.write_text('[]')
