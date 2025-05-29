@@ -44,6 +44,7 @@ on:
         type: boolean
         default: false
 
+  # This workflow is also called from workflows triton-benchmarks-*.yml.
   workflow_call:
     inputs:
       runner_label:
