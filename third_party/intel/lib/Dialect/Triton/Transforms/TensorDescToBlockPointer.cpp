@@ -61,6 +61,21 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([](Operation *op) {
+      if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op)) {
+        op->emitRemark(
+            "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (res.wasInterrupted()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "TritonIntelTensorDescToBlockPointer: Skipping module - "
+                    "contains unsupported operations\n");
+      return;
+    }
+
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       return TypeSwitch<Operation *, WalkResult>(op)
           .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
