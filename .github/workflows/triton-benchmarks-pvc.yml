@@ -1,0 +1,15 @@
+name: Triton benchmarks, PVC
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/triton-benchmarks*.yml
+      - benchmarks/**
+
+jobs:
+  benchmarks:
+    uses: ./.github/workflows/triton-benchmarks.yml
+    with:
+      runner_label: max1550
