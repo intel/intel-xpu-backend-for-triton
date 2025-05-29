@@ -44,12 +44,12 @@ on:
         type: boolean
         default: false
 
-  pull_request:
-    branches:
-      - main
-    paths:
-      - .github/workflows/triton-benchmarks.yml
-      - benchmarks/**
+  # This workflow is also called from workflows triton-benchmarks-*.yml.
+  workflow_call:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
