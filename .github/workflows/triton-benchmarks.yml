@@ -50,6 +50,10 @@ on:
       runner_label:
         description: Runner label
         type: string
+      skip_benchmarks:
+        description: JSON list of benchmarks to skip
+        type: string
+        default: "[]"
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
