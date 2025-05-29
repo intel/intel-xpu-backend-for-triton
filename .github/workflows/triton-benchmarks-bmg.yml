@@ -13,3 +13,4 @@ jobs:
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: b580
+      skip_benchmarks: "['flash_attention_bwd_benchmark.py','flex_attention_benchmark_custom_masks.py']"

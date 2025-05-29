@@ -13,3 +13,4 @@ jobs:
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: max1550
+      skip_benchmarks: "[]"
