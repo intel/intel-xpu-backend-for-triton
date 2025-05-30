@@ -9,10 +9,10 @@ from pathlib import Path
 from functools import cached_property
 
 from triton import knobs
-from triton.runtime.build import _build
+from triton.runtime.build import _build, platform_key
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase, platform_key
+from triton.backends.driver import DriverBase
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared

@@ -84,11 +84,19 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
-    testsuite_fixme_tests = set()
+    all_tests = set()
+    fixme_tests = set()
 
     for testsuite in root:
         for testcase in testsuite.iter('testcase'):
+            name = f'{testcase.get("classname")}::{testcase.get("name")}'
+
+            # ignore multiple elements for the same test
+            if name in all_tests:
+                continue
             stats.total += 1
+            all_tests.add(name)
+
             if testcase.find('failure') is not None or testcase.find('error') is not None:
                 stats.failed += 1
                 continue
@@ -102,8 +110,8 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
 
     for warning in get_warnings(report_path.parent, report_path.stem):
         if 'FIXME' in warning.message:
-            testsuite_fixme_tests.add(warning.location)
-    stats.fixme += len(testsuite_fixme_tests)
+            fixme_tests.add(warning.location)
+    stats.fixme += len(fixme_tests)
 
     stats.passed = stats.total - stats.failed - stats.skipped - stats.xfailed
     return stats

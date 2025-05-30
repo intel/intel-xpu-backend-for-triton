@@ -2,8 +2,8 @@ import os
 import sys
 import pathlib
 import pytest
-import tempfile
 from typing import Optional, Set
+import contextlib
 
 
 def pytest_configure(config):
@@ -69,11 +69,23 @@ def device(request):
 
 @pytest.fixture
 def fresh_triton_cache():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        from triton import knobs
-        with knobs.cache.scope():
-            knobs.cache.dir = tmpdir
-            yield tmpdir
+    from triton import knobs
+    with knobs.compilation.scope():
+        knobs.compilation.always_compile = True
+        yield
+
+
+@pytest.fixture
+def fresh_triton_cache_scope():
+    from triton import knobs
+
+    @contextlib.contextmanager
+    def fresh_cache():
+        with knobs.compilation.scope():
+            knobs.compilation.always_compile = True
+            yield
+
+    yield fresh_cache
 
 
 def _fresh_knobs_impl(monkeypatch, skipped_attr: Optional[Set[str]] = None):
