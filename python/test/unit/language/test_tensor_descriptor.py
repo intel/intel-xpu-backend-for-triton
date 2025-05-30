@@ -1509,13 +1509,9 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Broken on rocm")
         if is_xpu():
             if descriptor == "host":
-                pytest.skip("FIXME: host descriptor not supported")
-            if ((kind, dtype_str) in [("min", "int32"), ("min", "uint32"), ("max", "int32"), ("max", "uint32"),
-                                      ("and", "int32"), ("and", "uint32"), ("or", "int32"), ("or", "uint32"),
-                                      ("xor", "int32"), ("xor", "uint32")]):
-                pytest.skip("FIXME: issue #4281")
-            if (kind == "add" and dtype_str in ["bfloat16", "float16", "float32", "int32", "uint32"]):
-                pytest.skip("FIXME: issue #4281")
+                pytest.skip("FIXME: descriptor host API not supported")
+            if (kind, dtype_str) in [("add", "bfloat16")]:
+                pytest.skip("FIXME: issue #4375")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):
