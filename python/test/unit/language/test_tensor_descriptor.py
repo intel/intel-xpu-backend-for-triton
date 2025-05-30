@@ -1508,7 +1508,7 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
         if is_hip_cdna3() and (kind, dtype_str, M_BLOCK, N_BLOCK) in REDUCE_SKIP_HIP_CDNA3:
             pytest.skip("Broken on rocm")
         if is_xpu():
-            if (descriptor in "host"):
+            if descriptor == "host":
                 pytest.skip("FIXME: host descriptor not supported")
             if ((kind, dtype_str) in [("min", "int32"), ("min", "uint32"), ("max", "int32"), ("max", "uint32"),
                                       ("and", "int32"), ("and", "uint32"), ("or", "int32"), ("or", "uint32"),
