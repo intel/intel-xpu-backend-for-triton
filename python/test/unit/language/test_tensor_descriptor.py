@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_xpu
@@ -260,7 +260,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.xfail("CTAs is unsupported for these cards")
-    if is_xpu() and ndim not in [1] or dtype_str not in ["uint16", "uint32"]:
+    if is_xpu() and dtype_str not in uint_dtypes and ndim == 2 and not INNER_BLOCK == 16:
         pytest.skip("FIXME: issue #4139")
 
     @triton.jit
