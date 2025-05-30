@@ -759,8 +759,6 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 
 @pytest.mark.interpreter
 def test_tensor_descriptor_batched_gemm_2d_tma(device):
-    if is_xpu():
-        pytest.skip("FIXME: issue #4132")
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
 
     if is_hip():
