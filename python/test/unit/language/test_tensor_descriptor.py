@@ -1507,9 +1507,11 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.xfail("Multi-CTA not supported")
         if is_hip_cdna3() and (kind, dtype_str, M_BLOCK, N_BLOCK) in REDUCE_SKIP_HIP_CDNA3:
             pytest.skip("Broken on rocm")
-
-    if is_xpu():
-        pytest.skip("FIXME: issue #4281")
+        if is_xpu():
+            if descriptor == "host":
+                pytest.skip("FIXME: issue #4289")
+            if (kind, dtype_str) in [("add", "bfloat16")]:
+                pytest.skip("FIXME: issue #4375")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):
