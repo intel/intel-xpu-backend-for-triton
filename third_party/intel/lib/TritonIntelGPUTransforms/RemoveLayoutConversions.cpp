@@ -17,7 +17,6 @@
 
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
@@ -307,19 +306,18 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       continue;
     }
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
-      bool isMMAorMMADerived = std::all_of(
-          info.encodings.begin(), info.encodings.end(), [](Attribute encoding) {
-            bool MMAorMMADerived = isa<MmaEncodingTrait>(encoding);
-            if (isa<SliceEncodingAttr>(encoding)) {
-              MMAorMMADerived |= isa<MmaEncodingTrait>(
-                  cast<SliceEncodingAttr>(encoding).getParent());
-            } else if (isa<DotOperandEncodingAttr>(encoding)) {
-              MMAorMMADerived |= isa<MmaEncodingTrait>(
-                  cast<DotOperandEncodingAttr>(encoding).getParent());
-            }
-            return MMAorMMADerived;
-          });
-      if (isMMAorMMADerived) {
+      auto checkMMAorMMADerived = [](Attribute encoding) {
+        bool isMMAorMMADerived = isa<MmaEncodingTrait>(encoding);
+        if (isa<SliceEncodingAttr>(encoding)) {
+          isMMAorMMADerived |= isa<MmaEncodingTrait>(
+              cast<SliceEncodingAttr>(encoding).getParent());
+        } else if (isa<DotOperandEncodingAttr>(encoding)) {
+          isMMAorMMADerived |= isa<MmaEncodingTrait>(
+              cast<DotOperandEncodingAttr>(encoding).getParent());
+        }
+        return isMMAorMMADerived;
+      };
+      if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
         setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
                     info, changed, user);
       }
@@ -443,9 +441,10 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           if (rewriteStoreOp(storeOp))
             continue;
 
-          auto ops = op.getOpOperands();
+          llvm::MutableArrayRef<OpOperand> operands = op.getOpOperands();
+          // Check if all store op operands should use new encoding.
           bool usesNewEncoding =
-              std::all_of(ops.begin(), ops.end(), [&](OpOperand &operand) {
+              llvm::all_of(operands, [&](OpOperand &operand) {
                 auto it = layouts.find(operand.get());
                 if (it == layouts.end())
                   return false;
@@ -454,15 +453,11 @@ void LayoutPropagation::rewriteRegion(Region &region) {
                        "we should have resolved to a single encoding");
                 auto encoding = cast<RankedTensorType>(operand.get().getType())
                                     .getEncoding();
-                if (encoding == *info.encodings.begin())
-                  return false;
-                return true;
+                return encoding != *info.encodings.begin();
               });
           if (usesNewEncoding) {
             for (OpOperand &operand : op.getOpOperands()) {
               auto it = layouts.find(operand.get());
-              if (it == layouts.end())
-                continue;
               Attribute encoding =
                   cast<RankedTensorType>(operand.get().getType()).getEncoding();
               LayoutInfo &info = it->second;
