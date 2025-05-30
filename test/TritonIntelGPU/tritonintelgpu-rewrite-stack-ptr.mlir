@@ -2,14 +2,14 @@
 
 module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL:   llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
-  // CHECK-LABEL:   llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>)
+  // CHECK-LABEL:   llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
   tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
     // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
     // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
     // CHECK: [[POISON:%.*]] = llvm.mlir.poison : !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[POISON]], %arg2)
+    // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[POISON]], %arg3)
     tt.call @noinline_simple_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
@@ -29,13 +29,13 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 #smem = #ttg.shared_memory
 module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
-  // CHECK-LABEL:   llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<3>)
+  // CHECK-LABEL:   llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<3>)
   tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
     // CHECK: [[LOAD0:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
     // CHECK: [[LOAD1:%.*]] = llvm.extractelement {{.*}}[{{.*}}]
-    // CHECK: llvm.call spir_funccc @noinline_shared_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, %arg3, %arg2)
+    // CHECK: llvm.call spir_funccc @noinline_shared_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, %arg4, %arg3)
     tt.call @noinline_shared_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
