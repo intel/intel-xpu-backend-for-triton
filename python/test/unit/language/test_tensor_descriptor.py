@@ -1509,7 +1509,7 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.skip("Broken on rocm")
         if is_xpu():
             if descriptor == "host":
-                pytest.skip("FIXME: descriptor host API not supported")
+                pytest.skip("FIXME: issue #4289")
             if (kind, dtype_str) in [("add", "bfloat16")]:
                 pytest.skip("FIXME: issue #4375")
 
