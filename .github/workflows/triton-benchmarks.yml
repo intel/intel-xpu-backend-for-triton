@@ -316,7 +316,10 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-triton-report.csv --benchmark flex-attn-masks --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG --mask
-          python build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-onednn-report.csv --benchmark flex-attn-masks --compiler onednn --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG --mask
+          if [[ "${{ inputs.runner_label || 'max1550' }}" = "max1550" ]]; then
+            # FIXME: XPU out of memory
+            python build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-onednn-report.csv --benchmark flex-attn-masks --compiler onednn --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG --mask
+          fi
 
       - name: Run Prefix Sums kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'prefix_sums.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix_sums.py') }}
