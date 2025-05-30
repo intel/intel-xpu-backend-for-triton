@@ -74,8 +74,8 @@ def alibi_functional(score, _, h, q_idx, kv_idx):
            for mask in ['NATTEN', 'Alibi']
            for mode in [os.getenv('FA_KERNEL_MODE', 'fwd')]],
         line_arg='provider',
-        line_vals=['triton', 'onednn'],
-        line_names=['Triton', 'OneDNN'],
+        line_vals=['triton'] + ['onednn'] if '580' not in torch.xpu.get_device_name() else [],
+        line_names=['Triton'] + ['OneDNN'] if '580' not in torch.xpu.get_device_name() else [],
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnMasks-performance',
