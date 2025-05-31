@@ -245,6 +245,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
@@ -327,6 +328,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
                                            options.enable_tile_load_linear_layout)
+        intel.passes.ttgpuir.add_gen_to_llvm(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -377,6 +379,9 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
         else:
             metadata["build_flags"] = ""
+
+        if knobs.intel.disable_igc_opt:
+            metadata["build_flags"] += " -cl-opt-disable"
 
         metadata["generate_native_code"] = options.generate_native_code
 

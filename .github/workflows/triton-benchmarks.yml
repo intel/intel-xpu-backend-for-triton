@@ -44,12 +44,16 @@ on:
         type: boolean
         default: false
 
-  pull_request:
-    branches:
-      - main
-    paths:
-      - .github/workflows/triton-benchmarks.yml
-      - benchmarks/**
+  # This workflow is also called from workflows triton-benchmarks-*.yml.
+  workflow_call:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
+      skip_benchmarks:
+        description: JSON list of benchmarks to skip
+        type: string
+        default: "[]"
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
@@ -124,9 +128,9 @@ jobs:
         run: |
           cd benchmarks
           pip install .
-          pip install intel-pti==0.12.2
+          pip install intel-pti==0.12.3
           PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
-          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.2` and `libpti_view.so.0.12.2`
+          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.3` and `libpti_view.so.0.12.3`
           ls $PTI_LIBS_DIR
           echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
 
@@ -312,7 +316,10 @@ jobs:
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-triton-report.csv --benchmark flex-attn-masks --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG --mask
-          python build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-onednn-report.csv --benchmark flex-attn-masks --compiler onednn --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG --mask
+          if [[ "${{ inputs.runner_label || 'max1550' }}" = "max1550" ]]; then
+            # FIXME: XPU out of memory
+            python build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-onednn-report.csv --benchmark flex-attn-masks --compiler onednn --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col OneDNN-TFlops --hbm_col "OneDNN-GB/s" --tag $TAG --mask
+          fi
 
       - name: Run Prefix Sums kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'prefix_sums.py')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'prefix_sums.py') }}

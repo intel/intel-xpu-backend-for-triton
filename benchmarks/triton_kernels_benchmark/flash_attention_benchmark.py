@@ -423,7 +423,7 @@ class _attention(torch.autograd.Function):
     attn_fwd: Callable = None
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale):
+    def forward(ctx, q, k, v, causal, sm_scale, dq, dk, dv, delta):
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
@@ -473,7 +473,7 @@ class _attention(torch.autograd.Function):
                 advanced_path=True,  #
             )
 
-        ctx.save_for_backward(q, k, v, o, M)
+        ctx.save_for_backward(q, k, v, o, M, dq, dk, dv, delta)
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = Lk
@@ -488,12 +488,9 @@ class _attention(torch.autograd.Function):
         with record_function(
                 '__profile_kernel_of_func_bwd_fa'
         ) if benchmark_suite.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
-            q, k, v, o, M = ctx.saved_tensors
+            q, k, v, o, M, dq, dk, dv, delta = ctx.saved_tensors
             assert do.is_contiguous()
             assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
-            dq = torch.empty_like(q)
-            dk = torch.empty_like(k)
-            dv = torch.empty_like(v)
             BATCH, N_HEAD, N_CTX = q.shape[:3]
             PRE_BLOCK = 128
             NUM_WARPS, NUM_STAGES = 4, 5
@@ -505,7 +502,6 @@ class _attention(torch.autograd.Function):
             PRE_BLOCK = 128
             assert N_CTX % PRE_BLOCK == 0
             pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-            delta = torch.empty_like(M)
             _attn_bwd_preprocess[pre_grid](
                 o, do,  #
                 delta,  #
@@ -526,7 +522,7 @@ class _attention(torch.autograd.Function):
                 num_stages=NUM_STAGES  #
             )
 
-        return dq, dk, dv, None, None
+        return dq, dk, dv, None, None, None, None, None, None
 
 
 attention = _attention.apply
@@ -600,8 +596,13 @@ def get_benchmark(
         k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         sm_scale = 0.125
+        dq, dk, dv, delta = None, None, None, None
         if MODE == 'bwd':
             sm_scale = 1.3
+            dq = torch.empty_like(q)
+            dk = torch.empty_like(k)
+            dv = torch.empty_like(v)
+            delta = torch.empty_like(q)
         quantiles = [0.5, 0.0, 1.0]
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
@@ -621,7 +622,7 @@ def get_benchmark(
             )
 
         elif provider == 'triton':
-            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
+            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale, dq, dk, dv, delta)
             if MODE == 'bwd':
                 triton_o = triton_fn()
                 triton_do = torch.randn_like(triton_o)

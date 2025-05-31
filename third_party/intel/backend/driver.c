@@ -227,6 +227,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
 
+    const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
+
     if (is_spv) {
       constexpr int32_t max_reg_spill = 1000;
       const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
@@ -234,8 +236,6 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       // If the register mode isn't set, and the number of spills is greater
       // than the threshold, recompile the kernel using large GRF mode.
       if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-        const std::optional<bool> debugEnabled =
-            isEnvValueBool(getStrEnv("TRITON_DEBUG"));
         if (debugEnabled)
           std::cout << "(I): Detected " << n_spills
                     << " spills, recompiling the kernel using large GRF mode"
@@ -244,13 +244,32 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
         build_flags.addLargeGRFSizeFlag();
 
         try {
-          auto [l0_module, l0_kernel, n_spills] = compileLevelZeroObjects(
-              binary_ptr, binary_size, kernel_name, l0_device, l0_context,
-              build_flags(), is_spv);
+          auto [l0_module_dgrf, l0_kernel_dgrf, n_spills_dgrf] =
+              compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
+                                      l0_device, l0_context, build_flags(),
+                                      is_spv);
 
           if (debugEnabled)
-            std::cout << "(I): Kernel has now " << n_spills << " spills"
+            std::cout << "(I): Kernel has now " << n_spills_dgrf << " spills"
                       << std::endl;
+
+          std::swap(l0_module, l0_module_dgrf);
+          std::swap(l0_kernel, l0_kernel_dgrf);
+          std::swap(n_spills, n_spills_dgrf);
+
+          // clean up the unused module and kernel.
+          auto error_no = zeKernelDestroy(l0_kernel_dgrf);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            std::cerr
+                << "[Ignoring] Intel - Error during destroy unused L0 kernel"
+                << std::endl;
+          }
+          error_no = zeModuleDestroy(l0_module_dgrf);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            std::cerr
+                << "[Ignoring] Intel - Error during destroy unused L0 module"
+                << std::endl;
+          }
         } catch (const std::exception &e) {
           std::cerr << "[Ignoring] Error during Intel loadBinary with large "
                        "registers: "
@@ -259,6 +278,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
           build_flags = BuildFlags(build_flags_ptr);
         }
       }
+    }
+
+    if (debugEnabled && n_spills) {
+      std::cout << "(I): Detected " << n_spills << " spills for  \""
+                << kernel_name << "\"" << std::endl;
     }
 
     auto n_regs = build_flags.n_regs();
