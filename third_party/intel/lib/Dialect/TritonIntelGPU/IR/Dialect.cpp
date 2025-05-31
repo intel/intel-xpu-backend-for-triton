@@ -1264,7 +1264,67 @@ struct TritonIntelGPUVerifyTensorLayoutInterface
       }
     }
 
-    return success();
+    // re-dispatch the verify to triton gpu dialect
+    MLIRContext *ctx = op->getContext();
+    auto *dialect = ctx->getLoadedDialect("ttg");
+    assert(dialect && "Not found triton gpu dialect");
+    auto verifyLayoutInterface =
+        dyn_cast<mlir::triton::DialectVerifyTensorLayoutInterface>(dialect);
+    assert(verifyLayoutInterface &&
+           "Not found verify layout interface of triton gpu dialect");
+    return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, op,
+                                                     makeErr);
+  }
+
+  LogicalResult verifyDotOpLayout(
+      Attribute parent, unsigned opIdx, unsigned kWidth,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+
+    if (auto parentAttr = mlir::dyn_cast<DpasEncodingAttr>(parent)) {
+      int opsPerChannel = parentAttr.getOpsPerChannel();
+      if (opIdx == 0) {
+        // operand A
+        if (opsPerChannel == 1) {
+          if (kWidth != opsPerChannel)
+            return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                  "parent's opsPerChannel";
+        } else {
+          if (kWidth != opsPerChannel / 2)
+            return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                  "parent's opsPerChannel";
+        }
+
+        unsigned repeatCount = parentAttr.getRepeatCount();
+        unsigned systolicDepth = parentAttr.getSystolicDepth();
+        unsigned threadsPerWarp = parentAttr.getThreadsPerWarp();
+        // OpsPerChannel: 4 is for i8 type. 2 is for f16/bf16 type. 1 is for
+        // float32 type. 2 i8 elements are packed into i16. The number of packed
+        // elements per row for A operand is: 8, 16, 16.
+        unsigned numPackedElemPerRowForA =
+            opsPerChannel == 1 ? systolicDepth : systolicDepth * 2;
+        if (repeatCount * numPackedElemPerRowForA < threadsPerWarp)
+          return emitError()
+                 << "The DPAS encoding implies an invalid layout for A "
+                    "operand. The non-uniform matrix A could not be "
+                    "referred in kernel with threadsPerWarp: "
+                 << threadsPerWarp
+                 << ". numPackedElemPerRowForA:" << numPackedElemPerRowForA
+                 << ". RC:" << repeatCount
+                 << ", systolicDepth:" << systolicDepth
+                 << ", opsPerChan:" << opsPerChannel;
+      } else {
+        // operand B
+        if (kWidth != parentAttr.getOpsPerChannel())
+          return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                "parent's opsPerChannel";
+      }
+
+      return success();
+    }
+
+    return emitError()
+           << "ttg.dot_op unknown parent layout of TritonIntelGPU dialect: "
+           << parent;
   }
 };
 
