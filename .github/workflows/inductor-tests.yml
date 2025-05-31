@@ -20,6 +20,10 @@ on:
           inductor/test_triton_kernels.py
           inductor/test_gpu_cpp_wrapper.py
           inductor/test_aot_inductor.py
+          inductor/test_select_algorithm.py
+          # FIXME: enable them later
+          # inductor/test_max_autotune.py
+          # inductor/test_compile_subprocess.py
       runner_label:
         description: Runner label, keep empty for default
         type: string
