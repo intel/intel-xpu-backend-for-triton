@@ -105,6 +105,10 @@ public:
   virtual LogicalResult
   verifyMemDescLayout(Attribute layout, Type type, Operation *op,
                       function_ref<InFlightDiagnostic()> emitError) const = 0;
+
+  virtual LogicalResult
+  verifyDotOpLayout(Attribute parent, unsigned opIdx, unsigned kWidth,
+                    function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
 
 // Descriptor gather and scatter have restrictions on the tile sizes.
