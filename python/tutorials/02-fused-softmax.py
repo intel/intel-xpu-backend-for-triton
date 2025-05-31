@@ -129,7 +129,7 @@ kernels = {}
 tg_slm_sizes = [2**i for i in [0, 1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128]]  # TODO: Get from properties
 
 
-def softmax(x, y):
+def softmax(x):
 
     def occupancy(num_warps, size_smem):
 
@@ -154,6 +154,9 @@ def softmax(x, y):
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
     num_warps = min(max_num_warps, max(1, BLOCK_SIZE // (WARP_SIZE * 4)))
+
+    # Allocate output
+    y = torch.empty_like(x)
 
     # pre-compile kernel to get register usage and compute thread occupancy.
     kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, num_warps=num_warps,
@@ -186,8 +189,7 @@ def softmax(x, y):
 
 torch.manual_seed(0)
 x = torch.randn(1823, 781, device=DEVICE)
-y = torch.empty_like(x)
-y_triton = softmax(x, y)
+y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
 assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
 
@@ -224,7 +226,7 @@ def benchmark(M, N, provider):
     if provider == 'torch':
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
-        ms = triton.testing.do_bench(lambda: softmax(x, y))
+        ms = triton.testing.do_bench(lambda: softmax(x))
     gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
     torch.xpu.empty_cache()
     return gbps(ms)
