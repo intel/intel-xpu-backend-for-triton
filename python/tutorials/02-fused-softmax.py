@@ -226,6 +226,7 @@ def benchmark(M, N, provider):
     if provider == 'triton':
         ms = triton.testing.do_bench(lambda: softmax(x, y))
     gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
+    torch.xpu.empty_cache()
     return gbps(ms)
 
 
