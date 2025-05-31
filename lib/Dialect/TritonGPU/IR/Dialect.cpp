@@ -683,57 +683,17 @@ LogicalResult DotOperandEncodingAttr::verify(
   if (!parent) {
     return emitError() << "ttg.dot_op parent parameter cannot be null";
   }
-  if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-    if (kWidth != 0 && !(parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError() << "ttg.dot_op kWidth parameter can only be "
-                            "non-zero for Ampere or Hopper MMA parent";
-    if (kWidth == 0 && (parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
-                            "Ampere or Hopper MMA parent";
-    if (opIdx != 0 && parentAttr.isHopper())
-      return emitError()
-             << "ttg.dot_op opIdx parameter must be 0 for "
-                "Hopper MMA parent, since Hopper WGMMA only allows first "
-                "operand to be in registers";
-    return success();
-  }
 
-  if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    if (kWidth != 16 && parentAttr.getVersion() == 1 ||
-        kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 2)
-      return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
-                            "gfx11 and 8/16 for gfx12";
-    return success();
-  }
-
-  if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    if (kWidth == 0)
-      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
-                            "MFMA parent";
-    return success();
-  }
-
-  if (auto parentAttr = mlir::dyn_cast<intel::DpasEncodingAttr>(parent)) {
-    int opsPerChannel = parentAttr.getOpsPerChannel();
-    if (opIdx == 0) {
-      // operand A
-      if (opsPerChannel == 1) {
-        if (kWidth != opsPerChannel)
-          return emitError() << "ttg.dot_op kWidth parameter must match the "
-                                "parent's opsPerChannel";
-      } else {
-        if (kWidth != opsPerChannel / 2)
-          return emitError() << "ttg.dot_op kWidth parameter must match the "
-                                "parent's opsPerChannel";
-      }
-    } else {
-      // operand B
-      if (kWidth != parentAttr.getOpsPerChannel())
-        return emitError() << "ttg.dot_op kWidth parameter must match the "
-                              "parent's opsPerChannel";
+  if (isa<MmaEncodingTrait>(parent)) {
+    // The MMA layout can be defined in third party dialect.
+    // Dispatch to the verifier of dialect interface.
+    Dialect &dialect = parent.getDialect();
+    auto verifyLayoutInterface =
+        dyn_cast<mlir::triton::DialectVerifyTensorLayoutInterface>(&dialect);
+    if (verifyLayoutInterface) {
+      return verifyLayoutInterface->verifyDotOpLayout(parent, opIdx, kWidth,
+                                                      emitError);
     }
-
-    return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<intel::WarpEncodingAttr>(parent)) {
@@ -2762,6 +2722,45 @@ struct TritonGPUVerifyTensorLayoutInterface
     }
 
     return success();
+  }
+
+  LogicalResult verifyDotOpLayout(
+      Attribute parent, unsigned opIdx, unsigned kWidth,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+
+    if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
+      if (kWidth != 0 && !(parentAttr.isAmpere() || parentAttr.isHopper()))
+        return emitError() << "ttg.dot_op kWidth parameter can only be "
+                              "non-zero for Ampere or Hopper MMA parent";
+      if (kWidth == 0 && (parentAttr.isAmpere() || parentAttr.isHopper()))
+        return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                              "Ampere or Hopper MMA parent";
+      if (opIdx != 0 && parentAttr.isHopper())
+        return emitError()
+               << "ttg.dot_op opIdx parameter must be 0 for "
+                  "Hopper MMA parent, since Hopper WGMMA only allows first "
+                  "operand to be in registers";
+      return success();
+    }
+
+    if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
+      if (kWidth != 16 && parentAttr.getVersion() == 1 ||
+          kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 2)
+        return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
+                              "gfx11 and 8/16 for gfx12";
+      return success();
+    }
+
+    if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
+      if (kWidth == 0)
+        return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                              "MFMA parent";
+      return success();
+    }
+
+    return emitError()
+           << "ttg.dot_op unknown parent layout of TritonGPU dialect: "
+           << parent;
   }
 };
 
