@@ -1117,6 +1117,59 @@ struct TritonIntelGPUInferLayoutInterface
   }
 };
 
+struct TritonIntelGPUVerifyTensorLayoutInterface
+    : public triton::DialectVerifyTensorLayoutInterface {
+  using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
+
+  LogicalResult verifyTensorLayout(
+      Attribute layout, RankedTensorType rankedTy, Operation *op,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+
+    MLIRContext *ctx = op->getContext();
+    auto *dialect = ctx->getLoadedDialect("ttg");
+    assert(dialect && "Not found triton gpu dialect");
+    auto verifyLayoutInterface =
+        dyn_cast<mlir::triton::DialectVerifyTensorLayoutInterface>(dialect);
+    assert(verifyLayoutInterface &&
+           "Not found verify layout interface of triton gpu dialect");
+    // re-dispatch the verify to triton gpu dialect
+    return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, op,
+                                                     makeErr);
+  }
+
+  LogicalResult verifyDotOpLayout(
+      Attribute parent, unsigned opIdx, unsigned kWidth,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+
+    if (auto parentAttr = mlir::dyn_cast<DpasEncodingAttr>(parent)) {
+      int opsPerChannel = parentAttr.getOpsPerChannel();
+      if (opIdx == 0) {
+        // operand A
+        if (opsPerChannel == 1) {
+          if (kWidth != opsPerChannel)
+            return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                  "parent's opsPerChannel";
+        } else {
+          if (kWidth != opsPerChannel / 2)
+            return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                  "parent's opsPerChannel";
+        }
+      } else {
+        // operand B
+        if (kWidth != parentAttr.getOpsPerChannel())
+          return emitError() << "ttg.dot_op kWidth parameter must match the "
+                                "parent's opsPerChannel";
+      }
+
+      return success();
+    }
+
+    return emitError()
+           << "ttg.dot_op un-known parent layout of TritonIntelGPU dialect: "
+           << parent;
+  }
+};
+
 //===----------------------------------------------------------------------===//
 
 void TritonIntelGPUDialect::initialize() {
@@ -1126,6 +1179,9 @@ void TritonIntelGPUDialect::initialize() {
       >();
 
   addInterfaces<TritonIntelGPUInferLayoutInterface>();
+  // addInterfaces<TritonGPUOpAsmInterface>();
+  // addInterfaces<TritonGPUInferLayoutInterface>();
+  addInterfaces<TritonIntelGPUVerifyTensorLayoutInterface>();
 
   addOperations<
 #define GET_OP_LIST
