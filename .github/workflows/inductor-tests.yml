@@ -1,5 +1,5 @@
 name: PyTorch inductor tests on Linux
-run-name: ${{ inputs.run_name || 'PyTorch inductor tests on Linux' }}
+run-name: ${{ inputs.run_name }}
 
 on:
   workflow_dispatch:
