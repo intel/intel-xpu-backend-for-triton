@@ -300,7 +300,7 @@ run_minicore_tests() {
     run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=intel \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/ --ignore=intel/test_mxfp_matmul.py
 
   cd $TRITON_PROJ/third_party/intel/python/test
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=third_party \
@@ -316,8 +316,7 @@ run_mxfp_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=mxfp \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
-    -k "test_mxfp"
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu intel/test_mxfp_matmul.py
 }
 
 run_scaled_dot_tests() {
@@ -366,7 +365,7 @@ run_tutorial_tests() {
   run_tutorial_test "06-fused-attention"
   run_tutorial_test "07-extern-functions"
   run_tutorial_test "08-grouped-gemm"
-  TRITON_TEST_REPORTS=false run_tutorial_test "09-persistent-matmul"
+  run_tutorial_test "09-persistent-matmul"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
 
@@ -374,8 +373,7 @@ run_tutorial_tests() {
   echo "Running with TRITON_INTEL_RAISE_BLOCK_POINTER      "
   echo "***************************************************"
 
-  TRITON_TEST_REPORTS=false TRITON_INTEL_RAISE_BLOCK_POINTER=1 \
-    run_tutorial_test "03-matrix-multiplication"
+  run_tutorial_test "03i-matrix-multiplication"
 }
 
 run_microbench_tests() {
@@ -439,7 +437,7 @@ run_benchmarks() {
   pip install .
   for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
     benchmark=$(basename -- "$file" .py)
-    if [[ $benchmark = @("__init__"|"benchmark_driver"|"benchmark_testing") ]]; then
+    if [[ $benchmark = @("__init__"|"benchmark_shapes_parser"|"benchmark_testing"|"benchmark_utils"|"build_report") ]]; then
       continue
     fi
     echo

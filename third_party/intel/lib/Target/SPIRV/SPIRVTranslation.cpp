@@ -105,10 +105,11 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
-static SPIRV::TranslatorOpts getSPIRVOopts() {
-  SPIRV::TranslatorOpts SPIRVOpts;
-  static constexpr std::array<SPIRV::ExtensionID, 16> AllowedExtensions{
+static SPIRV::TranslatorOpts getSPIRVOpts() {
+  SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
+  static constexpr std::array<SPIRV::ExtensionID, 18> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
+      SPIRV::ExtensionID::SPV_INTEL_2d_block_io,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
       SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
       SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
@@ -118,6 +119,7 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
       SPIRV::ExtensionID::SPV_INTEL_split_barrier,
+      SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
       SPIRV::ExtensionID::SPV_INTEL_tensor_float32_conversion,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
@@ -129,7 +131,6 @@ static SPIRV::TranslatorOpts getSPIRVOopts() {
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
   SPIRVOpts.setPreserveAuxData(false);
   SPIRVOpts.setSPIRVAllowUnknownIntrinsics({"llvm.genx.GenISA."});
-  SPIRV::TranslatorOpts TransOpt{SPIRV::VersionNumber::SPIRV_1_4};
 
   for (auto &Ext : AllowedExtensions)
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
@@ -156,7 +157,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOopts();
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts();
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;

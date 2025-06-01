@@ -306,8 +306,8 @@ class CompileTimes:
 
 class CompilationListener(Protocol):
 
-    def __call__(self, *, src: Union[ASTSource, IRSource], metadata: dict[str, Any], times: CompileTimes,
-                 cache_hit: bool) -> None:
+    def __call__(self, *, src: Union[ASTSource, IRSource], metadata: dict[str, Any], metadata_group: dict[str, str],
+                 times: CompileTimes, cache_hit: bool) -> None:
         ...
 
 
@@ -489,13 +489,14 @@ class nvidia_knobs(base_knobs):
 class intel_knobs(base_knobs):
     spirv_dis: env_intel_tool = env_intel_tool("spirv-dis")
 
-    gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", None)
+    gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
     advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     reduce_transpose: env_bool = env_bool("TRITON_INTEL_REDUCE_TRANSPOSE", False)
+    disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
-    raise_block_pointer: env_bool = env_str("TRITON_INTEL_RAISE_BLOCK_POINTER", "0")
+    raise_block_pointer: env_str = env_str("TRITON_INTEL_RAISE_BLOCK_POINTER", "0")
     dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")

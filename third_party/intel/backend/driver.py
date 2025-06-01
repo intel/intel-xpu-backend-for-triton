@@ -9,10 +9,10 @@ from pathlib import Path
 from functools import cached_property
 
 from triton import knobs
-from triton.runtime.build import _build
+from triton.runtime.build import _build, platform_key
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import DriverBase, platform_key
+from triton.backends.driver import DriverBase
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -661,7 +661,7 @@ def serialize_args(args, constants, signature):
         print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
 
     cnt = 0
-    args_dict = {"gridX": args[cnt], "gridY": args[cnt + 1], "gridZ": args[cnt + 2]}
+    args_dict = {"gridX": int(args[cnt]), "gridY": int(args[cnt + 1]), "gridZ": int(args[cnt + 2])}
     # 3: stream
     # 4: function
     # 5: packed kernel metadata

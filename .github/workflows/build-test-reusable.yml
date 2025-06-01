@@ -76,6 +76,7 @@ env:
 jobs:
   build:
     name: Build
+    timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
       run:
@@ -118,8 +119,7 @@ jobs:
           mode: ${{ inputs.pytorch_mode }}
 
       - name: Build Proton with XPU support
-        # FIXME: re-enable Proton
-        if: false && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        if: inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
           echo TRITON_BUILD_PROTON_XPU=1 | tee -a $GITHUB_ENV
 
@@ -274,8 +274,7 @@ jobs:
           echo "TRITON_TEST_CMD=${{ needs.build.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
 
       - name: Run Proton tests
-        # FIXME: re-enable Proton
-        if: false && matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
+        if: matrix.suite == 'rest' && inputs.driver_version == 'rolling' && inputs.device == 'max1100'
         run: |
           cd third_party/proton/test
           pytest test_api.py test_lib.py test_profile.py test_viewer.py test_record.py -s -v
@@ -301,10 +300,42 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
-      - name: Run Tutorials
+      # FIXME: make sure new tutorials are added to one of the groups (mxfp, scaled_dot, rest)
+
+      - name: Select tutorials to run (mxfp)
+        if: matrix.suite == 'mxfp'
+        run: |
+          cat <<EOF | tee tutorials.txt
+          09-persistent-matmul
+          EOF
+
+      - name: Select tutorials to run (scaled_dot)
+        if: matrix.suite == 'scaled_dot'
+        run: |
+          cat <<EOF | tee tutorials.txt
+          06-fused-attention
+          EOF
+
+      - name: Select tutorials to run (rest)
         if: matrix.suite == 'rest'
         run: |
-          ${{ env.TRITON_TEST_CMD }} --tutorial
+          cat <<EOF | tee tutorials.txt
+          01-vector-add
+          02-fused-softmax
+          03-matrix-multiplication
+          03i-matrix-multiplication
+          04-low-memory-dropout
+          05-layer-norm
+          07-extern-functions
+          08-grouped-gemm
+          10-experimental-block-pointer
+          10i-experimental-block-pointer
+          EOF
+
+      - name: Run Tutorials
+        if: matrix.suite == 'mxfp' || matrix.suite == 'scaled_dot' || matrix.suite == 'rest'
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --select-from-file tutorials.txt --tutorial
 
       - name: Get transformers version
         if: matrix.suite == 'rest'
@@ -388,6 +419,13 @@ jobs:
         with:
           name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
           path: pass_rate*.json
+
+      - name: Upload tutorials test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          include-hidden-files: true
+          path: reports/tutorials.xml
 
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v4

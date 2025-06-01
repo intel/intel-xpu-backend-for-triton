@@ -55,11 +55,14 @@ public:
              "Expected 'loadOp' to load a tensor value.");
 
       // Find the make tensor ptr operation that created the base ptr.
-      tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-      if (!makeTensorPtrOp) {
+      std::optional<tt::MakeTensorPtrOp> defOp =
+          tt::intel::findDefiningMakeTensorPtrOp(ptr);
+      if (!defOp) {
         LDBG("Could not find make tensor ptr op for: " << loadOp);
         return;
       }
+
+      tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
       LDBG("Make tensor ptr op: " << makeTensorPtrOp);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
@@ -68,7 +71,7 @@ public:
       if (rank == 1)
         return;
 
-      if (!satisfies2DBlockReadAlignment(loadOp)) {
+      if (!satisfies2DBlockReadAlignment(loadOp, axisInfoAnalysis)) {
         LDBG("Alignment checks failed for: " << loadOp);
         return;
       }
@@ -114,7 +117,7 @@ public:
           LDBG("dotLayout: " << *dotLayout);
           auto opIdx =
               static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-          auto dotOrder = mlir::triton::gpu::getThreadOrder(tensorType);
+          auto dotOrder = tt::gpu::getThreadOrder(tensorType);
           const bool valueRowMajor = (dotOrder[0] == 1 && dotOrder[1] == 0);
           if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA &&
               valueRowMajor ^ isRowMajor) {
@@ -134,7 +137,7 @@ public:
 private:
   void MaterializeTensorOfPointers(
       tt::LoadOp loadOp,
-      mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
+      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     MLIRContext *context = loadOp.getContext();
     Value ptr = loadOp.getPtr();
     assert(!tt::isTensorPointerType(ptr.getType()) &&
@@ -279,7 +282,9 @@ private:
     return strideOneDim;
   }
 
-  bool satisfies2DBlockReadAlignment(tt::LoadOp loadOp) const {
+  bool satisfies2DBlockReadAlignment(
+      tt::LoadOp loadOp,
+      tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value ptr = loadOp.getPtr();
     assert(tt::isTensorPointerType(ptr.getType()) &&
            "Expected a ptr to a tensor of ptrs.");
@@ -288,21 +293,13 @@ private:
 
     // Find the make tensor ptr operation that created the base ptr for the load
     // operation.
-    tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-    assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
-
+    std::optional<tt::MakeTensorPtrOp> defOp =
+        tt::intel::findDefiningMakeTensorPtrOp(ptr);
+    assert(defOp && "Expected a make tensor ptr op.");
+    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
     Operation::operand_range shape = makeTensorPtrOp.getShape();
     if (shape.size() == 1)
       return false;
-
-    // Ensure the base ptr is 4-byte aligned.
-    // Note: the HW requires the address to be 64-byte aligned, however we will
-    // compensate by imposing restrictions on the offsetX and baseWidth.
-    TypedValue<tt::PointerType> base = makeTensorPtrOp.getBase();
-    if (!ttgi::isDivisible(base, 4)) {
-      LDBG("Found non 4-bytes aligned base: " << base);
-      return false;
-    }
 
     std::optional<unsigned> strideOneDim = getStrideOneDim(makeTensorPtrOp);
     if (!strideOneDim) {
@@ -315,6 +312,16 @@ private:
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     unsigned strideOneDimVal = strideOneDim.value();
     LDBG("strideOneDim: " << strideOneDimVal);
+
+    // Ensure the base ptr is 4-byte aligned.
+    // Note: the HW requires the address to be 64-byte aligned, however we will
+    // compensate by imposing restrictions on the offsetX and baseWidth.
+    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
+    if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
+      LDBG("Found non 4 bytes aligned base: "
+           << axisInfo->getDivisibility(strideOneDimVal));
+      return false;
+    }
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.

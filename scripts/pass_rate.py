@@ -7,6 +7,8 @@ import json
 import os
 import pathlib
 import platform
+import xml.etree.ElementTree as et
+
 from typing import List
 
 from defusedxml.ElementTree import parse
@@ -82,22 +84,34 @@ def parse_report(report_path: pathlib.Path) -> ReportStats:
     """Parses the specified report."""
     stats = ReportStats(name=report_path.stem)
     root = parse(report_path).getroot()
+    all_tests = set()
+    fixme_tests = set()
+
     for testsuite in root:
-        testsuite_fixme_tests = set()
-        stats.total += int(testsuite.get('tests'))
-        for skipped in testsuite.iter('skipped'):
+        for testcase in testsuite.iter('testcase'):
+            name = f'{testcase.get("classname")}::{testcase.get("name")}'
+
+            # ignore multiple elements for the same test
+            if name in all_tests:
+                continue
+            stats.total += 1
+            all_tests.add(name)
+
+            if testcase.find('failure') is not None or testcase.find('error') is not None:
+                stats.failed += 1
+                continue
+            skipped = testcase.find('skipped')
+            if skipped is None:
+                continue
             if skipped.get('type') == 'pytest.skip':
                 stats.skipped += 1
             elif skipped.get('type') == 'pytest.xfail':
                 stats.xfailed += 1
-        for _ in testsuite.iter('failure'):
-            stats.failed += 1
-        for _ in testsuite.iter('error'):
-            stats.failed += 1
-        for warning in get_warnings(report_path.parent, report_path.stem):
-            if 'FIXME' in warning.message:
-                testsuite_fixme_tests.add(warning.location)
-        stats.fixme += len(testsuite_fixme_tests)
+
+    for warning in get_warnings(report_path.parent, report_path.stem):
+        if 'FIXME' in warning.message:
+            fixme_tests.add(warning.location)
+    stats.fixme += len(fixme_tests)
 
     stats.passed = stats.total - stats.failed - stats.skipped - stats.xfailed
     return stats
@@ -124,31 +138,51 @@ def find_stats(stats: List[ReportStats], name: str) -> ReportStats:
     raise ValueError(f'{name} not found')
 
 
-def parse_junit_reports(args: argparse.Namespace) -> List[ReportStats]:
+def parse_junit_reports(reports_path: pathlib.Path) -> List[ReportStats]:
     """Parses junit report in the specified directory."""
-    reports_path = pathlib.Path(args.reports)
     return [parse_report(report) for report in reports_path.glob('*.xml')]
 
 
-def parse_tutorials_reports(args: argparse.Namespace) -> List[ReportStats]:
-    """Parses tutorials reports in the specified directory."""
-    reports_path = pathlib.Path(args.reports)
-    stats = ReportStats(name='tutorials')
-    for report in reports_path.glob('tutorial-*.txt'):
-        result = report.read_text().strip()
-        stats.total += 1
+# pylint: disable=too-many-locals
+def generate_junit_report(reports_path: pathlib.Path):
+    """Parses info files for tutorials and generates JUnit report.
+    The script `run_tutorial.py` generates `tutorial-*.json` files in the reports directory.
+    This function loads them and generates `tutorials.xml` file (JUnit XML report) in the same
+    directory.
+    """
+    testsuites = et.Element('testsuites')
+    testsuite = et.SubElement(testsuites, 'testsuite', name='tutorials')
+
+    total_tests, total_errors, total_failures, total_skipped = 0, 0, 0, 0
+    total_time = 0.0
+
+    for item in reports_path.glob('tutorial-*.json'):
+        data = json.loads(item.read_text())
+        name, result, time = data['name'], data['result'], data.get('time', 0)
+        testcase = et.SubElement(testsuite, 'testcase', name=name)
         if result == 'PASS':
-            stats.passed += 1
+            testcase.set('time', str(time))
         elif result == 'SKIP':
-            stats.skipped += 1
+            total_skipped += 1
+            et.SubElement(testcase, 'skipped', type='pytest.skip')
         elif result == 'FAIL':
-            stats.failed += 1
-    return [stats]
+            total_failures += 1
+            et.SubElement(testcase, 'failure', message=data.get('message', ''))
+        else:
+            continue
+        total_tests += 1
+        total_time += time
 
+    testsuite.set('tests', str(total_tests))
+    testsuite.set('errors', str(total_errors))
+    testsuite.set('failures', str(total_failures))
+    testsuite.set('skipped', str(total_skipped))
+    testsuite.set('time', str(total_time))
 
-def parse_reports(args: argparse.Namespace) -> List[ReportStats]:
-    """Parses all report in the specified directory."""
-    return parse_junit_reports(args) + parse_tutorials_reports(args)
+    report_path = reports_path / 'tutorials.xml'
+    with report_path.open('wb') as f:
+        tree = et.ElementTree(testsuites)
+        tree.write(f, encoding='UTF-8', xml_declaration=True)
 
 
 def print_text_stats(stats: ReportStats):
@@ -194,9 +228,10 @@ def print_json_stats(stats: ReportStats):
 def main():
     """Main."""
     args = create_argument_parser().parse_args()
-    args.report_path = pathlib.Path(args.reports)
 
-    stats = parse_reports(args)
+    reports_path = pathlib.Path(args.reports)
+    generate_junit_report(reports_path)
+    stats = parse_junit_reports(reports_path)
 
     if args.suite == 'all':
         summary = overall_stats(stats)

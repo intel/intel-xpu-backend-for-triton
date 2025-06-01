@@ -897,7 +897,7 @@ tt.func public @make_tensor_ptr(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f8E5M2> {tt.
 // -----
 
 // CHECK-LABEL: @ptr_offset
-tt.func public @ptr_offset(%arg0: i32) {
+tt.func public @ptr_offset(%arg0: i32, %arg1: tensor<128x1xi32>) {
   // CHECK: stride = [0, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [128, 1], constant_value = 512
   %cst_0 = arith.constant dense<512> : tensor<128x1xi32>
   // CHECK: stride = [0], contiguity = [1], divisibility = [512], constancy = [128], constant_value = 512
@@ -920,5 +920,7 @@ tt.func public @ptr_offset(%arg0: i32) {
   %6 = arith.muli %5, %cst_0 : tensor<128x1xi32>
   // CHECK: stride = [512, 0], contiguity = [1, 1], divisibility = [512, 512], constancy = [1, 64], constant_value = <none>
   %7 = tt.broadcast %6 : tensor<128x1xi32> -> tensor<128x64xi32>
+  // CHECK: stride = [-1, -1], contiguity = [1, 1], divisibility = [512, 512], constancy = [1, 1], constant_value = <none>
+  %8 = arith.muli %arg1, %cst_0 : tensor<128x1xi32>
   tt.return
 }

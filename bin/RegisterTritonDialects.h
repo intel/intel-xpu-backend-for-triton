@@ -59,9 +59,9 @@ void registerTestTritonAMDGPURangeAnalysis();
 
 inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerAllPasses();
-  mlir::registerTritonPasses();
+  mlir::triton::registerTritonPasses();
   mlir::triton::gpu::registerTritonGPUPasses();
-  mlir::registerTritonNvidiaGPUPasses();
+  mlir::triton::nvidia_gpu::registerTritonNvidiaGPUPasses();
   mlir::test::intel::registerTestAxisInfoPass();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();

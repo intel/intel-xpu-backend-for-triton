@@ -106,11 +106,15 @@ jobs:
     steps:
       - name: Print inputs
         run: |
-          echo "${{ toJSON(github.event.inputs) }}"
+          cat <<EOF
+          ${{ toJSON(github.event.inputs) }}
+          EOF
 
       - name: Print setup outputs
         run: |
-          echo "${{ toJSON(needs.setup.outputs) }}"
+          cat <<EOF
+          ${{ toJSON(needs.setup.outputs) }}
+          EOF
 
   run_tests:
     name: Run test matrix

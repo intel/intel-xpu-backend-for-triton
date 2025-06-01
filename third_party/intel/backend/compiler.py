@@ -218,11 +218,14 @@ class XPUBackend(BaseBackend):
         # Annotate module with information required by subsequent transformations.
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        intel.passes.ttgpuir.add_triton_annotate_module(pm, min(properties["sub_group_sizes"]),
-                                                        properties["has_subgroup_2d_block_io"],
-                                                        properties["has_subgroup_matrix_multiply_accumulate"],
-                                                        properties["has_bfloat16_conversions"], opt.threads_per_warp,
-                                                        target_arch)
+        module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
+        module_opts.min_sg_size = min(properties["sub_group_sizes"])
+        module_opts.support_sg_2d_block = properties["has_subgroup_2d_block_io"]
+        module_opts.support_dpas = properties["has_subgroup_matrix_multiply_accumulate"]
+        module_opts.support_bf16_conversion = properties["has_bfloat16_conversions"]
+        module_opts.threads_per_warp = opt.threads_per_warp
+        module_opts.target_arch = target_arch
+        intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod)
 
     @staticmethod
@@ -242,6 +245,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
@@ -324,6 +328,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
                                            options.enable_tile_load_linear_layout)
+        intel.passes.ttgpuir.add_gen_to_llvm(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -374,6 +379,9 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
         else:
             metadata["build_flags"] = ""
+
+        if knobs.intel.disable_igc_opt:
+            metadata["build_flags"] += " -cl-opt-disable"
 
         metadata["generate_native_code"] = options.generate_native_code
 

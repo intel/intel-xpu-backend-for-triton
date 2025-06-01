@@ -9,7 +9,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass, get_spvdis
-from .._utils import classproperty
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
 from pathlib import Path
@@ -305,6 +304,7 @@ def compile(src, target=None, options=None):
             compilation_listener(
                 src=src,
                 metadata=res.metadata._asdict(),
+                metadata_group=metadata_group,
                 times=timer.end(),
                 cache_hit=True,
             )
@@ -350,7 +350,12 @@ def compile(src, target=None, options=None):
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
-        if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
+        if fn_override_manager is None:
+            # Users can override kernels at scale by setting `ir_override` in autotune config
+            # without TRITON_KERNEL_OVERRIDE
+            if (ir_override := metadata.get("ir_override", None)) and ir_override.endswith(f".{ext}"):
+                next_module = parse(ir_override, ext, context)
+        elif full_name := fn_override_manager.get_file(ir_filename):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
         # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
@@ -384,7 +389,8 @@ def compile(src, target=None, options=None):
 
     # notify any listener
     if compilation_listener:
-        compilation_listener(src=src, metadata=metadata, times=timer.end(), cache_hit=False)
+        compilation_listener(src=src, metadata=metadata, metadata_group=metadata_group, times=timer.end(),
+                             cache_hit=False)
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
@@ -429,24 +435,6 @@ class AsmDict(dict):
 
 
 class CompiledKernel:
-
-    # FIXME: remove launch_enter_hook/launch_exit_hook properties
-    # when pytorch has a compatible layer for the new API.
-    @classproperty
-    def launch_enter_hook(cls):
-        return knobs.runtime.launch_enter_hook
-
-    @launch_enter_hook.setter
-    def launch_enter_hook(cls, value):
-        knobs.runtime.launch_enter_hook = value
-
-    @classproperty
-    def launch_exit_hook(cls):
-        return knobs.runtime.launch_exit_hook
-
-    @launch_exit_hook.setter
-    def launch_exit_hook(cls, value):
-        knobs.runtime.launch_exit_hook = value
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple

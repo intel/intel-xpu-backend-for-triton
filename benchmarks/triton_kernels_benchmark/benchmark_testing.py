@@ -361,8 +361,6 @@ class Mark:
         for bench in benchmarks:
             benchmark_dfs = []
             for run_counter in range(args.n_runs):
-                if run_counter > 0:
-                    disable_verification()
                 df = self._run(bench, args.reports, show_plots, print_data, run_counter=run_counter, **kwargs)
                 df["datetime"] = datetime.datetime.now()
                 df["run_counter"] = run_counter + 1

@@ -3,6 +3,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -23,7 +24,7 @@ namespace ttng = triton::nvidia_gpu;
 using Partition = WarpSchedule::Partition;
 
 //===----------------------------------------------------------------------===//
-// assignPartitions
+// getPartitionScheme
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -56,169 +57,30 @@ struct PipelinedMMA {
   PipelinedMMA(ttng::MMAv5OpInterface mmaOp) : mmaOp(mmaOp) {}
 
   ttng::MMAv5OpInterface mmaOp;
-  ttng::TMEMStoreOp storeOp;
-  SmallVector<Operation *> operandViews;
-};
-
-struct PartitionScheme {
-  SmallVector<PipelinedLoad> loads;
-  SmallVector<PipelinedMMA> mmas;
-  SetVector<Operation *> userOps;
 };
 } // namespace
 
-// Find the last operation in the loop body that defined this value, with a
-// maximum of distance 1.
-static Operation *findDefOpInLoop(scf::ForOp loop, Value value,
-                                  int distance = 0) {
-  if (auto arg = dyn_cast<BlockArgument>(value)) {
-    if (arg.getParentBlock() != loop.getBody())
-      return {};
-    // Don't look back more than distance 1.
-    if (distance == 1)
-      return {};
-    return findDefOpInLoop(
-        loop, loop.getYieldedValues()[arg.getArgNumber() - 1], distance + 1);
-  }
-  Operation *defOp = value.getDefiningOp();
-  if (!loop.getBodyRegion().isAncestor(defOp->getParentRegion()))
-    return {};
-  return defOp;
-}
-
-// Assign load and MMAs to partitions and figure out where the user partition
-// is.
-static PartitionScheme assignPartitions(scf::ForOp loop) {
-  // Find loads to pipeline.
+static std::pair<SmallVector<PipelinedLoad>, SmallVector<PipelinedMMA>>
+getPartitionScheme(scf::ForOp loop, const WarpSchedule &schedule) {
   SmallVector<PipelinedLoad> loads;
-  for (Operation &loadOp : loop.getOps()) {
-    // Only TMA loads are supported at the moment.
-    if (!isa<DescriptorLoadOp, DescriptorGatherOp>(loadOp))
-      continue;
-
-    PipelinedLoad &load = loads.emplace_back(&loadOp);
-    // Local alloc users of the load with matching encoding will cause the
-    // underlying buffer to be pass through. Keep track of them.
-    for (Operation *user : loadOp.getUsers()) {
-      if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
-        if (load.sharedEnc == alloc.getType().getEncoding())
-          load.allocOps.push_back(alloc);
-      } else if (isa<ttng::TMEMAllocOp>(user)) {
-        load.allocOps.push_back(user);
-      }
-    }
-  }
-
-  // Find MMAs to pipeline.
   SmallVector<PipelinedMMA> mmas;
+
+  for (Operation &op : loop.getOps()) {
+    if (!isa<DescriptorLoadOp, DescriptorGatherOp>(op))
+      continue;
+    auto &load = loads.emplace_back(&op);
+    for (Operation *user : op.getUsers()) {
+      if (schedule.getPartition(user) == schedule.getPartition(&op) &&
+          isa<LocalAllocOp, ttng::TMEMAllocOp>(user))
+        load.allocOps.push_back(user);
+    }
+  }
+
   for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
-    PipelinedMMA &mma = mmas.emplace_back(mmaOp);
-
-    // If the store is unrelated to the use of the MMA, then it gets placed in
-    // the MMA partition.
-    auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
-        findDefOpInLoop(loop, mmaOp.getAccDep()));
-    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp)
-      mma.storeOp = storeOp;
-
-    // Look for views into the operands.
-    SmallVector<Operation *> operandViews;
-    for (Value operand : mmaOp->getOperands()) {
-      if (Operation *defOp = operand.getDefiningOp())
-        operandViews.push_back(defOp);
-    }
-    while (!operandViews.empty()) {
-      Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !isa<MemDescSubviewOp, MemDescTransOp>(op))
-        continue;
-      mma.operandViews.push_back(op);
-      if (Operation *defOp = op->getOperand(0).getDefiningOp())
-        operandViews.push_back(defOp);
-    }
+    mmas.emplace_back(mmaOp);
   }
 
-  // Assign initial partitions.
-  Builder b(loop.getContext());
-  SmallVector<Operation *> transitiveUsers;
-
-  DenseSet<Operation *> scheduled;
-  for (PipelinedLoad &load : loads) {
-    for (Operation *allocOp : load.allocOps) {
-      scheduled.insert(allocOp);
-      transitiveUsers.push_back(allocOp);
-    }
-    scheduled.insert(load.loadOp);
-    transitiveUsers.push_back(load.loadOp);
-  }
-
-  for (PipelinedMMA &mma : mmas) {
-    scheduled.insert(mma.mmaOp);
-    if (mma.storeOp)
-      scheduled.insert(mma.storeOp);
-    for (Operation *view : mma.operandViews)
-      scheduled.insert(view);
-    transitiveUsers.push_back(mma.mmaOp);
-  }
-
-  // Recursively propagate partitions to the users.
-  SetVector<Operation *> userOps;
-  while (!transitiveUsers.empty()) {
-    Operation *op = transitiveUsers.pop_back_val();
-
-    SmallVector<OpOperand *> uses;
-    for (OpOperand &use : op->getUses())
-      uses.push_back(&use);
-    for (unsigned i = 0; i < uses.size(); ++i) {
-      OpOperand *use = uses[i];
-      Operation *user = use->getOwner();
-      if (user == loop.getBody()->getTerminator()) {
-        for (OpOperand &use :
-             loop.getRegionIterArg(use->getOperandNumber()).getUses())
-          uses.push_back(&use);
-      } else {
-        if (!scheduled.insert(user).second)
-          continue;
-        user = loop.getBody()->findAncestorOpInBlock(*user);
-        userOps.insert(user);
-        transitiveUsers.push_back(user);
-      }
-    }
-  }
-
-  return PartitionScheme{std::move(loads), std::move(mmas), std::move(userOps)};
-}
-
-static WarpSchedule getInitialSchedule(const PartitionScheme &scheme) {
-  WarpSchedule schedule;
-
-  Partition *loadPartition = schedule.addPartition(0);
-  for (const PipelinedLoad &load : scheme.loads) {
-    loadPartition->insert(load.loadOp);
-    for (Operation *allocOp : load.allocOps)
-      loadPartition->insert(allocOp);
-  }
-
-  Partition *mmaPartition = schedule.addPartition(1);
-  for (const PipelinedMMA &mma : scheme.mmas) {
-    mmaPartition->insert(mma.mmaOp);
-    if (mma.storeOp)
-      mmaPartition->insert(mma.storeOp);
-    for (Operation *viewOp : mma.operandViews)
-      mmaPartition->insert(viewOp);
-  }
-
-  if (!scheme.userOps.empty()) {
-    Partition *userPartition = schedule.addPartition(2);
-    for (Operation *userOp : scheme.userOps)
-      userPartition->insert(userOp);
-    // Place the epilogue partition in the default warpgroup. The MMA and load
-    // partitions shouldn't have tensor computations in them, which means they
-    // will get assigned just 1 warp each.
-    schedule.reorderPartitions({2, 1, 0});
-  }
-
-  schedule.updatePartitions();
-  return schedule;
+  return {std::move(loads), std::move(mmas)};
 }
 
 //===----------------------------------------------------------------------===//
@@ -233,14 +95,23 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
   }
   Value boolCst(bool value) { return intCst(value, /*width=*/1); }
 
+  void assignStage(Operation *op, std::optional<unsigned> stage) {
+    if (stage)
+      op->setAttr(kAssignedStageAttrName, getI32IntegerAttr(*stage));
+  }
+
   template <typename OpT, typename... Args>
-  auto createInPartition(Partition &partition, Args &&...args) {
+  auto createInto(Partition &partition, std::optional<unsigned> stage,
+                  Args &&...args) {
     auto op = create<OpT>(std::forward<Args>(args)...);
     op->setAttr(kPartitionAttrName, getI32IntegerAttr(partition.getIndex()));
+    assignStage(op, stage);
     partition.insert(op);
     return op;
   }
 };
+
+using StageMap = DenseMap<Operation *, std::optional<unsigned>>;
 
 static void replaceAllUsesDominatedBy(Operation *domOp, Value newValue,
                                       Value oldValue, DominanceInfo &domInfo) {
@@ -294,9 +165,8 @@ addIndexAndPhase(PartitionBuilder &b, scf::ForOp &loop, unsigned numStages,
   return {index, phase};
 }
 
-static std::pair<Value, Operation *>
-getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
-                    Value initialValue = {}) {
+static Value getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop,
+                                 Operation *domOp) {
   // If the use is inside a loop besides the actual loop being pipelined, we
   // have to hoist the use up to that loop, otherwise the barriers will be
   // inserted in the loop.
@@ -305,12 +175,13 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
     domOp = userLoop;
   assert(loop->isProperAncestor(domOp));
 
-  Value trueVal = b.create<arith::ConstantOp>(b.getBoolAttr(true));
   OpBuilder::InsertionGuard guard(b);
-  b.setInsertionPoint(loop.getBody()->findAncestorOpInBlock(*domOp));
+  b.setInsertionPoint(loop);
+  Value trueVal = b.create<arith::ConstantOp>(b.getBoolAttr(true));
 
-  Value precondition = initialValue ? initialValue : trueVal;
+  Value userPred = trueVal;
   Operation *parentOp = domOp;
+  b.setInsertionPoint(loop.getBody()->findAncestorOpInBlock(*domOp));
   while (loop != (parentOp = parentOp->getParentOp())) {
     assert(!isa<LoopLikeOpInterface>(parentOp));
     auto ifOp = dyn_cast<scf::IfOp>(parentOp);
@@ -321,10 +192,10 @@ getUserPrecondition(ImplicitLocOpBuilder &b, scf::ForOp loop, Operation *domOp,
     Value cond = ifOp.getCondition();
     if (domOp->getParentRegion() == &ifOp.getElseRegion())
       cond = b.create<arith::XOrIOp>(cond, trueVal);
-    precondition = b.create<arith::AndIOp>(precondition, cond);
+    userPred = b.create<arith::AndIOp>(userPred, cond);
   }
 
-  return {precondition, domOp};
+  return userPred;
 }
 
 static MemDescType getAsMutable(MemDescType type) {
@@ -344,7 +215,7 @@ findSharedMemorySinkOps(Value value, SmallVectorImpl<Operation *> &sinkOps) {
   for (Operation *user : value.getUsers()) {
     if (isa<ttng::MMAv5OpInterface, LocalLoadOp>(user)) {
       sinkOps.push_back(user);
-    } else if (isa<MemDescTransOp, MemDescSubviewOp>(user)) {
+    } else if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
       if (failed(findSharedMemorySinkOps(user->getResult(0), sinkOps)))
         return failure();
     } else {
@@ -440,7 +311,9 @@ struct PipelinedLoadGroup {
   Location getLoc();
   void allocateAref(scf::ForOp &loop, int numStages);
   LogicalResult lowerLoads(WarpSchedule &schedule, DominanceInfo &domInfo,
-                           PostDominanceInfo &postDomInfo);
+                           PostDominanceInfo &postDomInfo,
+                           std::optional<unsigned> stage,
+                           const StageMap &stages);
 
   SmallVector<PipelinedLoad> loads;
 
@@ -492,29 +365,32 @@ void PipelinedLoadGroup::allocateAref(scf::ForOp &loop, int numStages) {
 }
 
 static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
-                         Operation *op, Value barrier, Value view) {
+                         std::optional<unsigned> stage, Operation *op,
+                         Value barrier, Value view) {
   Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
-    Value tmaPtr = b.createInPartition<ttng::TensorDescToTMAPtrOp>(
-        loadPartition, load.getDesc());
+    Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
+        loadPartition, stage, load.getDesc());
     auto indices = ttng::translateTMAIndices(
         b, load.getLoc(), load.getDesc().getType().getBlockType().getEncoding(),
         load.getIndices());
-    b.createInPartition<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loadPartition, tmaPtr, indices, barrier, view, truePred);
+    b.createInto<ttng::AsyncTMACopyGlobalToLocalOp>(
+        loadPartition, stage, tmaPtr, indices, barrier, view, truePred);
   } else {
     auto gather = cast<DescriptorGatherOp>(op);
-    Value tmaPtr = b.createInPartition<ttng::TensorDescToTMAPtrOp>(
-        loadPartition, gather.getDesc());
-    b.createInPartition<ttng::AsyncTMAGatherOp>(
-        loadPartition, tmaPtr, gather.getXOffsets(), gather.getYOffset(),
+    Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
+        loadPartition, stage, gather.getDesc());
+    b.createInto<ttng::AsyncTMAGatherOp>(
+        loadPartition, stage, tmaPtr, gather.getXOffsets(), gather.getYOffset(),
         barrier, view, truePred);
   }
 }
 
 LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
                                              DominanceInfo &domInfo,
-                                             PostDominanceInfo &postDomInfo) {
+                                             PostDominanceInfo &postDomInfo,
+                                             std::optional<unsigned> stage,
+                                             const StageMap &stages) {
   // Insert before the group of loads.
   auto firstLoad = llvm::min_element(loads, [&](auto &lhs, auto &rhs) {
     return domInfo.properlyDominates(lhs.loadOp, rhs.loadOp);
@@ -524,15 +400,15 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 
   // Producer acquire.
   Value curEmptyBar = createSingleBufferView(b, emptyBars, index);
-  b.createInPartition<ttng::WaitBarrierOp>(loadPartition, curEmptyBar, phase);
+  b.createInto<ttng::WaitBarrierOp>(loadPartition, stage, curEmptyBar, phase);
 
   // Indicate the expected size of the loads.
   unsigned loadSizeInBytes = 0;
   for (const PipelinedLoad &load : loads)
     loadSizeInBytes += load.getLoadSizeInBytes();
   Value curLoadBar = createSingleBufferView(b, readyBars, index);
-  b.createInPartition<ttng::BarrierExpectOp>(loadPartition, curLoadBar,
-                                             loadSizeInBytes, b.boolCst(true));
+  b.createInto<ttng::BarrierExpectOp>(loadPartition, stage, curLoadBar,
+                                      loadSizeInBytes, b.boolCst(true));
 
   // Set up the consumer wait. We know the live before ops are the same for all
   // loads since that's how they were grouped.
@@ -541,7 +417,9 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   for (auto [i, liveBeforeOp] : llvm::enumerate(firstLoad->liveBeforeOps)) {
     b.setInsertionPoint(liveBeforeOp);
     Partition &userPartition = *schedule.getPartition(liveBeforeOp);
-    b.createInPartition<ttng::WaitBarrierOp>(userPartition, curLoadBar, phase);
+    auto userStage = stages.lookup(liveBeforeOp);
+    b.createInto<ttng::WaitBarrierOp>(userPartition, userStage, curLoadBar,
+                                      phase);
 
     SmallVector<Operation *> liveUntilOps;
     for (PipelinedLoad &load : loads) {
@@ -552,9 +430,9 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       Operation *liveUntilOp =
           findNearestCommonPostDominator(liveUntilOps, postDomInfo);
       b.setInsertionPoint(liveUntilOp);
-      arriveOps[schedule.getPartition(liveUntilOp)] =
-          b.createInPartition<ttng::ArriveBarrierOp>(userPartition, curEmptyBar,
-                                                     /*arriveCount=*/1);
+      auto arriveOp = b.createInto<ttng::ArriveBarrierOp>(
+          userPartition, userStage, curEmptyBar, 1);
+      arriveOps[schedule.getPartition(liveUntilOp)] = arriveOp;
     }
   }
 
@@ -574,7 +452,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   for (auto [load, buffer] : llvm::zip(loads, loadBuffers)) {
     b.setInsertionPoint(load.loadOp);
     Value view = createSingleBufferView(b, buffer, index);
-    lowerTMACopy(b, loadPartition, load.loadOp, curLoadBar, view);
+    lowerTMACopy(b, loadPartition, stage, load.loadOp, curLoadBar, view);
     // Propagate through shared memory uses.
     for (Operation *allocOp : load.allocOps) {
       replaceUsesAndPropagateType(b, allocOp, view);
@@ -591,8 +469,8 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
         users.push_back(arriveOp);
       Operation *loadBeforeOp = findNearestCommonDominator(users, domInfo);
       b.setInsertionPoint(loadBeforeOp);
-      Value loaded =
-          b.createInPartition<LocalLoadOp>(*partition, load.type, view);
+      Value loaded = b.createInto<LocalLoadOp>(
+          *partition, stages.lookup(loadBeforeOp), load.type, view);
       for (OpOperand *use : uses)
         use->set(loaded);
     }
@@ -606,9 +484,23 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 // MMA Pipelining
 //===----------------------------------------------------------------------===//
 
+static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(loop);
+  // (ub - lb -1) // step * step + lb
+  Value diff =
+      b.create<arith::SubIOp>(loop.getUpperBound(), loop.getLowerBound());
+  diff = b.create<arith::SubIOp>(diff, b.intCst(1));
+  Value ceilStep = b.create<arith::MulIOp>(
+      b.create<arith::DivSIOp>(diff, loop.getStep()), loop.getStep());
+  return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
+}
+
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
-                                 PostDominanceInfo &postDomInfo) {
+                                 PostDominanceInfo &postDomInfo,
+                                 std::optional<unsigned> stage,
+                                 const StageMap &stages) {
   ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
   auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
   Block &body = *loop.getBody();
@@ -693,7 +585,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
   struct Node {
     Operation *op;
-    Partition *partition;
     Value barPrev;
     Value barNext;
     Value index;
@@ -715,24 +606,21 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
   }
 
-  Value firstBar;
-  for (int i = nodes.size(); i > 0; --i) {
-    if ((firstBar = nodes[i % nodes.size()].barPrev))
-      break;
-  }
-  if (firstBar) {
+  // If the first node has a barrier, fully initialize it to let it run.
+  if (nodes.front().barPrev) {
     for (auto i : llvm::seq(numMmaStages)) {
       b.setInsertionPoint(loop);
-      Value bar = createSingleBufferView(b, firstBar, i);
+      Value bar = createSingleBufferView(b, nodes.front().barPrev, i);
       b.create<ttng::ArriveBarrierOp>(bar, /*arriveCount=*/1);
     }
   }
+
   Value userPred = b.boolCst(true);
   if (readOp == mmaOp) {
     PartitionBuilder b(mmaOp.getLoc(), mmaOp);
+    Value lastInductionValue = getLastInductionValue(b, loop);
     userPred = b.create<arith::CmpIOp>(
-        arith::CmpIPredicate::eq, loop.getInductionVar(),
-        b.create<arith::SubIOp>(loop.getUpperBound(), b.intCst(1)));
+        arith::CmpIPredicate::eq, loop.getInductionVar(), lastInductionValue);
     nodes.back().barNext = createBarrierAlloc(loop, /*numBarriers=*/1);
   }
 
@@ -741,14 +629,12 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Value replTok = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
   DenseSet<Operation *> seen;
   std::optional<OpBuilder::InsertPoint> incrementPt;
+  Node *firstAfterInc = nullptr;
   for (Node &node : nodes) {
     node.index = curIndex;
     node.phase = curPhase;
-    if (incrementPt && node.barPrev && node.barPrev != firstBar) {
-      b.setInsertionPoint(loop);
-      b.create<ttng::ArriveBarrierOp>(
-          createSingleBufferView(b, node.barPrev, 0), /*arriveCount=*/1);
-    }
+    if (incrementPt && node.barPrev && !firstAfterInc)
+      firstAfterInc = &node;
     if (!seen.insert(node.op).second)
       continue;
     b.setInsertionPoint(node.op);
@@ -769,13 +655,26 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     }
     if (node.op == dyn_cast<ttng::TMEMLoadOp>(readOp)) {
       ImplicitLocOpBuilder b(readOp->getLoc(), loop);
-      userPred = getUserPrecondition(b, loop, node.op).first;
+      userPred = getUserPrecondition(b, loop, node.op);
       b.setInsertionPointAfter(inBody(readOp));
       auto [nextIndex, nextPhase] =
           postIncrementModulo(b, index, phase, numMmaStages);
       curIndex = b.create<arith::SelectOp>(userPred, nextIndex, index);
       curPhase = b.create<arith::SelectOp>(userPred, nextPhase, phase);
       incrementPt = b.saveInsertionPoint();
+    }
+  }
+  if (firstAfterInc) {
+    b.setInsertionPoint(loop);
+    if (firstAfterInc->op == mmaOp) {
+      Value firstBar = createSingleBufferView(b, firstAfterInc->barPrev, 0);
+      b.create<ttng::ArriveBarrierOp>(firstBar, /*arriveCount=*/1);
+    } else {
+      assert(firstAfterInc->op == dyn_cast<ttng::TMEMStoreOp>(overwriteOp));
+      for (auto i : llvm::seq(numMmaStages)) {
+        Value firstBar = createSingleBufferView(b, firstAfterInc->barPrev, i);
+        b.create<ttng::ArriveBarrierOp>(firstBar, /*arriveCount=*/1);
+      }
     }
   }
   oldAllocOp.getToken().replaceAllUsesWith(allocOp.getToken());
@@ -785,34 +684,54 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       .append({curIndex, curPhase});
 
   // Find operands that need to be pipelined through shmem.
+  SmallVector<Value> incomingOperands;
+  llvm::append_range(incomingOperands, mmaOp->getOperands());
   SmallVector<std::pair<Operation *, Partition *>> operandDefs;
-  for (Value operand : mma.mmaOp->getOperands()) {
+  while (!incomingOperands.empty()) {
+    Value operand = incomingOperands.pop_back_val();
+    if (!isa<MemDescType>(operand.getType()))
+      continue;
     Operation *defOp = operand.getDefiningOp();
-    if (!defOp || !loop.getBodyRegion().isAncestor(defOp->getParentRegion()))
+    if (!defOp || loop.isDefinedOutsideOfLoop(operand))
       continue;
     defOp = inBody(defOp);
     Partition *defPartition = schedule.getPartition(defOp);
-    if (!defPartition)
+
+    if (!defPartition || defPartition == schedule.getRootPartition()) {
+      // If the MMA operand is coming from outside the loop, move the alloc out.
+      auto allocOp = dyn_cast<LocalAllocOp>(defOp);
+      if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()))
+        allocOp->moveBefore(loop);
       continue;
+    }
+
     if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
       PartitionBuilder b(allocOp.getLoc(), allocOp);
-      auto store = b.createInPartition<LocalStoreOp>(*defPartition,
-                                                     allocOp.getSrc(), allocOp);
+      auto store = b.createInto<LocalStoreOp>(*defPartition, std::nullopt,
+                                              allocOp.getSrc(), allocOp);
+      auto fence = b.createInto<ttng::FenceAsyncSharedOp>(
+          *defPartition, std::nullopt, /*bCluster=*/false);
       operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
                                defPartition);
+      operandDefs.emplace_back(body.findAncestorOpInBlock(*fence),
+                               defPartition);
       allocOp->moveBefore(loop);
+      allocOp->removeAttr(kPartitionAttrName);
       allocOp.getSrcMutable().clear();
       allocOp.getResult().setType(getAsMutable(allocOp.getType()));
     } else if (auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>()) {
       PartitionBuilder b(tmemAllocOp.getLoc(), tmemAllocOp);
-      auto store = b.createInPartition<ttng::TMEMStoreOp>(
-          *defPartition, Type(), tmemAllocOp.getResult(), Value(),
+      auto store = b.createInto<ttng::TMEMStoreOp>(
+          *defPartition, std::nullopt, Type(), tmemAllocOp.getResult(), Value(),
           tmemAllocOp.getSrc(), b.boolCst(true));
       operandDefs.emplace_back(body.findAncestorOpInBlock(*store),
                                defPartition);
       tmemAllocOp->moveBefore(loop);
+      tmemAllocOp->removeAttr(kPartitionAttrName);
       tmemAllocOp.getSrcMutable().clear();
       tmemAllocOp.getResult().setType(getAsMutable(tmemAllocOp.getType()));
+    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
+      incomingOperands.push_back(defOp->getOperand(0));
     }
   }
 
@@ -822,28 +741,44 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     SmallVector<Operation *> defs;
     defs.push_back(node.op);
+
+    // Find operand defs that come from the same partition and incorporate them
+    // in this synchronization edge.
+    decltype(operandDefs) nextOperandDefs;
     for (auto &[defOp, defPartition] : operandDefs) {
-      if (defPartition == partition)
+      if (defPartition == partition && inBody(node.op)->isBeforeInBlock(mmaOp))
         defs.push_back(defOp);
+      else
+        nextOperandDefs.emplace_back(defOp, defPartition);
     }
+    operandDefs = std::move(nextOperandDefs);
+
     Operation *domOp = findNearestCommonDominator(defs, domInfo);
     Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
 
     if (node.barPrev) {
       if (!isa<ttng::TMEMLoadOp>(node.op)) {
-        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()))
+        // If the user precondition is defined after the MMA, we need to peel
+        // the wait for the user.
+        if (incrementPt && domOp->isBeforeInBlock(&*incrementPt->getPoint()) &&
+            domInfo.properlyDominates(mmaOp, userPred.getDefiningOp())) {
           b.restoreInsertionPoint(*incrementPt);
-        else
+          Value bar = createSingleBufferView(b, node.barPrev, curIndex);
+          b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
+                                            bar, curPhase, userPred);
+        } else {
           b.setInsertionPoint(domOp);
-        Value bar = createSingleBufferView(b, node.barPrev, curIndex);
-        b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, curPhase,
-                                                 userPred);
+          Value bar = createSingleBufferView(b, node.barPrev, node.index);
+          b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
+                                            bar, node.phase, userPred);
+        }
       } else {
         b.setInsertionPoint(domOp);
         if (isa<scf::IfOp>(domOp->getParentOp()))
           b.setInsertionPointToStart(domOp->getBlock());
         Value bar = createSingleBufferView(b, node.barPrev, node.index);
-        b.createInPartition<ttng::WaitBarrierOp>(*partition, bar, node.phase);
+        b.createInto<ttng::WaitBarrierOp>(*partition, stages.lookup(node.op),
+                                          bar, node.phase);
       }
     }
     if (node.barNext) {
@@ -851,18 +786,50 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
         mmaOp.addCompletionBarrier(bar, userPred);
+        b.assignStage(mmaOp, stage);
       } else {
         b.setInsertionPointAfter(lastOp);
         if (isa<scf::IfOp>(lastOp->getParentOp()))
           b.setInsertionPoint(lastOp->getBlock()->getTerminator());
         Value bar = createSingleBufferView(b, node.barNext, node.index);
-        b.createInPartition<ttng::ArriveBarrierOp>(*partition, bar, 1);
+        b.createInto<ttng::ArriveBarrierOp>(*partition, stages.lookup(lastOp),
+                                            bar, 1);
       }
     }
   }
 
+  // Handle leftover operand defs.
+  llvm::MapVector<Partition *, SmallVector<Operation *>> operandDefsMap;
+  for (auto &[defOp, defPartition] : operandDefs)
+    operandDefsMap[defPartition].push_back(defOp);
+  for (auto &[partition, defs] : operandDefsMap) {
+    Value emptyBar = createBarrierAlloc(loop, /*numBarriers=*/1);
+    Value readyBar = createBarrierAlloc(loop, /*numBarriers=*/1);
+    PartitionBuilder b(defs.front()->getLoc(), loop);
+    b.create<ttng::ArriveBarrierOp>(emptyBar, /*arriveCount=*/1);
+
+    Operation *domOp = findNearestCommonDominator(defs, domInfo);
+    Operation *lastOp = findNearestCommonPostDominator(defs, postDomInfo);
+
+    auto [index, phase] = addIndexAndPhase(b, loop, /*numStages=*/1);
+    auto srcStage = stages.lookup(domOp);
+    b.setInsertionPoint(domOp);
+    b.createInto<ttng::WaitBarrierOp>(*partition, srcStage, emptyBar, phase);
+
+    b.setInsertionPointAfter(lastOp);
+    b.createInto<ttng::ArriveBarrierOp>(*partition, srcStage, readyBar, 1);
+
+    b.setInsertionPoint(mmaOp);
+    b.createInto<ttng::WaitBarrierOp>(*schedule.getPartition(mmaOp), stage,
+                                      readyBar, phase);
+    mmaOp.addCompletionBarrier(emptyBar, b.boolCst(true));
+  }
+
   if (nodes.back().barNext) {
     b.setInsertionPointAfter(loop);
+    // Re-acquire loop results as they may have been invalidated.
+    Value lastIndex = loop.getResult(index.getArgNumber() - 1);
+    Value lastPhase = loop.getResult(phase.getArgNumber() - 1);
     Value lastBar = createSingleBufferView(b, nodes.back().barNext, lastIndex);
     b.create<ttng::WaitBarrierOp>(lastBar, lastPhase);
   }
@@ -883,7 +850,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 // lowerLoops
 //===----------------------------------------------------------------------===//
 
-LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
+LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
+                         MutableArrayRef<PipelinedMMA> mmas,
                          WarpSchedule &schedule, int numLoadStages) {
   Block &body = *loop.getBody();
   DominanceInfo domInfo(loop);
@@ -893,7 +861,7 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
   // that multiple loads feeding into the same MMA op are placed together.
   llvm::MapVector<ArrayRef<Operation *>, SmallVector<PipelinedLoad>>
       liveBeforeGroups;
-  for (PipelinedLoad &load : scheme.loads) {
+  for (PipelinedLoad &load : loads) {
     if (failed(load.determineLiveRange(body, domInfo, postDomInfo, schedule)))
       return failure();
     liveBeforeGroups[load.liveBeforeOps].push_back(std::move(load));
@@ -902,17 +870,38 @@ LogicalResult lowerLoops(scf::ForOp &loop, PartitionScheme &scheme,
   for (auto &loads : llvm::make_second_range(liveBeforeGroups))
     loadGroups.push_back({std::move(loads)});
 
+  // Assign stages to ops when there are multiple ops in the same partition.
+  StageMap stages;
+  if (loadGroups.size() > 1) {
+    unsigned curLoadStage = 0;
+    for (const PipelinedLoadGroup &group : loadGroups) {
+      stages.insert({group.loads.front().loadOp, curLoadStage});
+      curLoadStage += 2;
+    }
+  }
+  if (mmas.size() > 1) {
+    unsigned curMMAStage = 0;
+    for (const PipelinedMMA &mma : mmas) {
+      stages.insert({mma.mmaOp, curMMAStage});
+      curMMAStage += 2;
+    }
+  }
+
   // Multi-buffer and lower the loads.
   for (PipelinedLoadGroup &group : loadGroups)
     group.allocateAref(loop, numLoadStages);
+
   for (PipelinedLoadGroup &group : loadGroups) {
-    if (failed(group.lowerLoads(schedule, domInfo, postDomInfo)))
+    if (failed(group.lowerLoads(schedule, domInfo, postDomInfo,
+                                stages.lookup(group.loads.front().loadOp),
+                                stages)))
       return failure();
   }
 
   // Multi-buffer and lower the MMAs.
-  for (PipelinedMMA &mma : scheme.mmas) {
-    if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo)))
+  for (PipelinedMMA &mma : mmas) {
+    if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo,
+                           stages.lookup(mma.mmaOp), stages)))
       return failure();
   }
 
@@ -931,7 +920,7 @@ namespace mlir::triton::gpu {
 
 namespace {
 struct LoadMMASpecialization
-    : triton::gpu::impl::TritonGPULoadMMASpecializationBase<
+    : public triton::gpu::impl::TritonGPULoadMMASpecializationBase<
           LoadMMASpecialization> {
   using TritonGPULoadMMASpecializationBase::TritonGPULoadMMASpecializationBase;
 
@@ -946,13 +935,14 @@ void LoadMMASpecialization::runOnOperation() {
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
-    PartitionScheme scheme = assignPartitions(loop);
-    if (scheme.loads.empty() && scheme.mmas.empty())
+    FailureOr<WarpSchedule> schedule = WarpSchedule::deserialize(loop);
+    if (failed(schedule))
       continue;
-    WarpSchedule schedule = getInitialSchedule(scheme);
-    schedule.serialize(loop);
+    auto [loads, mmas] = getPartitionScheme(loop, *schedule);
+    if (loads.empty() && mmas.empty())
+      continue;
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
-    if (failed(lowerLoops(loop, scheme, schedule, loopNumStages)))
+    if (failed(lowerLoops(loop, loads, mmas, *schedule, loopNumStages)))
       continue;
     // HACK: Set this attribute so that LowerLoops will multi-buffer TMA
     // descriptors.

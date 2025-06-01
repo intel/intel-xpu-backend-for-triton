@@ -557,8 +557,10 @@ struct PrefetchOpConversion
             /*v_blocks*/ vBlocks,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
         if (failed(newOp.verify())) {
-          // Explicitly invoke verifier because `triton_gen` ops are immediately
-          // lowered further to a builtin call.
+          // delete the op so that the verifier will not abort the pass
+          // pipeline later, as we can fail this path and try a different
+          // approach.
+          rewriter.eraseOp(newOp);
           return failure();
         }
       }
@@ -757,8 +759,10 @@ struct PrefetchOpConversion
                 /*v_blocks*/ vBlocks,
                 /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
             if (failed(newOp.verify())) {
-              // Explicitly invoke verifier because `triton_gen` ops are
-              // immediately lowered further to a builtin call.
+              // delete the op so that the verifier will not abort the pass
+              // pipeline later, as we can fail this path and try a different
+              // approach.
+              rewriter.eraseOp(newOp);
               return failure();
             }
           }
@@ -830,7 +834,10 @@ struct LoadOpToBlockIOConversion
     auto llAttr = LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
     SmallVector<unsigned> threadOrder(llAttr.getThreadOrder());
     size_t rank = threadOrder.size();
-    assert(rank == 2 && "only support rank of 2 for now");
+    if (rank != 2) {
+      // only support rank of 2 for now.
+      return failure();
+    }
     const bool valueRowMajor =
         (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
     assert((valueRowMajor ||
@@ -936,6 +943,12 @@ struct LoadOpToBlockIOConversion
       }
     } break;
     case DpasEncodingAttr::OpIdx::OperandC:
+      warpShape = std::move(dpasLayout.getShapeC());
+      dpasInstShape = std::move(dpasLayout.getDPASInstShapeC());
+      dimOuter = rank - 2;
+      dimInner = rank - 1;
+      usePackedType = false;
+      break;
     default:
       llvm_unreachable("unknown DPAS operands index type.");
       break;
@@ -1056,6 +1069,9 @@ struct LoadOpToBlockIOConversion
         numOperandsPer2DLoadN = repCluster[dimOuter];
         break;
       case DpasEncodingAttr::OpIdx::OperandC:
+        numOperandsPer2DLoadM = repCluster[dimOuter];
+        numOperandsPer2DLoadN = repCluster[dimInner];
+        break;
       default:
         llvm_unreachable("unknown DPAS operands index type.");
         break;
@@ -1137,6 +1153,10 @@ struct LoadOpToBlockIOConversion
       repInnerStride = warpShape[dimInner] * numOperandsInnerDimPerLoad;
       break;
     case DpasEncodingAttr::OpIdx::OperandC:
+      numRepOuter = numReps[dimOuter];
+      numRepInner = numReps[dimInner];
+      repInnerStride = warpShape[dimInner] * innerDimWarpNum;
+      break;
     default:
       llvm_unreachable("unknown DPAS operands index type.");
       break;
@@ -1320,6 +1340,7 @@ struct LoadOpToBlockIOConversion
 
                   // Save the decomposed vals to the map;
                   switch (opIdx) {
+                  case DpasEncodingAttr::OpIdx::OperandC:
                   case DpasEncodingAttr::OpIdx::OperandA: {
                     unsigned o = outer * numLoadPerOutRepCluster *
                                      numOperandsOuterDimPerLoad +
@@ -1343,7 +1364,6 @@ struct LoadOpToBlockIOConversion
                     loadVals[{o, i}] =
                         b.bitcast(loadVal, unpackedDPASOperandType);
                   } break;
-                  case DpasEncodingAttr::OpIdx::OperandC:
                   default: {
                     llvm_unreachable("unknown DPAS operands index type.");
                   } break;
@@ -1557,8 +1577,10 @@ struct LoadOpConversion
                   /*transpose*/ false,
                   /*vnni_transform*/ false);
               if (failed(load2dOp.verify())) {
-                // Explicitly invoke verifier because `triton_gen` ops are
-                // immediately lowered further to a builtin call.
+                // delete the op so that the verifier will not abort the pass
+                // pipeline later, as we can fail this path and try a different
+                // approach.
+                rewriter.eraseOp(load2dOp);
                 return failure();
               }
 
@@ -2070,8 +2092,10 @@ struct LoadOpConversion
               (usePackedType && !isOperandA && !isTransposeRequired &&
                originalElemBits != 32));
           if (failed(load2dOp.verify())) {
-            // Explicitly invoke verifier because `triton_gen` ops are
-            // immediately lowered further to a builtin call.
+            // delete the op so that the verifier will not abort the pass
+            // pipeline later, as we can fail this path and try a different
+            // approach.
+            rewriter.eraseOp(load2dOp);
             return failure();
           }
           LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
@@ -2504,8 +2528,10 @@ struct StoreOpConversion
                 /*stored_val*/ b.bitcast(storeVal, store2DGenXType));
 
             if (failed(newOp.verify())) {
-              // Explicitly invoke verifier because `triton_gen` ops are
-              // immediately lowered further to a builtin call.
+              // delete the op so that the verifier will not abort the pass
+              // pipeline later, as we can fail this path and try a different
+              // approach.
+              rewriter.eraseOp(newOp);
               return failure();
             }
           }
@@ -2894,7 +2920,9 @@ struct AtomicRMWOpConversion
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-      if (valueElemNBits == 16) {
+      bool support16BitAtomics = moduleOp->hasAttr(
+          TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+      if (valueElemNBits == 16 && !support16BitAtomics) {
         op.emitWarning(
             "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "

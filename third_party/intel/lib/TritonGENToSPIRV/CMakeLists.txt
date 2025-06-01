@@ -6,5 +6,4 @@ add_triton_library(TritonGENToSPIRV
 
   LINK_LIBS PUBLIC
   MLIRSPIRVDialect
-  TritonIntelUtils
 )

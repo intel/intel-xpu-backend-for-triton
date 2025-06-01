@@ -9,13 +9,13 @@ if (NOT CUTLASSLibrary_FOUND)
     set(CUTLASSLibrary_SOURCE_DIR
             "${CMAKE_CURRENT_BINARY_DIR}/CUTLASSLibrary")
     message(STATUS "CUTLASSLibrary is not specified. Will try to download
-                  CUTLASS library from https://github.com/codeplaysoftware/cutlass-fork into
+                  CUTLASS library from https://github.com/codeplaysoftware/cutlass-sycl.git into
                   ${CUTLASSLibrary_SOURCE_DIR}")
     file(READ cutlass_kernel/cutlass-library.conf CUTLASSLibrary_TAG)
     # Strip the potential trailing newline from tag
     string(STRIP "${CUTLASSLibrary_TAG}" CUTLASSLibrary_TAG)
     FetchContent_Declare(cutlass-library
-            GIT_REPOSITORY    https://github.com/codeplaysoftware/cutlass-fork
+            GIT_REPOSITORY    https://github.com/codeplaysoftware/cutlass-sycl.git
             GIT_TAG           ${CUTLASSLibrary_TAG}
             SOURCE_DIR ${CUTLASSLibrary_SOURCE_DIR}
             )

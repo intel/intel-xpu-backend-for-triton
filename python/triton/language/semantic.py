@@ -4,6 +4,8 @@ import warnings
 from typing import List, Optional, Sequence, Tuple, TypeVar
 import numbers
 
+from triton.runtime import driver
+
 from .._C.libtriton import ir
 from . import core as tl
 
@@ -1182,9 +1184,20 @@ def descriptor_atomic_add(desc: tl.tensor_descriptor_base, value: tl.tensor, off
     return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
 
 
+def _has_native_tma():
+    target = driver.active.get_current_target()
+    return (target.backend == "cuda" and target.arch >= 90)
+
+
+def _descriptor_atomic_min_max_supported(dtype):
+    assert dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    if dtype in {tl.float16, tl.bfloat16}:
+        assert _has_native_tma(), "16-bit float types require native tma support"
+
+
 def descriptor_atomic_min(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
     validate_store_like(desc, value, offsets)
-    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    _descriptor_atomic_min_max_supported(desc.dtype)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     kind = ir.DESCRIPTOR_REDUCE_KIND.MIN
     return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
@@ -1192,7 +1205,7 @@ def descriptor_atomic_min(desc: tl.tensor_descriptor_base, value: tl.tensor, off
 
 def descriptor_atomic_max(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
     validate_store_like(desc, value, offsets)
-    assert desc.dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
+    _descriptor_atomic_min_max_supported(desc.dtype)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     kind = ir.DESCRIPTOR_REDUCE_KIND.MAX
     return tl.tensor(builder.create_descriptor_reduce(kind, desc.handle, value.handle, offsets), tl.void)
@@ -1383,7 +1396,9 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     element_ty = ptr.type.scalar.element_ty
     if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
-    if element_ty in [tl.int16, tl.uint16, tl.bfloat16] or element_ty.primitive_bitwidth < 16:
+    if element_ty is tl.bfloat16 and op != 'add':
+        raise ValueError("atomic_" + op + " does not support bf16")
+    if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
         raise ValueError("atomic_" + op + " does not support " + str(element_ty))
     if ptr.type.is_block():
         if mask is not None:

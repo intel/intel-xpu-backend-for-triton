@@ -1,0 +1,16 @@
+name: Triton benchmarks, BMG
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/triton-benchmarks*.yml
+      - benchmarks/**
+
+jobs:
+  benchmarks:
+    uses: ./.github/workflows/triton-benchmarks.yml
+    with:
+      runner_label: b580
+      skip_benchmarks: "[]"

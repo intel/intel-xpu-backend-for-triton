@@ -271,6 +271,10 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps);
 
+std::optional<LinearLayout>
+getTmemLoadStoreLayout16x256(int M, int N, RankedTensorType oldType,
+                             int numWarps);
+
 // Return a layout valid for TMemLoad op for a tmem layout of block MxN that
 // distribute the data long M for the warp groups. This doesn't affect the TMem
 // layout it just returns a distributed layout compatible for tmem_load.
@@ -287,8 +291,7 @@ LinearLayout chooseScaledMfmaScaleLayout(
 // 8 elements. This layout is useful for emitting the widest 128-bit global
 // store instructions. Since it closely resembles mfmaLayout, conversion between
 // the two can be done using transferWithinWarp, without involving LDS
-LinearLayout chooseMfmaLikeStoreLayout(AMDMfmaEncodingAttr mfmaLayout,
-                                       ArrayRef<int64_t> shape);
+std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

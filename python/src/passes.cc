@@ -36,12 +36,15 @@ void init_triton_passes_common(py::module &&m) {
 
 void init_triton_passes_ttir(py::module &&m) {
   using namespace mlir::triton;
-  ADD_PASS_WRAPPER_0("add_combine", createCombineOpsPass);
-  ADD_PASS_WRAPPER_0("add_reorder_broadcast", createReorderBroadcastPass);
+  ADD_PASS_WRAPPER_0("add_combine", createTritonCombineOps);
+  ADD_PASS_WRAPPER_0("add_reorder_broadcast", createTritonReorderBroadcast);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
-                     createRewriteTensorPointerPass);
-  ADD_PASS_WRAPPER_0("add_loop_unroll", createLoopUnrollPass);
-  ADD_PASS_WRAPPER_0("add_triton_licm", createLoopInvariantCodeMotionPass);
+                     createTritonRewriteTensorPointer);
+  ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
+                     createTritonRewriteTensorDescriptorToPointer);
+  ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
+  ADD_PASS_WRAPPER_0("add_triton_licm", createTritonLoopInvariantCodeMotion);
+  ADD_PASS_WRAPPER_0("add_loop_aware_cse", createTritonLoopAwareCSE);
   ADD_PASS_OPTION_WRAPPER_4("add_convert_to_ttgpuir",
                             createConvertTritonToTritonGPU, const std::string &,
                             int, int, int);
@@ -57,7 +60,6 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_1("add_warp_specialize",
                             createTritonGPUAutomaticWarpSpecialization, int);
   ADD_PASS_WRAPPER_0("add_prefetch", createTritonGPUPrefetch);
-  ADD_PASS_WRAPPER_0("add_WGMMAPrefetch", createTritonGPUWGMMAPrefetch);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul", createTritonGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      createTritonGPUReorderInstructions);

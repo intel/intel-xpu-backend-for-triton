@@ -23,6 +23,14 @@ TRITON_BUILTIN = "__triton_builtin__"
 PropagateNan = ir.PROPAGATE_NAN
 
 
+def must_use_result(x, s=True):
+    """If the result of this function is unused, throw an error."""
+    if isinstance(x, str):
+        return (lambda fn: must_use_result(fn, x))
+    x._must_use_result = s
+    return x
+
+
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
     assert callable(fn)
@@ -296,6 +304,13 @@ CONSTEXPR_0 = constexpr(0)
 
 def _unwrap_if_constexpr(o):
     return o.value if isinstance(o, constexpr) else o
+
+
+def _normalize_tuple(t):
+    normalized_tuple = _unwrap_if_constexpr(t)
+    if isinstance(normalized_tuple, (list, builtins.tuple)):
+        normalized_tuple = tuple(normalized_tuple)
+    return normalized_tuple
 
 
 def check_bit_width(value, shift_value):
@@ -1061,7 +1076,6 @@ class tensor(base_value):
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        import builtins
         if isinstance(slices, (builtins.slice, slice, constexpr)) or slices is None:
             slices = [slices]
         if isinstance(slices, tuple):
@@ -1229,7 +1243,7 @@ class tensor(base_value):
 
 class tuple(base_value):
 
-    def __init__(self, args: list, type: tuple_type = None):
+    def __init__(self, args: Sequence, type: tuple_type = None):
         self.values = [i for i in args]
 
         def get_type(x):
@@ -1247,7 +1261,6 @@ class tuple(base_value):
         if isinstance(idx, constexpr):
             return self.values[idx]
         else:
-            import builtins
             assert isinstance(idx, (slice, builtins.slice))
             return tuple(self.values[idx.start:idx.stop:idx.step])
 
@@ -1262,8 +1275,7 @@ class tuple(base_value):
         self.values[idx] = value
 
     def __add__(self, other):
-        if isinstance(other, list):
-            other = tuple(other)
+        other = _normalize_tuple(other)
         return tuple(self.values + other.values)
         # return tuple(a + b for a, b in zip(self.values, other.values))
 
@@ -1272,13 +1284,10 @@ class tuple(base_value):
         return tuple(self.values * other.value)
 
     def __eq__(self, other):
-        import builtins
-        if isinstance(other, (list, builtins.tuple)):
-            other = tuple(other)
+        other = _normalize_tuple(other)
         return constexpr(self.values == other.values)
 
     def __hash__(self):
-        import builtins
         return hash(builtins.tuple(self.values))
 
     def __str__(self):
@@ -1710,6 +1719,22 @@ def _take_first(a, b):
     return a
 
 
+def _unsplat(x, _builder=None, _generator=None):
+    """
+    Convert a single-element tensor to a scalar.
+    """
+    if len(x.shape) == 0:
+        return x
+    numel = 1
+    for d in x.shape:
+        numel *= d
+    assert numel == 1, "can only unsplat single-element tensors"
+    if len(x.shape) >= 2:
+        x = semantic.reshape(x, [1], builder=_builder)
+    x = typing.cast(tensor, reduce(x, 0, _take_first, _builder=_builder, _generator=_generator))
+    return x
+
+
 @_tensor_member_fn
 @builtin
 def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
@@ -1739,8 +1764,8 @@ def split(a, _builder=None, _generator=None) -> tuple[tensor, tensor]:
 
     if was_rank_1:
         # Currently `reduce` is the best way to convert a tensor of shape [1] to a scalar.
-        out_lhs = typing.cast(tensor, reduce(out_lhs, None, _take_first, _builder=_builder, _generator=_generator))
-        out_rhs = typing.cast(tensor, reduce(out_rhs, None, _take_first, _builder=_builder, _generator=_generator))
+        out_lhs = _unsplat(out_lhs, _builder, _generator)
+        out_rhs = _unsplat(out_rhs, _builder, _generator)
 
     return out_lhs, out_rhs
 
@@ -1769,7 +1794,16 @@ def view(input, *shape, _builder=None):
 
 @_tensor_member_fn
 @builtin
-def reshape(input, *shape, can_reorder=False, _builder=None):
+def item(input, _builder=None, _generator=None):
+    """
+    Converts a single-element tensor into a scalar.
+    """
+    return _unsplat(input, _builder=_builder, _generator=_generator)
+
+
+@_tensor_member_fn
+@builtin
+def reshape(input, *shape, can_reorder=False, _builder=None, _generator=None):
     """
     Returns a tensor with the same number of elements as input but with the
     provided shape.
@@ -1785,6 +1819,8 @@ def reshape(input, *shape, can_reorder=False, _builder=None):
         reshape(x, 32, 32)
     """
     shape = _shape_check_impl(_unwrap_iterable(shape))
+    if len(shape) == 0:
+        return _unsplat(input, _builder=_builder, _generator=_generator)
     return semantic.reshape(input, shape, can_reorder, _builder)
 
 
@@ -2080,6 +2116,9 @@ def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _b
     return semantic.make_block_ptr(base, shape, strides, offsets, block_shape, order, _builder)
 
 
+@must_use_result(
+    "Note that tl.advance does not have any side effects. To move the block pointer, you need to assign the result of tl.advance to a variable."
+)
 @_tensor_member_fn
 @builtin
 def advance(base, offsets, _builder=None):

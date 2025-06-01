@@ -4,6 +4,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -256,7 +257,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
        llvm::zip(wsOp.getPartitionRegions(), partitionNumWarps,
                  wsOp.getPartitionNumWarps(), maxTensorRegs, estRegUsage)) {
     // "Guess" the register usage for each partition.
-    estRegs = tensorRegs ? 72 : 24;
+    estRegs = tensorRegs ? 88 : 24;
 
     // Layouts need to be reassigned if the number of warps changed and there
     // are tensor computations.

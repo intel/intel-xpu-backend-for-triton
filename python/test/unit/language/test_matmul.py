@@ -34,7 +34,7 @@ def matmul_kernel(  #
         stride_cm, stride_cn,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
         NUM_STAGES: tl.constexpr, SCALE_A: tl.constexpr = None, PRECISION: tl.constexpr = "ieee",
-        A_TRANS: tl.constexpr = False, EPILOGUE_SUBTILE: tl.constexpr = False):
+        A_TRANS: tl.constexpr = False, EPILOGUE_SUBTILE: tl.constexpr = False, dummy: tl.constexpr = 0):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
@@ -97,8 +97,9 @@ def get_src_element_ty_size(dtype_str):
 @pytest.mark.parametrize("NUM_CTAS", [1, 2])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("EPILOGUE_SUBTILE", [True, False])
+@pytest.mark.parametrize("LAYOUT_16x256", [True, False])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, NUM_CTAS, device,
-                       EPILOGUE_SUBTILE):
+                       EPILOGUE_SUBTILE, LAYOUT_16x256, monkeypatch):
     if NUM_CTAS > 1 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 9):
         pytest.xfail("Clusters requires nvidia compute capability >= 9")
     if is_hip() and ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
@@ -118,6 +119,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("multi-CTAs is broken for mmav2")
     if EPILOGUE_SUBTILE and not is_xpu() and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
         pytest.skip("creates convert layout too big to fit in smem")
+    if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
+        pytest.xfail("skip forcing tmem layout on non blackwell targets.")
     M, N, K = 1024, 512, 256
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
@@ -133,12 +136,16 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         b = torch.randn(K, N, dtype=dtype_src, device=device)
         A = a
         B = b
+    # pass a dummy constexpr argument to force recompilation.
+    if LAYOUT_16x256:
+        monkeypatch.setenv("TRITON_PREFER_TMEM_16x256_LAYOUT", "1")
     dtype_dst = getattr(torch, dtype_dst_str)
     output = torch.empty((M, N), dtype=dtype_dst, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
                             output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PRECISION=precision,
-                            num_warps=NUM_WARPS, num_ctas=NUM_CTAS, EPILOGUE_SUBTILE=EPILOGUE_SUBTILE)
+                            num_warps=NUM_WARPS, num_ctas=NUM_CTAS, EPILOGUE_SUBTILE=EPILOGUE_SUBTILE,
+                            dummy=LAYOUT_16x256)
     ref_out = torch.matmul(A, B).to(torch.float32)
     output = output.to(torch.float32)
     if dtype_src_str == "float32":
@@ -161,6 +168,13 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         ttgir = k.asm["ttgir"]
         count = ttgir.count("ttng.tc_gen5_mma")
         assert count == 2, "The TTGIR does not match the expected pattern."
+        ptx = k.asm["ptx"]
+        if LAYOUT_16x256:
+            assert "16x256b" in ptx, "PTX does not contain 16x256b"
+        else:
+            if "32x32b" not in ptx and "16x32b" not in ptx:
+                print(ptx)
+            assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
 
 
 # persistent matmul with fused loops
@@ -338,18 +352,7 @@ def fp8e8m0_to_float32(scale):
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
 def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     if is_xpu():
-        if (nonKDim == 0 and NUM_WARPS == 4 and (M, N, K, BLOCK_M, BLOCK_N, BLOCK_K) in {
-            (1024, 512, 256, 128, 64, 128),
-            (1024, 512, 256, 128, 128, 64),
-            (128, 256, 256, 128, 128, 64),
-            (128, 128, 128, 128, 128, 64),
-        }):
-            pytest.skip("https://github.com/intel/intel-xpu-backend-for-triton/issues/3677")
-        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
-                triton.runtime.driver.active.utils.get_device_properties(
-                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
-            pytest.xfail("Not enough shared memory")
-
+        pytest.xfail("XPU does not natively support scaled mxfp matmul")
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
@@ -396,8 +399,6 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     atol = 0.0001
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
-    if not is_cuda():
-        return
 
     if is_cuda() and torch.cuda.get_device_capability()[0] == 10:
         # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
@@ -491,12 +492,8 @@ def block_scale_mxfp_matmul(  #
                     reason="Requires compute capability == 10")
 def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
     if is_xpu():
-        if not torch.xpu.get_device_capability()["has_subgroup_matrix_multiply_accumulate"]:
-            pytest.skip("The device does not support MMA")
-        elif (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 256, 256) and \
-                triton.runtime.driver.active.utils.get_device_properties(
-                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
-            pytest.xfail("Not enough shared memory")
+        pytest.xfail("XPU does not natively support scaled mxfp matmul")
+
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
@@ -545,7 +542,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     if USE_2D_SCALE_LOAD:
         # Due to an issue in the coalescing pass, tmem_copy can not be generated for the 5D load.
         # The issue is fixed using the patch from https://github.com/triton-lang/triton/pull/4914
-        assert is_xpu() or "tcgen05.cp" in out.asm["ptx"]
+        assert "tcgen05.cp" in out.asm["ptx"]
     if NUM_STAGES > 1:
         if BLOCK_M == BLOCK_K and BLOCK_N == BLOCK_K:
             load_pipelined = ttgir.count(f"ttg.local_alloc : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_M}x{BLOCK_K}") == 2
@@ -563,12 +560,16 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
             print(f"SWP failed for M = {M}, N = {N}")
 
 
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 128, 32), (128, 256, 32)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 128, 32), (128, 256, 32),
+                                                       (256, 64, 32)])
 @pytest.mark.parametrize("a_trans", [False, True])
 @pytest.mark.parametrize("dtype_src_str", ["float32", "float16", "float8e5"])
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, monkeypatch):
+    if is_xpu():
+        pytest.xfail("XPU does not natively support tmem")
+
     M = 1024
     N = 512
     K = 256
@@ -636,9 +637,9 @@ def lhs_in_tmem_kernel_mxfp(  #
 @pytest.mark.skipif(is_hip() or (is_cuda() and torch.cuda.get_device_capability()[0] != 10),
                     reason="Requires compute capability == 10")
 def test_lhs_in_tmem_mxfp(device, monkeypatch):
-    if is_xpu() and not torch.xpu.get_device_capability()["has_subgroup_matrix_multiply_accumulate"]:
-        pytest.skip("The device does not support MMA")
-    _knob_promote_lhs_to_tmem(monkeypatch)
+    if is_xpu():
+        pytest.xfail("XPU does not natively support scaled mxfp matmul and tmem")
+
     M, N, K = 128, 64, 32
     torch.manual_seed(42)
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8, device=device)
@@ -759,7 +760,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
     elif is_xpu():
-        pytest.skip("FIXME: failed to legalize operation 'tt.dot_scaled' on XPU")
+        pytest.xfail("XPU does not natively support scaled fp4 matmul")
 
     NUM_STAGES = 1
     torch.manual_seed(42)
@@ -918,14 +919,10 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
+    elif is_xpu():
+        pytest.xfail("XPU does not natively support scaled mxfp8 & mxfp4 matmul")
     if not PACK_B_ALONG_K and B_DATA_TYPE != "float4":
         pytest.xfail("Pack along K can only be False for float4")
-
-    if is_xpu():
-        required_sm = BLOCK_M * BLOCK_K * 2 + BLOCK_N * BLOCK_K * 2
-        if triton.runtime.driver.active.utils.get_device_properties(
-                triton.runtime.driver.active.get_current_device())["max_shared_mem"] < required_sm:
-            pytest.xfail("Not enough shared memory")
 
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
