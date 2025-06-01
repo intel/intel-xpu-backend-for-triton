@@ -7,6 +7,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -234,8 +235,6 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
                                     SmallVector<Value> &changed,
                                     Operation *op) {
   for (Value value : values) {
-    if (!value)
-      continue;
     if (!isa<RankedTensorType>(value.getType()))
       continue;
     bool hasChanged = false;
@@ -318,8 +317,12 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         return isMMAorMMADerived;
       };
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
-        setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
-                    info, changed, user);
+        if (storeOp.getMask())
+          setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
+                      info, changed, user);
+        else
+          setEncoding({storeOp.getPtr(), storeOp.getValue()}, info, changed,
+                      user);
       }
       continue;
     }
