@@ -55,7 +55,7 @@ env:
 
 jobs:
   compute-params:
-    runs-on: ubuntu-latest
+    runs-on: linux
     outputs:
       suite: ${{ steps.set_suite.outputs.suite }}
     steps:
