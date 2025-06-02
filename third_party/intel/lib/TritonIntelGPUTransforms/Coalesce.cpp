@@ -395,11 +395,14 @@ private:
                "Expecting operand to have blocked pointer type");
         std::optional<tt::MakeTensorPtrOp> defOp =
             triton::intel::findDefiningMakeTensorPtrOp(operand);
-        assert(defOp && "Expecting a MakeTensorPtr operation");
-        LLVM_DEBUG({
-          llvm::dbgs() << "[" DEBUG_TYPE "]: Found definition: " << defOp
-                       << "\n";
-        });
+        if (!defOp) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "[" DEBUG_TYPE
+                        "]: Could not find 'make_tensor_ptr' definition for "
+                     << operand << "\n");
+          return;
+        }
+
         IRRewriter rewriter(builder);
         changeAndPropagateLayout(*defOp, encoding, rewriter);
         newArgs.push_back(operand);

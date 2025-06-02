@@ -295,9 +295,7 @@ private:
     // operation.
     std::optional<tt::MakeTensorPtrOp> defOp =
         tt::intel::findDefiningMakeTensorPtrOp(ptr);
-    if (!defOp)
-      return false;
-
+    assert(defOp && "Expected a make tensor ptr op.");
     tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
     Operation::operand_range shape = makeTensorPtrOp.getShape();
     if (shape.size() == 1)

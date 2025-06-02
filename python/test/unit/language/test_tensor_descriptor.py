@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_xpu
@@ -260,7 +260,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.xfail("CTAs is unsupported for these cards")
-    if is_xpu() and ndim not in [1] or dtype_str not in ["uint16", "uint32"]:
+    if is_xpu() and dtype_str not in uint_dtypes and ndim == 2 and not INNER_BLOCK == 16:
         pytest.skip("FIXME: issue #4139")
 
     @triton.jit
@@ -759,8 +759,6 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
 
 @pytest.mark.interpreter
 def test_tensor_descriptor_batched_gemm_2d_tma(device):
-    if is_xpu():
-        pytest.skip("FIXME: issue #4132")
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
 
     if is_hip():
@@ -1332,8 +1330,6 @@ def torch_gather_rows(input, idx, y, block_y):
 def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.xfail()
-    if is_xpu():
-        pytest.skip("FIXME: issue #4267")
 
     torch.manual_seed(42)
     if dtype != torch.int8:
@@ -1385,8 +1381,6 @@ def tma_gather_dot_pipeline(  #
 @pytest.mark.skipif(is_cuda() and torch.cuda.get_device_capability()[0] == 9,
                     reason="TMA Gather not supported on hopper")
 def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
-    if is_xpu():
-        pytest.skip("FIXME: issue #4267")
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -1437,8 +1431,6 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.xfail()
-    if is_xpu():
-        pytest.skip("FIXME: issue #4267")
 
     torch.manual_seed(42)
     input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device=device).reshape(BLOCK_X, BLOCK_Y)
@@ -1515,9 +1507,11 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.xfail("Multi-CTA not supported")
         if is_hip_cdna3() and (kind, dtype_str, M_BLOCK, N_BLOCK) in REDUCE_SKIP_HIP_CDNA3:
             pytest.skip("Broken on rocm")
-
-    if is_xpu():
-        pytest.skip("FIXME: issue #4281")
+        if is_xpu():
+            if descriptor == "host":
+                pytest.skip("FIXME: issue #4289")
+            if (kind, dtype_str) in [("add", "bfloat16")]:
+                pytest.skip("FIXME: issue #4375")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):

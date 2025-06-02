@@ -3,6 +3,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <optional>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -62,6 +63,26 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
       Value val = whileOp.getYieldedValues()[opRes.getResultNumber()];
       return findDefiningMakeTensorPtrOp(val);
     }
+    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      // Give up if the 2 possible definitions aren't the same.
+      Region &thenRgn = ifOp.getThenRegion();
+      Region &elseRgn = ifOp.getElseRegion();
+      assert(thenRgn.hasOneBlock() && elseRgn.hasOneBlock() &&
+             "Expecting single blocks on both the 'then' and 'else' regions");
+      auto thenYieldOp =
+               cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator()),
+           elseYieldOp =
+               cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
+      Value thenVal = thenYieldOp->getOperand(opRes.getResultNumber()),
+            elseVal = elseYieldOp->getOperand(opRes.getResultNumber());
+      std::optional<tt::MakeTensorPtrOp> thenDef =
+          findDefiningMakeTensorPtrOp(thenVal);
+      std::optional<tt::MakeTensorPtrOp> elseDef =
+          findDefiningMakeTensorPtrOp(elseVal);
+      if (!thenDef || !elseDef || *thenDef != *elseDef)
+        return std::nullopt;
+      return thenDef;
+    }
     if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
       // Give up if the 2 possible definitions aren't the same.
       Value trueVal = selectOp.getTrueValue(),
@@ -75,6 +96,7 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
       return trueDef;
     }
 
+    llvm::errs() << "defOp: " << *defOp << "\n";
     assert(false && "unhandled operation");
   }
 

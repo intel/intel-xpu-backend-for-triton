@@ -11,15 +11,7 @@ on:
       suite:
         description: Space separated lists of test suites or "all"
         type: string
-        default: >-
-          inductor/test_kernel_benchmark.py
-          inductor/test_codegen_triton.py
-          inductor/test_triton_extension_backend.py
-          inductor/test_triton_heuristics.py
-          inductor/test_triton_wrapper.py
-          inductor/test_triton_kernels.py
-          inductor/test_gpu_cpp_wrapper.py
-          inductor/test_aot_inductor.py
+        default:  ""
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -37,15 +29,52 @@ on:
         type: string
         default: "PyTorch inductor tests on Linux"
 
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/pins/pytorch.txt
+      - .github/workflows/inductor-tests.yml
+
 permissions: read-all
 
+env:
+  DEFAULT_SUITE: >-
+    inductor/test_kernel_benchmark.py
+    inductor/test_codegen_triton.py
+    inductor/test_triton_extension_backend.py
+    inductor/test_triton_heuristics.py
+    inductor/test_triton_wrapper.py
+    inductor/test_triton_kernels.py
+    inductor/test_gpu_cpp_wrapper.py
+    inductor/test_aot_inductor.py
+    inductor/test_select_algorithm.py
+    # FIXME: enable them later
+    # inductor/test_max_autotune.py
+    # inductor/test_compile_subprocess.py
+
 jobs:
+  compute-params:
+    runs-on: linux
+    outputs:
+      suite: ${{ steps.set_suite.outputs.suite }}
+    steps:
+      - id: set_suite
+        run: |
+          SUITE="${{ inputs.suite }}"
+          if [ -z "${SUITE}" ]; then
+            echo "Using default suite"
+            SUITE="${DEFAULT_SUITE}"
+          fi
+          echo "suite=${SUITE}" >> "$GITHUB_OUTPUT"
+
   run_tests:
     name: Run inductor tests
+    needs: compute-params
     uses: ./.github/workflows/inductor-tests-reusable.yml
     with:
-      pytorch_repo: ${{ inputs.pytorch_repo }}
-      python_version: ${{ inputs.python_version }}
-      runner_label: ${{ inputs.runner_label }}
-      suite: ${{ inputs.suite }}
-      pytorch_ref: ${{ inputs.pytorch_ref }}
+      pytorch_repo: ${{ inputs.pytorch_repo || 'pytorch/pytorch' }}
+      python_version: ${{ inputs.python_version || '3.9' }}
+      runner_label: ${{ inputs.runner_label || '' }}
+      suite: ${{ needs.compute-params.outputs.suite }}
+      pytorch_ref: ${{ inputs.pytorch_ref || '' }}

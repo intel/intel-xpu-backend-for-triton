@@ -61,6 +61,22 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([](Operation *op) {
+      if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op) ||
+          isa<tt::DescriptorReduceOp>(op)) {
+        op->emitRemark(
+            "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (res.wasInterrupted()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "TritonIntelTensorDescToBlockPointer: Skipping module - "
+                    "contains unsupported operations\n");
+      return;
+    }
+
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
       return TypeSwitch<Operation *, WalkResult>(op)
           .Case<tt::MakeTensorDescOp>([&](auto makeTensorDescOp) {
@@ -127,39 +143,41 @@ private:
   }
 
   void propagateToLoops(Operation *op) {
-    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op)) {
-      bool updated = false;
-      for (auto [initArg, rgnInitArg, yieldVal, loopRes] :
-           llvm::zip(loopOp.getInits(), loopOp.getRegionIterArgs(),
-                     loopOp.getYieldedValues(), loopOp->getResults())) {
-        Type initArgType = initArg.getType();
-        Type rgnInitArgType = rgnInitArg.getType();
-        assert(rgnInitArgType == loopRes.getType() &&
-               rgnInitArgType == yieldVal.getType() && "Type mismatch");
-        if (rgnInitArgType != initArgType) {
-          rgnInitArg.setType(initArgType);
-          yieldVal.setType(initArgType);
-          loopRes.setType(initArgType);
-          updated = true;
-        }
-      }
-      if (!updated)
-        return;
+    auto loopOp = dyn_cast<LoopLikeOpInterface>(op);
+    if (!loopOp)
+      return;
 
-      // For while loops we also need to update the "after" region arguments.
-      if (auto loopOp = dyn_cast<scf::WhileOp>(op)) {
-        for (auto [initArg, rgnAfterArg] :
-             llvm::zip(loopOp.getInits(), loopOp.getAfterArguments())) {
-          Type initArgType = initArg.getType();
-          if (rgnAfterArg.getType() != initArgType)
-            rgnAfterArg.setType(initArgType);
-        }
+    bool updated = false;
+    for (auto [initArg, rgnInitArg, yieldVal, loopRes] :
+         llvm::zip(loopOp.getInits(), loopOp.getRegionIterArgs(),
+                   loopOp.getYieldedValues(), loopOp->getResults())) {
+      Type initArgType = initArg.getType();
+      Type rgnInitArgType = rgnInitArg.getType();
+      assert(rgnInitArgType == loopRes.getType() &&
+             rgnInitArgType == yieldVal.getType() && "Type mismatch");
+      if (rgnInitArgType != initArgType) {
+        rgnInitArg.setType(initArgType);
+        yieldVal.setType(initArgType);
+        loopRes.setType(initArgType);
+        updated = true;
       }
-
-      // Propagate the loop results to their users.
-      for (Operation *user : loopOp->getUsers())
-        propagateToLoops(user);
     }
+    if (!updated)
+      return;
+
+    // For while loops we also need to update the "after" region arguments.
+    if (auto loopOp = dyn_cast<scf::WhileOp>(op)) {
+      for (auto [initArg, rgnAfterArg] :
+           llvm::zip(loopOp.getInits(), loopOp.getAfterArguments())) {
+        Type initArgType = initArg.getType();
+        if (rgnAfterArg.getType() != initArgType)
+          rgnAfterArg.setType(initArgType);
+      }
+    }
+
+    // Propagate the loop results to their users.
+    for (Operation *user : loopOp->getUsers())
+      propagateToLoops(user);
   }
 
   LogicalResult rewriteMakeTensorDescriptorOp(tt::MakeTensorDescOp op) {
