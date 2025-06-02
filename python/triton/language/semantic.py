@@ -672,7 +672,7 @@ def reshape(input: tl.tensor, dst_shape: List[int], can_reorder: bool, builder: 
 
 
 def expand_dims(input: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
-    dst_shape = [tl._constexpr_to_value(x) for x in input.shape]
+    dst_shape = [tl._unwrap_if_constexpr(x) for x in input.shape]
     dst_shape.insert(axis, 1)
 
     if not input.type.is_block():
@@ -716,7 +716,7 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 def split(a: tl.tensor, builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
     assert (len(a.shape) > 0)
-    assert (tl._constexpr_to_value(a.shape[-1]) == 2)
+    assert (tl._unwrap_if_constexpr(a.shape[-1]) == 2)
 
     new_shape = a.shape[:-1]
     ret_type = tl.block_type(a.type.scalar, new_shape)
@@ -730,7 +730,7 @@ def split(a: tl.tensor, builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
 def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tensor:
     if len(input.shape) != len(dims):
         raise ValueError("permute dims must have the same length as input shape")
-    if sorted(tl._constexpr_to_value(d) for d in dims) != list(range(len(dims))):
+    if sorted(tl._unwrap_if_constexpr(d) for d in dims) != list(range(len(dims))):
         raise ValueError(f"permute dims must be a permutation of 0, 1, ..., n-1, but were {dims}")
 
     ret_type = tl.block_type(input.type.scalar, [input.shape[d] for d in dims])
@@ -1569,6 +1569,10 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
 
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+        if "fp8e4b15" in builder.options.deprecated_fp8_dot_operand_dtypes:
+            warnings.warn(
+                "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+            )
         # We upcast because there's no fp8e4b15 type in MLIR
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
@@ -1963,13 +1967,13 @@ def make_tensor_descriptor(
         raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
     assert isinstance(base.dtype, tl.pointer_type)
     elem_size = base.dtype.element_ty.primitive_bitwidth // 8
-    contig_dim_size = tl._constexpr_to_value(block_shape[-1])
+    contig_dim_size = tl._unwrap_if_constexpr(block_shape[-1])
     if contig_dim_size * elem_size < 16:
         raise ValueError(
             f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
         )
 
-    strides[-1] = tl._constexpr_to_value(strides[-1])
+    strides[-1] = tl._unwrap_if_constexpr(strides[-1])
     backend = triton.runtime.driver.active.get_current_target().backend
     if backend != "xpu" and strides[-1] != 1:
         raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
