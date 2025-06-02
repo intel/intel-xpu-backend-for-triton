@@ -78,20 +78,21 @@ bool isLongLifeSpanVariable(Value v, const LivenessBlockInfo *livenessBlockInfo,
   // The variable is considered as a long life span elected for being moved if:
   // the live-in variables of the forOp consist in a large amount of bytes and
   // the variable defined by `v` is a large tensor (with large amount of element
-  // in the minor dimenssion) and The variable liveness of `v` expends before
+  // in the minor dimenssion) and the variable liveness of `v` expends before
   // the dot block. i.e. used in a block - loaded in another block
-  if (TensorValue tensorV = dyn_cast<TensorValue>(v)) {
-    auto tensorType = cast<RankedTensorType>(tensorV.getType());
-    auto tensorOrder = ttg::getOrder(tensorType);
-    return (
-        (tensorOrder.size() == 2) &&
-        (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
-        (tensorType.getShape()[tensorOrder[1]] >=
-         LARGE_TENSOR_MINOR_SHAPE_THRESHOLD) &&
-        (LiveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
-        livenessBlockInfo->isLiveIn(v));
-  }
-  return false;
+  TensorValue tensorV = dyn_cast<TensorValue>(v);
+  if (!tensorV)
+    return false;
+
+  auto tensorType = cast<RankedTensorType>(tensorV.getType());
+  auto tensorOrder = ttg::getOrder(tensorType);
+  return (
+      (tensorOrder.size() == 2) &&
+      (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
+      (tensorType.getShape()[tensorOrder[1]] >=
+       LARGE_TENSOR_MINOR_SHAPE_THRESHOLD) &&
+      (LiveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
+      livenessBlockInfo->isLiveIn(v));
 }
 
 /// Return true if the \p loadOp is suitable to be moved.
