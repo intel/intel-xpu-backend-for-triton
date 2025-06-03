@@ -112,7 +112,13 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'triton':
-        kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD_qk == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
+        kernel_options = {
+            'BLOCK_M': 32 if D_HEAD_v == 96 else 128,
+            'BLOCK_N': 64 if N_CTX_q > 1024 else 16 if D_HEAD_v == 96 else 32,
+            'num_warps': 16 if D_HEAD_v == 128 else 4 if D_HEAD_v == 96 else 8,
+            'num_stages': 2,
+            'BLOCKS_ARE_CONTIGUOUS': True,
+        }
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
