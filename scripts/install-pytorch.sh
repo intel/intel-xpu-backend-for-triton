@@ -199,13 +199,13 @@ function build_pytorch {
   pip install 'cmake<4.0.0'
   pip install -r requirements.txt
   pip install cmake ninja
-  USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
+  USE_XCCL=1 USE_STATIC_MKL=1 python setup.py develop
 }
 
 function install_pytorch {
   echo "****** Installing PyTorch ******"
   cd "$PYTORCH_PROJ"
-  pip install dist/*.whl
+  # pip install dist/*.whl
 }
 
 if [ "$CHECK_WHEEL" = false ] || ! pytorch_wheel_exists; then

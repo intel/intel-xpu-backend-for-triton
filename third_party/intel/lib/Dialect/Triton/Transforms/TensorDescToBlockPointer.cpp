@@ -62,7 +62,8 @@ public:
     ModuleOp moduleOp = getOperation();
 
     WalkResult res = moduleOp->walk<WalkOrder::PreOrder>([](Operation *op) {
-      if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op)) {
+      if (isa<tt::DescriptorGatherOp>(op) || isa<tt::DescriptorScatterOp>(op) ||
+          isa<tt::DescriptorReduceOp>(op)) {
         op->emitRemark(
             "TritonIntelTensorDescToBlockPointer: Failed to rewrite");
         return WalkResult::interrupt();

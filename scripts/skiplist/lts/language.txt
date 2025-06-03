@@ -369,15 +369,5 @@ python/test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-128-64]
 python/test/unit/language/test_pipeliner.py::test_indirect_matmul[5-128-64-128]
 python/test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-256-256]
 python/test/unit/language/test_matmul.py::test_lhs_in_tmem
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-128-256-8192-8192-8192]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-128-8192-8192-8192]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-256-1024-512-256]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-256-128-256-256]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[1-128-256-256-8192-8192-8192]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-128-256-8192-8192-8192]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-128-8192-8192-8192]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-256-1024-512-256]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-256-128-256-256]
-python/test/unit/language/test_tensor_descriptor.py::test_mxfp8_mxfp4_matmul_tma[3-128-256-256-8192-8192-8192]
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_2d_tma
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma

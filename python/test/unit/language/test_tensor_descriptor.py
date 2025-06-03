@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3, is_xpu
@@ -260,7 +260,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.xfail("CTAs is unsupported for these cards")
-    if is_xpu() and ndim not in [1] or dtype_str not in ["uint16", "uint32"]:
+    if is_xpu() and dtype_str not in uint_dtypes and ndim == 2 and not INNER_BLOCK == 16:
         pytest.skip("FIXME: issue #4139")
 
     @triton.jit
@@ -1270,6 +1270,12 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
     if BLOCK_K < K and is_cuda() and torch.cuda.get_device_capability(0)[0] != 10:
         pytest.skip("Currently broken on hopper")
 
+    required_sm = BLOCK_M * BLOCK_K * 2 + BLOCK_K * BLOCK_N * 2
+    max_sm = triton.runtime.driver.active.utils.get_device_properties(
+        triton.runtime.driver.active.get_current_device())["max_shared_mem"]
+    if is_xpu() and required_sm > max_sm:
+        pytest.xfail(f"Not enough shared memory for the given block size ({BLOCK_M}, {BLOCK_N}, {BLOCK_K})")
+
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
 
     dtype_src_str = "float8e5"
@@ -1507,9 +1513,11 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
             pytest.xfail("Multi-CTA not supported")
         if is_hip_cdna3() and (kind, dtype_str, M_BLOCK, N_BLOCK) in REDUCE_SKIP_HIP_CDNA3:
             pytest.skip("Broken on rocm")
-
-    if is_xpu():
-        pytest.skip("FIXME: issue #4281")
+        if is_xpu():
+            if descriptor == "host":
+                pytest.skip("FIXME: issue #4289")
+            if (kind, dtype_str) in [("add", "bfloat16")]:
+                pytest.skip("FIXME: issue #4375")
 
     @triton.jit(debug=True)
     def kernel(out_desc, out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, kind: tl.constexpr):

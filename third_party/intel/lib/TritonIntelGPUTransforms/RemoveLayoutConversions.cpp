@@ -97,6 +97,7 @@ public:
   void rewriteAssertOp(AssertOp assertOp);
   // Rewrite a StoreOp with the forwarded DPAS layout if applicable.
   // return true if the StoreOp has been rewritten.
+  bool rewriteTensorPtrStoreOp(StoreOp storeOp);
   bool rewriteStoreOp(StoreOp storeOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
@@ -239,7 +240,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
       Attribute dstEncoding;
-      if (isa<ConvertLayoutOp>(op)) {
+      if (isa<StoreOp, ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
         dstEncoding = encoding;
@@ -301,6 +302,28 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
           });
       if (isBlockedOrMma)
         setEncoding(user->getResults(), info, changed, user);
+      continue;
+    }
+    if (auto storeOp = dyn_cast<StoreOp>(user)) {
+      auto checkMMAorMMADerived = [](Attribute encoding) {
+        bool isMMAorMMADerived = isa<MmaEncodingTrait>(encoding);
+        if (isa<SliceEncodingAttr>(encoding)) {
+          isMMAorMMADerived |= isa<MmaEncodingTrait>(
+              cast<SliceEncodingAttr>(encoding).getParent());
+        } else if (isa<DotOperandEncodingAttr>(encoding)) {
+          isMMAorMMADerived |= isa<MmaEncodingTrait>(
+              cast<DotOperandEncodingAttr>(encoding).getParent());
+        }
+        return isMMAorMMADerived;
+      };
+      if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
+        if (storeOp.getMask())
+          setEncoding({storeOp.getPtr(), storeOp.getValue(), storeOp.getMask()},
+                      info, changed, user);
+        else
+          setEncoding({storeOp.getPtr(), storeOp.getValue()}, info, changed,
+                      user);
+      }
       continue;
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
@@ -421,7 +444,6 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           if (rewriteStoreOp(storeOp))
             continue;
         }
-
         // If we don't need to rewrite the op we still need to remap the
         // operands.
         for (OpOperand &operand : op.getOpOperands()) {
@@ -719,7 +741,7 @@ static void updateAdvanceOpChain(AdvanceOp advanceOp, StoreOp storeOp,
   }
 }
 
-bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
+bool LayoutPropagation::rewriteTensorPtrStoreOp(StoreOp storeOp) {
   // Disable 2D block store on LTS.
   if (!storeOp->getParentOfType<ModuleOp>()->hasAttr(
           ttgi::TritonIntelGPUDialect::getSupportSG2DBlockAttrName()))
@@ -829,6 +851,40 @@ bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
   // instructions are removed by the clean-up step performed at
   // the end of this pass (step 4).
   return true;
+}
+
+bool LayoutPropagation::rewriteStoreOp(StoreOp storeOp) {
+  if (rewriteTensorPtrStoreOp(storeOp))
+    return true;
+
+  Operation *op = storeOp.getOperation();
+  llvm::MutableArrayRef<OpOperand> operands = op->getOpOperands();
+  // Check if all store op operands should use new encoding.
+  bool usesNewEncoding = llvm::all_of(operands, [&](OpOperand &operand) {
+    auto it = layouts.find(operand.get());
+    if (it == layouts.end())
+      return false;
+    LayoutInfo &info = it->second;
+    assert(info.encodings.size() == 1 &&
+           "we should have resolved to a single encoding");
+    auto encoding =
+        cast<RankedTensorType>(operand.get().getType()).getEncoding();
+    return encoding != *info.encodings.begin();
+  });
+  if (usesNewEncoding) {
+    for (OpOperand &operand : op->getOpOperands()) {
+      auto it = layouts.find(operand.get());
+      Attribute encoding =
+          cast<RankedTensorType>(operand.get().getType()).getEncoding();
+      LayoutInfo &info = it->second;
+      encoding = info.encodings[0];
+      Value newOperand = getValueAs(operand.get(), encoding);
+      op->setOperand(operand.getOperandNumber(), newOperand);
+    }
+    return true;
+  }
+
+  return false;
 }
 
 Operation *LayoutPropagation::rewriteOp(Operation *op) {
