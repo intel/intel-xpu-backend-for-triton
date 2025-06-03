@@ -14,8 +14,6 @@ using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
-using Partition = WarpSchedule::Partition;
-
 //===----------------------------------------------------------------------===//
 // assignPartitions
 //===----------------------------------------------------------------------===//
@@ -247,11 +245,7 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
   for (auto [mmaOp, userPartition] : llvm::zip(mmas, userPartitions)) {
     scheduleUsers(loop, schedule, userPartition, mmaOp);
   }
-  for (ttng::MMAv5OpInterface mmaOp : mmas) {
-    scheduleDependencies(loop, schedule, defaultPartition, mmaOp);
-  }
 
-  schedule.updatePartitions();
   return schedule;
 }
 
@@ -447,10 +441,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       });
     }
 
-    // If all ops are on the critical path, assign them to the sink partition.
+    // If all ops are on the critical path, assign them to the def partition.
     if (critPath.size() == cluster.ops.size()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(sinkPartition, op);
+        schedule.insert(defPartition, op);
       continue;
     }
 
@@ -472,8 +466,6 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     for (Operation *op : cluster.ops)
       schedule.insert(defPartition, op);
   }
-
-  schedule.updatePartitions();
 }
 
 //===----------------------------------------------------------------------===//

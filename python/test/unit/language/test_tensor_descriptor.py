@@ -1270,6 +1270,12 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
     if BLOCK_K < K and is_cuda() and torch.cuda.get_device_capability(0)[0] != 10:
         pytest.skip("Currently broken on hopper")
 
+    required_sm = BLOCK_M * BLOCK_K * 2 + BLOCK_K * BLOCK_N * 2
+    max_sm = triton.runtime.driver.active.utils.get_device_properties(
+        triton.runtime.driver.active.get_current_device())["max_shared_mem"]
+    if is_xpu() and required_sm > max_sm:
+        pytest.xfail(f"Not enough shared memory for the given block size ({BLOCK_M}, {BLOCK_N}, {BLOCK_K})")
+
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
 
     dtype_src_str = "float8e5"
