@@ -78,6 +78,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                             enum gpu::intel::SplitBarrierScope);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
+  ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
+                     gpu::intel::createTritonIntelGPUOptimizeDotOperands);
   ADD_PASS_WRAPPER_0("add_coalesce", gpu::intel::createTritonIntelGPUCoalesce);
   ADD_PASS_OPTION_WRAPPER_2("add_prefetch_block",
                             gpu::intel::createTritonIntelGPUPrefetchBlock, int,

@@ -294,6 +294,7 @@ class XPUBackend(BaseBackend):
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
+        intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
         passes.ttgpuir.add_prefetch(pm)
