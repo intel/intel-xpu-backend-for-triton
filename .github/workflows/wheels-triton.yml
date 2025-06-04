@@ -1,0 +1,108 @@
+name: Triton wheels
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/wheels-triton.yml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/wheels-pytorch.yml
+
+permissions: read-all
+
+env:
+  NEW_WORKSPACE: C:\gh${{ github.run_id }}
+
+jobs:
+  windows:
+    runs-on:
+      - windows
+      - b580
+    strategy:
+      matrix:
+        python:
+          - "3.9"
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+      fail-fast: false
+      max-parallel: 2
+    steps:
+      - name: Checkout Triton repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
+      # Copy workspace to a temporary location with a shorter name.
+      - name: Copy workspace
+        run: |
+          Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
+
+      - name: Create venv
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          python -m venv .venv
+
+      - name: Install build dependencies
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          .venv\Scripts\activate.ps1
+          pip install cibuildwheel
+
+      - name: Set Triton version
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          cd pytorch
+          $pytorch_version = Get-Content version.txt
+          $pytorch_version = "$pytorch_version.post${{ env.GITHUB_RUN_NUMBER }}"
+          echo "$pytorch_version" > version.txt
+          echo "PyTorch version: $pytorch_version"
+
+      - name: Build Triton wheels
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+          $env:CIBW_BUILD_VERBOSITY = "1"
+          $env:CIBW_SKIP = "cp{35,36,37}-*"
+          $env:CIBW_BUILD = "cp" + "${{ matrix.python}}".replace(".", "") + "*-win_amd64"
+          $env:CIBW_CACHE_PATH = "${{ env.NEW_WORKSPACE }}/cibw"
+
+          python -m cibuildwheel --output-dir wheelhouse
+
+      - name: Artifact name
+        run: |
+          (Get-ChildItem -Path "${{ env.NEW_WORKSPACE }}\wheelhouse\*.whl").Name | Tee-Object -Variable WHEELS_NAME
+          echo "WHEELS_NAME=$WHEELS_NAME" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.WHEELS_NAME }}
+          path: ${{ env.NEW_WORKSPACE }}\wheelhouse\*.whl
+
+      - name: Clean up workspace
+        if: ${{ always() }}
+        run: |
+          Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
+
+      - name: Clean up temporary files
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf rm -rf /tmp/triton-* /tmp/tmp*
