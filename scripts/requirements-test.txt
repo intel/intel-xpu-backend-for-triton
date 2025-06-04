@@ -1,5 +1,5 @@
 # Keep in sync with extra_require.tests from setup.py
-filecheck
+filecheck>=1.0.0
 lit
 numpy
 pytest
