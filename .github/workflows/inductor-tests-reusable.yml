@@ -29,6 +29,9 @@ permissions: read-all
 env:
   PYTHON_VERSION: "${{ inputs.python_version }}"
   PYTORCH_REPO: "${{ inputs.pytorch_repo }}"
+  # Despite the name this _disables_ rerunning tests one by one.
+  # Note that the standard pytest retries are still enabled.
+  PYTORCH_TEST_RERUN_DISABLED_TESTS: "1"
 
 jobs:
   build:
