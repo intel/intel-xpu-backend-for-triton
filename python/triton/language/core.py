@@ -636,6 +636,10 @@ class dtype(base_type):
             return 'V'
         return super().mangle()
 
+    def with_element_ty(self, element_ty: dtype):
+        assert not self.is_block()
+        return element_ty
+
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -713,6 +717,9 @@ class block_type(dtype):
 
     def get_block_shapes(self) -> Tuple[int]:
         return self.shape
+
+    def with_element_ty(self, scalar_ty: dtype) -> block_type:
+        return block_type(scalar_ty, self.shape)
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, block_type):
@@ -2556,7 +2563,7 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None
 # -----------------------
 
 
-def _add_scan_docstr(name: str) -> Callable[[T], T]:
+def _add_scan_docstr(name: str, dtype_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2565,7 +2572,15 @@ def _add_scan_docstr(name: str) -> Callable[[T], T]:
     :param input: the input values
     :type input: Tensor
     :param axis: the dimension along which the scan should be done
-    :type axis: int"""
+    :type axis: int
+    :param reverse: if true, the scan is performed in the reverse direction
+    :type reverse: bool"""
+
+        if dtype_arg is not None:
+            docstr += f"""
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, small integer types (< 32 bits) are upcasted to prevent overflow. Note that :code:`tl.bfloat16` inputs are automatically promoted to :code:`tl.float32`.
+    :type {dtype_arg}: tl.dtype"""
+
         func.__doc__ = docstr.format(name=name)
         return func
 

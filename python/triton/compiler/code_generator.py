@@ -4,11 +4,12 @@ import re
 import warnings
 import textwrap
 import itertools
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
 from .. import knobs, language
-from .._C.libtriton import ir
+from .._C.libtriton import ir, gluon_ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line
@@ -271,13 +272,19 @@ class ASTFunction:
         return vals
 
 
+@dataclass(frozen=True)
+class BoundJITMethod:
+    __self__: base_value
+    __func__: JITFunction
+
+
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
                  module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
                  file_name: Optional[str] = None, begin_line=0):
         self.context = context
-        self.builder = ir.builder(context)
+        self.builder = ir.builder(context) if not jit_fn.is_gluon() else gluon_ir.GluonOpBuilder(context)
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
         self.begin_line = begin_line - 1
@@ -565,6 +572,11 @@ class CodeGenerator(ast.NodeVisitor):
             assert target.ctx.__class__.__name__ == "Store"
             for i, name in enumerate(target.elts):
                 self.set_value(self.visit(name), value.values[i])
+            return
+        if isinstance(target, ast.Attribute):
+            assert target.ctx.__class__.__name__ == "Store"
+            base = self.visit(target.value)
+            setattr(base, target.attr, value)
             return
         assert isinstance(target, ast.Name)
         self.set_value(self.visit(target), value)
@@ -1242,6 +1254,9 @@ class CodeGenerator(ast.NodeVisitor):
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
         args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+        if isinstance(fn, BoundJITMethod):
+            args.insert(0, fn.__self__)
+            fn = fn.__func__
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
@@ -1333,7 +1348,10 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         if _is_triton_tensor(lhs) and node.attr == "T":
             return semantic.permute(lhs, (1, 0), builder=self.builder)
-        return getattr(lhs, node.attr)
+        attr = getattr(lhs, node.attr)
+        if _is_triton_value(lhs) and isinstance(attr, JITFunction):
+            return BoundJITMethod(lhs, attr)
+        return attr
 
     def visit_Expr(self, node):
         node.value._is_unused = True
