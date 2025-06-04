@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <cstdlib>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -75,7 +76,10 @@ inline void assertIsRecognized(const std::string &env) {
   assert((is_invalidating || is_neutral) && errmsg.c_str());
 }
 
+static std::mutex getenv_mutex;
+
 inline std::string getStrEnv(const std::string &env) {
+  std::lock_guard<std::mutex> lock(getenv_mutex);
   assertIsRecognized(env);
   const char *cstr = std::getenv(env.c_str());
   if (!cstr)
@@ -86,6 +90,7 @@ inline std::string getStrEnv(const std::string &env) {
 
 // return value of a cache-invalidating boolean environment variable
 inline bool getBoolEnv(const std::string &env) {
+  std::lock_guard<std::mutex> lock(getenv_mutex);
   assertIsRecognized(env);
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");
