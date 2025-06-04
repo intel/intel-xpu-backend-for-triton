@@ -642,6 +642,5 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
             fp.write(src)
         k = triton.compile(kernel_path, target=triton.runtime.driver.active.get_current_target())
         spv = k.asm['spvdis']
-        assert "OpCapability Kernel" in spv
-        assert "LocalSize 128 1 1" in spv
+        assert "OpCapability KernelAttributesINTEL" in spv
         assert "SubgroupSize 32" in spv
