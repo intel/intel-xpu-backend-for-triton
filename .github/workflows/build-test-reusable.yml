@@ -355,7 +355,6 @@ jobs:
 
       - name: Run E2E test
         if: matrix.suite == 'rest'
-        ignore_errors: ${{ inputs.ignore_errors }}
         timeout-minutes: 60
         run: |
           ${{ env.TRITON_TEST_CMD }} --inductor
