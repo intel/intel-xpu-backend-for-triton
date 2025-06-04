@@ -355,7 +355,7 @@ jobs:
 
       - name: Run E2E test
         if: matrix.suite == 'rest'
-        timeout-minutes: 60
+        timeout-minutes: 15
         run: |
           ${{ env.TRITON_TEST_CMD }} --inductor
 
@@ -367,6 +367,7 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
+        if: success() || ${{ inputs.ignore_errors }}
         uses: actions/upload-artifact@v4
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
