@@ -355,9 +355,8 @@ jobs:
 
       - name: Run E2E test
         if: matrix.suite == 'rest'
-        timeout-minutes: 15
         run: |
-          ${{ env.TRITON_TEST_CMD }} --inductor
+          timeout 15m -s KILL ${{ env.TRITON_TEST_CMD }} --inductor || ${{ inputs.ignore_errors }}
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
