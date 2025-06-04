@@ -90,7 +90,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           cd pytorch
           $pytorch_version = Get-Content version.txt
-          $pytorch_version = "$pytorch_version.post${{ env.GITHUB_RUN_NUMBER }}"
+          $pytorch_version = "$pytorch_version.post$env:GITHUB_RUN_NUMBER"
           echo "$pytorch_version" > version.txt
           echo "PyTorch version: $pytorch_version"
 
