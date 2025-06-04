@@ -1,4 +1,3 @@
-02-fused-softmax
 03i-matrix-multiplication
 06-fused-attention
 08-grouped-gemm
