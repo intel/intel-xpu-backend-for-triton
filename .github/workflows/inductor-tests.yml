@@ -23,7 +23,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.9"
+        default: "3.10"
       run_name:
         description: Custom run name
         type: string
@@ -74,7 +74,7 @@ jobs:
     uses: ./.github/workflows/inductor-tests-reusable.yml
     with:
       pytorch_repo: ${{ inputs.pytorch_repo || 'pytorch/pytorch' }}
-      python_version: ${{ inputs.python_version || '3.9' }}
+      python_version: ${{ inputs.python_version || '3.10' }}
       runner_label: ${{ inputs.runner_label || '' }}
       suite: ${{ needs.compute-params.outputs.suite }}
       pytorch_ref: ${{ inputs.pytorch_ref || '' }}
