@@ -64,13 +64,13 @@ jobs:
           pip install cibuildwheel
 
       - name: Set Triton version
+        shell: bash
         run: |
-          cd ${{ env.NEW_WORKSPACE }}
-          cd pytorch
-          $pytorch_version = Get-Content version.txt
-          $pytorch_version = "$pytorch_version.post${{ env.GITHUB_RUN_NUMBER }}"
-          echo "$pytorch_version" > version.txt
-          echo "PyTorch version: $pytorch_version"
+          cd /c/gh${{ github.run_id }}
+          version="$(./scripts/triton-version.sh)"
+          version="$version.post$GITHUB_RUN_NUMBER+git$(git rev-parse --short=7 HEAD)"
+          ./scripts/triton-version.sh "$version"
+          echo "Triton version: $(./scripts/triton-version.sh)"
 
       - name: Build Triton wheels
         run: |
