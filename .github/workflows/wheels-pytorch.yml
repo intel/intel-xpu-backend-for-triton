@@ -57,6 +57,7 @@ jobs:
           git checkout $pytorch_commit
           git submodule update --init --recursive
           bash -c '../scripts/patch-pytorch.sh'
+          echo "PyTorch commit: $pytorch_commit"
 
       - name: Create venv
         run: |
@@ -77,6 +78,15 @@ jobs:
           cd pytorch/.github/scripts
           python -c 'from generate_binary_build_matrix import PYTORCH_EXTRA_INSTALL_REQUIREMENTS; print(PYTORCH_EXTRA_INSTALL_REQUIREMENTS["xpu"])' | Tee-Object -Variable PYTORCH_EXTRA_INSTALL_REQUIREMENTS
           echo "PYTORCH_EXTRA_INSTALL_REQUIREMENTS=$PYTORCH_EXTRA_INSTALL_REQUIREMENTS" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Set PyTorch version
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          cd pytorch
+          $pytorch_version = Get-Content version.txt
+          $pytorch_version = "$pytorch_version.post${{ env.GITHUB_RUN_NUMBER }}"
+          echo "$pytorch_version" > version.txt
+          echo "PyTorch version: $pytorch_version"
 
       - name: Build PyTorch wheels
         run: |
