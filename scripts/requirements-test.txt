@@ -1,4 +1,5 @@
 # Keep in sync with extra_require.tests from setup.py
+filecheck
 lit
 numpy
 pytest
