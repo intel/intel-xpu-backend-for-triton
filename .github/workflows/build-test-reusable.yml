@@ -379,6 +379,7 @@ jobs:
     runs-on:
       - linux
     needs: integration-tests
+    if: success() || ${{ inputs.ignore_errors }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
