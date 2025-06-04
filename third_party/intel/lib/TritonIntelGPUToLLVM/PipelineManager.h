@@ -67,7 +67,17 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       result.push_back(attr);
     }
   }
-
+  /// Calling convention for the scratch buffer on shared and global:
+  ///
+  /// - Shared memory:
+  ///   * Kernel functions:
+  ///       Use the address of `global_smem` as the scratch stack.
+  ///   * Non-kernel functions:
+  ///       Uses the second last param as the shared scratch stack.
+  ///
+  /// - Global memory:
+  ///   * Both kernel and non-kernel functions:
+  ///       Use the last param as the global scratch stack.
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo) const {
