@@ -27,6 +27,7 @@ if (NOT CUTLASSLibrary_FOUND)
 
     set(CUTLASSLibrary_INCLUDE_DIR "${CUTLASSLibrary_SOURCE_DIR}/include" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
     set(CUTLASSLibrary_INCLUDE_TOOL_DIR "${CUTLASSLibrary_SOURCE_DIR}/tools/util/include" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
+    set(CUTLASSLibrary_INCLUDE_APPLICATION_DIR "${CUTLASSLibrary_SOURCE_DIR}/applications" CACHE INTERNAL "CUTLASSLibrary_SOURCE_DIR")
 
     find_package_handle_standard_args(
             CUTLASSLibrary
