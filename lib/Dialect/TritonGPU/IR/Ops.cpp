@@ -417,7 +417,7 @@ OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
 
 LogicalResult
 MemDescTransOp::inferReturnTypes(MLIRContext *context,
-                                 std::optional<Location> location,
+                                 std::optional<Location> loc,
                                  MemDescTransOp::Adaptor adaptor,
                                  SmallVectorImpl<Type> &inferredReturnTypes) {
 
@@ -433,9 +433,8 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
-            .failed()) {
+    if (failed(inferLayoutInterface->inferTransOpEncoding(
+            argEncoding, shape, order, retEncoding, loc))) {
       return failure();
     }
   }
