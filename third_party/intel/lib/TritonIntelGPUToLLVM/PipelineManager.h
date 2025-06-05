@@ -143,9 +143,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setCConv(LLVM::CConv::SPIR_FUNC);
     }
 
-    constexpr size_t numDims = 3;
-    std::array<int, numDims> localSize{threadsPerWarp * numWarps, 1, 1};
-    newFuncOp.setReqdWorkGroupSize(localSize);
+    newFuncOp->setAttr(
+        TritonGEN::TritonGENDialect::getMaxWorkGroupSizeAttrName(),
+        rewriter.getDenseI32ArrayAttr({threadsPerWarp * numWarps, 1, 1}));
     newFuncOp.setIntelReqdSubGroupSize(threadsPerWarp);
 
     if (!LLVM::isKernel(funcOp)) {

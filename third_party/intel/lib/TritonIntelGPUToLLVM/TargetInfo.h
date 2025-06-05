@@ -36,8 +36,6 @@ public:
                       ArrayRef<unsigned> order,
                       int swizzleByteSize) const override;
 
-  bool supportLdStMatrix() const override { return false; }
-
   void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
                          Value val) const override;
 

@@ -396,4 +396,17 @@ def TritonIntelGPURewriteStackPtr
   ];
 }
 
+def TritonIntelGPUReduceVariableLiveness
+    : Pass<"tritonintelgpu-reduce-variable-liveness", "mlir::ModuleOp"> {
+  let summary = "Attempt to reduce the variable liveness";
+
+  let description = [{
+    This pass attempts to reduce the variable liveness
+    by reducing the distance between loads and usage.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
 #endif // TRITON_INTEL_GPU_PASSES

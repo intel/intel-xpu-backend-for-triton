@@ -381,12 +381,14 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
   }];
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
 }
 
 def NVMMASharedEncodingAttr :
@@ -437,7 +439,11 @@ def NVMMASharedEncodingAttr :
         } else {
           swizzlingByteWidth = 0;
         }
-        if (shapePerCTA.size() < 2 || shapePerCTA[order[1]] < 8) {
+        int flattenOutterDim = 1;
+        for (int i = 1; i < shapePerCTA.size(); i++) {
+          flattenOutterDim *= shapePerCTA[order[i]];
+        }
+        if (shapePerCTA.size() < 2 || flattenOutterDim < 8) {
           swizzlingByteWidth = 0;
         }
         bool transposed = order[0] == 0;
@@ -446,6 +452,7 @@ def NVMMASharedEncodingAttr :
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
@@ -552,6 +559,7 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
   );
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    unsigned getRank() const { return getCTAOrder().size(); }
     int32_t getAlignment() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
