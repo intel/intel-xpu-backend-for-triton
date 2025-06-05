@@ -38,7 +38,7 @@ on:
           - float32
         default: all
       models:
-        description: Run all models or a subset from .github/models/accuracy/{suite}.txt
+        description: Run all models or a subset from .github/models/performance/{suite}.txt
         type: choice
         options:
           - all
