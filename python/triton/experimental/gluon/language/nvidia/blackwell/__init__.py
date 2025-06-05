@@ -2,14 +2,24 @@ from __future__ import annotations
 from typing import Optional, Tuple, List, TYPE_CHECKING
 
 from dataclasses import dataclass
+from triton.language.semantic import _convert_elem_to_ir_value, _convert_to_ir_values
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+
+from . import tma
+from ..hopper import mbarrier
 
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from triton._C.libtriton import gluon_ir as ir
 
-__all__ = ["TensorMemoryLayout", "tensor_memory_descriptor", "allocate_tensor_memory"]
+__all__ = [
+    "TensorMemoryLayout",
+    "tensor_memory_descriptor",
+    "allocate_tensor_memory",
+    "mbarrier",
+    "tma",
+]
 
 
 @dataclass(frozen=True, eq=True)
@@ -29,6 +39,12 @@ class TensorMemoryLayout:
             self.unpacked,
             cta_split_num,
         )
+
+    def mangle(self) -> str:
+        block_str = f"{self.block[0]}x{self.block[1]}"
+        unpacked_str = "U" if self.unpacked else "P"
+        cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
+        return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
 
 
 class tensor_memory_descriptor_type(base_type):
@@ -66,7 +82,7 @@ class tensor_memory_descriptor_type(base_type):
         return not (self == other)
 
     def mangle(self) -> str:
-        shape_str = "_".join(self.shape)
+        shape_str = "_".join([str(s) for s in self.shape])
         return f"MD{self.element_ty.mangle()}S{shape_str}SL{self.layout.mangle()}LAS{self.alloc_shape}ASMD"
 
 
@@ -87,6 +103,10 @@ class tensor_memory_descriptor(base_value):
     def shape(self):
         return self.type.shape
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
     def __str__(self) -> str:
         return str(self.type)
 
@@ -104,7 +124,7 @@ class tensor_memory_descriptor(base_value):
         _builder.create_tmem_store(self.handle, value.handle, pred.handle)
 
     @builtin
-    def subslice(self, start, length, _builder: GluonOpBuilder) -> None:
+    def split(self, start, length, _builder: GluonOpBuilder) -> None:
         start = _unwrap_if_constexpr(start)
         length = _unwrap_if_constexpr(length)
         assert isinstance(start, int)
@@ -114,13 +134,51 @@ class tensor_memory_descriptor(base_value):
         ret.handle = _builder.create_tmem_subslice(ret.type.to_ir(_builder), self.handle, start)
         return ret
 
+    @builtin
+    def subslice(self, index, shape=None, layout=None, _builder: GluonOpBuilder = None) -> tensor_memory_descriptor:
+        if layout is None:
+            layout = self.type.layout
+        if shape is None:
+            shape = self.shape[1:]
+
+        index = _convert_elem_to_ir_value(_builder, index, require_i64=False)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
+
+        offsets = [_builder.get_int32(0)] * self.rank
+        offsets[0] = index
+        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
+        ret.handle = _builder.create_memdesc_subview(ret.type.to_ir(_builder), self.handle, offsets)
+        return ret
+
 
 @builtin
 def allocate_tensor_memory(element_ty, shape, layout, value=None, _builder=None):
     element_ty = _unwrap_if_constexpr(element_ty)
     shape = _unwrap_if_constexpr(shape)
     layout = _unwrap_if_constexpr(layout)
+    value = value.handle if value is not None else None
 
     ty = tensor_memory_descriptor_type(element_ty, shape, layout, shape)
-    handle = _builder.create_tmem_alloc(ty.to_ir(_builder), value.handle)
+    handle = _builder.create_tmem_alloc(ty.to_ir(_builder), value)
     return tensor_memory_descriptor(handle, element_ty, shape, layout, shape)
+
+
+@builtin
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _builder=None):
+    use_acc = ttgl.to_tensor(use_acc, _builder=_builder)
+    pred = ttgl.to_tensor(pred, _builder=_builder)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = ttgl.to_tensor(True, _builder=_builder)
+            mbarrier_preds = [true] * len(mbarriers)
+        else:
+            mbarrier_preds = _convert_to_ir_values(_builder, mbarrier_preds, require_i64=False)
+
+    _builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)

@@ -410,7 +410,8 @@ static Attribute inferTransOpDstEncoding(Attribute srcEnc,
   if (succeeded(
           srcEnc.getDialect()
               .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-              ->inferTransOpEncoding(srcEnc, shape, order, retEncoding))) {
+              ->inferTransOpEncoding(srcEnc, shape, order, retEncoding,
+                                     /*loc=*/{}))) {
     return retEncoding;
   }
   return {};
@@ -681,17 +682,15 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
   return newForOp;
 }
 
-Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
-                                          ValueRange newIterOperands) {
-  unsigned curArgIdx = loop.getNumRegionIterArgs();
+scf::ForOp addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp loop,
+                             ValueRange newIterOperands) {
   scf::ForOp newLoop =
       replaceForOpWithNewSignature(rewriter, loop, newIterOperands);
   // Save the caller from insertion point invalidation.
   if (rewriter.getInsertionPoint() == loop->getIterator())
     rewriter.setInsertionPoint(newLoop);
   loop.erase();
-  loop = newLoop;
-  return loop.getRegionIterArgs().slice(curArgIdx);
+  return newLoop;
 }
 
 scf::WhileOp replaceWhileOpWithNewSignature(
