@@ -1,3 +1,5 @@
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -6,17 +8,16 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
-
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Utils/Utility.h"
-
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/Support/Debug.h"
 #include <optional>
+
+#define DEBUG_TYPE "tritonintelgpu-optimize-dot-operands"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -52,13 +53,14 @@ public:
     if (!isCandidate(transOp))
       return failure();
 
+    LLVM_DEBUG(llvm::dbgs() << "Candidate: " << transOp << "\n");
     auto tensorType = cast<RankedTensorType>(transOp.getType());
     Attribute dotEncoding =
         cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
     auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
     tt::MakeTensorPtrOp makeTensorPtrOp =
         *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
-    llvm::errs() << "makeTensorPtrOp: " << makeTensorPtrOp << "\n";
+    LLVM_DEBUG(llvm::dbgs() << "makeTensorPtrOp: " << makeTensorPtrOp << "\n");
 
     // Create a MakeTensorPtrOp yielding a block pointer to the transposed
     // tensor.
@@ -73,13 +75,12 @@ public:
     Value ptr = builder.create<tt::MakeTensorPtrOp>(
         makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
         newShape, newStrides, newOffsets, makeTensorPtrOp.getOrderAttr());
-    assert(makeTensorPtrOp->hasOneUse() && "Expecing single user");
-    llvm::errs() << "newMakeTensorPtrOp: " << ptr << "\n";
+    assert(makeTensorPtrOp->hasOneUse() && "Expecting single user");
+    LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp: " << ptr << "\n");
 
     // Transitively update users of the block pointer.
     Operation *makeTensorPtrOpUser = *makeTensorPtrOp->getUsers().begin();
     if (auto advanceOp = dyn_cast<tt::AdvanceOp>(makeTensorPtrOpUser)) {
-      llvm::errs() << "user is advance: " << advanceOp << "\n";
       ptr = updateAdvanceOpChain(advanceOp, loadOp, ptr);
     } else {
       // TODO: handle loop init args (scf.for only for now).
@@ -93,7 +94,6 @@ public:
         loadOp.getLoc(), ptr, loadOp.getMask(), loadOp.getOther(),
         loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
         loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-    llvm::errs() << "newLoadOp: " << newLoadOp << "\n";
 
     StringRef blockIOAttrName =
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
@@ -107,11 +107,11 @@ public:
     assert(newAttr && "Expecting a valid blockIO attribute");
 
     newLoadOp->setAttr(blockIOAttrName, newAttr);
+    LLVM_DEBUG(llvm::dbgs() << "newLoadOp: " << newLoadOp << "\n");
 
     transOp->replaceAllUsesWith(newLoadOp);
 
     [[maybe_unused]] auto moduleOp = newLoadOp->getParentOfType<ModuleOp>();
-    moduleOp->dumpPretty();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
 
     return success();
@@ -142,7 +142,6 @@ private:
     if (!defOp || !isa<tt::LoadOp>(defOp))
       return false;
 
-    llvm::errs() << "at line " << __LINE__ << "\n";
     return isCandidate(cast<tt::LoadOp>(defOp));
   }
 
@@ -154,51 +153,31 @@ private:
     if (!loadOp->hasOneUse() || !loadOpHasBlockIOAttr)
       return false;
 
-    llvm::errs() << "at line " << __LINE__ << "\n";
     auto ptrType = cast<tt::PointerType>(loadOp.getPtr().getType());
     if (!isTensorPointerType(ptrType) ||
         cast<RankedTensorType>(ptrType.getPointeeType()).getRank() != 2)
       return false;
 
-    llvm::errs() << "at line " << __LINE__ << "\n";
     std::optional<tt::MakeTensorPtrOp> defOp =
         *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
-    if (!defOp || !singleUsersInChain(*defOp, loadOp)) {
-      llvm::errs() << "at line " << __LINE__ << "\n";
+    if (!defOp || !singleUsersInChain(*defOp, loadOp))
       return false;
-    }
-    llvm::errs() << "at line " << __LINE__ << "\n";
+
     return true;
   }
 
   bool singleUsersInChain(Operation *start, Operation *end) const {
     assert(start && end && "Expecting valid operations");
     Operation *currentOp = start;
+
     while (currentOp != end) {
-      llvm::errs() << "currentOp: " << *currentOp << "\n";
-      if (!currentOp->hasOneUse()) {
-        llvm::errs() << "at line " << __LINE__ << "\n";
+      // TODO: extend to handle loops.
+      if ((currentOp->getNumRegions() != 0) || !currentOp->hasOneUse())
         return false;
-      }
 
       currentOp = *currentOp->getUsers().begin();
-      if (auto forOp = dyn_cast<scf::ForOp>(currentOp)) {
-        for (BlockArgument arg : forOp.getRegionIterArgs()) {
-          Value initArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-          if (initArg == currentOp->getResult(0)) {
-            if (!arg.hasOneUse()) {
-              llvm::errs() << "at line " << __LINE__ << "\n";
-              return false;
-            }
-
-            currentOp = *arg.getUsers().begin();
-            break;
-          }
-        }
-      }
     }
 
-    llvm::errs() << "at line " << __LINE__ << "\n";
     return true;
   }
 
@@ -228,9 +207,7 @@ private:
       return updateAdvanceOpChain(advanceOp, loadOp, ptr);
     }
 
-    llvm::errs() << "user: " << *user << "\n";
     llvm_unreachable("Unexpected user");
-
     return nullptr;
   }
 };
