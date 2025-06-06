@@ -39,6 +39,7 @@ on:
 permissions: read-all
 
 env:
+  PYTORCH_TEST_RERUN_DISABLED_TESTS: '1'
   DEFAULT_SUITE: >-
     inductor/test_kernel_benchmark.py
     inductor/test_codegen_triton.py
