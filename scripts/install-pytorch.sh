@@ -144,6 +144,7 @@ mkdir -p $BASE
 
 function pytorch_wheel_exists {
   if [[ ! -d $PYTORCH_PROJ/dist ]]; then
+    echo "check-wheel: $PYTORCH_PROJ/dist does not exist"
     return 1
   fi
   PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")
@@ -158,10 +159,13 @@ function pytorch_wheel_exists {
   fi
   PYTORCH_WHEEL_NAME="torch-${PYTORCH_VERSION}+git${PYTORCH_COMMIT:0:7}-cp${PYTHON_VERSION}-cp${PYTHON_VERSION}-${PYTORCH_OS}_${PYTORCH_ARCH}.whl"
   if [[ -f $PYTORCH_PROJ/dist/$PYTORCH_WHEEL_NAME ]]; then
-    echo "**** $PYTORCH_WHEEL_NAME exists ****"
+    echo "check-wheel: $PYTORCH_WHEEL_NAME exists"
     return 0
   else
-    echo "**** $PYTORCH_WHEEL_NAME does not exist ****"
+    echo "check-wheel: $PYTORCH_WHEEL_NAME does not exist"
+    if [[ -d $PYTORCH_PROJ/dist ]]; then
+      echo "check-wheel: existing files:" $(cd $PYTORCH_PROJ/dist && ls)
+    fi
     return 1
   fi
 }
