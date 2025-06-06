@@ -8,7 +8,6 @@
 #include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonGENToSPIRV/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-#include "intel/include/TritonRaiseBlockPointer/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -76,7 +75,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerConvertTritonToTritonGPUWarpPass();
   mlir::triton::intel::registerTritonIntelTensorDescToBlockPointer();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
-  mlir::triton::intel::registerTritonRaiseBlockPointer();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();
