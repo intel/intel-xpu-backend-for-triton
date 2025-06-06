@@ -55,14 +55,14 @@ public:
     if (!isCandidate(transOp))
       return failure();
 
-    LLVM_DEBUG(llvm::dbgs() << "Candidate: " << transOp << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Found candidate:\n\t" << transOp << "\n");
     auto tensorType = cast<RankedTensorType>(transOp.getType());
     Attribute dotEncoding =
         cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
     auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
     tt::MakeTensorPtrOp makeTensorPtrOp =
         *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
-    LLVM_DEBUG(llvm::dbgs() << "makeTensorPtrOp: " << makeTensorPtrOp << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "makeTensorPtrOp:\n\t" << makeTensorPtrOp << "\n");
 
     // Create a MakeTensorPtrOp yielding a block pointer to the transposed
     // tensor.
@@ -78,7 +78,7 @@ public:
         makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
         newShape, newStrides, newOffsets, makeTensorPtrOp.getOrderAttr());
     assert(makeTensorPtrOp->hasOneUse() && "Expecting single user");
-    LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp: " << ptr << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n\t" << ptr << "\n");
 
     // Transitively update users of the block pointer.
     Operation *makeTensorPtrOpUser = *makeTensorPtrOp->getUsers().begin();
@@ -276,6 +276,9 @@ private:
       return updateAdvanceOpChain(advanceOp, loadOp, ptr);
     }
 
+    // TODO: add support for loops (advanceOp cound be consumed by a loop
+    // init_arg).
+    
     llvm_unreachable("Unexpected user");
     return nullptr;
   }
