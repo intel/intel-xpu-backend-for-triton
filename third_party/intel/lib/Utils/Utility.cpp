@@ -1,6 +1,7 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include <optional>
@@ -49,6 +50,8 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
     return findDefiningMakeTensorPtrOp(loopArg);
   }
 
+  if (auto poisonOp = val.getDefiningOp<ub::PoisonOp>())
+    return std::nullopt;
   if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
     return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
   if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
