@@ -12,6 +12,7 @@
 #include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -37,6 +38,7 @@
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+#include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONGENTOLLVM
@@ -110,18 +112,28 @@ loadCacheControlToCacheControls(Builder &builder,
   return builder.getAttr<TritonGEN::DecorationCacheControlAttr>(decorations);
 }
 
-static bool isOCLBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
-  // The following signature is not valid in OCL interface.
-  // _Z42intel_sub_group_2d_block_read_16b_16r16x2cPU3AS1viiiDv2_iPDh
-  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
-      op.getTileWidth() == 16 && op.getVBlocks() == 2) {
-    return false;
-  }
-
-  if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
-      op.getVBlocks() != 4 && !op.getVnniTransform()) {
-    // TODO: add ocl builtin/spirv intrinsics for 8b 16 column 1 vBlock & 2
-    // vBlock reads
+static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
+  // FIXME: The following signatures are not valid in SPV interface.
+  // intel_sub_group_2d_block_read_8b_32r16x1c
+  // intel_sub_group_2d_block_read_8b_32r16x2c
+  // intel_sub_group_2d_block_read_8b_16r16x2c
+  // intel_sub_group_2d_block_read_8b_8r16x1c
+  // intel_sub_group_2d_block_read_8b_8r16x2c
+  if ((op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 1 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 1 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
+       !op.getVnniTransform())) {
     return false;
   }
 
@@ -136,24 +148,32 @@ template <
                                      TritonGEN::Matrix2DBlockStoreOp,
                                      TritonGEN::Matrix2DBlockPrefetchOp>::value,
                      bool> = true>
-static std::pair<Value, Value>
-computeAlignedBaseWidthAndOffset(OpTy op, ConversionPatternRewriter &rewriter) {
+static std::tuple<Value, Value, Value>
+computeAlignedBasePtrWidthAndOffset(OpTy op,
+                                    ConversionPatternRewriter &rewriter) {
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value baseAddr =
-      rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), op.getPtr());
+  Value baseAddr = b.ptrtoint(int_ty(64), op.getPtr());
   // A mask for 64-byte alignment (0x3f = 63).
   constexpr int64_t ALIGNMENT_MASK = 0x3f;
+  // Clear the lower 6 bits to make the base address 64-byte align.
+  Value adjustedBasePtr = b.and_(baseAddr, b.i64_val(~ALIGNMENT_MASK));
+  adjustedBasePtr = b.inttoptr(op.getPtr().getType(), adjustedBasePtr);
   // Calculate the byte offset of the base address from a 64-byte alignment.
   Value offsetInBytes =
       b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
   // Adjust the base width to account for the byte offset.
-  Value adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
+  // If base width is zero, then we want to keep it as zero.
+  Value adjustedBaseWidth = op.getBaseWidth();
+  llvm::APInt baseWidthVal;
+  if (!matchPattern(op.getBaseWidth(), m_ConstantInt(&baseWidthVal)) ||
+      !baseWidthVal.isZero())
+    adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
   // Adjust the x-coordinate offset based on the number of scalar elements.
   Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
   Value adjustedXOffset =
       b.add(op.getX(), b.udiv(offsetInBytes, elemSizeInBytes));
-  return {adjustedBaseWidth, adjustedXOffset};
+  return {adjustedBasePtr, adjustedBaseWidth, adjustedXOffset};
 }
 
 [[maybe_unused]] static Value
@@ -164,7 +184,6 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  Value ptr = op.getPtr();
   Value baseHeight = op.getBaseHeight();
   Value basePitch = op.getBasePitch();
   Value y = op.getY();
@@ -175,11 +194,11 @@ createGenISA2DBlockRead(TritonGEN::Matrix2DBlockLoadOp op,
   IntegerType int32Ty = rewriter.getIntegerType(32);
   IntegerType int64Ty = rewriter.getIntegerType(64);
 
+  Value one = b.i32_val(1);
+  auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
+
   // The IGC intrinsic requires the first argument be int64
   ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int64Ty, ptr);
-
-  Value one = b.i32_val(1);
-  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
 
   SmallVector<Type> argTypes{int64Ty,
                              baseWidth.getType(),
@@ -274,9 +293,6 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // The IGC intrinsic requires the first argument be int64
-  Value ptr = op.getPtr();
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
   Value baseHeight = op.getBaseHeight();
   Value basePitch = op.getBasePitch();
   Value y = op.getY();
@@ -286,7 +302,10 @@ createGenISA2DBlockWrite(TritonGEN::Matrix2DBlockStoreOp op,
   std::string funcName =
       "llvm.genx.GenISA.LSC2DBlockWrite." + getGenISATypeMangling(storeValType);
   Value one = b.i32_val(1);
-  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
+
+  // The IGC intrinsic requires the first argument be int64
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -322,14 +341,14 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // The IGC intrinsic requires the first argument be int64
-  Value ptr = op.getPtr();
-  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
   Value baseHeight = op.getBaseHeight();
   Value basePitch = op.getBasePitch();
   Value y = op.getY();
   Value one = b.i32_val(1);
-  auto [baseWidth, x] = computeAlignedBaseWidthAndOffset(op, rewriter);
+  auto [ptr, baseWidth, x] = computeAlignedBasePtrWidthAndOffset(op, rewriter);
+
+  // The IGC intrinsic requires the first argument be int64
+  ptr = rewriter.create<LLVM::PtrToIntOp>(loc, int_ty(64), ptr);
 
   SmallVector<Type> argTypes{
       int_ty(64),          baseWidth.getType(), baseHeight.getType(),
@@ -413,16 +432,17 @@ struct TritonMatrixDPASLowering
     if (cOrigTy != cTy)
       c = rewriter.create<LLVM::BitcastOp>(loc, cTy, c);
 
-    std::string fnName =
-        "intel_sub_group_" + stringifyPrecisionType(precisionA).str() + "_" +
-        stringifyPrecisionType(op.getPb()).str() + "_matrix_mad_k" +
-        std::to_string(8 /*systolic depth*/ *
-                       getNumOperandsPerDword(precisionA));
-
-    SmallVector<Type> argTypes{aTy, bTy, cTy};
+    std::string fnName = "__spirv_SubgroupMatrixMultiplyAccumulateINTEL";
+    SmallVector<Type> argTypes{int32Ty, aTy, bTy, cTy, int32Ty};
     fnName = intel::mangle(fnName, argTypes);
 
-    SmallVector<Value> args{a, b, c};
+    TritonLLVMOpBuilder builder(loc, rewriter);
+    Value kDim = builder.i32_val(8 /*systolic depth*/ *
+                                 getNumOperandsPerDword(precisionA));
+    SmallVector<Value> args{
+        kDim, a, b, c,
+        builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
+            cOrigTy.getElementType(), precisionA))};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
@@ -455,6 +475,30 @@ private:
       llvm_unreachable("unsupported TritonGEN::PrecisionType");
     }
   }
+
+  // Values are defined in
+  // https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate.html.
+  static unsigned
+  getMatrixMultiplyAccumulateOperandsVal(Type cTy,
+                                         TritonGEN::PrecisionType pTy) {
+    unsigned res = 0;
+    if (cTy.isBF16())
+      res |= 0x4 | 0x8;
+    switch (pTy) {
+    case TritonGEN::PrecisionType::TF32:
+      return res | 0x100 | 0x200;
+    case TritonGEN::PrecisionType::BF16:
+      return res | 0x1000 | 0x2000;
+    case TritonGEN::PrecisionType::FP16:
+      return res | 0x400 | 0x800;
+    case TritonGEN::PrecisionType::U8:
+      return res | 0x10 | 0x20;
+    case TritonGEN::PrecisionType::S8:
+      return res | 0x1 | 0x2 | 0x10 | 0x20;
+    default:
+      llvm_unreachable("unsupported TritonGEN::PrecisionType");
+    }
+  }
 };
 
 struct TritonMatrix2DBlockLoadLowering
@@ -465,7 +509,7 @@ struct TritonMatrix2DBlockLoadLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isOCLBuiltinAvailable(op)) {
+    if (!isSPVBuiltinAvailable(op)) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockRead(op, rewriter));
       return success();
@@ -479,43 +523,47 @@ struct TritonMatrix2DBlockLoadLowering
     auto dest = rewriter.create<LLVM::AllocaOp>(
         loc, ptr_ty(ctx), resType.getElementType(),
         b.i32_val(resType.getNumElements()));
-    std::string fnName = "intel_sub_group_2d_block_read_";
+    std::string fnName = "__spirv_Subgroup2DBlockLoad";
     if (op.getVnniTransform())
-      fnName += "transform_";
+      fnName += "Transform";
     else if (op.getTranspose())
-      fnName += "transpose_";
-    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
-              std::to_string(op.getTileHeight()) + "r" +
-              std::to_string(op.getTileWidth()) + "x" +
-              std::to_string(op.getVBlocks()) + "c";
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
-    fnName +=
-        intel::getTypeMangling(resType.getElementType(), /*isUnsigned=*/true);
-
-    auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
-
+      fnName += "Transpose";
+    fnName += "INTEL";
     VectorType vecType = vec_ty(i32_ty, 2);
+    SmallVector<Type> argTypes{i32_ty, i32_ty, i32_ty, i32_ty,  ptr_ty(ctx, 1),
+                               i32_ty, i32_ty, i32_ty, vecType, ptr_ty(ctx)};
+    fnName = intel::mangle(fnName, argTypes);
+
+    auto [ptr, baseWidth, offsetX] =
+        computeAlignedBasePtrWidthAndOffset(op, rewriter);
+
     Value byteCoord = b.insert_element(
         vecType,
         b.insert_element(vecType, b.undef(vecType), offsetX, b.i32_val(0)),
         op.getY(), b.i32_val(1));
-    SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty,  i32_ty,
-                               i32_ty,         vecType, ptr_ty(ctx)};
 
-    SmallVector<Value> args{op.getPtr(),       baseWidth, op.getBaseHeight(),
-                            op.getBasePitch(), byteCoord, dest};
+    SmallVector<Value> args{b.i32_val(op.getElemSizeInBits() / 8),
+                            b.i32_val(op.getTileWidth()),
+                            b.i32_val(op.getTileHeight()),
+                            b.i32_val(op.getVBlocks()),
+                            ptr,
+                            baseWidth,
+                            op.getBaseHeight(),
+                            op.getBasePitch(),
+                            byteCoord,
+                            dest};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 4> paramAttrs{
-        std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(0, LLVM::LLVMDialect::getReadonlyAttrName()),
-        std::make_pair(5, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(5, LLVM::LLVMDialect::getWriteOnlyAttrName()),
+        std::make_pair(4, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(4, LLVM::LLVMDialect::getReadonlyAttrName()),
+        std::make_pair(9, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(9, LLVM::LLVMDialect::getWriteOnlyAttrName()),
     };
 
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs,
         intel::noUnwindWillReturnAttrs);
-    constexpr uint32_t ptrOperandIndex = 0;
+    constexpr uint32_t ptrOperandIndex = 4;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
                                             ptrOperandIndex)) {
@@ -546,41 +594,44 @@ struct TritonMatrix2DBlockStoreLowering
         b.i32_val(storeValType.getNumElements()));
     rewriter.create<LLVM::StoreOp>(loc, op.getStoredVal(), storeValPtr);
 
-    std::string fnName = "intel_sub_group_2d_block_write_";
-    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
-              std::to_string(op.getTileHeight()) + "r" +
-              std::to_string(op.getTileWidth()) + "x" +
-              std::to_string(op.getVBlocks()) + "c";
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_iP";
-    unsigned storeValBitWidth =
-        storeValType.getElementType().getIntOrFloatBitWidth();
-    fnName += (storeValBitWidth == 32)   ? "j"
-              : (storeValBitWidth == 16) ? "t"
-                                         : "h";
+    std::string fnName = "__spirv_Subgroup2DBlockStoreINTEL";
 
-    auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
+    auto [ptr, baseWidth, offsetX] =
+        computeAlignedBasePtrWidthAndOffset(op, rewriter);
 
     VectorType vecType = vec_ty(i32_ty, 2);
+    SmallVector<Type> argTypes{i32_ty,      i32_ty,         i32_ty, i32_ty,
+                               ptr_ty(ctx), ptr_ty(ctx, 1), i32_ty, i32_ty,
+                               i32_ty,      vecType};
+    fnName = intel::mangle(fnName, argTypes);
+
     Value byteCoord = b.insert_element(
         vecType,
         b.insert_element(vecType, b.undef(vecType), offsetX, b.i32_val(0)),
         op.getY(), b.i32_val(1));
-    SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty,  i32_ty,
-                               i32_ty,         vecType, ptr_ty(ctx)};
-    SmallVector<Value> args{op.getPtr(),       baseWidth, op.getBaseHeight(),
-                            op.getBasePitch(), byteCoord, storeValPtr};
+
+    SmallVector<Value> args{b.i32_val(op.getElemSizeInBits() / 8),
+                            b.i32_val(op.getTileWidth()),
+                            b.i32_val(op.getTileHeight()),
+                            b.i32_val(op.getVBlocks()),
+                            storeValPtr,
+                            ptr,
+                            baseWidth,
+                            op.getBaseHeight(),
+                            op.getBasePitch(),
+                            byteCoord};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 4> paramAttrs{
-        std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(0, LLVM::LLVMDialect::getWriteOnlyAttrName()),
         std::make_pair(5, LLVM::LLVMDialect::getNonNullAttrName()),
-        std::make_pair(5, LLVM::LLVMDialect::getReadonlyAttrName()),
+        std::make_pair(5, LLVM::LLVMDialect::getWriteOnlyAttrName()),
+        std::make_pair(4, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(4, LLVM::LLVMDialect::getReadonlyAttrName()),
     };
 
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs,
         intel::noUnwindWillReturnAttrs);
-    constexpr uint32_t ptrOperandIndex = 0;
+    constexpr uint32_t ptrOperandIndex = 5;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             storeCacheControlToCacheControls(rewriter, op.getCacheControl(),
                                              ptrOperandIndex)) {
@@ -604,24 +655,31 @@ struct TritonMatrix2DBlockPrefetchLowering
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    std::string fnName = "intel_sub_group_2d_block_prefetch_";
-    fnName += std::to_string(op.getElemSizeInBits()) + "b_" +
-              std::to_string(op.getTileHeight()) + "r" +
-              std::to_string(op.getTileWidth()) + "x" +
-              std::to_string(op.getVBlocks()) + "c";
-    fnName = "_Z" + std::to_string(fnName.size()) + fnName + "PU3AS1viiiDv2_i";
-    auto [baseWidth, offsetX] = computeAlignedBaseWidthAndOffset(op, rewriter);
+    std::string fnName = "__spirv_Subgroup2DBlockPrefetchINTEL";
+    auto [ptr, baseWidth, offsetX] =
+        computeAlignedBasePtrWidthAndOffset(op, rewriter);
     VectorType vecType = vec_ty(i32_ty, 2);
+    SmallVector<Type> argTypes{i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx, 1),
+                               i32_ty, i32_ty, i32_ty, vecType};
+    fnName = intel::mangle(fnName, argTypes);
+
     Value byteCoord = b.insert_element(
         vecType,
         b.insert_element(vecType, b.undef(vecType), offsetX, b.i32_val(0)),
         op.getY(), b.i32_val(1));
-    SmallVector<Type> argTypes{ptr_ty(ctx, 1), i32_ty, i32_ty, i32_ty, vecType};
-    SmallVector<Value> args{op.getPtr(), baseWidth, op.getBaseHeight(),
-                            op.getBasePitch(), byteCoord};
+
+    SmallVector<Value> args{b.i32_val(op.getElemSizeInBits() / 8),
+                            b.i32_val(op.getTileWidth()),
+                            b.i32_val(op.getTileHeight()),
+                            b.i32_val(op.getVBlocks()),
+                            ptr,
+                            baseWidth,
+                            op.getBaseHeight(),
+                            op.getBasePitch(),
+                            byteCoord};
 
     std::array<std::pair<unsigned, mlir::StringRef>, 1> paramAttrs{
-        std::make_pair(0, LLVM::LLVMDialect::getNonNullAttrName()),
+        std::make_pair(4, LLVM::LLVMDialect::getNonNullAttrName()),
     };
 
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
@@ -633,7 +691,7 @@ struct TritonMatrix2DBlockPrefetchLowering
 
     LLVM::CallOp call = intel::createDeviceFunctionCall(
         rewriter, fnName, void_ty(ctx), argTypes, args, paramAttrs, funcAttrs);
-    constexpr uint32_t ptrOperandIndex = 0;
+    constexpr uint32_t ptrOperandIndex = 4;
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
                                             ptrOperandIndex)) {
@@ -772,15 +830,19 @@ struct ConvertTritonGENToLLVM
 
   void runOnOperation() override {
     MLIRContext *ctx = &getContext();
-    RewritePatternSet pattern(ctx);
+    RewritePatternSet patterns(ctx);
     LowerToLLVMOptions options(ctx);
-    LLVMTypeConverter converter(ctx, options);
+    LLVMTypeConverter typeConverter(ctx, options);
     LLVMConversionTarget target(*ctx);
 
-    populateTritonGENToLLVMConversionPatterns(converter, pattern);
+    populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
 
-    if (failed(
-            applyPartialConversion(getOperation(), target, std::move(pattern))))
+    populateTritonGENToSPIRVConversionPatterns(patterns);
+    populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
+                                          spirv::ClientAPI::OpenCL);
+
+    if (failed(applyPartialConversion(getOperation(), target,
+                                      std::move(patterns))))
       signalPassFailure();
   }
 };

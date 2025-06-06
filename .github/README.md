@@ -24,6 +24,12 @@ Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extens
 
 See also: [experimental support for Windows](WINDOWS.md).
 
+# Triton is included in the PyTorch
+
+If you have PyTorch on XPU installed from [binaries](https://docs.pytorch.org/docs/stable/notes/get_start_xpu.html#binaries), you already have Triton installed and don't need any additional installations, unless you want to use the latest version of Triton from `main`.
+
+You can check existing installation by running one of the [tutorials](/python/tutorials/01-vector-add.py).
+
 # Quick Installation
 
 ## Prerequisites

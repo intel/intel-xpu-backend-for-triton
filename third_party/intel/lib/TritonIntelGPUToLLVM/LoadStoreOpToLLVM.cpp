@@ -9,6 +9,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -64,35 +65,6 @@ Value emitRedundantThreadPredicate(
 
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
-}
-
-inline LLVM::AtomicBinOp matchAtomicOp(RMWOp atomicOp) {
-  switch (atomicOp) {
-  case RMWOp::AND:
-    return LLVM::AtomicBinOp::_and;
-  case RMWOp::OR:
-    return LLVM::AtomicBinOp::_or;
-  case RMWOp::XOR:
-    return LLVM::AtomicBinOp::_xor;
-  case RMWOp::ADD:
-    return LLVM::AtomicBinOp::add;
-  case RMWOp::FADD:
-    return LLVM::AtomicBinOp::fadd;
-  case RMWOp::MAX:
-    return LLVM::AtomicBinOp::max;
-  case RMWOp::MIN:
-    return LLVM::AtomicBinOp::min;
-  case RMWOp::UMAX:
-    return LLVM::AtomicBinOp::umax;
-  case RMWOp::UMIN:
-    return LLVM::AtomicBinOp::umin;
-  case RMWOp::XCHG:
-    return LLVM::AtomicBinOp::xchg;
-  }
-  // Note that we should never hit this because all cases are covered above.
-  // However, something is necessary after the switch in the function body to
-  // avoid a compiler error.
-  llvm_unreachable("Unhandled RMWOp in case statement");
 }
 
 /// Holds the values related to a block pointer.
@@ -557,8 +529,10 @@ struct PrefetchOpConversion
             /*v_blocks*/ vBlocks,
             /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
         if (failed(newOp.verify())) {
-          // Explicitly invoke verifier because `triton_gen` ops are immediately
-          // lowered further to a builtin call.
+          // delete the op so that the verifier will not abort the pass
+          // pipeline later, as we can fail this path and try a different
+          // approach.
+          rewriter.eraseOp(newOp);
           return failure();
         }
       }
@@ -757,8 +731,10 @@ struct PrefetchOpConversion
                 /*v_blocks*/ vBlocks,
                 /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
             if (failed(newOp.verify())) {
-              // Explicitly invoke verifier because `triton_gen` ops are
-              // immediately lowered further to a builtin call.
+              // delete the op so that the verifier will not abort the pass
+              // pipeline later, as we can fail this path and try a different
+              // approach.
+              rewriter.eraseOp(newOp);
               return failure();
             }
           }
@@ -1573,8 +1549,10 @@ struct LoadOpConversion
                   /*transpose*/ false,
                   /*vnni_transform*/ false);
               if (failed(load2dOp.verify())) {
-                // Explicitly invoke verifier because `triton_gen` ops are
-                // immediately lowered further to a builtin call.
+                // delete the op so that the verifier will not abort the pass
+                // pipeline later, as we can fail this path and try a different
+                // approach.
+                rewriter.eraseOp(load2dOp);
                 return failure();
               }
 
@@ -2086,8 +2064,10 @@ struct LoadOpConversion
               (usePackedType && !isOperandA && !isTransposeRequired &&
                originalElemBits != 32));
           if (failed(load2dOp.verify())) {
-            // Explicitly invoke verifier because `triton_gen` ops are
-            // immediately lowered further to a builtin call.
+            // delete the op so that the verifier will not abort the pass
+            // pipeline later, as we can fail this path and try a different
+            // approach.
+            rewriter.eraseOp(load2dOp);
             return failure();
           }
           LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
@@ -2520,8 +2500,10 @@ struct StoreOpConversion
                 /*stored_val*/ b.bitcast(storeVal, store2DGenXType));
 
             if (failed(newOp.verify())) {
-              // Explicitly invoke verifier because `triton_gen` ops are
-              // immediately lowered further to a builtin call.
+              // delete the op so that the verifier will not abort the pass
+              // pipeline later, as we can fail this path and try a different
+              // approach.
+              rewriter.eraseOp(newOp);
               return failure();
             }
           }
@@ -2669,21 +2651,6 @@ void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
   b.barrier();
 }
 
-static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
-  switch (memOrdering) {
-  case MemSemantic::RELAXED:
-    return LLVM::AtomicOrdering::monotonic;
-  case MemSemantic::ACQUIRE:
-    return LLVM::AtomicOrdering::acquire;
-  case MemSemantic::RELEASE:
-    return LLVM::AtomicOrdering::release;
-  case MemSemantic::ACQUIRE_RELEASE:
-    return LLVM::AtomicOrdering::acq_rel;
-  default:
-    return LLVM::AtomicOrdering::acq_rel;
-  }
-}
-
 struct AtomicCASOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -2739,7 +2706,9 @@ struct AtomicCASOpConversion
     SmallVector<Value> resultVals(elemsPerThread);
 
     MemSemantic memSem = op.getSem();
-    LLVM::AtomicOrdering successOrdering = getMemoryOrdering(memSem);
+    LLVM::AtomicOrdering successOrdering = getMemoryOrdering(memSem)
+                                               ? *getMemoryOrdering(memSem)
+                                               : LLVM::AtomicOrdering::acq_rel;
     LLVM::AtomicOrdering failureOrdering = LLVM::AtomicOrdering::monotonic;
     for (size_t i = 0; i < elemsPerThread; i += vec) {
       Value casVal = b.undef(vecTy);
@@ -2841,7 +2810,9 @@ struct AtomicRMWOpConversion
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
     MemSemantic memSem = op.getSem();
-    LLVM::AtomicOrdering llvmMemOrdering = getMemoryOrdering(memSem);
+    LLVM::AtomicOrdering llvmMemOrdering = getMemoryOrdering(memSem)
+                                               ? *getMemoryOrdering(memSem)
+                                               : LLVM::AtomicOrdering::acq_rel;
 
     Value val = op.getVal();
     Value ptr = op.getPtr();
@@ -2927,11 +2898,14 @@ struct AtomicRMWOpConversion
                                                 TritonGEN::MemFence::GLOBAL);
 
         auto createAtomicBinOpInstruction = [&]() -> SmallVector<Value, 1> {
-          mlir::LLVM::AtomicBinOp rmwKind = matchAtomicOp(atomicRmwAttr);
+          std::optional<mlir::LLVM::AtomicBinOp> rmwKind =
+              matchAtomicOp(atomicRmwAttr);
+          if (!rmwKind)
+            llvm_unreachable("Unhandled RMWOp in case statement");
 
           rmwVal = b.bitcast(rmwVal, valueElemTy);
           auto atomRMW = rewriter.create<LLVM::AtomicRMWOp>(
-              loc, rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
+              loc, *rmwKind, rmwPtr, rmwVal, llvmMemOrdering);
           return {atomRMW.getRes()};
         };
 

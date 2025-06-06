@@ -1,15 +1,15 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory  --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,NO-AGGRESSIVE-REUSE
-// RUN: env TRITON_INTEL_AGGRESSIVE_DPAS_REUSE=1 triton-opt %s -split-input-file --allocate-shared-memory  --convert-triton-intel-gpu-to-llvm --cse -canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm  --check-prefixes=CHECK,AGGRESSIVE-REUSE
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm --cse -canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm --check-prefixes=CHECK,NO-AGGRESSIVE-REUSE
+// RUN: env TRITON_INTEL_AGGRESSIVE_DPAS_REUSE=1 triton-opt %s -split-input-file --allocate-shared-memory  --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm --cse -canonicalize | FileCheck %s --implicit-check-not=llvm.inline_asm  --check-prefixes=CHECK,AGGRESSIVE-REUSE
 
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK:  llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK:  llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-LABEL: dot_f32_f16_f16_f32_1
   tt.func @dot_f32_f16_f16_f32_1(%a: tensor<8x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<8x16xf32, #dpas>) {
-    // CHECK: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+    // CHECK: llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32>
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<8x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<8x16xf32, #dpas>
     tt.return
   }
@@ -17,16 +17,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-LABEL: dot_f32_f16_f16_f32_2
   tt.func @dot_f32_f16_f16_f32_2(%a: tensor<16x16xf16, #dot_operand_a>, %b: tensor<16x16xf16, #dot_operand_b>, %c: tensor<16x16xf32, #dpas>) {
     // COM: 2 repetitions along axis for M.
-    // CHECK-COUNT-2: llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32>
+    // CHECK-COUNT-2: llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32>
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x16xf16, #dot_operand_a> * tensor<16x16xf16, #dot_operand_b> -> tensor<16x16xf32, #dpas>
     tt.return
   }
@@ -34,15 +34,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK:   llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK:   llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iS0_i(i32, vector<8xi16>, vector<8xi32>, vector<8xi32>, i32) -> vector<8xi32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-LABEL: dot_i32_i8_i8_i32_1
   tt.func @dot_i32_i8_i8_i32_1(%a: tensor<8x32xi8, #dot_operand_a>, %b: tensor<32x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #dpas>) {
-    // CHECK: llvm.call spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+    // CHECK: llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iS0_i(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xi32>, i32) -> vector<8xi32>
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<8x32xi8, #dot_operand_a> * tensor<32x16xi8, #dot_operand_b> -> tensor<8x16xi32, #dpas>
     tt.return
   }
@@ -50,16 +50,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=2}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=4}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iS0_i(i32, vector<8xi16>, vector<8xi32>, vector<8xi32>, i32) -> vector<8xi32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-LABEL: dot_i32_i8_i8_i32_2
   tt.func @dot_i32_i8_i8_i32_2(%a: tensor<8x64xi8, #dot_operand_a>, %b: tensor<64x16xi8, #dot_operand_b>, %c: tensor<8x16xi32, #dpas>) {
     // COM: 2 repetition along axis for K.
-    // CHECK-COUNT2: llvm.call spir_funccc @_Z36intel_sub_group_i8_i8_matrix_mad_k32Dv8_sDv8_iS0_(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<8xi16>, vector<8xi32>, vector<8xi32>) -> vector<8xi32>
+    // CHECK-COUNT2: llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iS0_i(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xi32>, i32) -> vector<8xi32>
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<8x64xi8, #dot_operand_a> * tensor<64x16xi8, #dot_operand_b> -> tensor<8x16xi32, #dpas>
     tt.return
   }
@@ -67,7 +67,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=1}>
 
@@ -85,7 +85,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK: %[[B_0:.*]] = llvm.insertelement %[[B_RTNE_VAL]], %{{.*}}{{\[}}%{{.*}} : i32] : vector<8xf32>
     // CHECK: %[[C_LAST_VAL:.*]] = llvm.extractvalue %[[C]][7]
     // CHECK: %[[C_0:.*]] = llvm.insertelement %[[C_LAST_VAL]], %{{.*}}{{\[}}%{{.*}} : i32] : vector<8xf32>
-    // CHECK: llvm.call spir_funccc @_Z39intel_sub_group_tf32_tf32_matrix_mad_k8Dv4_fDv8_fS0_(%[[A_0]], %[[B_0]], %[[C_0]]) {{.*}} : (vector<4xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32>
+    // CHECK: llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_fDv8_fS0_i(%{{.*}}, %[[A_0]], %[[B_0]], %[[C_0]], %{{.*}}} : (i32, vector<4xf32>, vector<8xf32>, vector<8xf32>, i32) -> vector<8xf32>
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<8x8xf32, #dot_operand_a> * tensor<8x16xf32, #dot_operand_b> -> tensor<8x16xf32, #dpas>
     tt.return
   }
@@ -93,7 +93,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=1}>
 
@@ -101,7 +101,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: dot_f32_tf32_tf32_f32_2
   tt.func @dot_f32_tf32_tf32_f32_2(%a: tensor<8x8xf32, #dot_operand_a>, %b: tensor<8x32xf32, #dot_operand_b>, %c: tensor<8x32xf32, #dpas>) {
     // COM: 2 repetitions along axis for N.
-    // CHECK-COUNT-2: llvm.call spir_funccc @_Z39intel_sub_group_tf32_tf32_matrix_mad_k8Dv4_fDv8_fS0_(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (vector<4xf32>, vector<8xf32>, vector<8xf32>) -> vector<8xf32>
+    // CHECK-COUNT-2: llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv4_fDv8_fS0_i(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, vector<4xf32>, vector<8xf32>, vector<8xf32>, i32) -> vector<8xf32>
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<8x8xf32, #dot_operand_a> * tensor<8x32xf32, #dot_operand_b> -> tensor<8x32xf32, #dpas>
     tt.return
   }
@@ -109,12 +109,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-#dpas = #triton_intel_gpu.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK: llvm.func spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(vector<8xi16>, vector<8xi32>, vector<8xf32>) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
+  // CHECK: llvm.func spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return}
   // CHECK-LABEL: llvm.func spir_kernelcc @dot_rep_cluster_4_2(
   // CHECK-SAME:    %[[A:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>, %[[B:.*]]: !llvm.struct<(f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16, f16)>,
   // CHECK-SAME:    %[[C:.*]]: !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32)>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 16, 1, 1>} {
@@ -545,43 +545,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // COM: Total 16 dpas ops unrolled.
     // CHECK:           %[[B_0_0:.*]] = llvm.bitcast %[[VAL_237]] : vector<16xf16> to vector<8xi32>
     // CHECK:           %[[A_0_0:.*]] = llvm.bitcast %[[VAL_93]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[C_0_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_0]], %[[C_0_0]])
+    // CHECK:           %[[C_0_0_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_0]], %[[B_0_0]], %[[C_0_0]], %{{.*}})
     // CHECK:           %[[A_1_0:.*]] = llvm.bitcast %[[VAL_102]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[C_1_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_0]], %[[C_1_0]])
+    // CHECK:           %[[C_1_0_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_0]], %[[B_0_0]], %[[C_1_0]], %{{.*}})
     // CHECK:           %[[A_2_0:.*]] = llvm.bitcast %[[VAL_111]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[C_2_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_0]], %[[C_2_0]])
+    // CHECK:           %[[C_2_0_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_2_0]], %[[B_0_0]], %[[C_2_0]], %{{.*}})
     // CHECK:           %[[A_3_0:.*]] = llvm.bitcast %[[VAL_120]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[C_3_0_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_0]], %[[C_3_0]])
+    // CHECK:           %[[C_3_0_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_3_0]], %[[B_0_0]], %[[C_3_0]], %{{.*}})
     // CHECK:           %[[B_0_1:.*]] = llvm.bitcast %[[VAL_254]] : vector<16xf16> to vector<8xi32>
 
-    // NO-AGGRESSIVE-REUSE:           %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_1]], %[[C_0_1]])
-    // NO-AGGRESSIVE-REUSE:           %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_1]], %[[C_1_1]])
-    // NO-AGGRESSIVE-REUSE:           %[[C_2_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_1]], %[[C_2_1]])
-    // NO-AGGRESSIVE-REUSE:           %[[C_3_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_1]], %[[C_3_1]])
-    // AGGRESSIVE-REUSE:              %[[C_3_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_0]], %[[B_0_1]], %[[C_3_1]])
-    // AGGRESSIVE-REUSE:              %[[C_2_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_0]], %[[B_0_1]], %[[C_2_1]])
-    // AGGRESSIVE-REUSE:              %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_0]], %[[B_0_1]], %[[C_1_1]])
-    // AGGRESSIVE-REUSE:              %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_0]], %[[B_0_1]], %[[C_0_1]])
+    // NO-AGGRESSIVE-REUSE:           %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_0]], %[[B_0_1]], %[[C_0_1]], %{{.*}})
+    // NO-AGGRESSIVE-REUSE:           %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_0]], %[[B_0_1]], %[[C_1_1]], %{{.*}})
+    // NO-AGGRESSIVE-REUSE:           %[[C_2_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_2_0]], %[[B_0_1]], %[[C_2_1]], %{{.*}})
+    // NO-AGGRESSIVE-REUSE:           %[[C_3_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_3_0]], %[[B_0_1]], %[[C_3_1]], %{{.*}})
+    // AGGRESSIVE-REUSE:              %[[C_3_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_3_0]], %[[B_0_1]], %[[C_3_1]], %{{.*}})
+    // AGGRESSIVE-REUSE:              %[[C_2_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_2_0]], %[[B_0_1]], %[[C_2_1]], %{{.*}})
+    // AGGRESSIVE-REUSE:              %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_0]], %[[B_0_1]], %[[C_1_1]], %{{.*}})
+    // AGGRESSIVE-REUSE:              %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_0]], %[[B_0_1]], %[[C_0_1]], %{{.*}})
 
     // CHECK:           %[[B_1_0:.*]] = llvm.bitcast %[[VAL_271]] : vector<16xf16> to vector<8xi32>
     // CHECK:           %[[A_0_1:.*]] = llvm.bitcast %[[VAL_129]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_0]], %[[C_0_0_0]])
+    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_1]], %[[B_1_0]], %[[C_0_0_0]], %{{.*}})
     // CHECK:           %[[A_1_1:.*]] = llvm.bitcast %[[VAL_138]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_0]], %[[C_1_0_0]])
+    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_1]], %[[B_1_0]], %[[C_1_0_0]], %{{.*}})
     // CHECK:           %[[A_2_1:.*]] = llvm.bitcast %[[VAL_147]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_0]], %[[C_2_0_0]])
+    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_2_1]], %[[B_1_0]], %[[C_2_0_0]], %{{.*}})
     // CHECK:           %[[A_3_1:.*]] = llvm.bitcast %[[VAL_156]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_0]], %[[C_3_0_0]])
+    // CHECK:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_3_1]], %[[B_1_0]], %[[C_3_0_0]], %{{.*}})
     // CHECK:           %[[B_1_1:.*]] = llvm.bitcast %[[VAL_288]] : vector<16xf16> to vector<8xi32>
 
-    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_1]], %[[C_0_1_0]])
-    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_1]], %[[C_1_1_0]])
-    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_1]], %[[C_2_1_0]])
-    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_1]], %[[C_3_1_0]])
-    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_3_1]], %[[B_1_1]], %[[C_3_1_0]])
-    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_2_1]], %[[B_1_1]], %[[C_2_1_0]])
-    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_1_1]], %[[B_1_1]], %[[C_1_1_0]])
-    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z38intel_sub_group_f16_f16_matrix_mad_k16Dv8_sDv8_iDv8_f(%[[A_0_1]], %[[B_1_1]], %[[C_0_1_0]])
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_1]], %[[B_1_1]], %[[C_0_1_0]], %{{.*}})
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_1]], %[[B_1_1]], %[[C_1_1_0]], %{{.*}})
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_2_1]], %[[B_1_1]], %[[C_2_1_0]], %{{.*}})
+    // NO-AGGRESSIVE-REUSE:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_3_1]], %[[B_1_1]], %[[C_3_1_0]], %{{.*}})
+    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_3_1]], %[[B_1_1]], %[[C_3_1_0]], %{{.*}})
+    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_2_1]], %[[B_1_1]], %[[C_2_1_0]], %{{.*}})
+    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_1]], %[[B_1_1]], %[[C_1_1_0]], %{{.*}})
+    // AGGRESSIVE-REUSE:              {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_1]], %[[B_1_1]], %[[C_0_1_0]], %{{.*}})
 
     %0 = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<32x32xf16, #dot_operand_a> * tensor<32x32xf16, #dot_operand_b> -> tensor<32x32xf32, #dpas>
     tt.return

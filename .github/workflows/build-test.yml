@@ -92,7 +92,7 @@ jobs:
         run: |
           pip install pytest pytest-xdist defusedxml
           cd scripts
-          pytest -n 4 test_*.py
+          pytest -v -n 4 test_*.py
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
@@ -108,7 +108,7 @@ jobs:
       fail-fast: false
       matrix:
         python:
-          - "3.9"
+          - "3.10"
         driver: ${{ fromJson((inputs.runner_label || '') == '' && '["rolling", "lts"]' || '["rolling"]') }}
 
     uses: ./.github/workflows/build-test-reusable.yml

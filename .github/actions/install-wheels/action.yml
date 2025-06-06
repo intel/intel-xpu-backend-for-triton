@@ -4,10 +4,13 @@ description: Install latest wheels from a specified workflow using a custom wild
 inputs:
   workflow:
     description: Name of the workflow to install wheels from
-    default: Triton wheels
+    default: nightly-wheels.yml
   repository:
     description: Repository name with owner
     default: intel/intel-xpu-backend-for-triton
+  branch:
+    description: Filter runs by branch (use empty string for all branches)
+    default: main
   wheels_pattern:
     # Example of specifying only some packages to install: '{intel_extension_for_pytorch-*,torch-*}'
     # Extended globbing is enabled for this pattern so for example to exclude intel_extension_for_pytorch use pattern
@@ -33,7 +36,11 @@ runs:
         GH_TOKEN: ${{ inputs.gh_token }}
       run: |
         set -e
-        run_id=$(gh run list -w "${{ inputs.workflow }}" -s success --repo ${{ inputs.repository }} --json databaseId --jq '.[0].databaseId')
+        if [[ -z "${{ inputs.branch }}" ]]; then
+          run_id=$(gh run list --workflow "${{ inputs.workflow }}" --status success --repo "${{ inputs.repository }}" --json databaseId --jq '.[0].databaseId')
+        else
+          run_id=$(gh run list --workflow "${{ inputs.workflow }}" --branch "${{ inputs.branch }}" --status success --repo "${{ inputs.repository }}" --json databaseId --jq '.[0].databaseId')
+        fi
         if [[ ! $run_id ]]; then
           exit 1
         fi

@@ -8,8 +8,9 @@ llvm-project-*/
 
 # Triton Python module builds
 dist/
-triton*.egg-info/
+python/triton*.egg-info/
 *.whl
+python/triton_kernels/triton*.egg-info/
 
 python/triton/_C/*.pyd
 python/triton/_C/*.so

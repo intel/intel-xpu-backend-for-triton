@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend
+from triton.backends.compiler import BaseBackend, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src
 from triton import knobs
@@ -26,8 +26,9 @@ class XPUOptions:
     optimize_epilogue: bool = False
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
+    reduce_variable_liveness: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
-    deprecated_fp8_dtypes: Tuple[str] = ()
+    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     allow_fp8e4nv: bool = False
@@ -245,6 +246,7 @@ class XPUBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
+        passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
@@ -291,6 +293,9 @@ class XPUBackend(BaseBackend):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, XPUBackend.get_split_barrier_scope(opt))
 
+        if (opt.reduce_variable_liveness):
+            intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
+
         passes.ttgpuir.add_fuse_nested_loops(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
@@ -311,6 +316,20 @@ class XPUBackend(BaseBackend):
         return mod
 
     @staticmethod
+    def ttgir_opt(src, metadata, options):
+        mod = src
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        passes.ttgpuir.add_inliner(pm)
+        passes.ttir.add_loop_aware_cse(pm)
+        passes.ttgpuir.add_canonicalizer(pm)
+        passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+
+        pm.run(mod)
+        return mod
+
+    @staticmethod
     def make_llir(src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
@@ -323,10 +342,11 @@ class XPUBackend(BaseBackend):
         # solutions for SLM allocation, so this will crash on some operations
         # being used, e.g., convert_layout.
         if not knobs.intel.reduce_transpose:
-            passes.ttgpuir.add_allocate_shared_memory(pm)
+            intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
                                            options.enable_tile_load_linear_layout)
+        intel.passes.ttgpuir.add_gen_to_llvm(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -377,6 +397,9 @@ class XPUBackend(BaseBackend):
             metadata["build_flags"] = "-cl-intel-enable-auto-large-GRF-mode"
         else:
             metadata["build_flags"] = ""
+
+        if knobs.intel.disable_igc_opt:
+            metadata["build_flags"] += " -cl-opt-disable"
 
         metadata["generate_native_code"] = options.generate_native_code
 
@@ -435,9 +458,12 @@ class XPUBackend(BaseBackend):
             return zebin
         return spirv
 
-    def add_stages(self, stages, options):
-        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
+    def add_stages(self, stages, options, language):
+        if language == Language.TRITON:
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+            stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
+        elif language == Language.GLUON:
+            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
 

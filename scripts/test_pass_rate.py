@@ -22,6 +22,36 @@ Missing deselected test names:
   - test22
 """
 
+# Real JUnit report with the 3 tests. One test passed, but there is an error at test teardown.
+# Note that pytest incorrectly reports 4 tests instead of 3.
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/4341.
+JUNIT_XML_REPORT1 = """\
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="1" failures="0" skipped="2" tests="4" time="31.615" timestamp="2025-05-28T15:26:42.685704+00:00" hostname="example">
+    <testcase classname="python.test.unit.test_perf_warning" name="test_remark_swp_op_before_operands" time="17.602"><error message="xxx"></error></testcase>
+    <testcase classname="python.test.unit.test_perf_warning" name="test_mma_remark" time="0.019"><skipped type="pytest.xfail" message="Not designed for XPU" /></testcase>
+    <testcase classname="python.test.unit.test_perf_warning" name="test_remark_vectorization" time="0.030"><skipped type="pytest.xfail" message="Not designed for XPU" /></testcase>
+  </testsuite>
+</testsuites>
+"""
+
+# JUnit report with the same test reported twice: one for test failure, another for error at teardown
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/4331.
+JUNIT_XML_REPORT2 = """\
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite>
+    <testcase classname="python.test.unit.runtime.test_compilation_listener" name="test_compile_stats">
+      <failure/>
+    </testcase>
+    <testcase classname="python.test.unit.runtime.test_compilation_listener" name="test_compile_stats">
+      <error/>
+    </testcase>
+  </testsuite>
+</testsuites>
+"""
+
 
 def test_get_warnings_empty_file(tmp_path):
     warnings_path = tmp_path / 'suite-warnings.json'
@@ -70,3 +100,25 @@ def test_generate_junit_report(tmp_path):
     assert stats[0].failed == 1
     assert stats[0].skipped == 1
     assert stats[0].total == 3
+
+
+def test_parse_report_ignore_tests_attribute(tmp_path):
+    report_path = tmp_path / 'suite.xml'
+    report_path.write_text(JUNIT_XML_REPORT1)
+    stats = pass_rate.parse_report(report_path)
+    assert stats.passed == 0
+    assert stats.xfailed == 2
+    assert stats.failed == 1
+    assert stats.skipped == 0
+    assert stats.total == 3
+
+
+def test_parse_report_duplicate_test(tmp_path):
+    report_path = tmp_path / 'suite.xml'
+    report_path.write_text(JUNIT_XML_REPORT2)
+    stats = pass_rate.parse_report(report_path)
+    assert stats.passed == 0
+    assert stats.xfailed == 0
+    assert stats.failed == 1
+    assert stats.skipped == 0
+    assert stats.total == 1

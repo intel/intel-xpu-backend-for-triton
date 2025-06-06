@@ -188,10 +188,12 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   if (newOrder != order && op) {
     op->emitWarning("Warning: Forcing a different order [")
         << newOrder[0] << ", " << newOrder[1]
-        << "] on SMEM than the register order for the opreand " << opIdx
+        << "] on SMEM than the register order for the operand " << opIdx
         << ". Registers will be transposed before SMEM store and the pipelined "
            "load for this operand will be disabled, so poor performance is "
-           "expected.";
+           "expected. Recommendation: consider transposing the operand in "
+           "global "
+           "memory to remove the need to transpose the tensor in registers.";
   }
 
   Attribute SharedMemorySpace =
@@ -218,8 +220,10 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   auto CTALayout = getCTALayout(argType.getEncoding());
   // No swizzling for scale for now
   auto newLayout = NVMMASharedEncodingAttr::get(
-      argType.getContext(), argType.getShape(), newOrder, CTALayout,
-      argType.getElementType(), false);
+      argType.getContext(), /*swizzlingByteWidth=*/0,
+      /*transposed=*/false,
+      /*elementBitWidth=*/argType.getElementType().getIntOrFloatBitWidth(),
+      /*fp4Padded=*/false, CTALayout);
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
@@ -391,9 +395,14 @@ public:
         int bitwidth = getElementTypeOrSelf(a).getIntOrFloatBitWidth();
         a = getDotOperand(a, 0, bitwidth);
       } else {
-        a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
+        a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose,
+                                      /*isMMAv5Fp4Padded=*/false,
+                                      /*forceTranspose=*/false, dotOp);
       }
-      b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
+      b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose,
+                                    /*isMMAv5Fp4Padded=*/false,
+                                    /*forceTranspose=*/false, dotOp);
+
       newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
           dotOp.getLoc(), newRetType, a, b, newAcc, nullptr,
           dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc(), false);

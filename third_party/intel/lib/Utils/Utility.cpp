@@ -3,6 +3,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <optional>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -31,6 +32,75 @@ Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
   return (it != insertPoint)
              ? cast<arith::ConstantIntOp>(*it)
              : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
+}
+
+std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
+  if (auto arg = dyn_cast<BlockArgument>(val)) {
+    Operation *parentOp = arg.getParentBlock()->getParentOp();
+
+    Value loopArg;
+    if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
+      loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
+    else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
+      loopArg = whileOp.getInits()[arg.getArgNumber()];
+    else
+      llvm_unreachable("Unexpected parent operator");
+
+    return findDefiningMakeTensorPtrOp(loopArg);
+  }
+
+  if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
+    return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
+  if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
+    return makePtrOp;
+  if (auto opRes = dyn_cast<OpResult>(val)) {
+    Operation *defOp = opRes.getOwner();
+    if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+      Value val = forOp.getYieldedValues()[opRes.getResultNumber()];
+      return findDefiningMakeTensorPtrOp(val);
+    }
+    if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+      Value val = whileOp.getYieldedValues()[opRes.getResultNumber()];
+      return findDefiningMakeTensorPtrOp(val);
+    }
+    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      // Give up if the 2 possible definitions aren't the same.
+      Region &thenRgn = ifOp.getThenRegion();
+      Region &elseRgn = ifOp.getElseRegion();
+      assert(thenRgn.hasOneBlock() && elseRgn.hasOneBlock() &&
+             "Expecting single blocks on both the 'then' and 'else' regions");
+      auto thenYieldOp =
+               cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator()),
+           elseYieldOp =
+               cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
+      Value thenVal = thenYieldOp->getOperand(opRes.getResultNumber()),
+            elseVal = elseYieldOp->getOperand(opRes.getResultNumber());
+      std::optional<tt::MakeTensorPtrOp> thenDef =
+          findDefiningMakeTensorPtrOp(thenVal);
+      std::optional<tt::MakeTensorPtrOp> elseDef =
+          findDefiningMakeTensorPtrOp(elseVal);
+      if (!thenDef || !elseDef || *thenDef != *elseDef)
+        return std::nullopt;
+      return thenDef;
+    }
+    if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+      // Give up if the 2 possible definitions aren't the same.
+      Value trueVal = selectOp.getTrueValue(),
+            falseVal = selectOp.getFalseValue();
+      std::optional<tt::MakeTensorPtrOp> trueDef =
+          findDefiningMakeTensorPtrOp(trueVal);
+      std::optional<tt::MakeTensorPtrOp> falseDef =
+          findDefiningMakeTensorPtrOp(falseVal);
+      if (!trueDef || !falseDef || *trueDef != *falseDef)
+        return std::nullopt;
+      return trueDef;
+    }
+
+    llvm::errs() << "defOp: " << *defOp << "\n";
+    assert(false && "unhandled operation");
+  }
+
+  return std::nullopt;
 }
 
 std::optional<int64_t> getFoldedConstantValue(Operation *op) {

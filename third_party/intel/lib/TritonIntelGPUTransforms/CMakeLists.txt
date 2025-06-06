@@ -10,6 +10,7 @@ add_triton_library(TritonIntelGPUTransforms
   Pipeliner/SoftwarePipeliner.cpp
   PrefetchBlock.cpp
   ReduceDataDuplication.cpp
+  ReduceVariableLiveness.cpp
   RemoveLayoutConversions.cpp
   RewriteStackPtr.cpp
   ScheduleLoad.cpp

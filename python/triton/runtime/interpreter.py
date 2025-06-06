@@ -119,7 +119,7 @@ class InterpreterOptions:
     sanitize_overflow: bool = True
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
-    deprecated_fp8_dtypes: Tuple[str] = ()
+    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
@@ -595,11 +595,18 @@ class InterpreterBuilder:
             b_data = _convert_float(b_data, b.dtype, tl.float16, None).view(np.float16)
         return TensorHandle(np.matmul(a_data, b_data, dtype=d.data.dtype) + d.data, d.dtype.scalar)
 
-    def create_make_range(self, start, stop):
+    def create_make_range(self, ret_ty, start, stop):
         return TensorHandle(np.arange(start, stop, dtype=np.int32), tl.int32)
 
-    def create_histogram(self, data, bins):
-        return TensorHandle(np.histogram(data.data, bins=bins, range=(0, bins))[0], tl.int32)
+    def create_histogram(self, data, bins, mask):
+        if mask is None:
+            mask = TensorHandle(np.ones_like(data.data, dtype=bool), tl.int1)
+        # force all masked elements to zero
+        data = np.where(mask.data, data.data, np.zeros_like(data.data))
+        histogram = np.histogram(data, bins=bins, range=(0, bins))[0]
+        # remove overcounted elements
+        histogram[0] -= np.logical_not(mask.data).sum()
+        return TensorHandle(histogram, tl.int32)
 
     def create_gather(self, src, indices, axis):
         return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
@@ -649,7 +656,8 @@ class InterpreterBuilder:
         # Triton only supports splitting the original tensor into two along the last axis
         return (TensorHandle(val.data[..., 0], val.dtype.scalar), TensorHandle(val.data[..., 1], val.dtype.scalar))
 
-    def create_splat(self, arg, shape):
+    def create_splat(self, ret_ty, arg):
+        shape = ret_ty.shape
         if isinstance(arg.dtype, tl.block_type):
             return TensorHandle(np.full(shape, arg.data[0], dtype=_get_np_dtype(arg.dtype)), arg.dtype.scalar)
         else:  # scalar

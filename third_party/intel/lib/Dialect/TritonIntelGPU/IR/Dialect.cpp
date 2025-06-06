@@ -505,17 +505,19 @@ struct TritonIntelGPUInferLayoutInterface
 
   LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
-                        Attribute &resultEncoding) const override {
+                        Attribute &resultEncoding,
+                        std::optional<Location> loc) const override {
     resultEncoding =
         SliceEncodingAttr::get(getDialect()->getContext(), axis,
                                cast<DistributedEncodingTrait>(operandEncoding));
     return success();
   }
 
-  LogicalResult inferTransOpEncoding(Attribute operandEncoding,
-                                     ArrayRef<int64_t> shape,
-                                     ArrayRef<int32_t> order, // trans order
-                                     Attribute &resultEncoding) const override {
+  LogicalResult
+  inferTransOpEncoding(Attribute operandEncoding, ArrayRef<int64_t> shape,
+                       ArrayRef<int32_t> order, // trans order
+                       Attribute &resultEncoding,
+                       std::optional<Location> loc) const override {
     // Not support TransOp on DPAS layout.
     return failure();
   }
@@ -889,7 +891,7 @@ struct TritonIntelGPUInferLayoutInterface
     auto dst = src.transposeOuts(srcOutDims)
                    .reshapeOuts(newOutDims)
                    .transposeOuts(standardOutDimNames(ctx, newRank));
-    dstEnc = LinearEncodingAttr::get(ctx, dst);
+    dstEnc = LinearEncodingAttr::get(ctx, std::move(dst));
     return success();
   }
 

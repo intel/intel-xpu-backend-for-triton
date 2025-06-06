@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-hoist-tmem-alloc -tritongpu-pipeline=num-stages=3 -triton-nvidia-gpu-remove-tmem-tokens -canonicalize | FileCheck %s --check-prefixes=CHECK
+// RUN: triton-opt %s -split-input-file -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -triton-nvidia-gpu-remove-tmem-tokens -canonicalize | FileCheck %s --check-prefixes=CHECK
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -196,20 +196,16 @@ tt.func private @pipelined_gather(
   // CHECK: [[BAR0:%.*]] = ttg.memdesc_subview [[BARS]][%c0_i32]
   // CHECK: ttng.barrier_expect [[BAR0]], 16384
   // CHECK: [[LHS_BUF0:%.*]] = ttg.memdesc_subview [[LHS_BUFS]][%c0_i32,
-  // CHECK: [[LHS_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[LHS_DESC]]
-  // CHECK: ttng.async_tma_gather [[LHS_PTR]][[[LHS_X]], %c0_i32] [[LHS_BUF0]], [[BAR0]], %true
+  // CHECK: ttng.async_tma_gather [[LHS_DESC]][[[LHS_X]], %c0_i32] [[LHS_BUF0]], [[BAR0]], %true
   // CHECK: [[RHS_BUF0:%.*]] = ttg.memdesc_subview [[RHS_BUFS]][%c0_i32,
-  // CHECK: [[RHS_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[RHS_DESC]]
-  // CHECK: ttng.async_tma_gather [[RHS_PTR]][[[RHS_X]], %c0_i32] [[RHS_BUF0]], [[BAR0]], %true
+  // CHECK: ttng.async_tma_gather [[RHS_DESC]][[[RHS_X]], %c0_i32] [[RHS_BUF0]], [[BAR0]], %true
 
   // CHECK: [[BAR1:%.*]] = ttg.memdesc_subview [[BARS]][%c1_i32]
   // CHECK: ttng.barrier_expect [[BAR1]], 16384
   // CHECK: [[LHS_BUF1:%.*]] = ttg.memdesc_subview [[LHS_BUFS]][%c1_i32,
-  // CHECK: [[LHS_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[LHS_DESC]]
-  // CHECK: ttng.async_tma_gather [[LHS_PTR]][[[LHS_X]], %c128_i32] [[LHS_BUF1]], [[BAR1]], %true
+  // CHECK: ttng.async_tma_gather [[LHS_DESC]][[[LHS_X]], %c128_i32] [[LHS_BUF1]], [[BAR1]], %true
   // CHECK: [[RHS_BUF1:%.*]] = ttg.memdesc_subview [[RHS_BUFS]][%c1_i32,
-  // CHECK: [[RHS_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[RHS_DESC]]
-  // CHECK: ttng.async_tma_gather [[RHS_PTR]][[[RHS_X]], %c128_i32] [[RHS_BUF1]], [[BAR1]], %true
+  // CHECK: ttng.async_tma_gather [[RHS_DESC]][[[RHS_X]], %c128_i32] [[RHS_BUF1]], [[BAR1]], %true
 
   // CHECK: scf.for
   %out = scf.for %y = %c0_i32 to %c1024_i32 step %c128_i32 iter_args(%acc = %c0) -> (tensor<32x32xf32, #mma>)  : i32 {

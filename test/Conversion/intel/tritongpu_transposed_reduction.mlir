@@ -3,7 +3,7 @@
 
 // COM: Checks the correct lowering of transpose reductions.
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
 
 // CHECK:         llvm.func spir_funccc @[[MAXNUM:.*]](
 // CHECK-SAME:                                   %[[VAL_0:.*]]: f32, %[[VAL_1:.*]]: f32) -> f32 attributes {always_inline} {

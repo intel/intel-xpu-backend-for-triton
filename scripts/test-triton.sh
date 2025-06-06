@@ -275,8 +275,12 @@ run_minicore_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
+  # Ignore language/test_frontend.py when Python < 3.10.
+  # The test requires Python package filecheck which is not available for Python < 3.10.
+  # https://github.com/intel/intel-xpu-backend-for-triton/issues/4443
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    $(python -c 'import sys; print("--ignore=language/test_frontend.py" if sys.version_info < (3, 10) else "")') \
     -k "not test_mxfp and not test_scaled_dot"
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
@@ -326,7 +330,7 @@ run_scaled_dot_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=scaled_dot \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py --ignore=language/test_frontend.py\
     -k "test_scaled_dot"
 }
 
@@ -365,7 +369,7 @@ run_tutorial_tests() {
   run_tutorial_test "06-fused-attention"
   run_tutorial_test "07-extern-functions"
   run_tutorial_test "08-grouped-gemm"
-  TRITON_TEST_REPORTS=false run_tutorial_test "09-persistent-matmul"
+  run_tutorial_test "09-persistent-matmul"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
 
@@ -437,7 +441,7 @@ run_benchmarks() {
   pip install .
   for file in $TRITON_PROJ/benchmarks/triton_kernels_benchmark/*.py; do
     benchmark=$(basename -- "$file" .py)
-    if [[ $benchmark = @("__init__"|"benchmark_driver"|"benchmark_testing") ]]; then
+    if [[ $benchmark = @("__init__"|"benchmark_shapes_parser"|"benchmark_testing"|"benchmark_utils"|"build_report") ]]; then
       continue
     fi
     echo

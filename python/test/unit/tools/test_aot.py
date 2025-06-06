@@ -13,7 +13,7 @@ import pytest
 import triton
 from triton._internal_testing import is_cuda, is_xpu
 from triton.backends.compiler import GPUTarget
-from triton.backends.nvidia.driver import include_dir, library_dirs
+from triton.backends.nvidia.driver import include_dirs, library_dirs
 from triton.backends.intel.driver import COMPILATION_HELPER
 
 kernel_utils_src = """
@@ -175,7 +175,7 @@ def gen_kernel_library(dir, libname):
     else:
         c_files = glob.glob(os.path.join(dir, "*.c"))
         subprocess.run(
-            ["gcc"] + c_files + ["-I", include_dir[0], "-c", "-fPIC"],
+            ["gcc"] + c_files + ["-I", include_dirs[0], "-c", "-fPIC"],
             check=True,
             cwd=dir,
         )
@@ -344,7 +344,7 @@ int main(int argc, char ** argv) {{
 
     if is_cuda():
         command = ["gcc", "test.c"]
-        for inc_dir in include_dir:
+        for inc_dir in include_dirs:
             command.extend(["-I", inc_dir])
         for lib_dir in library_dirs():
             command.extend(["-L", lib_dir])
