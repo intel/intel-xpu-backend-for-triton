@@ -1,7 +1,12 @@
+import sys
 import os
+import io
 import inspect
-import subprocess
-import tempfile
+
+from filecheck.options import Options
+from filecheck.finput import FInput
+from filecheck.parser import Parser, pattern_for_opts
+from filecheck.matcher import Matcher
 
 import triton
 from triton.compiler import ASTSource, make_backend
@@ -17,8 +22,8 @@ from triton._C.libtriton import ir
 stub_target = GPUTarget("cuda", 100, 32)
 stub_backend = make_backend(stub_target)
 
-triton_dir = os.path.dirname(__file__)
-filecheck_path = os.path.join(triton_dir, "FileCheck")
+llvm_bin_dir = os.path.join(os.path.dirname(sys.executable), "bin")
+filecheck_path = os.path.join(llvm_bin_dir, "FileCheck")
 
 
 class MatchError(ValueError):
@@ -32,21 +37,14 @@ class MatchError(ValueError):
 
 
 def run_filecheck(name, module_str, check_template):
-    with tempfile.TemporaryDirectory() as tempdir:
-        temp_module = os.path.join(tempdir, "module")
-        with open(temp_module, "w") as temp:
-            temp.write(module_str)
-
-        temp_expected = os.path.join(tempdir, "expected")
-        with open(temp_expected, "w") as temp:
-            temp.write(check_template)
-
-        try:
-            subprocess.check_output([filecheck_path, temp_expected, "--input-file", temp_module],
-                                    stderr=subprocess.STDOUT)
-        except subprocess.CalledProcessError as error:
-            decoded = error.output.decode('unicode_escape')
-            raise ValueError(decoded)
+    options = Options(match_filename=name)
+    fin = FInput(name, module_str)
+    ops = io.StringIO(check_template)
+    parser = Parser(options, ops, *pattern_for_opts(options))
+    matcher = Matcher(options, fin, parser)
+    matcher.stderr = io.StringIO()
+    if matcher.run() != 0:
+        raise MatchError(matcher.stderr.getvalue(), module_str)
 
 
 def run_parser(kernel_fn):
