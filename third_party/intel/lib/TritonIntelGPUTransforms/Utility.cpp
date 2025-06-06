@@ -120,9 +120,22 @@ bool isExpensiveLoadOrStore(Operation *op) {
   if (isSingleValue(base))
     return false;
 
-  // Loads that use a block pointer are expensive if they cannot be lowered to
-  // 2D block read operations. Temporarily leverage the
-  // "ttig.block_io" attribute to filter out inexpensive loads.
+  if (auto loadOp = dyn_cast<LoadOp>(op)) {
+    // Subgroup2DBlockEncodingAttr loads are expensive, but loads without this
+    // encoding may still be expensive so we only return true if the encodng
+    // exists
+    if (auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getType()))
+      if (isa<Subgroup2DBlockEncodingAttr>(tensorTy.getEncoding()))
+        return true;
+  }
+
+  // The block ptr attribute identifies loads that are candidates for subgroup
+  // 2d block io operations. Loads with these attributes (and without the new
+  // subgroup 2d block encoding above) should have their layouts replaced with
+  // the layout from the expensive op (usually a dot op with DPAS encoding). The
+  // load result is convert to the expensive op layout during LLVM lowering.
+  // Note: the long term plan is to replace this path with the above subgroup 2d
+  // block encoding layout.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr)
