@@ -28,6 +28,6 @@ at::Tensor softmax(const int64_t M, const int64_t N, const at::Tensor &input,
 
 PYBIND11_MODULE(onednn_kernel, m) {
   // softmax
-  m.def("onednn_softmax", &softmax, "softmax forward (ONEDNN)");
+  m.def("onednn_softmax", &softmax, "softmax forward (oneDNN)");
   ;
 }

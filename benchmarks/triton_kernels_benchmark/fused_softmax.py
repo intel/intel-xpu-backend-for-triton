@@ -111,7 +111,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
         # "torch-native": "Torch (native)",
         # "torch-jit": # "Torch (jit)",
         "xetla": "XeTLA",
-        "onednn": "ONEDNN",
+        "onednn": "oneDNN",
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
