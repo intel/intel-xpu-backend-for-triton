@@ -118,8 +118,8 @@ addIndexAndPhase(PartitionBuilder &b, scf::ForOp &loop, unsigned numStages,
   b.setInsertionPoint(loop);
 
   // Index and phase both start at 0.
-  unsigned curArgIdx = loop.getNumRegionIterArgs();
-  auto newArgs = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  loop = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  auto newArgs = loop.getRegionIterArgs().take_back(2);
   BlockArgument index = newArgs[0];
   BlockArgument phase = newArgs[1];
 
@@ -339,19 +339,16 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
                          Value barrier, Value view) {
   Value truePred = b.boolCst(true);
   if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
-    Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
-        loadPartition, stageCluster, load.getDesc());
     auto indices = ttng::translateTMAIndices(
         b, load.getLoc(), load.getDesc().getType().getBlockType().getEncoding(),
         load.getIndices());
-    b.createInto<ttng::AsyncTMACopyGlobalToLocalOp>(
-        loadPartition, stageCluster, tmaPtr, indices, barrier, view, truePred);
+    b.createInto<ttng::AsyncTMACopyGlobalToLocalOp>(loadPartition, stageCluster,
+                                                    load.getDesc(), indices,
+                                                    barrier, view, truePred);
   } else {
     auto gather = cast<DescriptorGatherOp>(op);
-    Value tmaPtr = b.createInto<ttng::TensorDescToTMAPtrOp>(
-        loadPartition, stageCluster, gather.getDesc());
     b.createInto<ttng::AsyncTMAGatherOp>(
-        loadPartition, stageCluster, tmaPtr, gather.getXOffsets(),
+        loadPartition, stageCluster, gather.getDesc(), gather.getXOffsets(),
         gather.getYOffset(), barrier, view, truePred);
   }
 }
@@ -455,18 +452,6 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 // MMA Pipelining
 //===----------------------------------------------------------------------===//
 
-static Value getLastInductionValue(PartitionBuilder &b, scf::ForOp loop) {
-  OpBuilder::InsertionGuard guard(b);
-  b.setInsertionPoint(loop);
-  // (ub - lb -1) // step * step + lb
-  Value diff =
-      b.create<arith::SubIOp>(loop.getUpperBound(), loop.getLowerBound());
-  diff = b.create<arith::SubIOp>(diff, b.intCst(1));
-  Value ceilStep = b.create<arith::MulIOp>(
-      b.create<arith::DivSIOp>(diff, loop.getStep()), loop.getStep());
-  return b.create<arith::AddIOp>(ceilStep, loop.getLowerBound());
-}
-
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                  WarpSchedule &schedule, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo) {
@@ -500,7 +485,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       createTMemAlloc(b, oldAllocOp, /*multiBuffered=*/true, numMmaStages);
 
   // Use placeholder values for the indices in the loop.
-  auto indexPhase = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  loop = addIterArgsToLoop(b, loop, {b.intCst(0), b.intCst(0)});
+  auto indexPhase = loop.getRegionIterArgs().take_back(2);
   BlockArgument index = indexPhase[0];
   BlockArgument phase = indexPhase[1];
 
@@ -587,7 +573,11 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Value userPred = b.boolCst(true);
   if (readOp == mmaOp) {
     PartitionBuilder b(mmaOp.getLoc(), mmaOp);
-    Value lastInductionValue = getLastInductionValue(b, loop);
+    Value lastInductionValue = [&]() {
+      OpBuilder::InsertionGuard guard(b);
+      b.setInsertionPoint(loop);
+      return getLastInductionValue(b, loop);
+    }();
     userPred = b.create<arith::CmpIOp>(
         arith::CmpIPredicate::eq, loop.getInductionVar(), lastInductionValue);
     nodes.back().barNext = createBarrierAlloc(loop, /*numBarriers=*/1);

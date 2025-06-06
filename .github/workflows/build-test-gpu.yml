@@ -51,7 +51,7 @@ jobs:
     name: Integration tests matrix
     strategy:
       matrix:
-        python: ["3.9"]
+        python: ["3.10"]
     uses: ./.github/workflows/build-test-reusable.yml
     with:
       device: ${{ inputs.runner_label }}

@@ -96,6 +96,8 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         else:
             if os.name != "nt":
                 extra_compile_args += ["--std=c++17"]
+            if os.environ.get("TRITON_SUPPRESS_GCC_HOST_CODE_DEPRECATION_WARNINGS"):
+                extra_compile_args += ["-Wno-deprecated-declarations"]
         if os.name == "nt":
             library_dirs = library_dirs + [
                 os.path.abspath(os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs"))

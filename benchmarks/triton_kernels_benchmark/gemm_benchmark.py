@@ -301,7 +301,9 @@ def get_benchmark(
     }
     # use_cutlass
     if not (transpose_a or transpose_b):
-        supported_providers['cutlass'] = 'CUTLASS'
+        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+            # FIXME: enable cutlass on LNL
+            supported_providers['cutlass'] = 'CUTLASS'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Benchmark Performance

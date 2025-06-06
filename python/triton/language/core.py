@@ -6,14 +6,15 @@ from enum import Enum
 from functools import partial, wraps
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
+from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import jit
+from ..runtime.jit import jit, JITFunction
 import inspect
 
 from .._C.libtriton import ir
 from . import semantic
-from ._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape
+from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth
 
 T = TypeVar('T')
 
@@ -138,7 +139,62 @@ class const:
     pass
 
 
-class constexpr:
+class base_value:
+    """Base class of values that exist in the triton IR (i.e. not constexprs).
+    """
+    type: base_type
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        """Flatten frontend value into a sequence of mlir handles, which are appended
+        to the output list
+        """
+        raise NotImplementedError
+
+
+class base_type:
+
+    def __eq__(self, other):
+        raise NotImplementedError("Types must implement __eq__")
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        """Build a frontend value with the current dtype, wrapping a list of existing handles.
+        cursor is the index of the first handle relevant to this value, and the function
+        should return the updated cursor position after any handles consumed by the created value.
+        """
+        raise NotImplementedError
+
+    def mangle(self) -> str:
+        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        raise NotImplementedError
+
+
+class constexpr_type(base_type):
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return self.value == other.value
+
+    def __repr__(self) -> str:
+        return f"constexpr[{self.value}]"
+
+    def mangle(self) -> str:
+        return repr(self)
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        return
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        return constexpr(self.value), cursor
+
+
+class constexpr(base_value):
     """
     This class is used to store a value that is known at compile-time.
     """
@@ -148,10 +204,13 @@ class constexpr:
             self.value = value.value
         else:
             self.value = value
-        self.type = constexpr
+        self.type = constexpr_type(value)
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        return
 
     def __index__(self):
         return self.value
@@ -282,7 +341,7 @@ def constexpr_function(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         # de-constexpr arguments and discard the _builder keyword argument:
-        args = [getattr(x, "value", x) for x in args]
+        args = [_unwrap_if_constexpr(x) for x in args]
         kwargs = {k: getattr(v, "value", v) for (k, v) in kwargs.items() if k != "_builder"}
 
         # call the raw Python function f:
@@ -321,40 +380,6 @@ def check_bit_width(value, shift_value):
             )
 
 
-class base_value:
-    """Base class of values that exist in the triton IR (i.e. not constexprs).
-    """
-    type: base_type
-
-    def _flatten_ir(self, handles: List[ir.value]) -> None:
-        """Flatten frontend value into a sequence of mlir handles, which are appended
-        to the output list
-        """
-        raise NotImplementedError
-
-
-class base_type:
-
-    def __eq__(self, other):
-        raise NotImplementedError("Types must implement __eq__")
-
-    def __ne__(self, other):
-        return not (self == other)
-
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
-        """Build a frontend value with the current dtype, wrapping a list of existing handles.
-        cursor is the index of the first handle relevant to this value, and the function
-        should return the updated cursor position after any handles consumed by the created value.
-        """
-        raise NotImplementedError
-
-    def mangle(self) -> str:
-        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
-
-    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
-        raise NotImplementedError
-
-
 # -----------------------
 # dtype
 # -----------------------
@@ -380,55 +405,43 @@ class dtype(base_type):
         name = _unwrap_if_constexpr(name)
         self.name = name
         assert name in dtype.SINT_TYPES + dtype.UINT_TYPES + dtype.FP_TYPES + dtype.OTHER_TYPES, name
+        self.primitive_bitwidth = get_primitive_bitwidth(name)
         if name in dtype.SINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.SIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.UINT_TYPES:
             self.int_signedness = dtype.SIGNEDNESS.UNSIGNED
-            self.int_bitwidth = int(name.split('int')[-1])
-            self.primitive_bitwidth = self.int_bitwidth
+            self.int_bitwidth = self.primitive_bitwidth
         elif name in dtype.FP_TYPES:
             if name == 'fp8e4b15':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e4nv':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 7
             elif name == 'fp8e4b8':
                 self.fp_mantissa_width = 3
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 8
             elif name == 'fp8e5':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 15
             elif name == 'fp8e5b16':
                 self.fp_mantissa_width = 2
-                self.primitive_bitwidth = 8
                 self.exponent_bias = 16
             elif name == 'fp16':
                 self.fp_mantissa_width = 10
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 15
             elif name == 'bf16':
                 self.fp_mantissa_width = 7
-                self.primitive_bitwidth = 16
                 self.exponent_bias = 127
             elif name == 'fp32':
                 self.fp_mantissa_width = 23
-                self.primitive_bitwidth = 32
                 self.exponent_bias = 127
             elif name == 'fp64':
                 self.fp_mantissa_width = 52
-                self.primitive_bitwidth = 64
                 self.exponent_bias = 1023
             else:
                 raise RuntimeError(f'Unsupported floating-point type {name}')
-        elif name == 'void':
-            self.primitive_bitwidth = 0
 
     def is_fp8(self):
         return 'fp8' in self.name
@@ -636,6 +649,10 @@ class dtype(base_type):
             return 'V'
         return super().mangle()
 
+    def with_element_ty(self, element_ty: dtype):
+        assert not self.is_block()
+        return element_ty
+
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -713,6 +730,9 @@ class block_type(dtype):
 
     def get_block_shapes(self) -> Tuple[int]:
         return self.shape
+
+    def with_element_ty(self, scalar_ty: dtype) -> block_type:
+        return block_type(scalar_ty, self.shape)
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, block_type):
@@ -1300,6 +1320,9 @@ class tuple(base_value):
         for v in self.values:
             v._flatten_ir(handles)
 
+    def __repr__(self):
+        return f"({' ,'.join(repr(x) for x in self.values)})"
+
 
 class slice:
 
@@ -1478,6 +1501,99 @@ class tensor_descriptor(tensor_descriptor_base):
         handles.append(self.handle)
         handles.extend(s.handle for s in self.shape)
         handles.extend(s.handle for s in self.strides)
+
+
+# -----------------------
+# aggregate
+# -----------------------
+
+
+@dataclass(frozen=True)
+class _aggregate_type(base_type):
+    """A generic base type for all Triton aggregate types.
+
+    This class contains a reference to the original user-defined Python class
+    and a list of class fields with their Triton types.
+    """
+
+    base_cls: type
+    fields: List[Tuple[str, base_type]]
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[ir.value, int]:
+        instance = self.base_cls._get_instance()
+        for name, ty in self.fields:
+            value, cursor = ty._unflatten_ir(handles, cursor)
+            setattr(instance, name, value)
+        return instance, cursor
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        for name, ty in self.fields:
+            ty._flatten_ir_types(builder, out)
+
+    def mangle(self) -> str:
+        name = f"{self.base_cls.__module__}.{self.base_cls.__qualname__}"
+        fields = [ty.mangle() for (name, ty) in self.fields]
+        return f"{name}<{', '.join(fields)}>"
+
+
+def _aggregate(cls):
+
+    # Define the wrapped Triton value type.
+    class aggregate_value(base_value):
+        __triton_builtin__ = True
+        __triton_aggregate__ = True
+
+        @classmethod
+        def _get_instance(this_cls):
+            return super().__new__(this_cls)
+
+        def __new__(this_cls, *args, _builder=None, _generator=None, **kwargs):
+            # Call into the user-defined constructor.
+            instance = this_cls._get_instance()
+            if isinstance(cls.__init__, JITFunction):
+                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+            extra_kwargs = {}
+            if "_builder" in inspect.signature(cls.__init__).parameters:
+                extra_kwargs["_builder"] = _builder
+            if "_generator" in inspect.signature(cls.__init__).parameters:
+                extra_kwargs["_generator"] = _generator
+            cls.__init__(instance, *args, **extra_kwargs, **kwargs)
+
+            # Require that the user-defined constructor initialized all fields.
+            for name in cls.__annotations__.keys():
+                if not hasattr(instance, name):
+                    raise AttributeError(f"constructor for {cls.__name__} did not initialize attribute '{name}'")
+
+            return instance
+
+        # Only allow setting attributes defined in the class annotations.
+        def __setattr__(self, name, value):
+            if name not in cls.__annotations__:
+                raise AttributeError(f"{cls.__name__} has no attribute '{name}'")
+            if not isinstance(value, cls.__annotations__[name]):
+                raise TypeError(f"Expected {cls.__annotations__[name]} for attribute '{name}', got {type(value)}")
+            super().__setattr__(name, value)
+
+        def _flatten_ir(self, handles: List[ir.value]) -> None:
+            for name in cls.__annotations__.keys():
+                getattr(self, name)._flatten_ir(handles)
+
+        @property
+        def type(self):
+            return _aggregate_type(aggregate_value,
+                                   [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
+
+    for (name, member) in inspect.getmembers(cls):
+        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
+            if name != "__init__":
+                setattr(aggregate_value, name, member)
+
+    aggregate_value.__name__ = cls.__name__
+    aggregate_value.__module__ = cls.__module__
+    aggregate_value.__qualname__ = cls.__qualname__
+    aggregate_value.__doc__ = cls.__doc__
+
+    return aggregate_value
 
 
 # -----------------------
@@ -2556,7 +2672,7 @@ def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _builder=None
 # -----------------------
 
 
-def _add_scan_docstr(name: str) -> Callable[[T], T]:
+def _add_scan_docstr(name: str, dtype_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2565,7 +2681,15 @@ def _add_scan_docstr(name: str) -> Callable[[T], T]:
     :param input: the input values
     :type input: Tensor
     :param axis: the dimension along which the scan should be done
-    :type axis: int"""
+    :type axis: int
+    :param reverse: if true, the scan is performed in the reverse direction
+    :type reverse: bool"""
+
+        if dtype_arg is not None:
+            docstr += f"""
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, small integer types (< 32 bits) are upcasted to prevent overflow. Note that :code:`tl.bfloat16` inputs are automatically promoted to :code:`tl.float32`.
+    :type {dtype_arg}: tl.dtype"""
+
         func.__doc__ = docstr.format(name=name)
         return func
 
@@ -2612,17 +2736,22 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
 
 @_tensor_member_fn
 @builtin
-def histogram(input, num_bins, _builder=None, _generator=None):
+def histogram(input, num_bins, mask=None, _builder=None, _generator=None):
     """computes an histogram based on input tensor with num_bins bins, the bins have a width of 1 and start at 0.
 
     :param input: the input tensor
     :type input: Tensor
     :param num_bins: number of histogram bins
     :type num_bins: int
+    :param mask: if `mask[idx]` is false, exclude `input[idx]` from histogram
+    :type mask: Block of `triton.int1`, optional
 
     """
     num_bins = _unwrap_if_constexpr(num_bins)
-    return semantic.histogram(input, num_bins, _builder)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = semantic.to_tensor(mask, _builder)
+    return semantic.histogram(input, num_bins, mask, _builder)
 
 
 @_tensor_member_fn
