@@ -13,80 +13,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::gpu::intel;
 
 namespace {
-SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
-                                          ArrayRef<Value> values) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> results;
-  for (auto v : values) {
-    auto em0 = b.and_(v, b.i8_val(0x7));
-    auto em1 = b.and_(v, b.i8_val(0x70));
-    Value v0 =
-        b.or_(b.shl(b.zext(i16_ty, em0), b.i16_val(6)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x8))), b.i16_val(12)));
-    Value v1 =
-        b.or_(b.shl(b.zext(i16_ty, em1), b.i16_val(2)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x80))), b.i16_val(8)));
-    // Three cases:
-    // 1) x is normal and non-zero: Correct bias
-    v0 = b.select(b.icmp_ne(b.and_(em0, b.i8_val(0x6)), b.i8_val(0)),
-                  b.add(v0, b.i16_val((127 - 1) << 7)), v0);
-    v1 = b.select(b.icmp_ne(b.and_(em1, b.i8_val(0x60)), b.i8_val(0)),
-                  b.add(v1, b.i16_val((127 - 1) << 7)), v1);
-    // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
-    // bf16
-    v0 = b.bitcast(
-        b.select(b.icmp_eq(em0, b.i8_val(0x1)),
-                 b.or_(b.i16_val(16128), b.and_(v0, b.i16_val(0x8000))), v0),
-        bf16_ty);
-    v1 = b.bitcast(
-        b.select(b.icmp_eq(em1, b.i8_val(0x10)),
-                 b.or_(b.i16_val(16128), b.and_(v1, b.i16_val(0x8000))), v1),
-        bf16_ty);
-    // 3) x is zero, nothing to do
-    results.push_back(v0);
-    results.push_back(v1);
-  }
-  return results;
-}
-
-SmallVector<Value> convertMxfp4x2ToFp16x2(RewriterBase &rewriter, Location loc,
-                                          ArrayRef<Value> values) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> results;
-  for (auto v : values) {
-    auto em0 = b.and_(v, b.i8_val(0x7));
-    auto em1 = b.and_(v, b.i8_val(0x70));
-    // FP16 bits: sign = 1, exponent = 5, mantissa = 10
-    Value v0 =
-        b.or_(b.shl(b.zext(i16_ty, em0), b.i16_val(10 - 1)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x8))), b.i16_val(12)));
-    Value v1 =
-        b.or_(b.shl(b.zext(i16_ty, em1), b.i16_val(10 - 1 - 4)),
-              b.shl(b.zext(i16_ty, b.and_(v, b.i8_val(0x80))), b.i16_val(8)));
-
-    // Three cases:
-    // 1) x is normal and non-zero: Correct bias
-    v0 = b.select(b.icmp_ne(b.and_(em0, b.i8_val(0x6)), b.i8_val(0)),
-                  b.add(v0, b.i16_val((15 - 1) << 10)), v0);
-    v1 = b.select(b.icmp_ne(b.and_(em1, b.i8_val(0x60)), b.i8_val(0)),
-                  b.add(v1, b.i16_val((15 - 1) << 10)), v1);
-
-    // 2) x is subnormal (x == 0bs001 where s is the sign): Map to fp16 +-0.5
-    v0 = b.bitcast(
-        b.select(b.icmp_eq(em0, b.i8_val(0x1)),
-                 b.or_(b.i16_val(0x3800), b.and_(v0, b.i16_val(0x8000))), v0),
-        f16_ty);
-    v1 = b.bitcast(
-        b.select(b.icmp_eq(em1, b.i8_val(0x10)),
-                 b.or_(b.i16_val(0x3800), b.and_(v1, b.i16_val(0x8000))), v1),
-        f16_ty);
-    // 3) x is zero, nothing to do
-    results.push_back(v0);
-    results.push_back(v1);
-  }
-  return results;
-}
-
 class Fp4ToFpOpPattern : public ConvertOpToLLVMPattern<Fp4ToFpOp> {
 public:
   Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter, PatternBenefit benefit)
@@ -96,20 +22,50 @@ public:
   matchAndRewrite(Fp4ToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto *ctx = op.getContext();
     Type elemType = op.getType().getElementType();
     assert(elemType == f16_ty || elemType == bf16_ty);
-    bool toFp16 = elemType == f16_ty;
 
-    SmallVector<Value> xVals =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    xVals = toFp16 ? convertMxfp4x2ToFp16x2(rewriter, loc, xVals)
-                   : convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
-
-    Value result =
-        packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
-    rewriter.replaceOp(op, result);
+    SmallVector<Value> results;
+    {
+      SmallVector<Value> xVals =
+          unpackLLElements(loc, adaptor.getSrc(), rewriter);
+      convertMxfp4x2ToFloat(rewriter, loc, xVals, results,
+                            elemType == f16_ty ? f16_ty : bf16_ty);
+    }
+    rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), results,
+                                          rewriter, op.getType()));
     return success();
+  }
+
+private:
+  static void convertMxfp4x2ToFloat(RewriterBase &rewriter, Location loc,
+                                    SmallVector<Value> &values,
+                                    SmallVector<Value> &results,
+                                    FloatType floatTy) {
+    assert(results.empty() && !values.empty());
+
+    Value table;
+    { // Create a constant vector containing all the possible values
+      auto vecTy = VectorType::get({16}, floatTy);
+      SmallVector<Attribute, 16> values;
+      for (double v : {0., 0.5, 1., 1.5, 2., 3., 4., 6., -0., -0.5, -1., -1.5,
+                       -2., -3., -4., -6.})
+        values.push_back(rewriter.getFloatAttr(floatTy, v));
+      table = rewriter.create<LLVM::ConstantOp>(
+          loc, vecTy, DenseElementsAttr::get(vecTy, values));
+    }
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value i8_4 = b.i8_val(4);
+    Value i8_15 = b.i8_val(15);
+    results.reserve(values.size() * 2);
+    for (Value v : values) {
+      // The first and last 4 bits are the values indices in the table
+      Value idx1 = b.and_(v, i8_15);
+      Value idx2 = b.lshr(v, i8_4);
+      results.push_back(b.extract_element(table, idx1));
+      results.push_back(b.extract_element(table, idx2));
+    }
   }
 };
 } // anonymous namespace
