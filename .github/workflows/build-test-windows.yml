@@ -34,17 +34,13 @@ jobs:
     # Building PyTorch can take up to 4 hours on certain machines, increasing the timeout to 8 hours.
     timeout-minutes: 720
     steps:
-      - name: Enable long paths
-        run: |
-          git config --system core.longPaths true
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Clean up old workspaces
         shell: bash

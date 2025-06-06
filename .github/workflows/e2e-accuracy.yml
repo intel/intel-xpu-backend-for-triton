@@ -38,14 +38,14 @@ on:
           - float32
         default: all
       models:
-        description: Run all models or a subset from .github/models/performance/{suite}.txt
+        description: Run all models or a subset from .github/models/accuracy/{suite}.txt
         type: choice
         options:
           - all
           - subset
         default: all
       check_all_subset_models:
-        description: In "subset" mode, check all subset models
+        description: In "subset" mode, keep going after errors
         type: boolean
         default: false
       only_one_model:
@@ -70,7 +70,7 @@ permissions: read-all
 jobs:
   setup:
     name: Setup
-    runs-on: Linux
+    runs-on: linux
     outputs:
       suite: ${{ steps.set-matrix.outputs.suite }}
       mode: ${{ steps.set-matrix.outputs.mode }}
@@ -99,11 +99,6 @@ jobs:
           echo "mode=$mode" >> $GITHUB_OUTPUT
           echo "dtype=$dtype" >> $GITHUB_OUTPUT
 
-  print_inputs:
-    name: Print inputs
-    needs: setup
-    runs-on: Linux
-    steps:
       - name: Print inputs
         run: |
           cat <<EOF
@@ -113,7 +108,7 @@ jobs:
       - name: Print setup outputs
         run: |
           cat <<EOF
-          ${{ toJSON(needs.setup.outputs) }}
+          ${{ toJSON(steps.set-matrix.outputs) }}
           EOF
 
   run_tests:
