@@ -1,3 +1,5 @@
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -6,8 +8,6 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Utils/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -113,7 +113,7 @@ public:
 
     transOp->replaceAllUsesWith(newLoadOp);
 
-    [[maybe_unused]] auto moduleOp = newLoadOp->getParentOfType<ModuleOp>();    
+    [[maybe_unused]] auto moduleOp = newLoadOp->getParentOfType<ModuleOp>();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
 
     return success();
@@ -200,18 +200,17 @@ private:
 
       auto yieldOp = cast<scf::YieldOp>(*llvm::find_if(
           users, [](Operation *user) { return isa<scf::YieldOp>(user); }));
-      auto yieldedValUsedAfterLoop =
-          [&op, &yieldOp]() {
-            auto it = llvm::find_if(yieldOp->getOpOperands(),
-                                    [&op](OpOperand &operand) {
-                                      return operand.get() == op->getResult(0);
-                                    });
-            assert(it != yieldOp->getOpOperands().end());
-            OpOperand &operand = *it;
-            auto forOp = cast<scf::ForOp>(yieldOp->getParentOp());
-            OpResult res = forOp->getResult(operand.getOperandNumber());
-            return !res.getUsers().empty();
-          };
+      auto yieldedValUsedAfterLoop = [&op, &yieldOp]() {
+        auto it =
+            llvm::find_if(yieldOp->getOpOperands(), [&op](OpOperand &operand) {
+              return operand.get() == op->getResult(0);
+            });
+        assert(it != yieldOp->getOpOperands().end());
+        OpOperand &operand = *it;
+        auto forOp = cast<scf::ForOp>(yieldOp->getParentOp());
+        OpResult res = forOp->getResult(operand.getOperandNumber());
+        return !res.getUsers().empty();
+      };
       if (yieldedValUsedAfterLoop())
         return false;
 
