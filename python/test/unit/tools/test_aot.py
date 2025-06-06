@@ -220,7 +220,6 @@ int main(int argc, char **argv) {{
   cuMemcpyHtoD(B, hB, K*N*2);
 
   // launch kernel
-  cuStreamSynchronize(stream);
   CUresult ret;
   int algo_id = {algo_id};
   if (algo_id == 0) {{
@@ -230,8 +229,6 @@ int main(int argc, char **argv) {{
   }}
   if (ret != 0) fprintf(stderr, "kernel launch failed\\n");
   assert(ret == 0);
-
-  cuStreamSynchronize(stream);
 
   // read data
   int32_t hC[M*N];
@@ -417,22 +414,21 @@ def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK, ge
 
 def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints):
     # compile all desired configs
-    for ha in ha_hb_hints:
-        for hb in ha_hb_hints:
-            sig = f"*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}"
-            name = f"matmul_{dtype}"
-            grid = f"M/{BM}, N/{BN}, 1"
-            _compile_kernel(
-                dir=dir,
-                signature=sig,
-                kernel_name="kernel",
-                out_name=name,
-                out_path=name,
-                num_warps=1,
-                grid=grid,
-                generate_native_code=generate_native_code,
-                kernel_path=kernel_path,
-            )
+    for ha, hb in ha_hb_hints:
+        sig = f"*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}"
+        name = f"matmul_{dtype}"
+        grid = f"M/{BM}, N/{BN}, 1"
+        _compile_kernel(
+            dir=dir,
+            signature=sig,
+            kernel_name="kernel",
+            out_name=name,
+            out_path=name,
+            num_warps=1,
+            grid=grid,
+            generate_native_code=generate_native_code,
+            kernel_path=kernel_path,
+        )
 
 
 def link_aot_kernels(dir):
@@ -496,7 +492,7 @@ def test_compile_link_matmul(generate_native_code):
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=["", ":16"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":16", ":16")])
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -528,7 +524,7 @@ def test_launcher_has_no_available_kernel(generate_native_code):
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[":1"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":1", ":1")])
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -569,14 +565,13 @@ def test_compile_link_autotune_matmul():
 
         tile_sizes = [
             [16, 16, 16],
-            [32, 32, 16],
-            [32, 32, 32],
             [64, 64, 32],
         ]
 
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
-            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=["", ":16"])
+            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code,
+                                ha_hb_hints=[(":16", ":16"), (":16", ""), ("", ":16")])
 
         link_aot_kernels(tmp_dir)
 

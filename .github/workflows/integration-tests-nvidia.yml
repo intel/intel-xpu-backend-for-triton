@@ -88,7 +88,7 @@ jobs:
           if [ "${{ matrix.runner[0] }}" == "nvidia-gb200" ]; then
             source /venv/bin/activate
           fi
-          make test-unit
+          make NUM_PROCS=24 test-unit
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'nvidia-h100' }}
         run: make test-interpret

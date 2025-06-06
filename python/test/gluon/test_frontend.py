@@ -1,4 +1,5 @@
 import expecttest
+from triton.runtime.jit import MockTensor
 import torch
 import pytest
 import re
@@ -599,4 +600,184 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+""")
+
+
+@gluon.jit
+def broadcast_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [2, 16], [4, 1], [1, 0])
+    a = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, layout))[None, :]
+    b = ttgl.arange(0, 16, layout=ttgl.SliceLayout(1, layout))[:, None]
+    0 + a + b
+
+
+def test_broadcast(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = broadcast_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @broadcast_kernel() attributes {noinline = false} {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked> loc(#loc)
+    %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+    %3 = tt.expand_dims %2 {axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16x1xi32, #blocked> loc(#loc)
+    %c0_i32 = arith.constant 0 : i32 loc(#loc)
+    %c0_i32_0 = arith.constant 0 : i32 loc(#loc)
+    %cst = arith.constant dense<0> : tensor<1x16xi32, #blocked> loc(#loc)
+    %4 = arith.addi %cst, %1 : tensor<1x16xi32, #blocked> loc(#loc)
+    %5 = tt.broadcast %4 : tensor<1x16xi32, #blocked> -> tensor<16x16xi32, #blocked> loc(#loc)
+    %6 = tt.broadcast %3 : tensor<16x1xi32, #blocked> -> tensor<16x16xi32, #blocked> loc(#loc)
+    %7 = arith.addi %5, %6 : tensor<16x16xi32, #blocked> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def math_kernel():
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    a = ttgl.full([16, 16], 1, ttgl.float32, layout)
+    b = ttgl.full([16, 16], 2, ttgl.float32, layout)
+    c = ttgl.full([16, 16], 4, ttgl.float32, layout)
+    d = ttgl.full([16, 16], 1, ttgl.int32, layout)
+    e = ttgl.full([16, 16], 1, ttgl.int32, layout)
+    ttgl.umulhi(d, e)
+    ttgl.exp(a)
+    ttgl.exp2(a)
+    ttgl.log(a)
+    ttgl.log2(a)
+    ttgl.cos(a)
+    ttgl.sin(a)
+    ttgl.sqrt(a)
+    ttgl.sqrt_rn(a)
+    ttgl.rsqrt(a)
+    ttgl.abs(a)
+    ttgl.fdiv(a, b)
+    ttgl.div_rn(a, b)
+    ttgl.erf(a)
+    ttgl.floor(a)
+    ttgl.ceil(a)
+    ttgl.fma(a, b, c)
+
+
+def test_math(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = math_kernel.warmup(sanitize_overflow=False, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @math_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f32 loc(#loc)
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %cst_1 = arith.constant 2.000000e+00 : f32 loc(#loc)
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %cst_3 = arith.constant 4.000000e+00 : f32 loc(#loc)
+    %cst_4 = arith.constant dense<4.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %c1_i32 = arith.constant 1 : i32 loc(#loc)
+    %cst_5 = arith.constant dense<1> : tensor<16x16xi32, #blocked> loc(#loc)
+    %c1_i32_6 = arith.constant 1 : i32 loc(#loc)
+    %cst_7 = arith.constant dense<1> : tensor<16x16xi32, #blocked> loc(#loc)
+    %0 = tt.mulhiui %cst_5, %cst_7 : tensor<16x16xi32, #blocked> loc(#loc)
+    %1 = math.exp %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %2 = math.exp2 %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %3 = math.log %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %4 = math.log2 %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %5 = math.cos %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %6 = math.sin %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %7 = math.sqrt %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %8 = tt.precise_sqrt %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %9 = math.rsqrt %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %10 = math.absf %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %11 = arith.divf %cst_0, %cst_2 : tensor<16x16xf32, #blocked> loc(#loc)
+    %12 = tt.precise_divf %cst_0, %cst_2 : tensor<16x16xf32, #blocked> loc(#loc)
+    %13 = math.erf %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %14 = math.floor %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %15 = math.ceil %cst_0 : tensor<16x16xf32, #blocked> loc(#loc)
+    %16 = math.fma %cst_0, %cst_2, %cst_4 : tensor<16x16xf32, #blocked> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def pair_add(a0, a1, b0, b1):
+    return a0 + b0, a1 + b1
+
+
+@gluon.jit
+def reduce_kernel(out):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    a = ttgl.full([16, 16], 1, ttgl.float32, layout)
+    b = ttgl.full([16, 16], 2, ttgl.float32, layout)
+    s0 = ttgl.sum(a, 0)
+    ttgl.static_assert(s0.type.layout == ttgl.SliceLayout(0, layout))
+    s1 = ttgl.sum(a, 1)
+    ttgl.static_assert(s1.type.layout == ttgl.SliceLayout(1, layout))
+
+    scalar = ttgl.max(s0, 0)
+    ttgl.static_assert(scalar.type == ttgl.float32)
+
+    s1 = ttgl.convert_layout(s1, s0.type.layout)
+
+    pairs = ttgl.reduce((a, b), 0, pair_add)
+    ttgl.static_assert(pairs[0].type.layout == ttgl.SliceLayout(0, layout))
+    ttgl.static_assert(pairs[1].type.layout == ttgl.SliceLayout(0, layout))
+    result = scalar + s1 + pairs[0] + pairs[1]
+    tl.store(out + ttgl.arange(0, 16, s0.type.layout), result)
+
+
+def test_reduce(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = reduce_kernel.warmup(MockTensor(ttgl.float32), sanitize_overflow=False, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["ttgir"]), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#loc = loc(unknown)
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
+    %cst = arith.constant dense<2.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x16xf32, #blocked> loc(#loc)
+    %0 = "tt.reduce"(%cst_0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %12 = arith.addf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %12 : f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %1 = "tt.reduce"(%cst_0) <{axis = 1 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %12 = arith.addf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %12 : f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>) -> tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> loc(#loc)
+    %2 = "tt.reduce"(%0) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown)):
+      %12 = arith.maxnumf %arg1, %arg2 : f32 loc(#loc)
+      tt.reduce.return %12 : f32 loc(#loc)
+    }) : (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) -> f32 loc(#loc)
+    %3 = ttg.convert_layout %1 : tensor<16xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %4:2 = "tt.reduce"(%cst_0, %cst) <{axis = 0 : i32}> ({
+    ^bb0(%arg1: f32 loc(unknown), %arg2: f32 loc(unknown), %arg3: f32 loc(unknown), %arg4: f32 loc(unknown)):
+      %12 = arith.addf %arg1, %arg3 : f32 loc(#loc)
+      %13 = arith.addf %arg2, %arg4 : f32 loc(#loc)
+      tt.reduce.return %12, %13 : f32, f32 loc(#loc)
+    }) : (tensor<16x16xf32, #blocked>, tensor<16x16xf32, #blocked>) -> (tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>>) loc(#loc)
+    %5 = tt.splat %2 : f32 -> tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %6 = arith.addf %5, %3 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %7 = arith.addf %6, %4#0 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %8 = arith.addf %7, %4#1 : tensor<16xf32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %9 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %10 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    %11 = tt.addptr %10, %9 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>>, tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.store %11, %8 : tensor<16x!tt.ptr<f32>, #ttg.slice<{dim = 0, parent = #blocked}>> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
 """)
