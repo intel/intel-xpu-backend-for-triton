@@ -159,7 +159,7 @@ private:
       return false;
 
     std::optional<tt::MakeTensorPtrOp> defOp =
-        *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+        triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
     if (!defOp || !singleUsersInChain(*defOp, loadOp))
       return false;
 
