@@ -323,7 +323,6 @@ jobs:
           01-vector-add
           02-fused-softmax
           03-matrix-multiplication
-          03i-matrix-multiplication
           04-low-memory-dropout
           05-layer-norm
           07-extern-functions
