@@ -275,8 +275,12 @@ run_minicore_tests() {
   cd $TRITON_PROJ/python/test/unit
   ensure_spirv_dis
 
+  # Ignore language/test_frontend.py when Python < 3.10.
+  # The test requires Python package filecheck which is not available for Python < 3.10.
+  # https://github.com/intel/intel-xpu-backend-for-triton/issues/4443
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=language \
     run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-8} --device xpu language/ --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=language/test_warp_specialization.py \
+    $(python -c 'import sys; print("--ignore=language/test_frontend.py" if sys.version_info < (3, 10) else "")') \
     -k "not test_mxfp and not test_scaled_dot"
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=subprocess \
