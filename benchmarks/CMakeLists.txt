@@ -13,9 +13,13 @@ find_package(Torch REQUIRED)
 find_library(TORCH_PYTHON_LIBRARY torch_python PATH "${TORCH_INSTALL_PREFIX}/lib")
 find_package(XeTLALibrary REQUIRED)
 find_package(CUTLASSLibrary REQUIRED)
+find_package(ONEDNNLibrary REQUIRED)
 
 # add the XeTLA kernel.
 add_subdirectory(xetla_kernel)
 
 # add the CUTLASS kernel.
 add_subdirectory(cutlass_kernel)
+
+# add the ONEDNN kernel.
+add_subdirectory(onednn_kernel)
