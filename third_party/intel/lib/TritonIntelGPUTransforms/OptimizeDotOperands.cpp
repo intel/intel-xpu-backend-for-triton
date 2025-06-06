@@ -1,5 +1,3 @@
-#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -8,12 +6,16 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Utils/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -107,11 +109,11 @@ public:
     assert(newAttr && "Expecting a valid blockIO attribute");
 
     newLoadOp->setAttr(blockIOAttrName, newAttr);
-    LLVM_DEBUG(llvm::dbgs() << "newLoadOp: " << newLoadOp << "\n");
+    LLVM_DEBUG(llvm::errs() << "newLoadOp: " << newLoadOp << "\n");
 
     transOp->replaceAllUsesWith(newLoadOp);
 
-    [[maybe_unused]] auto moduleOp = newLoadOp->getParentOfType<ModuleOp>();
+    [[maybe_unused]] auto moduleOp = newLoadOp->getParentOfType<ModuleOp>();    
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
 
     return success();
@@ -166,16 +168,84 @@ private:
     return true;
   }
 
+  // Determine whether all operations in the def-use chain from \p start to
+  // \p end have a single user.
+  // Note: we allow an operation in the def-use chain to have an additional user
+  // if the operation is in a for loop, and the additional user is the yield
+  // operation, provided that the result yielded is not used after the loop.
+  // Example:
+  //   make_tensor_ptr -> advance -> load (OK)
+  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
+  //                                   -> yield (OK)
+  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
+  //                                              -> yield -> load (NOT OK)
+  //
   bool singleUsersInChain(Operation *start, Operation *end) const {
     assert(start && end && "Expecting valid operations");
     Operation *currentOp = start;
 
-    while (currentOp != end) {
-      // TODO: extend to handle loops.
-      if ((currentOp->getNumRegions() != 0) || !currentOp->hasOneUse())
+    auto validate = [](Operation *op, Operation *&nextOp) {
+      assert(nextOp == nullptr);
+
+      if (op->hasOneUse())
+        return true;
+      if (!op->getParentOfType<scf::ForOp>())
         return false;
 
-      currentOp = *currentOp->getUsers().begin();
+      SmallVector<Operation *> users(op->getUsers());
+      if (users.size() > 2 || llvm::none_of(users, [](Operation *op) {
+            return isa<scf::YieldOp>(op);
+          }))
+        return false;
+
+      auto yieldOp = cast<scf::YieldOp>(*llvm::find_if(
+          users, [](Operation *user) { return isa<scf::YieldOp>(user); }));
+      auto yieldedValUsedAfterLoop =
+          [&op, &yieldOp]() {
+            auto it = llvm::find_if(yieldOp->getOpOperands(),
+                                    [&op](OpOperand &operand) {
+                                      return operand.get() == op->getResult(0);
+                                    });
+            assert(it != yieldOp->getOpOperands().end());
+            OpOperand &operand = *it;
+            auto forOp = cast<scf::ForOp>(yieldOp->getParentOp());
+            OpResult res = forOp->getResult(operand.getOperandNumber());
+            return !res.getUsers().empty();
+          };
+      if (yieldedValUsedAfterLoop())
+        return false;
+
+      nextOp = *llvm::find_if(
+          users, [](Operation *user) { return !isa<scf::YieldOp>(user); });
+      return true;
+    };
+
+    while (currentOp != end) {
+      Operation *user = nullptr;
+      if (!validate(currentOp, user)) {
+        LLVM_DEBUG(llvm::dbgs() << currentOp << " fails safety checks\n");
+        return false;
+      }
+
+      user = (!user) ? user = *currentOp->getUsers().begin() : user;
+      if (user->getNumRegions() == 0) {
+        currentOp = user;
+        continue;
+      }
+
+      // Find the next operation in the def-use chain inside the lop body.
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        for (BlockArgument arg : forOp.getRegionIterArgs()) {
+          Value initArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
+          if (initArg == currentOp->getResult(0)) {
+            if (!arg.hasOneUse())
+              return false;
+
+            currentOp = *arg.getUsers().begin();
+            break;
+          }
+        }
+      }
     }
 
     return true;
