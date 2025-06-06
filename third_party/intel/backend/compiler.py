@@ -343,7 +343,7 @@ class XPUBackend(BaseBackend):
         # solutions for SLM allocation, so this will crash on some operations
         # being used, e.g., convert_layout.
         if not knobs.intel.reduce_transpose:
-            passes.ttgpuir.add_allocate_shared_memory(pm)
+            intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.advanced_path, options.one_matrix_per_load_for_bt,
                                            options.enable_tile_load_linear_layout)

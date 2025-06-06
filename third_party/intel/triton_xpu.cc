@@ -76,6 +76,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_2("add_pipeline",
                             gpu::intel::createTritonIntelGPUPipeline, int,
                             enum gpu::intel::SplitBarrierScope);
+  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
+                     gpu::intel::createIntelAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
