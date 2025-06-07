@@ -8,7 +8,7 @@ from triton import knobs
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout
 from triton._filecheck import filecheck_test, run_parser
 import triton.language as tl
 from triton._internal_testing import is_cuda
@@ -123,7 +123,7 @@ def test_tensor_memory(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     layout = ttgl.BlockedLayout(size_per_thread=[1, 64], threads_per_warp=[32, 1], warps_per_cta=[4, 1], order=[0, 1])
-    tmem_layout = ttgl.nvidia.blackwell.TensorMemoryLayout(block=[128, 128], unpacked=True)
+    tmem_layout = TensorMemoryLayout(block=[128, 128], unpacked=True)
     h = tensor_memory_kernel.warmup(layout, tmem_layout, num_warps=4, grid=(1, ))
     expecttest.assert_expected_inline(
         anonymize_ir(h.asm["source"]), """\
@@ -247,8 +247,8 @@ def shared_memory_cast_kernel():
                                                       rank=2)
     layout_T: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=8,
                                                       rank=2)
-    smem = ttgl.allocate_shared_memory(ttgl.int8, [256, 128], layout_a)
-    smem.permute((1, 0), layout_T)
+    smem = ttgl.allocate_shared_memory(ttgl.int8, [2, 256, 128], layout_a)
+    smem.subslice(0).permute((1, 0), layout_T)
 
     layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16,
                                                       rank=4, cta_order=[3, 2, 1, 0])
@@ -271,11 +271,14 @@ def test_shared_memory_cast(fresh_knobs):
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @shared_memory_cast_kernel() attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable>
-    %1 = ttg.memdesc_trans %0 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable>
-    %2 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
-    %3 = ttg.memdesc_reshape %2 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable, 32x1x4x64>
-    %4 = ttg.memdesc_reinterpret %2 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<1024xi8, #shared4, #smem, mutable>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2x256x128xi8, #shared, #smem, mutable>
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i32_0 = arith.constant 0 : i32
+    %1 = ttg.memdesc_subview %0[%c0_i32_0, %c0_i32, %c0_i32] : !ttg.memdesc<2x256x128xi8, #shared, #smem, mutable> -> !ttg.memdesc<256x128xi8, #shared, #smem, mutable, 2x256x128>
+    %2 = ttg.memdesc_trans %1 {order = array<i32: 1, 0>} : !ttg.memdesc<256x128xi8, #shared, #smem, mutable, 2x256x128> -> !ttg.memdesc<128x256xi8, #shared1, #smem, mutable, 2x128x256>
+    %3 = ttg.local_alloc : () -> !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable>
+    %4 = ttg.memdesc_reshape %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared3, #smem, mutable, 32x1x4x64>
+    %5 = ttg.memdesc_reinterpret %3 : !ttg.memdesc<32x1x4x64xf16, #shared2, #smem, mutable> -> !ttg.memdesc<1024xi8, #shared4, #smem, mutable>
     tt.return
   }
 }
@@ -283,17 +286,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def warp_specialize_default(a, b):
+def warp_specialize_default(a, b, e: ttgl.constexpr):
     return b, a
 
 
 @gluon.jit
-def warp_specialize_worker0(a, b):
+def warp_specialize_worker0(a, b, e: ttgl.constexpr):
     pass
 
 
 @gluon.jit
-def warp_specialize_worker1(a, b):
+def warp_specialize_worker1(a, b, e: ttgl.constexpr):
     pass
 
 
@@ -322,15 +325,15 @@ def test_warp_specialize():
     # CHECK-NEXT:    [[C:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     # CHECK-NEXT:    [[OUTS:%.*]]:3 = ttg.warp_specialize([[A]], [[B]], [[C]]) {{.*}}requestedRegisters = array<i32: 24, 48>
     # CHECK-NEXT:    default {
-    # CHECK-NEXT:      [[RESULTS:%.*]]:3 = tt.call @{{.*}}warp_specialize_default{{.*}}([[A]], [[B]], [[C]])
+    # CHECK-NEXT:      [[RESULTS:%.*]]:3 = tt.call @{{.*}}warp_specialize_default{{.*}}cconstexpr_42{{.*}}([[A]], [[B]], [[C]])
     # CHECK-NEXT:      warp_yield [[RESULTS]]#0, [[RESULTS]]#1, [[RESULTS]]#2
     # CHECK-NEXT:    }
     # CHECK-NEXT:    partition0(%arg0: tensor<1xi32, [[BLOCKED]]>, %arg1: tensor<2xi32, [[BLOCKED]]>, %arg2: tensor<4xi32, [[BLOCKED]]>) num_warps(4) {
-    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker0{{.*}}(%arg0, %arg1, %arg2)
+    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker0{{.*}}cconstexpr_42{{.*}}(%arg0, %arg1, %arg2)
     # CHECK-NEXT:      warp_return
     # CHECK-NEXT:    }
     # CHECK-NEXT:    partition1(%arg0: tensor<1xi32, [[BLOCKED]]>, %arg1: tensor<2xi32, [[BLOCKED]]>, %arg2: tensor<4xi32, [[BLOCKED]]>) num_warps(4) {
-    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker1{{.*}}(%arg0, %arg1, %arg2)
+    # CHECK-NEXT:      call @{{.*}}warp_specialize_worker1{{.*}}cconstexpr_42{{.*}}(%arg0, %arg1, %arg2)
     # CHECK-NEXT:      warp_return
     # CHECK-NEXT:    }
     # CHECK-NEXT:    call @{{.*}}anchor{{.*}}([[OUTS]]#0)
@@ -340,8 +343,9 @@ def test_warp_specialize():
     b = ttgl.arange(0, 2, layout=layout)
     c = ttgl.arange(0, 4, layout=layout)
     pair = Pair(a, b)
-    a, b = ttgl.warp_specialize((pair, c), warp_specialize_default, [warp_specialize_worker0, warp_specialize_worker1],
-                                [4, 4], [24, 48])
+    e: ttgl.constexpr = 42
+    a, b = ttgl.warp_specialize((pair, c, e), warp_specialize_default,
+                                [warp_specialize_worker0, warp_specialize_worker1], [4, 4], [24, 48])
     anchor(a)
     anchor(b)
 
@@ -399,7 +403,7 @@ def test_tcgen05_mma(fresh_knobs):
     knobs.compilation.disable_line_info = True
 
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-    acc_layout = blackwell.TensorMemoryLayout([128, 128], unpacked=True)
+    acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
 
     h = tcgen05_mma_kernel.warmup(nvmma_layout, acc_layout, grid=(1, ))
     expecttest.assert_expected_inline(
@@ -552,7 +556,7 @@ def test_mlir_attr_error():
 
 @gluon.jit
 def tmem_subslice_kernel():
-    layout: ttgl.constexpr = ttgl.nvidia.blackwell.TensorMemoryLayout(block=[128, 128], unpacked=True)
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], unpacked=True)
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [2, 256, 256], layout)
     tmem.subslice(0)
 
@@ -781,3 +785,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   } loc(#loc)
 } loc(#loc)
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_elementwise_core():
+    # CHECK: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    # CHECK: @test_elementwise_core
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 16, layout)
+    y = ttgl.arange(16, 32, layout)
+
+    # CHECK: arith.select {{.*}} : tensor<16xi1, [[BLOCKED]]>, tensor<16xi32, [[BLOCKED]]>
+    a = ttgl.where(x > 8, x, y)
+    # CHECK: arith.maxsi {{.*}} : tensor<16xi32, [[BLOCKED]]>
+    b = ttgl.maximum(x, y)
+    # CHECK: arith.minsi {{.*}} : tensor<16xi32, [[BLOCKED]]>
+    c = ttgl.minimum(x, y)
+    ttgl.static_assert(a.type == x.type)
+    ttgl.static_assert(b.type == x.type)
+    ttgl.static_assert(c.type == x.type)
