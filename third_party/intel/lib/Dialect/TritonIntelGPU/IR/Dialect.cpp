@@ -496,6 +496,173 @@ void WarpEncodingAttr::print(mlir::AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
+// Subgroup2DBlockEncodingAttr
+//===----------------------------------------------------------------------===//
+
+namespace {
+std::optional<CTALayoutAttr> getCTALayoutOrError(
+    AsmParser &parser, std::optional<SmallVector<unsigned>> CTAsPerCGA,
+    std::optional<SmallVector<unsigned>> CTASplitNum,
+    std::optional<SmallVector<unsigned>> CTAOrder, unsigned rank) {
+  if (CTAsPerCGA && CTASplitNum && CTAOrder) {
+    return CTALayoutAttr::get(parser.getContext(), *CTAsPerCGA, *CTASplitNum,
+                              *CTAOrder);
+  }
+  if (!CTAsPerCGA && !CTASplitNum && !CTAOrder) {
+    return CTALayoutAttr::getDefault(parser.getContext(), rank);
+  }
+  parser.emitError(parser.getNameLoc(), "CTAsPerCGA, CTASplitNum, and CTAOrder "
+                                        "must all be present or all be absent");
+  return std::nullopt;
+}
+
+// Print the CTALayout if it's not equal to the default.
+void maybePrintCTALayout(mlir::MLIRContext *context, mlir::AsmPrinter &printer,
+                         CTALayoutAttr layout, unsigned rank) {
+  if (layout != CTALayoutAttr::getDefault(context, rank)) {
+    printer << ", CTAsPerCGA = [" << ArrayRef(layout.getCTAsPerCGA()) << "]"
+            << ", CTASplitNum = [" << ArrayRef(layout.getCTASplitNum()) << "]"
+            << ", CTAOrder = [" << ArrayRef(layout.getCTAOrder()) << "]";
+  }
+}
+
+} // namespace
+
+LogicalResult Subgroup2DBlockEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError,
+    ArrayRef<unsigned> warpsPerCTA, CTALayoutAttr CTALayout,
+    ArrayRef<unsigned> instrShape, unsigned numBlocks, ArrayRef<unsigned> order,
+    unsigned kWidth, unsigned threadsPerWarp) {
+  if (instrShape.size() != 2) {
+    return emitError() << "instrShape must be rank 2 but was: "
+                       << instrShape.size();
+  }
+  if (order.size() != 2) {
+    return emitError() << "order must be rank 2 but was " << order.size();
+  }
+  if (warpsPerCTA.size() != 2) {
+    return emitError() << "warpsPerCTA must be rank 2 but was "
+                       << warpsPerCTA.size();
+  }
+  if (!(kWidth == 1 || kWidth == 2 || kWidth == 4)) {
+    return emitError() << "kWidth must be 1, 2 or 4, but was: " << kWidth;
+  }
+  if (!threadsPerWarp == 16) {
+    return emitError() << "threadsPerWarp must be 16, but was: "
+                       << threadsPerWarp;
+  }
+  return success();
+}
+
+Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict).failed())
+    return {};
+  if (parser.parseGreater().failed())
+    return {};
+
+  SmallVector<unsigned> warpsPerCTA;
+  std::optional<SmallVector<unsigned>> CTAsPerCGA;
+  std::optional<SmallVector<unsigned>> CTASplitNum;
+  std::optional<SmallVector<unsigned>> CTAOrder;
+  SmallVector<unsigned> instrShape;
+  unsigned numBlocks = 0;
+  SmallVector<unsigned> order;
+  unsigned kWidth = 0;
+  unsigned threadsPerWarp = 0;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "warpsPerCTA") {
+      if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "CTAsPerCGA") {
+      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTASplitNum") {
+      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "CTAOrder") {
+      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
+              .failed())
+        return {};
+    }
+    if (attr.getName() == "instrShape") {
+      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
+        return {};
+    }
+    if (attr.getName() == "numBlocks") {
+      if (parseUInt(parser, attr, numBlocks, "numBlocks").failed())
+        return {};
+    }
+    if (attr.getName() == "order") {
+      if (parseIntArrayAttr(parser, attr, order, "order").failed())
+        return {};
+    }
+    if (attr.getName() == "kWidth") {
+      if (parseUInt(parser, attr, kWidth, "kWidth").failed())
+        return {};
+    }
+    if (attr.getName() == "threadsPerWarp") {
+      if (parseUInt(parser, attr, threadsPerWarp, "threadsPerWarp").failed())
+        return {};
+    }
+  }
+
+  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
+      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
+  if (!CTALayout.has_value())
+    return {};
+
+  return parser.getChecked<Subgroup2DBlockEncodingAttr>(
+      parser.getContext(), warpsPerCTA, *CTALayout, instrShape, numBlocks,
+      order, kWidth, threadsPerWarp);
+}
+
+SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
+  return getMatrixOrder(getRank(), /*rowMajor*/ true);
+}
+
+SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+
+SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+
+SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+SmallVector<unsigned>
+Subgroup2DBlockEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
+}
+
+void Subgroup2DBlockEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{" << "warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+
+  maybePrintCTALayout(getContext(), printer, getCTALayout(), getRank());
+
+  printer << ", instrShape = [" << getInstrShape()
+          << "], numBlocks=" << getNumBlocks() << ", order=[" << getOrder()
+          << "], kWidth=" << getKWidth()
+          << ", threadsPerWarp=" << getThreadsPerWarp() << "}>";
+}
+
+LinearLayout
+Subgroup2DBlockEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  return subgroup2DBlockToLinearLayout(shape, *this, getKWidth());
+}
+
+//===----------------------------------------------------------------------===//
 // Dialect Interface
 //===----------------------------------------------------------------------===//
 
