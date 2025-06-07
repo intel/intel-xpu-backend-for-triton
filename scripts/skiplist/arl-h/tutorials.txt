@@ -1,4 +1,3 @@
-02-fused-softmax
 03-matrix-multiplication
 03i-matrix-multiplication
 06-fused-attention
