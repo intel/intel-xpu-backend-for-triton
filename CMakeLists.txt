@@ -331,8 +331,8 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   configure_file(
-    "${LLVM_SYSPATH}/bin/FileCheck"
-    "${TRITON_WHEEL_DIR}/FileCheck"
+    "${LLVM_SYSPATH}/bin/FileCheck${CMAKE_EXECUTABLE_SUFFIX}"
+    "${TRITON_WHEEL_DIR}/FileCheck${CMAKE_EXECUTABLE_SUFFIX}"
     COPYONLY)
 
 endif()
