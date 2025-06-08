@@ -1,14 +1,11 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-// #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/PriorityWorklist.h"
 
-#include "mlir/Analysis/SliceAnalysis.h"
-#include "triton/Analysis/Utility.h"
+// #include "triton/Analysis/Utility.h"
 
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+// #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
@@ -21,244 +18,13 @@ namespace gpu::intel {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace {
-
-#if 1
-class BlockedToSubgroupBlockIO : public mlir::OpRewritePattern<LoadOp> {
-private:
-  llvm::MapVector<Operation *, Attribute> layoutMap;
-
-public:
-  BlockedToSubgroupBlockIO(mlir::MLIRContext *context,
-                           llvm::MapVector<Operation *, Attribute> layoutMap,
-                           int benefit)
-      : OpRewritePattern<LoadOp>(context, benefit), layoutMap(layoutMap) {}
-
-  // well, this is very stupid. instead of messing around with the block ptr
-  // which we don't even care about (how does that get changed during remove
-  // layout conversions anyway?) so let's just try inserting the convert layout
-  // op as before and then checking the load in RemoveLayoutConversions to see
-  // if the first user is a convert layout op to subgroup 2d block io. if it is
-  // then, idk, maybe we can pick that layout somehow? or maybe we can intercept
-  // this layout in TritonToTritonIntelGPU somehow. but that probably blows up
-  // the rest of the pipeline. probably worth trying the hack in
-  // RemoveLayoutConversions first
-  mlir::LogicalResult
-  matchAndRewrite(LoadOp loadOp,
-                  mlir::PatternRewriter &rewriter) const override {
-    llvm::errs() << "LoadOp: " << loadOp << "\n";
-
-    auto loadOpType = dyn_cast<RankedTensorType>(loadOp.getType());
-    if (!loadOpType)
-      return failure();
-
-    // traverse the def-use chain until we find the DotOpOperand layout for this
-    // layout
-    return failure();
-
-#if 0
-    auto oldType = dyn_cast<RankedTensorType>(loadOp.getType());
-    // invalid or already visited
-    if (!oldType || isa<Subgroup2DBlockEncodingAttr>(oldType.getEncoding()))
-      return failure();
-
-    if (layoutMap.find(loadOp) == layoutMap.end())
-      return failure();
-    auto encoding = layoutMap.lookup(loadOp);
-
-
-    llvm::errs() << "processing loadop: " << loadOp << "\nwith new encoding "
-                 << encoding << "\n";
-     rewriter.setInsertionPointAfterValue(loadOp);
-    auto newLoad = rewriter.clone(*loadOp);
-
-    auto newType = RankedTensorType::get(oldType.getShape(), oldType.getElementType(), encoding);
-    newLoad->getResult(0).setType(newType);
-
-    // convert back to blocked
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(loadOp, oldType, newLoad->getResult(0));
-
-    return success();
-#endif
-  }
-};
-
-#else
-// does the load op care about the mismatch between operand and result?
-class BlockedToSubgroupBlockIO
-    : public mlir::OpRewritePattern<triton::MakeTensorPtrOp> {
-private:
-  llvm::MapVector<Operation *, Attribute> layoutMap;
-
-  void setEncoding(ValueRange values, Attribute encoding,
-                   SmallVector<Value> &changed, Operation *op) const {
-    for (Value value : values) {
-      bool hasChanged = false;
-      auto ptrType = dyn_cast<PointerType>(value.getType());
-      if (!ptrType)
-        continue;
-      auto tensorType = dyn_cast<RankedTensorType>(ptrType.getPointeeType());
-      if (!tensorType)
-        continue;
-
-      llvm::errs() << "Considering value: " << value << "\n";
-      changed.push_back(value);
-    }
-  }
-
-  SmallVector<Value>
-  propagateToUsers(Value value, Attribute encoding,
-                   SetVector<Operation *> &opsToDelete) const {
-    SmallVector<Value> changed;
-    for (OpOperand &use : value.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        Value arg = forOp.getTiedLoopRegionIterArg(&use);
-        Value result = forOp.getTiedLoopResult(&use);
-        setEncoding({arg, result}, encoding, changed, user);
-        continue;
-      }
-      if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
-        Value arg = whileOp.getBeforeArguments()[use.getOperandNumber()];
-        setEncoding({arg}, encoding, changed, user);
-        continue;
-      }
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto parent = yieldOp->getParentOp();
-        SmallVector<Value> valuesToPropagate;
-        if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
-          valuesToPropagate.push_back(
-              parent->getResult(use.getOperandNumber()));
-        if (auto forOp = dyn_cast<scf::ForOp>(parent))
-          valuesToPropagate.push_back(
-              forOp.getRegionIterArg(use.getOperandNumber()));
-        if (auto whileOp = dyn_cast<scf::WhileOp>(parent))
-          valuesToPropagate.push_back(
-              whileOp.getBeforeArguments()[use.getOperandNumber()]);
-        if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
-          setEncoding(valuesToPropagate, encoding, changed, user);
-        continue;
-      }
-      if (auto conditionOp = dyn_cast<scf::ConditionOp>(user)) {
-        auto whileOp = cast<scf::WhileOp>(conditionOp->getParentOp());
-        // Skip arg 0 as it is the condition.
-        unsigned argIndex = use.getOperandNumber() - 1;
-        Value afterArg = whileOp.getAfterArguments()[argIndex];
-        Value result = whileOp->getResult(argIndex);
-        setEncoding({afterArg, result}, encoding, changed, user);
-        continue;
-      }
-      if (isa<LoadOp>(user)) {
-        // though we need to change load op???
-        setEncoding(cast<LoadOp>(user).getResult(), encoding, changed, user);
-        continue;
-      }
-
-      llvm::errs() << "user: " << *user << "\n";
-    }
-    return changed;
-  }
-
-public:
-  BlockedToSubgroupBlockIO(mlir::MLIRContext *context,
-                           llvm::MapVector<Operation *, Attribute> layoutMap,
-                           int benefit)
-      : OpRewritePattern<triton::MakeTensorPtrOp>(context, benefit),
-        layoutMap(layoutMap) {}
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::MakeTensorPtrOp makeTensorPtrOp,
-                  mlir::PatternRewriter &rewriter) const override {
-    if (layoutMap.find(makeTensorPtrOp) == layoutMap.end())
-      return failure();
-    auto encoding = layoutMap.lookup(makeTensorPtrOp);
-
-    auto oldPtrType = cast<PointerType>(makeTensorPtrOp.getType());
-    auto oldType = cast<RankedTensorType>(oldPtrType.getPointeeType());
-    if (isa<Subgroup2DBlockEncodingAttr>(oldType.getEncoding())) {
-      return failure();
-    }
-
-    auto newType = RankedTensorType::get(oldType.getShape(),
-                                         oldType.getElementType(), encoding);
-    auto newPtrType = PointerType::get(newType, oldPtrType.getAddressSpace());
-
-    rewriter.setInsertionPointAfter(makeTensorPtrOp);
-    auto newMakeTensorPtrOp = rewriter.clone(*makeTensorPtrOp);
-    newMakeTensorPtrOp->getResult(0).setType(newPtrType);
-    rewriter.replaceAllUsesWith(makeTensorPtrOp,
-                                newMakeTensorPtrOp->getResult(0));
-    rewriter.eraseOp(makeTensorPtrOp);
-
-    mlir::AttrTypeReplacer replacer;
-    replacer.addReplacement([](PointerType ty) {
-      llvm::errs() << "ty: " << ty << "\n";
-      return ty; // RankedTensorType::get(ty.getShape(), ty.getElementType());
-    });
-#if 0
-    // But don't remove them from the tensors inside descriptors.
-    replacer.addReplacement([](TensorDescType ty) -> std::pair<Type, WalkResult> {
-      return {ty, WalkResult::skip()};
-    });
-#endif
-    replacer.recursivelyReplaceElementsIn(*container, /*replaceAttrs=*/false,
-                                          /*replaceLocs=*/false,
-                                          /*replaceTypes=*/true);
-
-#if 0
-
-    SetVector<Operation*> opsToDelete;
-      opsToDelete.insert(makeTensorPtrOp);
-
-    // now propagate the new encoding
-    SmallVector<Value> queue;
-    queue.push_back(makeTensorPtrOp->getResult(0));
-    while (!queue.empty()) {
-      Value currentValue = queue.back();
-      queue.pop_back();
-
-      // SmallVector<Value> changed = propagateToUsers(currentValue, encoding);
-       for (OpOperand &use : currentValue.getUses()) {
-        Operation *user = use.getOwner();
-        if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        BlockArgument arg = forOp.getTiedLoopRegionIterArg(&use);
-        forOp.getInitArgsMutable()[arg.getArgNumber() - 1].assign(currentValue);
-
-        BlockArgument result = forOp.getTiedLoopResult(&use);
-        queue.push_back(result);
-        // clone the for loop
-        auto newLoop = replaceForOpWithNewSignature(rewriter, forOp, {});
-        // replace the old result with the new type
-
-
-        continue;
-        }
-       }
-
-      queue.insert(queue.end(), changed.begin(), changed.end());
-    }
-
-
-    // rewriter.replaceAllUsesWith(makeTensorPtrOp,
-    //                             newMakeTensorPtrOp->getResult(0));
-    // rewriter.eraseOp(makeTensorPtrOp);
-    for (Operation *op : llvm::reverse(opToDelete))
-      op->erase();
-#endif
-    return success();
-  }
-};
-#endif
-
-} // namespace
-
-#define GEN_PASS_DEF_TRITONINTELGPUOPTIMIZEBLOCKLOADENCODINGPASS
+#define GEN_PASS_DEF_TRITONINTELGPUOPTIMIZEBLOCKIOENCODINGPASS
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
 // maybe it should be a struct?
-class TritonIntelGPUOptimizeBlockLoadEncodingPass
-    : public impl::TritonIntelGPUOptimizeBlockLoadEncodingPassBase<
-          TritonIntelGPUOptimizeBlockLoadEncodingPass> {
+class TritonIntelGPUOptimizeBlockIOEncodingPass
+    : public impl::TritonIntelGPUOptimizeBlockIOEncodingPassBase<
+          TritonIntelGPUOptimizeBlockIOEncodingPass> {
 
   void getSubgroup2DBlockLayoutForOperand(
       Value operand, DpasEncodingAttr dpasLayout,
@@ -340,13 +106,6 @@ class TritonIntelGPUOptimizeBlockLoadEncodingPass
     layoutMap[loadOp] = subgroup2DBlockEncoding;
   }
 
-  void setEncoding(ValueRange values, Attribute encoding,
-                   SmallVector<Value> &changed, Operation *op) {
-    for (Value value : values) {
-      changed.push_back(value);
-    }
-  }
-
   static Type getNewType(Type type, Attribute encoding) {
     RankedTensorType tensorType = cast<RankedTensorType>(type);
     return RankedTensorType::get(tensorType.getShape(),
@@ -360,7 +119,6 @@ class TritonIntelGPUOptimizeBlockLoadEncodingPass
         getNewType(oldPointerType.getPointeeType(), encoding),
         oldPointerType.getAddressSpace());
   }
-#if 1
 
   SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
@@ -513,79 +271,12 @@ class TritonIntelGPUOptimizeBlockLoadEncodingPass
       }
     }
   }
-#else
-  void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
-    assert(isa<LoadOp>(op) && "expected load op");
-    auto loadOp = cast<LoadOp>(op);
-    llvm::errs() << "rewrite load op: " << loadOp << "\n";
-    if (!isa<PointerType>(loadOp.getOperand(0).getType()))
-      return;
 
-    // find the tensor ptr for the load op
-    Value ptr = loadOp.getPtr();
-    assert(isTensorPointerType(ptr.getType()) && "expecting pointer to tensor");
-    auto makeTensorPtrOp = getMakeTensorPtrOp(ptr);
-    auto typeToReplace = cast<PointerType>(makeTensorPtrOp.getType());
-    auto oldPointeeType =
-        cast<RankedTensorType>(typeToReplace.getPointeeType());
-
-    auto newPtrType = PointerType::get(
-        RankedTensorType::get(oldPointeeType.getShape(),
-                              oldPointeeType.getElementType(), encoding),
-        typeToReplace.getAddressSpace());
-
-    llvm::errs() << "starting replacement with " << makeTensorPtrOp << "\n";
-    llvm::errs() << "replacing " << typeToReplace << " with " << newPtrType
-                 << "\n";
-
-    // propagate the new pointer type through the def-use chain starting with
-    // the MakeTensorPtr op
-    SetVector<Operation *> opsToDelete;
-    SmallVector<Operation *> queue;
-    queue.push_back(makeTensorPtrOp);
-    while (!queue.empty()) {
-      Operation *op = queue.back();
-      llvm::errs() << "Processing op " << *op << "\n";
-      queue.pop_back();
-
-      auto newOp = propagatePointerType(encoding, op);
-      llvm::errs() << "newOp: " << *newOp << "\n";
-      for (auto use : op->getUsers()) {
-        queue.push_back(use);
-        llvm::errs() << "use: " << *use << "\n";
-      }
-
-      // wonder if we can just delete it here...
-      op->replaceAllUsesWith(newOp);
-      opsToDelete.insert(op);
-    }
-
-    for (Operation *op : llvm::reverse(opsToDelete))
-      op->erase();
-  }
-#endif
   Operation *propagatePointerType(Attribute encoding, Operation *op) {
     OpBuilder builder(op);
 
     llvm::errs() << "Rewriting op " << *op << "\n\tto use new layout:\n"
                  << encoding << "\n\n";
-
-#if 0
-    // add a layout conversion from the op parent to the op
-    SmallVector<Value, 4> newArgs;
-    for (auto operand : op->getOperands()) {
-      auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-      // is tensor pointer type? actually maybe we just forward the operands and change the outputs
-      if (tensorType &&
-          !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
-        Type newType = getNewType(tensorType, encoding);
-        newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
-            op->getLoc(), newType, operand));
-      } else {
-        newArgs.push_back(operand);
-      }
-    }
-#endif
 
     // Convert output types
     SmallVector<Type, 4> newTypes;
@@ -634,23 +325,6 @@ public:
     for (auto &kv : layoutMap) {
       rewriteTensorLayoutsForOp(kv.second, kv.first, context);
     }
-
-#if 0
-    MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
-
-    mlir::RewritePatternSet patterns(context);
-    constexpr int benefitDefault = 1;
-    patterns.add<BlockedToSubgroupBlockIO>(context, benefitDefault);
-
-    // triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(patterns,
-    //                                                           &getContext());
-
-    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
-      llvm::errs() << "this pass failed.\n";
-      signalPassFailure();
-    }
-#endif
   }
 };
 
