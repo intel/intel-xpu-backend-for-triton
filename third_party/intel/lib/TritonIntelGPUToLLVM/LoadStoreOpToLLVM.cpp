@@ -1769,7 +1769,8 @@ struct LoadOpConversion
         // operand per inst.
         // Note: the tileHeight and numOperandsPer2DLoadM are the column size
         // now.
-        numOperandsPer2DLoadM = (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
+        numOperandsPer2DLoadM =
+            (threadsPerWarp <= tileHeight) ? repCluster[rank - 1] : 1;
       }
       // The transpose 2d load only support 1 operand per inst on column.
       // (vBlocks = 1)
