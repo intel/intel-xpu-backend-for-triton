@@ -153,6 +153,13 @@ bool isExpensiveLoadOrStore(Operation *op) {
   return false;
 }
 
+bool hasSubgroup2DBlockEncoding(RankedTensorType tensorType) {
+  if (!tensorType.getEncoding())
+    return false;
+
+  return isa<ttgi::Subgroup2DBlockEncodingAttr>(tensorType.getEncoding());
+}
+
 bool hasDotDpasEncoding(RankedTensorType tensorType) {
   if (!tensorType.getEncoding())
     return false;
