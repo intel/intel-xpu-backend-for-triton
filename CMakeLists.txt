@@ -321,6 +321,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+
+  if (NOT DEFINED LLVM_SYSPATH)
+      message(FATAL_ERROR "LLVM_SYSPATH must be set.")
+  endif()
+
+  if (NOT DEFINED TRITON_WHEEL_DIR)
+      message(FATAL_ERROR "TRITON_WHEEL_DIR must be set.")
+  endif()
+
+  configure_file(
+    "${LLVM_SYSPATH}/bin/FileCheck${CMAKE_EXECUTABLE_SUFFIX}"
+    "${TRITON_WHEEL_DIR}/FileCheck${CMAKE_EXECUTABLE_SUFFIX}"
+    COPYONLY)
+
 endif()
 
 if (UNIX AND NOT APPLE)
