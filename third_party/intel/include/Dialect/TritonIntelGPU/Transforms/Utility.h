@@ -33,6 +33,9 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
 
+// Returns true if the tensor type has a subgroup 2d block io encoding
+bool hasSubgroup2DBlockEncoding(RankedTensorType tensorType);
+
 // Returns true if the tensor type has a dot dpas encoding.
 bool hasDotDpasEncoding(RankedTensorType tensorType);
 
