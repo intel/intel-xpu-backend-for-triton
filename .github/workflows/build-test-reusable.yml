@@ -366,7 +366,6 @@ jobs:
           dest: ${{ steps.pip-cache.outputs.dest }}
 
       - name: Upload test reports
-        if: success() || ${{ inputs.ignore_errors }}
         uses: actions/upload-artifact@v4
         with:
           name: test-reports-${{ matrix.suite }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
@@ -378,7 +377,6 @@ jobs:
     runs-on:
       - linux
     needs: integration-tests
-    if: success() || ${{ inputs.ignore_errors }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
