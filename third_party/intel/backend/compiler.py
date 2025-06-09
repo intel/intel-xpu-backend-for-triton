@@ -140,29 +140,37 @@ class XPUBackend(BaseBackend):
         dev_prop['has_subgroup_2d_block_io'] = tgt_prop.get('has_subgroup_2d_block_io', False)
         dev_prop['has_bfloat16_conversions'] = tgt_prop.get('has_bfloat16_conversions', True)
 
-        if self.device_arch and shutil.which('ocloc'):
-            if self.device_arch in self.device_props:
-                dev_prop.update(self.device_props[self.device_arch])
-                return dev_prop
+        if not self.device_arch:
+            return dev_prop
+
+        if self.device_arch in self.device_props:
+            dev_prop.update(self.device_props[self.device_arch])
+            return dev_prop
+
+        supported_extensions = set()
+
+        if knobs.intel.device_extensions:
+            supported_extensions.update(knobs.intel.device_extensions.split(' '))
+        elif shutil.which('ocloc'):
             try:
-                ocloc_cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', self.device_arch]
+                cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', self.device_arch]
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    output = subprocess.check_output(ocloc_cmd, text=True, cwd=temp_dir)
-                supported_extensions = set()
-                for extension in output.split(' '):
-                    supported_extensions.add(extension)
-                ocloc_dev_prop = {}
-                ocloc_dev_prop[
-                    'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extensions
-                ocloc_dev_prop[
-                    'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
-                ocloc_dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
-                ocloc_dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
-                self.device_props[self.device_arch] = ocloc_dev_prop
-                dev_prop.update(ocloc_dev_prop)
+                    output = subprocess.check_output(cmd, text=True, cwd=temp_dir)
+                supported_extensions.update(output.split(' '))
             except subprocess.CalledProcessError:
                 # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.
                 pass
+
+        ocloc_dev_prop = {}
+        ocloc_dev_prop[
+            'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extensions
+        ocloc_dev_prop[
+            'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
+        ocloc_dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
+        ocloc_dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
+        self.device_props[self.device_arch] = ocloc_dev_prop
+        dev_prop.update(ocloc_dev_prop)
+
         return dev_prop
 
     def parse_options(self, opts) -> Any:
