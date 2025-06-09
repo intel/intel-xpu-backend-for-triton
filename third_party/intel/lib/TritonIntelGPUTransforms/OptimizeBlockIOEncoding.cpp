@@ -3,10 +3,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/PriorityWorklist.h"
 
-// #include "triton/Analysis/Utility.h"
-
-// #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
@@ -21,7 +17,6 @@ namespace gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPUOPTIMIZEBLOCKIOENCODINGPASS
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 
-// maybe it should be a struct?
 class TritonIntelGPUOptimizeBlockIOEncodingPass
     : public impl::TritonIntelGPUOptimizeBlockIOEncodingPassBase<
           TritonIntelGPUOptimizeBlockIOEncodingPass> {
