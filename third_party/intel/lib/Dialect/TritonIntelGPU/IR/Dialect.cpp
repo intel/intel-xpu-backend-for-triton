@@ -547,7 +547,7 @@ LogicalResult Subgroup2DBlockEncodingAttr::verify(
   if (!(kWidth == 1 || kWidth == 2 || kWidth == 4)) {
     return emitError() << "kWidth must be 1, 2 or 4, but was: " << kWidth;
   }
-  if (!threadsPerWarp == 16) {
+  if (!(threadsPerWarp == 16)) {
     return emitError() << "threadsPerWarp must be 16, but was: "
                        << threadsPerWarp;
   }
