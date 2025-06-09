@@ -3,7 +3,7 @@
 include(FetchContent)
 
 if (NOT oneDNNLibrary_FOUND)
-    # TODO: switch ot FetchContent_MakeAvailable once oneDNN supports it
+    # TODO: switch to FetchContent_MakeAvailable once oneDNN supports it
     cmake_policy(SET CMP0169 OLD)
 
     set(oneDNNLibrary_SOURCE_DIR

@@ -77,7 +77,7 @@ dnnl::stream softmax_example(const int M, const int N, const int axis,
 
     return engine_stream;
   } catch (dnnl::error &e) {
-    std::cout << "oneDNN error caught: " << std::endl
+    std::cerr << "oneDNN error caught: " << std::endl
               << "\tStatus: " << dnnl_status2str(e.status) << std::endl
               << "\tMessage: " << e.what() << std::endl;
   }
