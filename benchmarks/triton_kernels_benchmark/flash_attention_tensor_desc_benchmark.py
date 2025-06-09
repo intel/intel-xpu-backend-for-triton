@@ -11,7 +11,7 @@ from triton_kernels_benchmark import flash_attention_benchmark
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     desc_k, desc_v,  #
-                    offset_y, start_m, qk_scale,  #
+                    offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                     N_CTX: tl.constexpr):
@@ -49,8 +49,9 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = acc * alpha[:, None]
         # prepare p and v for the dot
         v = desc_v.load([offsetv_y, 0])
-        p = p.to(tl.float16)
-        acc += tl.dot(p, v)
+        p = p.to(dtype)
+        # note that this non transposed v for FP8 is only supported on Blackwell
+        acc = tl.dot(p, v, acc)
         # update m_i and l_i
         # place this at the end of the loop to reduce register pressure
         l_i = l_i * alpha + l_ij
@@ -77,7 +78,7 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
                                BLOCK_N: tl.constexpr,  #
                                STAGE: tl.constexpr  #
                                ):  # pylint: disable=unused-argument
-
+    dtype = tl.float16
     start_m = tl.program_id(2)
     off_z = tl.program_id(0)
     off_h = tl.program_id(1)
@@ -87,7 +88,6 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
         off_z = tl.program_id(2)
         qvk_offset = off_z.to(tl.int64) * stride_qh
 
-    # tensor descriptors
     y_dim = Z * H * N_CTX
     desc_q = tl.make_tensor_descriptor(base=Q, shape=(N_CTX, BLOCK_DMODEL), strides=(stride_qm, stride_qk),
                                        block_shape=(BLOCK_M, BLOCK_DMODEL))
@@ -113,18 +113,20 @@ def _attn_fwd_with_tensor_desc(Q, K, V, sm_scale, M, Out,  #
     # load q: it will stay in SRAM throughout
     q = desc_q.load([qo_offset_y, 0])
     # stage 1: off-band
-    # For causal = True, STAGE = 3, the kernel gets 1 as its STAGE
-    # For causal = False, STAGE = 1, the kernel gets 3 as its STAGE
+    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
+    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, desc_k, desc_v,  #
-                                        offset_y, start_m, qk_scale,  #
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
+                                        desc_k, desc_v,  #
+                                        offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
-        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, desc_k, desc_v,  #
-                                        offset_y, start_m, qk_scale,  #
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
+                                        desc_k, desc_v,  #
+                                        offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, BLOCK_DMODEL, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX  #
                                         )
