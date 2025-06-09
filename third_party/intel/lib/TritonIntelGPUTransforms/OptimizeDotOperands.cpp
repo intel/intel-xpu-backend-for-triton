@@ -1,8 +1,10 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
@@ -46,27 +48,39 @@ namespace {
 //   %load = tt.load %ptr, {blockIO=<column_major|row_major>}
 //         : tt.ptr<tensor<NxM, dotEnc>
 //   tt.dot(%a, %load)
-class FuseTransWithLoad : public OpRewritePattern<tt::TransOp> {
+class FuseTransWithLoad {
+private:
+  tt::FuncOp funcOp;
+  SmallPtrSet<Operation *, 8> cleanUp;
+
 public:
-  using OpRewritePattern::OpRewritePattern;
+  FuseTransWithLoad(tt::FuncOp funcOp) : funcOp(funcOp) {}
 
-  LogicalResult matchAndRewrite(tt::TransOp transOp,
-                                PatternRewriter &rewriter) const override {
-    if (!isCandidate(transOp))
-      return failure();
+  void run() {
+    funcOp.walk([&](tt::TransOp transOp) {
+      if (isCandidate(transOp))
+        fuse(transOp);
+    });
 
+    if (!cleanUp.empty())
+      finalize();
+
+    [[maybe_unused]] auto moduleOp = funcOp->getParentOfType<ModuleOp>();
+    assert(succeeded(verify(moduleOp)) && "Module verification failed");
+  }
+
+  void fuse(tt::TransOp transOp) {
     LLVM_DEBUG(llvm::dbgs() << "Found candidate:\n\t" << transOp << "\n");
-    auto tensorType = cast<RankedTensorType>(transOp.getType());
-    Attribute dotEncoding =
-        cast<ttg::DotOperandEncodingAttr>(tensorType.getEncoding());
     auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
     tt::MakeTensorPtrOp makeTensorPtrOp =
         *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
-    LLVM_DEBUG(llvm::dbgs() << "makeTensorPtrOp:\n\t" << makeTensorPtrOp << "\n");
+    LLVM_DEBUG(llvm::dbgs()
+               << "makeTensorPtrOp:\n\t" << makeTensorPtrOp << "\n");
 
     // Create a MakeTensorPtrOp yielding a block pointer to the transposed
-    // tensor.
+    // tensor...
     auto ptrType = cast<tt::PointerType>(makeTensorPtrOp.getType());
+    auto tensorType = cast<RankedTensorType>(transOp.getType());
     auto newPtrType =
         tt::PointerType::get(tensorType, ptrType.getAddressSpace());
     SmallVector<Value> newShape(llvm::reverse(makeTensorPtrOp.getShape()));
@@ -80,43 +94,8 @@ public:
     assert(makeTensorPtrOp->hasOneUse() && "Expecting single user");
     LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n\t" << ptr << "\n");
 
-    // Transitively update users of the block pointer.
-    Operation *makeTensorPtrOpUser = *makeTensorPtrOp->getUsers().begin();
-    if (auto advanceOp = dyn_cast<tt::AdvanceOp>(makeTensorPtrOpUser)) {
-      ptr = updateAdvanceOpChain(advanceOp, loadOp, ptr);
-    } else {
-      // TODO: handle loop init args (scf.for only for now).
-      assert(makeTensorPtrOpUser == loadOp &&
-             "Expecting the load to be the user");
-    }
-
-    // Replace the load+transpose with a new load operation that uses the
-    // transposed block pointer.
-    auto newLoadOp = rewriter.create<tt::LoadOp>(
-        loadOp.getLoc(), ptr, loadOp.getMask(), loadOp.getOther(),
-        loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-
-    StringRef blockIOAttrName =
-        ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
-    StringAttr attr = loadOp->getAttrOfType<StringAttr>(blockIOAttrName);
-    StringAttr newAttr =
-        (attr == "row_major")
-            ? StringAttr::get(loadOp->getContext(), "column_major")
-        : (attr == "column_major")
-            ? StringAttr::get(loadOp->getContext(), "row_major")
-            : nullptr;
-    assert(newAttr && "Expecting a valid blockIO attribute");
-
-    newLoadOp->setAttr(blockIOAttrName, newAttr);
-    LLVM_DEBUG(llvm::errs() << "newLoadOp: " << newLoadOp << "\n");
-
-    transOp->replaceAllUsesWith(newLoadOp);
-
-    [[maybe_unused]] auto moduleOp = newLoadOp->getParentOfType<ModuleOp>();
-    assert(succeeded(verify(moduleOp)) && "Module verification failed");
-
-    return success();
+    // ... and propagate it through the def-use chain.
+    propagateToUsers(ptr, makeTensorPtrOp, makeTensorPtrOp, transOp);
   }
 
 private:
@@ -161,7 +140,7 @@ private:
       return false;
 
     std::optional<tt::MakeTensorPtrOp> defOp =
-        *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+        triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
     if (!defOp || !singleUsersInChain(*defOp, loadOp))
       return false;
 
@@ -222,7 +201,7 @@ private:
     while (currentOp != end) {
       Operation *user = nullptr;
       if (!validate(currentOp, user)) {
-        LLVM_DEBUG(llvm::dbgs() << currentOp << " fails safety checks\n");
+        LLVM_DEBUG(llvm::dbgs() << *currentOp << " fails safety checks\n");
         return false;
       }
 
@@ -232,7 +211,7 @@ private:
         continue;
       }
 
-      // Find the next operation in the def-use chain inside the lop body.
+      // Find the next operation in the def-use chain inside the loop body.
       if (auto forOp = dyn_cast<scf::ForOp>(user)) {
         for (BlockArgument arg : forOp.getRegionIterArgs()) {
           Value initArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
@@ -278,34 +257,170 @@ private:
 
     // TODO: add support for loops (advanceOp cound be consumed by a loop
     // init_arg).
-    
+
     llvm_unreachable("Unexpected user");
     return nullptr;
+  }
+
+  // Propagate \p newVal to users of \p origOp.
+  void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
+                        Operation *sentinel) {
+    assert(origOp && sentinel && "Expecting valid operations");
+    const SmallVector<Operation *> users(origOp->getUsers());
+    for (Operation *user : users)
+      propagateToUser(newVal, origVal, user, sentinel);
+  }
+
+  // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
+  // terminate the propagation.
+  void propagateToUser(Value newVal, Value origVal, Operation *user,
+                       Operation *sentinel) {
+    assert(user && sentinel && "Expecting valid operations");
+    assert(llvm::is_contained(origVal.getUsers(), user) && "Invalid usage");
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "In " << __func__ << "\n";
+      llvm::dbgs() << "user of ";
+      if (origVal.getDefiningOp()) {
+        llvm::dbgs() << "\n\t" << *origVal.getDefiningOp() << "\n";
+      } else {
+        origVal.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << " ";
+      }
+      llvm::dbgs() << "is:\n\t";
+      user->dumpPretty();
+    });
+
+    if (user == sentinel) {
+      LLVM_DEBUG(llvm::dbgs() << "Reached sentinel\n");
+      sentinel->replaceAllUsesWith(newVal.getDefiningOp());
+      cleanUp.insert(sentinel);
+      return;
+    }
+
+    Location loc = user->getLoc();
+    if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
+      OpBuilder rewriter(advanceOp);
+      SmallVector<Value> newOffsets(llvm::reverse(advanceOp.getOffsets()));
+      auto newAdvanceOp = rewriter.create<tt::AdvanceOp>(loc, newVal.getType(),
+                                                         newVal, newOffsets);
+      LLVM_DEBUG(llvm::dbgs() << "\tnewAdvanceOp: " << newAdvanceOp << "\n");
+      cleanUp.insert(advanceOp);
+      return propagateToUsers(newAdvanceOp, advanceOp.getResult(), advanceOp,
+                              sentinel);
+    }
+
+    if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
+      OpBuilder rewriter(loadOp);
+      auto newLoadOp = rewriter.create<tt::LoadOp>(
+          loadOp.getLoc(), newVal, loadOp.getMask(), loadOp.getOther(),
+          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
+          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+
+      StringRef blockIOAttrName =
+          ttgi::TritonIntelGPUDialect::getBlockIOAttrName();
+      StringAttr attr = loadOp->getAttrOfType<StringAttr>(blockIOAttrName);
+      StringAttr newAttr =
+          (attr == "row_major")
+              ? StringAttr::get(loadOp->getContext(), "column_major")
+          : (attr == "column_major")
+              ? StringAttr::get(loadOp->getContext(), "row_major")
+              : nullptr;
+      assert(newAttr && "Expecting a valid blockIO attribute");
+
+      newLoadOp->setAttr(blockIOAttrName, newAttr);
+      LLVM_DEBUG(llvm::dbgs() << "\tnewLoadOp: " << newLoadOp << "\n");
+      cleanUp.insert(loadOp);
+      return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel);
+    }
+
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+      int opNum = -1;
+      for (OpOperand &operand : yieldOp->getOpOperands()) {
+        if (operand.get() == origVal) {
+          opNum = operand.getOperandNumber();
+          yieldOp->setOperand(operand.getOperandNumber(), newVal);
+          break;
+        }
+      }
+
+      // Update the yield's parent operation result type.
+      Operation *parentOp = yieldOp->getParentOp();
+      for (OpResult res : parentOp->getOpResults()) {
+        int resNum = res.getResultNumber();
+        if (resNum == opNum)
+          res.setType(newVal.getType());
+      }
+      return;
+    }
+
+    if (auto forOp = dyn_cast<scf::ForOp>(user))
+      return propagateToLoop(newVal, origVal, forOp, sentinel);
+  }
+
+  void propagateToLoop(Value newVal, Value origVal, LoopLikeOpInterface loopOp,
+                       Operation *sentinel) {
+    assert(sentinel && sentinel != loopOp && "Unexpected sentinel kind");
+    LLVM_DEBUG({
+      llvm::dbgs() << "In " << __func__ << "\n";
+      llvm::dbgs() << "newVal: " << newVal << "\n";
+    });
+
+    for (auto [initArg, rgnInitArg, yieldVal, loopRes] :
+         llvm::zip(loopOp.getInitsMutable(), loopOp.getRegionIterArgs(),
+                   loopOp.getYieldedValues(), loopOp->getResults())) {
+      if (initArg.get() == origVal) {
+        initArg.set(newVal);
+        rgnInitArg.setType(initArg.get().getType());
+        const SmallVector<Operation *> users(rgnInitArg.getUsers());
+        for (Operation *user : users)
+          propagateToUser(rgnInitArg, rgnInitArg, user, sentinel);
+      }
+    }
+  }
+
+  // Cleanup unused operations.
+  void finalize() {
+    bool erasedOperation;
+    do {
+      erasedOperation = false;
+      SmallPtrSet<Operation *, 8> erased;
+      for (Operation *op : cleanUp) {
+        if (!op->getUsers().empty() || !op->getRegions().empty())
+          continue;
+
+        erased.insert(op);
+        op->erase();
+        erasedOperation = true;
+      }
+      cleanUp.remove_if([&](Operation *op) { return erased.contains(op); });
+    } while (erasedOperation);
+
+    // Remove operations that contain a region.
+    for (Operation *op : cleanUp) {
+      if (!op->getUsers().empty())
+        continue;
+      op->erase();
+    }
   }
 };
 
 } // namespace
 
 class TritonIntelGPUOptimizeDotOperandsPass
-    : public triton::gpu::intel::impl::TritonIntelGPUOptimizeDotOperandsBase<
+    : public ttgi::impl::TritonIntelGPUOptimizeDotOperandsBase<
           TritonIntelGPUOptimizeDotOperandsPass> {
+
 public:
-  using triton::gpu::intel::impl::TritonIntelGPUOptimizeDotOperandsBase<
+  using ttgi::impl::TritonIntelGPUOptimizeDotOperandsBase<
       TritonIntelGPUOptimizeDotOperandsPass>::
       TritonIntelGPUOptimizeDotOperandsBase;
 
-  void runOnOperation() override {
-    MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
-
-    OpPassManager pm;
-    pm.addPass(mlir::createCanonicalizerPass());
-    if (failed(runPipeline(pm, m)))
-      return signalPassFailure();
-
-    mlir::RewritePatternSet patterns(context);
-    patterns.add<FuseTransWithLoad>(context);
-    if (failed(applyPatternsGreedily(m, std::move(patterns))))
-      signalPassFailure();
+  void runOnOperation() final {
+    ModuleOp moduleOp = getOperation();
+    moduleOp.walk([](tt::FuncOp funcOp) {
+      FuseTransWithLoad fuser(funcOp);
+      fuser.run();
+    });
   }
 };
