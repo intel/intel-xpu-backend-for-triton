@@ -234,7 +234,14 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
 
     // get the MakeTensorPtr Op for the load
     Value ptr = loadOp.getPtr();
-    assert(isTensorPointerType(ptr.getType()) && "expecting pointer to tensor");
+    if (!isTensorPointerType(ptr.getType())) {
+      // TODO: support tensor of pointer loads
+      LLVM_DEBUG(DBGS() << "Ptr\n"
+                        << ptr << " for Load Op:\n"
+                        << loadOp
+                        << "\nincompatible with Subgroup 2D Block Layout.\n");
+      return;
+    }
     MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
     assert(makeTensorPtrOp &&
            "expecting a tensor pointer parent to block io load "
