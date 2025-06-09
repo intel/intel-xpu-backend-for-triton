@@ -48,13 +48,13 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
   return {};
 }
 
-static Type getNewType(Type type, Attribute encoding) {
+Type getNewType(Type type, Attribute encoding) {
   RankedTensorType tensorType = cast<RankedTensorType>(type);
   return RankedTensorType::get(tensorType.getShape(),
                                tensorType.getElementType(), encoding);
 }
 
-static Type getNewPointerType(Type type, Attribute encoding) {
+Type getNewPointerType(Type type, Attribute encoding) {
   assert(isa<PointerType>(type) && "expected a ptr type!");
   auto oldPointerType = cast<PointerType>(type);
   return PointerType::get(getNewType(oldPointerType.getPointeeType(), encoding),
@@ -63,42 +63,49 @@ static Type getNewPointerType(Type type, Attribute encoding) {
 
 struct EncodingInfo {
   Attribute desiredEncoding;
-  bool isPtr = false;
-  int addressSpace = -1;
   bool requiresConvert = false;
 
   bool operator==(const EncodingInfo &other) const {
-    return desiredEncoding == other.desiredEncoding && isPtr == other.isPtr &&
-           addressSpace == other.addressSpace;
+    return desiredEncoding == other.desiredEncoding &&
+           requiresConvert == other.requiresConvert;
   }
 };
 
+/**
+ * The algorithm here takes inspiration from
+ * TritonNVIDIAGPU::OptimizeDescriptorEncoding. The idea is to iterate the
+ * def-use chain in both directions starting from the Load Op. We store the
+ * values that need to be updated along with the new encoding in the
+ * `valueToEncodingInfo` MapVector. After all value/encoding pairs have been
+ * determined, we update the encoding for each value, adding aa conversion to
+ * the existing Load Op result layout for users of the load.
+ */
 void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
   auto loadOp = cast<LoadOp>(op);
-  llvm::errs() << "processing load op: " << loadOp << "\n";
   auto loadPtrType = cast<PointerType>(loadOp->getOperand(0).getType());
   auto addressSpace = loadPtrType.getAddressSpace();
 
   llvm::MapVector<TypedValue<PointerType>, EncodingInfo> valueToEncodingInfo;
   llvm::PriorityWorklist<TypedValue<PointerType>> worklist;
 
-  auto updateEncoding = [&](ArrayRef<Value> descValues, EncodingInfo info) {
-    for (auto value : descValues) {
-      llvm::errs() << "update encoding for value " << value << "\n";
+  auto updateEncoding = [&](ArrayRef<Value> ptrValues, EncodingInfo info) {
+    for (auto value : ptrValues) {
       bool requiresConvert = llvm::any_of(
           value.getUsers(), [](auto user) { return isa<LoadOp>(user); });
       info.requiresConvert = requiresConvert;
-      llvm::errs() << "requiresConvert? " << requiresConvert << "\n";
+
       auto typedVal = cast<TypedValue<PointerType>>(value);
       auto itr = valueToEncodingInfo.find(typedVal);
       if (itr == valueToEncodingInfo.end()) {
+        LLVM_DEBUG(DBGS() << "Add encoding " << info.desiredEncoding
+                          << " for value " << typedVal << "\n");
         valueToEncodingInfo[typedVal] = info;
         worklist.insert(typedVal);
       } else {
-        llvm::errs() << "existing encoding: " << itr->second.desiredEncoding
-                     << "\n";
-        llvm::errs() << "new encoding: " << info.desiredEncoding << "\n";
-        // we have already seen this value. make sure it is the right one!
+        LLVM_DEBUG(DBGS() << "Found existing encoding info "
+                          << itr->second.desiredEncoding << " for value "
+                          << typedVal << ". Ensure new encoding "
+                          << info.desiredEncoding << " matches.\n");
         assert(itr->second == info && "already visited encoding info for "
                                       "value, expected them to be equal!");
         continue;
@@ -108,10 +115,10 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
 
   worklist.insert(cast<TypedValue<PointerType>>(loadOp->getOperand(0)));
 
-  // Propagate encoding info
+  // 1. Starting from the Load Op, propagate encoding info up and down the
+  // def-use chain.
   while (!worklist.empty()) {
     auto crtValue = worklist.pop_back_val();
-    llvm::errs() << "Processing " << crtValue << "\n";
 
     // Propagate to users
     for (OpOperand &use : crtValue.getUses()) {
@@ -119,12 +126,10 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
       if (isa<scf::ForOp, scf::WhileOp>(op)) {
         auto offset = 3 * isa<scf::ForOp>(op);
         auto vals = getTiedArgs(op, use.getOperandNumber() - offset);
-        updateEncoding(vals, EncodingInfo{encoding, /*isPtr=*/true,
-                                          /*addressSpace=*/addressSpace});
+        updateEncoding(vals, EncodingInfo{encoding});
       } else if (isa<scf::YieldOp>(op)) {
         auto vals = getTiedArgs(op->getParentOp(), use.getOperandNumber());
-        updateEncoding(vals, EncodingInfo{encoding, /*isPtr=*/true,
-                                          /*addressSpace=*/addressSpace});
+        updateEncoding(vals, EncodingInfo{encoding});
       }
     }
 
@@ -133,36 +138,35 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
       auto definingOp = opResult.getOwner();
       if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(definingOp)) {
         auto vals = getTiedArgs(definingOp, opResult.getResultNumber());
-        updateEncoding(vals, EncodingInfo{encoding, /*isPtr=*/true,
-                                          /*addressSpace=*/addressSpace});
+        updateEncoding(vals, EncodingInfo{encoding});
       }
     } else if (auto blockArg = dyn_cast<BlockArgument>(crtValue)) {
       auto parentOp = blockArg.getOwner()->getParentOp();
       if (isa<scf::ForOp, scf::WhileOp>(parentOp)) {
         auto offset = isa<scf::ForOp>(parentOp);
         auto vals = getTiedArgs(parentOp, blockArg.getArgNumber() - offset);
-        updateEncoding(vals, EncodingInfo{encoding, /*isPtr=*/true,
-                                          /*addressSpace=*/addressSpace});
+        updateEncoding(vals, EncodingInfo{encoding});
       }
     }
   }
 
-  // update types
-
-  for (auto &[desc, einfo] : valueToEncodingInfo) {
-    llvm::errs() << "update type for value " << desc << "\n";
-    assert(einfo.desiredEncoding);
+  // 2. Update the type for each value in-place. Add a ConvertLayout Op after
+  // any loads which require conversion to the existing layout for the loaded
+  // value.
+  for (auto &[val, einfo] : valueToEncodingInfo) {
     Attribute newEncoding = einfo.desiredEncoding;
-    PointerType oldType = desc.getType();
+    LLVM_DEBUG(DBGS() << "Rewrite encoding to " << newEncoding << " for value "
+                      << val << "\n");
+
+    PointerType oldType = val.getType();
     auto oldTensorTy = cast<RankedTensorType>(oldType.getPointeeType());
     auto newTensorTy = RankedTensorType::get(
         oldTensorTy.getShape(), oldTensorTy.getElementType(), newEncoding);
 
-    desc.setType(PointerType::get(newTensorTy, oldType.getAddressSpace()));
+    val.setType(PointerType::get(newTensorTy, oldType.getAddressSpace()));
     if (einfo.requiresConvert) {
-      for (auto user : desc.getUsers()) {
+      for (auto user : val.getUsers()) {
         if (auto loadOp = dyn_cast<LoadOp>(user)) {
-          llvm::errs() << "converting load op: " << loadOp << "\n";
 
           OpBuilder builder(loadOp);
           auto oldLoadType = loadOp.getType();
@@ -171,6 +175,9 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
           builder.setInsertionPointAfter(loadOp);
           auto cvt = builder.create<ConvertLayoutOp>(loadOp.getLoc(),
                                                      result.getType(), result);
+          LLVM_DEBUG(DBGS() << "Added convert Op:\n"
+                            << cvt << " after Load Op:\n"
+                            << loadOp << "\n");
           result.setType(newTensorTy);
 
           result.replaceAllUsesExcept(cvt.getResult(), cvt.getOperation());
@@ -178,30 +185,6 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
       }
     }
   }
-}
-
-Operation *propagatePointerType(Attribute encoding, Operation *op) {
-  OpBuilder builder(op);
-
-  llvm::errs() << "Rewriting op " << *op << "\n\tto use new layout:\n"
-               << encoding << "\n\n";
-
-  // Convert output types
-  SmallVector<Type, 4> newTypes;
-  for (auto t : op->getResultTypes()) {
-    if (isa<PointerType>(t)) {
-      newTypes.push_back(getNewPointerType(t, encoding));
-    } else {
-      newTypes.push_back(t);
-    }
-  }
-
-  // Construct new op with the new encoding
-  Operation *newOp =
-      builder.create(op->getLoc(), op->getName().getIdentifier(),
-                     /*newArgs*/ op->getOperands(), newTypes, op->getAttrs());
-
-  return newOp;
 }
 
 } // namespace
