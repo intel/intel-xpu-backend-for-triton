@@ -1,8 +1,8 @@
 diff --git a/python/sglang/srt/utils.py b/python/sglang/srt/utils.py
-index 884e715f..14e5df33 100644
+index 779843981..3ae5fe576 100644
 --- a/python/sglang/srt/utils.py
 +++ b/python/sglang/srt/utils.py
-@@ -77,12 +77,20 @@ from torch.func import functional_call
+@@ -79,12 +79,20 @@ from torch.func import functional_call
  from torch.library import Library
  from torch.profiler import ProfilerActivity, profile, record_function
  from torch.utils._contextlib import _DecoratorContextManager
@@ -29,9 +29,9 @@ index 884e715f..14e5df33 100644
  
  logger = logging.getLogger(__name__)
  
-@@ -156,6 +164,18 @@ def is_xpu() -> bool:
- def is_npu() -> bool:
-     return hasattr(torch, "npu") and torch.npu.is_available()
+@@ -167,6 +175,20 @@ def is_cpu() -> bool:
+         and torch.cpu.is_available()
+     )
  
 +def infer_device():
 +    """
@@ -43,13 +43,15 @@ index 884e715f..14e5df33 100644
 +        return "xpu"
 +    elif is_hpu():
 +        return "hpu"
++    elif is_npu():
++        return "npu"
 +    else:
 +        return "cpu"
  
  def is_flashinfer_available():
      """
 diff --git a/test/srt/test_triton_attention_kernels.py b/test/srt/test_triton_attention_kernels.py
-index 47eb16a9..9d6a0af0 100644
+index 47eb16a9b..9d6a0af06 100644
 --- a/test/srt/test_triton_attention_kernels.py
 +++ b/test/srt/test_triton_attention_kernels.py
 @@ -16,8 +16,11 @@ from sglang.srt.layers.attention.triton_ops.prefill_attention import (
