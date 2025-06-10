@@ -203,7 +203,12 @@ jobs:
         if: ${{ inputs.suite == 'torchbench' }}
         run: |
           cd benchmark
-          python install.py
+          if [[ "${{ inputs.only_one_model }}" ]]; then
+            python install.py "${{ inputs.only_one_model }}"
+          else
+            # install all models
+            python install.py
+          fi
           pip install -e .
 
       - name: Run e2e ${{ inputs.test_mode }} tests
