@@ -260,7 +260,8 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
         oldTensorType.getElementType().getIntOrFloatBitWidth();
 
     auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
-        cast<DistributedEncodingTrait>(dpasLayout), oldTensorType.getShape(),
+        cast<DistributedEncodingTrait>(dotOperandEncoding),
+        oldTensorType.getShape(),
         blockIOAttr == StringAttr::get(&getContext(), "row_major"),
         elemSizeInBits / 8, &getContext());
     SmallVector<unsigned> instrShape{tileParams[0], tileParams[1]};
