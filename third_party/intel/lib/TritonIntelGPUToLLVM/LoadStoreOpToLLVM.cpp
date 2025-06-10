@@ -1428,7 +1428,9 @@ struct LoadOpConversion
       llvm_unreachable("expected to find a cvt op with dpas layout");
     };
 
-    auto dpasTensorType = hasSubgroup2DBlockEncoding(tensorType) ? getDpasTypeFromCVTOp(op.getResult()) : tensorType;
+    auto dpasTensorType = hasSubgroup2DBlockEncoding(tensorType)
+                              ? getDpasTypeFromCVTOp(op.getResult())
+                              : tensorType;
     llvm::errs() << "using dpas tensor type: " << dpasTensorType << "\n";
     DpasEncodingAttr dpasLayout = getDpasLayout(dpasTensorType);
 
@@ -1472,7 +1474,7 @@ struct LoadOpConversion
       }
     };
     auto [tileHeight, tileWidth, vBlocks] = getTileParams();
-    
+
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
@@ -1642,6 +1644,7 @@ struct LoadOpConversion
     // input operands to DPAS.
     // TODO: add support for int4 and int2.
     unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+    llvm::errs() << "opsPerChannel = " << opsPerChannel << "\n";
     if ((opsPerChannel == 4 && elemSizeInBits == 8) ||
         (opsPerChannel == 2 && elemSizeInBits == 16) ||
         (opsPerChannel == 1 && elemSizeInBits == 32)) {
@@ -1865,6 +1868,8 @@ struct LoadOpConversion
     unsigned numValuesPerLoad = packedElemsPerLanePerDPASInst *
                                 numOperandsOuterDimPerLoad *
                                 numOperandsInnerDimPerLoad;
+    llvm::errs() << "num values per load = " << numValuesPerLoad << "\n";
+    llvm::errs() << "loadResultElemType = " << loadResultElemType << "\n";
     Type load2DGenXType =
         LLVM::getVectorType(loadResultElemType, numValuesPerLoad);
 
@@ -2212,6 +2217,8 @@ struct LoadOpConversion
     }
 
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    llvm::errs() << "op.getType() " << op.getType() << "\n";
+    llvm::errs() << "llvmResultStructTy: " << llvmResultStructTy << "\n";
     Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
