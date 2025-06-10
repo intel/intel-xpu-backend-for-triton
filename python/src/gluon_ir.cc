@@ -8,6 +8,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/LinearLayout.h"
 
 using namespace mlir;
 namespace py = pybind11;
@@ -80,6 +82,75 @@ struct GluonOpBuilder : public TritonOpBuilder {
   }
 };
 
+struct GluonLayouts {
+  py::handle BlockedLayout;
+  py::handle SliceLayout;
+  py::handle DistributedLinearLayout;
+  py::handle NVMMASharedLayout;
+  py::handle SwizzledSharedLayout;
+
+  GluonLayouts() {
+    auto layouts =
+        py::module::import("triton.experimental.gluon.language._layouts");
+    BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
+    SliceLayout = py::object(layouts.attr("SliceLayout")).release();
+    DistributedLinearLayout =
+        py::object(layouts.attr("DistributedLinearLayout")).release();
+    NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
+    SwizzledSharedLayout =
+        py::object(layouts.attr("SwizzledSharedLayout")).release();
+  }
+};
+
+template <typename T> std::vector<T> toStdVector(llvm::ArrayRef<T> array) {
+  return std::vector<T>(array.begin(), array.end());
+}
+
+py::object layoutToGluon(Attribute layout) {
+  static GluonLayouts layouts;
+  if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
+    auto ctaLayout = blocked.getCTALayout();
+    return layouts.BlockedLayout(toStdVector(blocked.getSizePerThread()),
+                                 toStdVector(blocked.getThreadsPerWarp()),
+                                 toStdVector(blocked.getWarpsPerCTA()),
+                                 toStdVector(blocked.getOrder()),
+                                 toStdVector(ctaLayout.getCTAsPerCGA()),
+                                 toStdVector(ctaLayout.getCTASplitNum()),
+                                 toStdVector(ctaLayout.getCTAOrder()));
+  } else if (auto sliced = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
+    return layouts.SliceLayout(sliced.getDim(),
+                               layoutToGluon(sliced.getParent()));
+  } else if (auto linear = dyn_cast<ttg::LinearEncodingAttr>(layout)) {
+    auto ll = linear.getLinearLayout();
+    auto ctx = layout.getContext();
+    auto kReg = mlir::StringAttr::get(ctx, "register");
+    auto kLane = mlir::StringAttr::get(ctx, "lane");
+    auto kWarp = mlir::StringAttr::get(ctx, "warp");
+    auto kBlock = mlir::StringAttr::get(ctx, "block");
+    return layouts.DistributedLinearLayout(
+        ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
+        ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
+        ll.getOutDimSizes());
+  } else if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(layout)) {
+    auto ctaLayout = nvmma.getCTALayout();
+    return layouts.NVMMASharedLayout(
+        nvmma.getSwizzlingByteWidth(), nvmma.getElementBitWidth(),
+        ctaLayout.getRank(), nvmma.getTransposed(), nvmma.getFp4Padded(),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(ctaLayout.getCTASplitNum()),
+        toStdVector(ctaLayout.getCTAOrder()));
+  } else if (auto swizzled =
+                 dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
+    auto ctaLayout = nvmma.getCTALayout();
+    return layouts.SwizzledSharedLayout(
+        swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
+        swizzled.getOrder(), toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(ctaLayout.getCTASplitNum()),
+        toStdVector(ctaLayout.getCTAOrder()));
+  }
+  throw py::value_error("Unhandled encoding encountered");
+}
+
 void init_gluon_ir(py::module &&m) {
   using ret = py::return_value_policy;
 
@@ -133,6 +204,26 @@ void init_gluon_ir(py::module &&m) {
              auto dist = cast<ttg::DistributedEncodingTrait>(parent);
              return self.getChecked<ttg::SliceEncodingAttr>(ctx, dim, dist);
            })
+      .def("get_distributed_linear_layout",
+           [](GluonOpBuilder &self, std::vector<std::vector<int>> regBases,
+              std::vector<std::vector<int>> laneBases,
+              std::vector<std::vector<int>> warpBases,
+              std::vector<std::vector<int>> blockBases,
+              std::vector<int64_t> shape) -> Attribute {
+             auto ctx = self.getContext();
+             auto kReg = mlir::StringAttr::get(ctx, "register");
+             auto kLane = mlir::StringAttr::get(ctx, "lane");
+             auto kWarp = mlir::StringAttr::get(ctx, "warp");
+             auto kBlock = mlir::StringAttr::get(ctx, "block");
+             auto outDims = tt::standardOutDimPairs(ctx, shape);
+             auto ll = tt::LinearLayout({{kReg, regBases},
+                                         {kLane, laneBases},
+                                         {kWarp, warpBases},
+                                         {kBlock, blockBases}},
+                                        outDims,
+                                        /*requiresSurjective=*/true);
+             return ttg::LinearEncodingAttr::get(ctx, ll);
+           })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
               unsigned elementBitwidth, bool transposed, bool fp4Padded,
@@ -166,6 +257,12 @@ void init_gluon_ir(py::module &&m) {
              return self.getChecked<ttng::TensorMemoryEncodingAttr>(
                  ctx, block[0], block[1], unpacked, ctaSplitNum[0],
                  ctaSplitNum[1]);
+           })
+      .def("get_gluon_layout_from_tensor",
+           [](GluonOpBuilder &self, Value tensor) -> py::object {
+             auto ty = dyn_cast<RankedTensorType>(tensor.getType());
+             assert(ty.getEncoding());
+             return layoutToGluon(ty.getEncoding());
            })
       .def("create_convert_layout",
            [](GluonOpBuilder &self, Type resultTy, Value value) -> Value {
