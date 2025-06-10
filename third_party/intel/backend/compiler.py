@@ -305,6 +305,12 @@ class XPUBackend(BaseBackend):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
         passes.ttgpuir.add_fuse_nested_loops(pm)
+
+        passes.common.add_canonicalizer(pm)
+        passes.ttir.add_triton_licm(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.common.add_cse(pm)
