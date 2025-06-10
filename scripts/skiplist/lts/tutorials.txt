@@ -1,5 +1,4 @@
 03-matrix-multiplication
-03i-matrix-multiplication
 06-fused-attention
 08-grouped-gemm
 09-persistent-matmul

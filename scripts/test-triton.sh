@@ -368,12 +368,6 @@ run_tutorial_tests() {
   run_tutorial_test "09-persistent-matmul"
   run_tutorial_test "10-experimental-block-pointer"
   run_tutorial_test "10i-experimental-block-pointer"
-
-  echo "***************************************************"
-  echo "Running with TRITON_INTEL_RAISE_BLOCK_POINTER      "
-  echo "***************************************************"
-
-  run_tutorial_test "03i-matrix-multiplication"
 }
 
 run_microbench_tests() {
