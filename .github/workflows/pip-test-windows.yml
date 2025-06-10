@@ -37,6 +37,7 @@ env:
   PYTEST_MAX_PROCESSES: 8
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list || 'a770' }} --reports-dir reports --ignore-errors
+  TRITON_INTEL_DEVICE_EXTENSIONS: cl_intel_subgroup_matrix_multiply_accumulate has_subgroup_matrix_multiply_accumulate_tensor_float32 cl_intel_subgroup_2d_block_io cl_intel_bfloat16_conversions
 
 jobs:
   build:
