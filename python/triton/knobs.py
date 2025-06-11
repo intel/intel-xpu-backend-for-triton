@@ -555,6 +555,7 @@ class intel_knobs(base_knobs):
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
     split_barriers_scope: env_opt_str = env_opt_str("TRITON_INTEL_SOFTWARE_PIPELINE_BARRIE_SCOPE")
+    reduce_variable_liveness: env_bool = env_bool("TRITON_INTEL_REDUCE_VARIABLE_LIVENESS", False)
 
     dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
 
