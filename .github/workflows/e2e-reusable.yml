@@ -12,7 +12,7 @@ on:
         type: string
         default: all
       mode:
-        description: Inference, inference-no-freezing, or training
+        description: Inference, inference-with-freezing, or training
         type: string
         default: all
       test_mode:
