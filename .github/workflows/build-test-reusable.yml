@@ -262,7 +262,7 @@ jobs:
           PYTORCH_VERSION=$PYTORCH_VERSION
           TRITON_REPO=$GITHUB_REPOSITORY
           EOF
-
+          
           if [ "${{ matrix.suite }}" == "minicore" ]; then
             reports_file="reports/.env"
           else
