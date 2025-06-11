@@ -1,1 +1,5 @@
 03-matrix-multiplication
+
+# 09-persistent-matmul fails with 0x78000011 on ARL-S 
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/4487
+09-persistent-matmul
