@@ -57,6 +57,7 @@ class XPUOptions:
             raise AssertionError("num_warps must be a power of 2")
         self.generate_native_code = (knobs.intel.gen_native_code
                                      or knobs.intel.dump_shader_info) or self.generate_native_code
+        self.one_matrix_per_load_for_bt = knobs.intel.one_matrix_per_load_for_bt or self.one_matrix_per_load_for_bt
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
