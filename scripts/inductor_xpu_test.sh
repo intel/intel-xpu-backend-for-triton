@@ -24,7 +24,9 @@ if [[ -n "$MODEL_ONLY" ]]; then
 fi
 
 if [[ $MODE == "inference" ]]; then
-    Mode_extra="--inference --freezing "
+    # For PT >= 2.1
+    # Remove --freezing cause feature not ready
+    Mode_extra="--inference"
 fi
 
 if [[ $MODE == "inference-no-freezing" ]]; then
