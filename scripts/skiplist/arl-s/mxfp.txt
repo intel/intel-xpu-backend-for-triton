@@ -1,1 +1,2 @@
+# Takes too long, perhaps this may fix it: https://github.com/intel/intel-xpu-backend-for-triton/issues/4062
 python/test/unit/intel/test_mxfp_matmul.py::test_mxfp_matmul
