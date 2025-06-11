@@ -29,8 +29,8 @@ if [[ $MODE == "inference" ]]; then
     Mode_extra="--inference"
 fi
 
-if [[ $MODE == "inference-no-freezing" ]]; then
-    Mode_extra="--inference "
+if [[ $MODE == "inference-with-freezing" ]]; then
+    Mode_extra="--inference --freezing "
 fi
 
 if [[ $MODE == "training" ]]; then

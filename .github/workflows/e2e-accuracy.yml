@@ -18,12 +18,12 @@ on:
           - torchbench
         default: all
       mode:
-        description: Inference, inference-no-freezing, or training
+        description: Inference, inference-with-freezing, or training
         type: choice
         options:
           - all
           - inference
-          - inference-no-freezing
+          - inference-with-freezing
           - training
         default: all
       dtype:
@@ -86,7 +86,7 @@ jobs:
             suite='["${{ inputs.suite }}"]'
           fi
           if [[ -z "${{ inputs.mode }}" || "${{ inputs.mode }}" == "all" ]]; then
-            mode='["inference", "inference-no-freezing", "training"]'
+            mode='["inference", "inference-with-freezing", "training"]'
           else
             mode='["${{ inputs.mode }}"]'
           fi
