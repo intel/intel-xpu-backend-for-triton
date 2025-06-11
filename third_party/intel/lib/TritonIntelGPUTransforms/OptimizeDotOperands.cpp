@@ -3,7 +3,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -32,17 +31,17 @@ namespace mlir::triton::gpu::intel {
 namespace {
 
 // Transform:
-//   %ptr = make_block_ptr [shX, shX], [stX, stY], [offX, offY]
-//        : tt.ptr<tensor<MxN, enc>
+//   %ptr = make_block_ptr [shapeN, shapeK], [strideN, strideK], [offN, offK]
+//        : tt.ptr<tensor<NxK, enc>
 //   %load = tt.load %ptr, {blockIO=<row_major|column_major>}
-//         : tt.ptr<tensor<MxN, encoding>
-//   %trans = tt.trans %load : tt.ptr<tensor<NxM, dotEnc>>
+//         : tt.ptr<tensor<NxK, enc>
+//   %trans = tt.trans %load : tt.ptr<tensor<KxN, dotEnc>>
 //   tt.dot(%a, %trans)
 // into:
-//   %ptr = make_block_ptr [shX, shX], [stX, stY], [offX, offY]
-//        : tt.ptr<tensor<NxM, dotEnc>
+//   %ptr = make_block_ptr [shapeK, shapeN], [strideK, strideN], [offK, offN]
+//        : tt.ptr<tensor<KxN, dotEnc>
 //   %load = tt.load %ptr, {blockIO=<column_major|row_major>}
-//         : tt.ptr<tensor<NxM, dotEnc>
+//         : tt.ptr<tensor<KxN, dotEnc>
 //   tt.dot(%a, %load)
 class FuseTransWithLoad : public OpRewritePattern<tt::TransOp> {
 public:
@@ -110,9 +109,6 @@ public:
     LLVM_DEBUG(llvm::dbgs() << "newLoadOp: " << newLoadOp << "\n");
 
     transOp->replaceAllUsesWith(newLoadOp);
-
-    [[maybe_unused]] auto moduleOp = newLoadOp->getParentOfType<ModuleOp>();
-    assert(succeeded(verify(moduleOp)) && "Module verification failed");
 
     return success();
   }
