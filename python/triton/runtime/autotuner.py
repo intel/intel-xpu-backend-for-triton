@@ -127,8 +127,6 @@ class Autotuner(KernelInterface):
         from ..compiler.errors import CompileTimeAssertionFailure
 
         verbose = knobs.autotuning.print
-        if verbose:
-            print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
@@ -145,7 +143,7 @@ class Autotuner(KernelInterface):
                 config.pre_hook(full_nargs)
             self.pre_hook(full_nargs)
             try:
-                self.fn.run(
+                ret = self.fn.run(
                     *args,
                     **current,
                 )
@@ -158,7 +156,14 @@ class Autotuner(KernelInterface):
 
             self.post_hook(full_nargs, exception=None)
 
+            return ret
+
         try:
+            pgm = kernel_call()
+            if verbose:
+                print(
+                    f"Autotuning kernel {self.base_fn.__name__} with config {config}, cache dir: {pgm.metadata.cache_dir}"
+                )
             return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
         except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
             if verbose:
