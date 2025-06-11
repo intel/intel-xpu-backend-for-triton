@@ -251,7 +251,14 @@ jobs:
       - name: Report environment details
         run: |
           mkdir -p reports
-          cat <<EOF | tee reports/.env
+
+          if [ "${{ matrix.suite }}" == "minicore" ]; then
+            reports_file="reports/.env"
+          else
+            reports_file="/dev/null"
+          fi
+
+          cat <<EOF | tee "${reports_file}"
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
@@ -262,12 +269,6 @@ jobs:
           PYTORCH_VERSION=$PYTORCH_VERSION
           TRITON_REPO=$GITHUB_REPOSITORY
           EOF
-
-          if [ "${{ matrix.suite }}" == "minicore" ]; then
-            reports_file="reports/.env"
-          else
-            reports_file="/dev/null"
-          fi
 
           ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 
