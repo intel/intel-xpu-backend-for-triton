@@ -257,7 +257,7 @@ jobs:
           fi
 
           mkdir -p reports
-          cat <<EOF | tee "${reports_file}"
+          cat <<EOF | tee "$reports_file"
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
