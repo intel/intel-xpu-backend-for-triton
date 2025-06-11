@@ -58,6 +58,7 @@ class XPUOptions:
         self.generate_native_code = (knobs.intel.gen_native_code
                                      or knobs.intel.dump_shader_info) or self.generate_native_code
         self.split_barriers_scope = self.split_barriers_scope if knobs.intel.split_barriers_scope is None else knobs.intel.split_barriers_scope
+        self.reduce_variable_liveness = knobs.intel.reduce_variable_liveness or self.reduce_variable_liveness
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
