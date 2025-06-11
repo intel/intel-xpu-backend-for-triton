@@ -19,17 +19,20 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
 
+import os
 import argparse
 import itertools
 
 import torch
 import triton
 import triton.language as tl
-import triton.profiler as proton
 from triton.tools.tensor_descriptor import TensorDescriptor
 from contextlib import contextmanager
 
 from typing import Optional
+
+if os.name != "nt":
+    import triton.profiler as proton
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
