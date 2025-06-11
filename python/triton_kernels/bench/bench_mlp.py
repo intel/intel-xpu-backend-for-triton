@@ -28,7 +28,7 @@ def quantize(w, dtype, dev, **opt):
     elif dtype == "fp8":
         fp8e4_dtype = torch.float8_e4m3fn if get_cdna_version() != 3 \
             else torch.float8_e4m3fnuz
-        wq = w.to(fp8e4_dtype).transpose(-1, -2).contiguous().transpose(-1, -2)
+        wq = w.to(fp8e4_dtype)
         return wq, InFlexData(dtype=wq.dtype, scale=w.abs().max().unsqueeze(0)), \
                    MicroscalingCtx()
     else:
@@ -198,7 +198,7 @@ def roofline_mlp(batch_ranges, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_
     x_bw = [x_bw[0], x_comp[0]]
     y_bw = [opints[0] * max_tbps, max_tflops]
     y_comp = [max_tflops] * len(x_comp)
-    ax.plot(x_bw, y_bw, "--", label=f"BW-bound  ({max_tbps:.0f} TB/s)")
+    ax.plot(x_bw, y_bw, "--", label=f"BW-bound  ({max_tbps:.1f} TB/s)")
     ax.plot(x_comp, y_comp, "--", label=f"Compute-bound  ({max_tflops:.0f} TFLOP/s)")
     # plot data
     ax.scatter(xs, perf, marker="+")
