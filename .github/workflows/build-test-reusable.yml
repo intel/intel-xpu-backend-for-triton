@@ -249,7 +249,6 @@ jobs:
           python -c 'import triton; print(triton.__version__)'
 
       - name: Report environment details
-        if: matrix.suite == 'minicore'
         run: |
           mkdir -p reports
           cat <<EOF | tee reports/.env
@@ -263,7 +262,14 @@ jobs:
           PYTORCH_VERSION=$PYTORCH_VERSION
           TRITON_REPO=$GITHUB_REPOSITORY
           EOF
-          ./scripts/capture-hw-details.sh | tee -a reports/.env
+
+          if [ '${{ matrix.suite }}' == 'minicore' ]; then
+            reports_file="reports/.env"
+          else
+            reports_file="/dev/null"
+          fi
+          
+          ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 
       - name: Install test dependencies
         run: |
