@@ -3,7 +3,7 @@
 include(FetchContent)
 
 if (NOT CUTLASSLibrary_FOUND)
-    # TODO: switch ot FetchContent_MakeAvailable once CUTLASS supports it
+    # TODO: switch to FetchContent_MakeAvailable once CUTLASS supports it
     cmake_policy(SET CMP0169 OLD)
 
     set(CUTLASSLibrary_SOURCE_DIR

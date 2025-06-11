@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton._filecheck import filecheck_test
+from triton._filecheck import filecheck_test, run_filecheck_test
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
@@ -25,7 +25,7 @@ class Pair:
     def get_first(self):
         return self.first
 
-    def get_second(self, _builder=None):
+    def get_second(self, _semantic=None):
         return self.second
 
     @triton.jit
@@ -82,10 +82,10 @@ def test_jit_method():
 class TypeWithBuiltinInitializer:
     value: tl.tensor
 
-    def __init__(self, _builder=None):
-        self.value = tl.arange(0, 4, _builder=_builder)
+    def __init__(self, _semantic=None):
+        self.value = tl.arange(0, 4, _semantic=_semantic)
 
-    def modify(self, value, _builder=None):
+    def modify(self, value, _semantic=None):
         self.value = value
 
 
@@ -257,3 +257,109 @@ def test_reassign_aggregate_with_constexpr():
         agg = agg.modify(tl.arange(8, 12))
     # CHECK: call @{{.*}}anchor{{.*}}([[AGG]])
     anchor(agg)
+
+
+@tl.constexpr_function
+def make_shape(m, n):
+    return (m, n)
+
+
+@tl.constexpr_function
+def add_shape_dims(m, n):
+    return m + n
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_getitem():
+    # CHECK-LABEL: test_constexpr_getitem
+    # CHECK: make_range {end = 12 : i32, start = 4 : i32}
+    shape: tl.constexpr = make_shape(4, 8)
+    sum: tl.constexpr = add_shape_dims(shape[0], shape[1])
+    tl.arange(4, sum)
+
+
+@tl.constexpr_function
+def make_constexpr_closure(x):
+    x = tl.constexpr(x)
+
+    @triton.jit
+    def inner(shape: tl.constexpr):
+        return tl.full(shape, x, dtype=tl.int32)
+
+    return inner
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_closure():
+    # CHECK-LABEL: test_constexpr_closure
+    closure: tl.constexpr = make_constexpr_closure(42)
+
+    # CHECK: arith.constant dense<42> : tensor<128x128xi32>
+    closure((128, 128))
+
+
+@tl.constexpr_function
+def make_constexpr_generator(f):
+    f = tl.constexpr(f)
+
+    @triton.jit
+    def inner(lhs):
+        return lhs + f(lhs.shape, lhs.dtype)
+
+    return inner
+
+
+@triton.jit
+def inner_function(shape: tl.constexpr, dtype: tl.constexpr):
+    return tl.full(shape, 42, dtype)
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_generator():
+    # CHECK: func public @test_constexpr_generator
+    # CHECK:   [[RANGE:%.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
+    # CHECK:   call @{{.*}}make_constexpr_generator.<locals>.inner{{.*}}([[RANGE]])
+
+    # CHECK: func private @{{.*}}make_constexpr_generator.<locals>.inner
+    # CHECK:   [[RHS:%.*]] = tt.call @{{.*}}inner_function
+    # CHECK:   [[RESULT:%.*]] = arith.addi %arg0, [[RHS]]
+    # CHECK:   return [[RESULT]]
+
+    # CHECK: func private @{{.*}}inner_function
+    # CHECK:   %cst = arith.constant dense<42> : tensor<128xi32>
+    # CHECK:   return %cst
+    generator: tl.constexpr = make_constexpr_generator(inner_function)
+    lhs = tl.arange(0, 128)
+    generator(lhs)
+
+
+def Box(T):
+
+    @tl.core._aggregate
+    class BoxImpl:
+        value: T
+
+        @triton.jit
+        def create(value):
+            return BoxImpl(value)
+
+        def __init__(self, value):
+            self.value = value
+
+    return BoxImpl
+
+
+def test_late_bound_class_reference():
+    TensorBox = Box(tl.tensor)
+
+    @triton.jit
+    def kernel():
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+        # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
+        value = TensorBox(tl.arange(0, 4))
+        anchor(value)
+
+    run_filecheck_test(kernel)

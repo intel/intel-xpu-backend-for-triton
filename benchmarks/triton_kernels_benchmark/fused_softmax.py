@@ -15,7 +15,7 @@ import triton.language as tl
 from triton.runtime import driver
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import xetla_kernel, onednn_kernel
 
 
 @torch.jit.script
@@ -111,6 +111,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
         # "torch-native": "Torch (native)",
         # "torch-jit": # "Torch (jit)",
         "xetla": "XeTLA",
+        "onednn": "oneDNN",
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -160,6 +161,16 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             torch_fn = lambda: torch.softmax(x, axis=-1)
             # benchmark_suite.assert_close(xetla_fn, torch_fn, err_msg="xetla to torch")
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(xetla_fn, quantiles=quantiles, n_warmup=10,
+                                                                   n_repeat=10)
+
+        elif provider == "onednn":
+            name = "onednn_softmax"
+            func = getattr(onednn_kernel, name)
+            out = torch.empty_like(x, device="xpu")
+            onednn_fn = lambda: func(M, N, x, out, 1)
+            torch_fn = lambda: torch.softmax(x, axis=-1)
+            benchmark_suite.assert_close(onednn_fn, torch_fn, err_msg="onednn to torch")
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(onednn_fn, quantiles=quantiles, n_warmup=10,
                                                                    n_repeat=10)
 
         else:

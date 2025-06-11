@@ -8,16 +8,13 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -36,17 +33,17 @@ namespace mlir::triton::gpu::intel {
 namespace {
 
 // Transform:
-//   %ptr = make_block_ptr [shX, shX], [stX, stY], [offX, offY]
-//        : tt.ptr<tensor<MxN, enc>
+//   %ptr = make_block_ptr [shapeN, shapeK], [strideN, strideK], [offN, offK]
+//        : tt.ptr<tensor<NxK, enc>
 //   %load = tt.load %ptr, {blockIO=<row_major|column_major>}
-//         : tt.ptr<tensor<MxN, encoding>
-//   %trans = tt.trans %load : tt.ptr<tensor<NxM, dotEnc>>
+//         : tt.ptr<tensor<NxK, enc>
+//   %trans = tt.trans %load : tt.ptr<tensor<KxN, dotEnc>>
 //   tt.dot(%a, %trans)
 // into:
-//   %ptr = make_block_ptr [shX, shX], [stX, stY], [offX, offY]
-//        : tt.ptr<tensor<NxM, dotEnc>
+//   %ptr = make_block_ptr [shapeK, shapeN], [strideK, strideN], [offK, offN]
+//        : tt.ptr<tensor<KxN, dotEnc>
 //   %load = tt.load %ptr, {blockIO=<column_major|row_major>}
-//         : tt.ptr<tensor<NxM, dotEnc>
+//         : tt.ptr<tensor<KxN, dotEnc>
 //   tt.dot(%a, %load)
 class FuseTransWithLoad {
 private:
@@ -63,7 +60,7 @@ public:
     });
 
     if (!cleanUp.empty())
-      finalize();
+      tt::intel::eraseOperations(cleanUp);
 
     [[maybe_unused]] auto moduleOp = funcOp->getParentOfType<ModuleOp>();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
@@ -229,39 +226,6 @@ private:
     return true;
   }
 
-  // Recursively update the operands in a chain of AdvanceOps, after setting the
-  // pointer operand of the first one.
-  tt::AdvanceOp updateAdvanceOpChain(tt::AdvanceOp advanceOp, tt::LoadOp loadOp,
-                                     Value ptr) const {
-    assert(advanceOp->hasOneUse() && "Expecting single user");
-    assert(tt::isTensorPointerType(ptr.getType()) &&
-           "Expecting a block pointer");
-
-    Operation *user = *advanceOp->getUsers().begin();
-    if (auto loadUser = dyn_cast<tt::LoadOp>(user)) {
-      assert(loadUser == loadOp &&
-             "chain should be terminated by candidate load");
-      OpBuilder rewriter(advanceOp);
-      SmallVector<Value> newOffsets(llvm::reverse(advanceOp.getOffsets()));
-      return rewriter.create<tt::AdvanceOp>(advanceOp.getLoc(), ptr.getType(),
-                                            ptr, newOffsets);
-    }
-
-    if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      OpBuilder rewriter(advanceOp);
-      SmallVector<Value> newOffsets(llvm::reverse(advanceOp.getOffsets()));
-      ptr = rewriter.create<tt::AdvanceOp>(advanceOp.getLoc(), ptr.getType(),
-                                           ptr, newOffsets);
-      return updateAdvanceOpChain(advanceOp, loadOp, ptr);
-    }
-
-    // TODO: add support for loops (advanceOp cound be consumed by a loop
-    // init_arg).
-
-    llvm_unreachable("Unexpected user");
-    return nullptr;
-  }
-
   // Propagate \p newVal to users of \p origOp.
   void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
                         Operation *sentinel) {
@@ -376,31 +340,6 @@ private:
         for (Operation *user : users)
           propagateToUser(rgnInitArg, rgnInitArg, user, sentinel);
       }
-    }
-  }
-
-  // Cleanup unused operations.
-  void finalize() {
-    bool erasedOperation;
-    do {
-      erasedOperation = false;
-      SmallPtrSet<Operation *, 8> erased;
-      for (Operation *op : cleanUp) {
-        if (!op->getUsers().empty() || !op->getRegions().empty())
-          continue;
-
-        erased.insert(op);
-        op->erase();
-        erasedOperation = true;
-      }
-      cleanUp.remove_if([&](Operation *op) { return erased.contains(op); });
-    } while (erasedOperation);
-
-    // Remove operations that contain a region.
-    for (Operation *op : cleanUp) {
-      if (!op->getUsers().empty())
-        continue;
-      op->erase();
     }
   }
 };

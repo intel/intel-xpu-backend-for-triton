@@ -12,7 +12,7 @@ on:
         type: string
         default: all
       mode:
-        description: Inference, inference-no-freezing, or training
+        description: Inference, inference-with-freezing, or training
         type: string
         default: all
       test_mode:
@@ -49,6 +49,7 @@ permissions: read-all
 env:
   TRITON_DISABLE_LINE_INFO: 1
   PYTHON_VERSION: "3.10"
+  BENCHMARK_REPO: pytorch/benchmark
 
 jobs:
   run_tests:
@@ -99,23 +100,15 @@ jobs:
         with:
           ref: ${{ inputs.pytorch_ref }}
 
-      - name: Set benchmark repository
-        run: |
-          echo "BENCHMARK_REPO=pytorch/benchmark" | tee -a "$GITHUB_ENV"
-
-      - name: Get benchmark commit id
-        run: |
-          cd pytorch
-          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
-
       - name: Identify pinned versions
         run: |
           cd pytorch
-          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" >> "${GITHUB_ENV}"
-          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" >> "${GITHUB_ENV}"
-          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" >> "${GITHUB_ENV}"
-          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" >> "${GITHUB_ENV}"
-          echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" >> "${GITHUB_ENV}"
+          echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
+          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
+          echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" | tee -a "$GITHUB_ENV"
+          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a "$GITHUB_ENV"
+          echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a "$GITHUB_ENV"
+          echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Generate Triton cache key
         id: triton-key
@@ -210,7 +203,12 @@ jobs:
         if: ${{ inputs.suite == 'torchbench' }}
         run: |
           cd benchmark
-          python install.py
+          if [[ "${{ inputs.only_one_model }}" ]]; then
+            python install.py "${{ inputs.only_one_model }}"
+          else
+            # install all models
+            python install.py
+          fi
           pip install -e .
 
       - name: Run e2e ${{ inputs.test_mode }} tests

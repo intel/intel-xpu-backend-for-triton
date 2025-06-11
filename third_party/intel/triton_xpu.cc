@@ -18,7 +18,6 @@
 #include "intel/include/TritonAnnotateModule/Passes.h"
 #include "intel/include/TritonGENToLLVM/Passes.h"
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h"
-#include "intel/include/TritonRaiseBlockPointer/Passes.h"
 #include "intel/include/TritonToTritonGPUWarp/Passes.h"
 #include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
@@ -57,8 +56,6 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
                      intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
-  ADD_PASS_OPTION_WRAPPER_1("add_raise_block_pointer",
-                            intel::createTritonRaiseBlockPointer, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_convert_to_ttgpuir_warp",
                             intel::createConvertTritonToTritonGPUWarp,
                             unsigned);

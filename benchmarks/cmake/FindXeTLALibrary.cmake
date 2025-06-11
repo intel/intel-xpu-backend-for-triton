@@ -3,7 +3,7 @@
 include(FetchContent)
 
 if (NOT XeTLALibrary_FOUND)
-    # TODO: switch ot FetchContent_MakeAvailable once XeTLA supports it
+    # TODO: switch to FetchContent_MakeAvailable once XeTLA supports it
     cmake_policy(SET CMP0169 OLD)
 
     set(XeTLALibrary_SOURCE_DIR

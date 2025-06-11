@@ -306,13 +306,10 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                          n_spills, n_max_threads);
 
   } catch (const std::exception &e) {
-    char err[1024] = {0};
-    std::string_view error_str(e.what());
-    strncat(err, error_str.data(), std::min(error_str.size(), size_t(1024)));
     PyGILState_STATE gil_state;
     gil_state = PyGILState_Ensure();
-    PyErr_SetString(PyExc_RuntimeError, err);
-    std::cerr << "Error during Intel loadBinary: " << err << std::endl;
+    PyErr_SetString(PyExc_RuntimeError, e.what());
+    std::cerr << "Error during Intel loadBinary: " << e.what() << std::endl;
     PyGILState_Release(gil_state);
     return NULL;
   }
