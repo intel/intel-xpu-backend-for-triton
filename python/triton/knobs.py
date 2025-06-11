@@ -498,6 +498,7 @@ class intel_knobs(base_knobs):
     reduce_transpose: env_bool = env_bool("TRITON_INTEL_REDUCE_TRANSPOSE", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
     one_matrix_per_load_for_bt: env_bool = env_bool("TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT", False)
+    reduce_variable_liveness: env_bool = env_bool("TRITON_INTEL_REDUCE_VARIABLE_LIVENESS", False)
 
     dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
 
