@@ -47,6 +47,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
         l_ij = tl.sum(p, 1)
+        l_i = l_i * alpha + l_ij
         # -- update output accumulator --
         acc = acc * alpha[:, None]
         # prepare p and v for the dot
@@ -56,7 +57,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
         # place this at the end of the loop to reduce register pressure
-        l_i = l_i * alpha + l_ij
         m_i = m_ij
         offsetk_y += BLOCK_N
         offsetv_y += BLOCK_N
