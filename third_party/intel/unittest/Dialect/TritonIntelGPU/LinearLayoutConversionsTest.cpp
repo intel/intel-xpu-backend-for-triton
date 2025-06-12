@@ -129,15 +129,6 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
 }
 
 TEST_F(LinearLayoutConversionsTest, FP16_16x16x2_M256_N32_K32_B) {
-  auto ll = subgroup2DBlockToLinearLayout(
-      /*shape*/ {32, 256},
-      sdb(/*instrShape*/ {16, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
-          /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
-          /*blockShape*/ {32, 256}, /*opsPerChannel*/ 2,
-          /*opIdx*/ 1),
-      /*kWidth*/ 2);
-  llvm::errs() << "final ll: " << ll << "\n";
-
   EXPECT_EQ(subgroup2DBlockToLinearLayout(
                 /*shape*/ {32, 256},
                 sdb(/*instrShape*/ {16, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
