@@ -628,8 +628,11 @@ def torch_matmul(a, b):
     N, K = b.shape
     bytes_per_elem = a.element_size()
     flops_str = f"flops{bytes_per_elem * 8}"
-    with proton.scope(f"torch [M={M}, N={N}, K={K}]",
-                      {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
+    if is_cuda():
+        with proton.scope(f"torch [M={M}, N={N}, K={K}]",
+                          {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
+            c = torch.matmul(a, b.T)
+    else:
         c = torch.matmul(a, b.T)
     return c
 
