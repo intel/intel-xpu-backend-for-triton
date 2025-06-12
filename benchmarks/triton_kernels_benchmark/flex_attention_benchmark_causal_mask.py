@@ -9,8 +9,34 @@ from torch.nn.attention.flex_attention import (
 
 import torch
 import torch.nn.functional as F
+import torch._inductor
+import torch._inductor.lowering
+import torch._inductor.kernel
+import torch._inductor.kernel.flex_attention as flex_attn
+import torch._inductor.virtualized
 
 import triton_kernels_benchmark as benchmark_suit
+
+# Use TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 or uncomment the following line to print the auto-tune results.
+# torch._inductor.config.max_autotune_gemm = True
+
+
+def get_xpu_config(*args, **kwargs):  # pylint: disable=unused-argument
+    # BLOCK_M, BLOCK_N, num_warps, num_stages
+    configs = [
+        (32, 16, 4, 2),
+        (128, 64, 16, 2),
+        (128, 64, 8, 2),
+        (128, 32, 16, 2),
+        (128, 32, 8, 2),
+    ]
+    return configs
+
+
+# There is a auto-tuning requirement to get the best configuration for the flex attention.
+#The pytorch flex attention doesn't support auto-tuning by user in default.
+#Overriding the _get_xpu_config method to provide custom configurations for auto-tuning on XPU.
+flex_attn._get_xpu_config = get_xpu_config  # pylint: disable=protected-access
 
 torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
@@ -112,7 +138,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(torch_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     elif provider == 'triton':
-        kernel_options = {'num_stages': 2, 'num_warps': 16 if D_HEAD_qk == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': True}
+        kernel_options = {'BLOCKS_ARE_CONTIGUOUS': True}
         triton_fn = lambda: compiled_flex_attention(q, k, v, block_mask=block_mask, scale=sm_scale, enable_gqa=(
             not H_q == H_kv), kernel_options=kernel_options)
         if MODE == 'bwd':
