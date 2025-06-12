@@ -19,17 +19,20 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
 
+import os
 import argparse
 import itertools
 
 import torch
 import triton
 import triton.language as tl
-import triton.profiler as proton
 from triton.tools.tensor_descriptor import TensorDescriptor
 from contextlib import contextmanager
 
 from typing import Optional
+
+if os.name != "nt":
+    import triton.profiler as proton
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
@@ -625,8 +628,11 @@ def torch_matmul(a, b):
     N, K = b.shape
     bytes_per_elem = a.element_size()
     flops_str = f"flops{bytes_per_elem * 8}"
-    with proton.scope(f"torch [M={M}, N={N}, K={K}]",
-                      {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
+    if is_cuda():
+        with proton.scope(f"torch [M={M}, N={N}, K={K}]",
+                          {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
+            c = torch.matmul(a, b.T)
+    else:
         c = torch.matmul(a, b.T)
     return c
 
