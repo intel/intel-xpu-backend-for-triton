@@ -269,8 +269,11 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
 
     auto subgroup2DBlockEncoding = Subgroup2DBlockEncodingAttr::get(
         &getContext(), dpasLayout.getWarpsPerCTA(), CTALayout, instrShape,
-        tileParams[2], oldLayout.getOrder(), kWidth,
-        dpasLayout.getThreadsPerWarp());
+        tileParams[2],
+        getOrderForDotOperand(dotOperandEncoding.getOpIdx(), /*rank*/ 2,
+                              /*kContig*/ true),
+        kWidth, dpasLayout.getThreadsPerWarp());
+
     LLVM_DEBUG(DBGS() << "Generated new encoding: " << subgroup2DBlockEncoding
                       << " for op : " << loadOp << "\n");
 
