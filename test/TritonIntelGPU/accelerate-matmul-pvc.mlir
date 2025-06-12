@@ -238,14 +238,14 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
   // CHECK: tt.func @dot_scaled_fp8([[ARG0:%.*]]: tensor<128x32xi8, [[BLOCKED]]>, [[ARG1:%.*]]: tensor<128x2xi8, [[BLOCKED1]]>, [[ARG2:%.*]]: tensor<64x128xf8E4M3FN, [[BLOCKED2]]>) -> tensor<128x128xf32, [[BLOCKED2]]> {
   tt.func @dot_scaled_fp8(%a: tensor<128x32xi8, #blocked2>, %scale: tensor<128x2xi8, #blocked1>, %b: tensor<64x128xf8E4M3FN, #blocked>) -> tensor<128x128xf32, #blocked> {
     // CHECK: [[C:%.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, [[BLOCKED2]]>
-    // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[ARG0]] {axis = 1 : i32} : tensor<128x32xi8, #blocked> -> tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<128x64xbf16, [[LINEAR]]> -> tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<128x64xbf16, [[BLOCKED3]]>
-    // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<128x64xbf16, [[BLOCKED3]]> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
-    // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[ARG2]] : tensor<64x128xf8E4M3FN, [[BLOCKED2]]> -> tensor<64x128xbf16, [[BLOCKED2]]>
-    // CHECK: [[CVT_ARG2:%.*]] = ttg.convert_layout [[FPTOFP]] : tensor<64x128xbf16, [[BLOCKED2]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
-    // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<128x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> -> tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
-    // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG2:%.*]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
+    // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[ARG0]] {axis = 1 : i32} : tensor<128x32xi8, #blocked> -> tensor<128x64xf16, [[BLOCKED3]]>
+    // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<128x64xf16, [[LINEAR]]> -> tensor<128x64xf16, [[BLOCKED3]]>
+    // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<128x64xf16, [[BLOCKED3]]>
+    // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[UPCAST]] : tensor<128x64xf16, [[BLOCKED3]]> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
+    // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[ARG2]] : tensor<64x128xf8E4M3FN, [[BLOCKED2]]> -> tensor<64x128xf16, [[BLOCKED2]]>
+    // CHECK: [[CVT_ARG2:%.*]] = ttg.convert_layout [[FPTOFP]] : tensor<64x128xf16, [[BLOCKED2]]> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
+    // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> -> tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>>
+    // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG2:%.*]] : tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>>
     // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[C]] : tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED2]]}>> * tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED2]]}>> -> tensor<128x128xf32, [[BLOCKED2]]>
     // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<128x128xf32, [[BLOCKED2]]> -> tensor<128x128xf32, [[BLOCKED2]]>
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
@@ -282,21 +282,20 @@ module attributes {ttg.target = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warps"
     %c0_i32 = arith.constant 0 : i32
     %cst_0 = arith.constant dense<32> : tensor<32x1xi32, #blocked3>
     %cst_1 = arith.constant dense<2> : tensor<32x1xi32, #blocked2>
-    // CHECK: [[NAN:%.*]] = arith.constant dense<0x7FC0> : tensor<32x64xbf16, [[LINEAR]]>
     // CHECK: [[CST:%.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32, [[BLOCKED4]]>
     // CHECK: [[DOT_RES:%.*]] = scf.for {{.*}} iter_args([[ARG5:%.*]] = [[CST]]) -> (tensor<32x128xf32, [[BLOCKED4]]>)  : i32 {
     %0 = scf.for %arg4 = %c0_i32 to %c100_i32 step %c1_i32 iter_args(%arg5 = %cst) -> (tensor<128x32xf32, #blocked1>)  : i32 {
       // CHECK: [[TRANS_A:%.*]] = tt.trans [[ARG0]] {{.*}} : tensor<128x64xf8E4M3FN, [[BLOCKED]]> -> tensor<64x128xf8E4M3FN, [[BLOCKED5]]>
       // CHECK: [[TRANS_B:%.*]] = tt.trans [[ARG1]] {{.*}} : tensor<32x32xi8, [[BLOCKED1]]> -> tensor<32x32xi8, [[BLOCKED4]]>
-      // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[TRANS_B]] {axis = 1 : i32} : tensor<32x32xi8, [[BLOCKED4]]> -> tensor<32x64xbf16, [[LINEAR]]>
-      // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<32x64xbf16, [[LINEAR1]]> -> tensor<32x64xbf16, [[LINEAR]]>
-      // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<32x64xbf16, [[LINEAR]]>
-      // CHECK: [[MASKNAN:%.*]] = arith.select {{.*}}, [[NAN]], [[UPCAST]] : tensor<32x64xi1, [[LINEAR]]>, tensor<32x64xbf16, [[LINEAR]]>
-      // CHECK: [[CVT_ARG1:%.*]] = ttg.convert_layout [[MASKNAN]] : tensor<32x64xbf16, [[LINEAR]]> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>>
-      // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[TRANS_A]] : tensor<64x128xf8E4M3FN, [[BLOCKED5]]> -> tensor<64x128xbf16, [[BLOCKED5]]>
-      // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[FPTOFP]] : tensor<64x128xbf16, [[BLOCKED5]]> -> tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
-      // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG1]] : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> -> tensor<32x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>>
-      // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<64x128xbf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
+      // CHECK: [[FP4TOFP:%.*]] = ttg.fp4_to_fp [[TRANS_B]] {axis = 1 : i32} : tensor<32x32xi8, [[BLOCKED4]]> -> tensor<32x64xf16, [[LINEAR]]>
+      // CHECK: [[SCALE:%.*]] = ttg.convert_layout {{.*}} : tensor<32x64xf16, [[LINEAR1]]> -> tensor<32x64xf16, [[LINEAR]]>
+      // CHECK: [[UPCAST:%.*]] = arith.mulf [[FP4TOFP]], [[SCALE]] : tensor<32x64xf16, [[LINEAR]]>
+      // CHECK: [[MASKNAN:%.*]] = arith.select {{.*}}, [[NAN]], [[UPCAST]] : tensor<32x64xi1, [[LINEAR]]>, tensor<32x64xf16, [[LINEAR]]>
+      // CHECK: [[CVT_ARG1:%.*]] = ttg.convert_layout [[MASKNAN]] : tensor<32x64xf16, [[LINEAR]]> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>>
+      // CHECK: [[FPTOFP:%.*]] = tt.fp_to_fp [[TRANS_A]] : tensor<64x128xf8E4M3FN, [[BLOCKED5]]> -> tensor<64x128xf16, [[BLOCKED5]]>
+      // CHECK: [[CVT_ARG0:%.*]] = ttg.convert_layout [[FPTOFP]] : tensor<64x128xf16, [[BLOCKED5]]> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
+      // CHECK: [[A:%.*]] = tt.fp_to_fp [[CVT_ARG1]] : tensor<32x64xf16, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> -> tensor<32x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>>
+      // CHECK: [[B:%.*]] = tt.fp_to_fp [[CVT_ARG0]] : tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>>
       // CHECK: [[D:%.*]] = tt.dot [[A]], [[B]], [[ARG5]] : tensor<32x64xf32, #ttg.dot_op<{opIdx = 0, parent = [[BLOCKED4]]}>> * tensor<64x128xf32, #ttg.dot_op<{opIdx = 1, parent = [[BLOCKED4]]}>> -> tensor<32x128xf32, [[BLOCKED4]]>
       // CHECK: [[RES:%.*]] = ttg.convert_layout [[D]] : tensor<32x128xf32, [[BLOCKED4]]> -> tensor<32x128xf32, [[BLOCKED4]]>
       // CHECK: scf.yield [[RES]] : tensor<32x128xf32, [[BLOCKED4]]>
