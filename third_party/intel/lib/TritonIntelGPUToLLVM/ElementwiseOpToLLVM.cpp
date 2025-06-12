@@ -1043,6 +1043,14 @@ struct FpToFpOpConversion
       return outVals;
     }
 
+    if (srcElementType.isBF16() && dstElementType.isF32()) {
+      SmallVector<Value> outVals;
+      for (Value v : operands[0]) {
+        outVals.push_back(intel::convertBf16ToFp32(loc, rewriter, v));
+      }
+      return outVals;
+    }
+
     bool useFP16IntermediateSrc = srcElementType.isF32();
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
