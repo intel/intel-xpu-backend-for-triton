@@ -99,7 +99,7 @@ private:
   // Candidate is of the form:
   //   tt.dot(tt.trans(tt.load(..., {blockIO=...})))
   // Where:
-  //  - the transpose result is used only by the dot operation, and
+  //  - the transpose result is used by the dot operation, and
   //  - the transpose operation uses the result of a 2-dim load operation on a
   //    block pointer (transitively) defined by a `make_tensor_ptr` in the same
   //    function, and
@@ -108,11 +108,26 @@ private:
   bool isCandidate(tt::TransOp transOp) const {
     assert(transOp && "Expecting a valid transpose operation");
 
-    bool transOpUsedOnlyByDotOp =
-        transOp->hasOneUse() &&
-        isa<triton::DotOp>(*transOp->getUsers().begin());
+    // Check whether \p transOp is used by a `dotOp` directly or indirectly
+    // (each operation in the def-use chain need to have a single user).
+    auto usedByDotOp = [](tt::TransOp transOp) {
+      if (!transOp->hasOneUse())
+        return false;
+
+      Operation *user = *transOp->getUsers().begin();
+      while (user) {
+        if (isa<tt::DotOp>(user))
+          return true;
+        if (!user->hasOneUse())
+          break;
+        user = *user->getUsers().begin();
+      }
+
+      return false;
+    };
+
     Attribute transOpEncoding = transOp.getType().getEncoding();
-    if (!transOpUsedOnlyByDotOp || !transOpEncoding ||
+    if (!usedByDotOp(transOp) || !transOpEncoding ||
         !isa<ttg::DotOperandEncodingAttr>(transOpEncoding))
       return false;
 
@@ -165,14 +180,16 @@ private:
 
       if (op->hasOneUse())
         return true;
-      if (!op->getParentOfType<scf::ForOp>())
+      if (!op->getParentOfType<scf::ForOp>()) {
         return false;
+      }
 
       SmallVector<Operation *> users(op->getUsers());
       if (users.size() > 2 || llvm::none_of(users, [](Operation *op) {
             return isa<scf::YieldOp>(op);
-          }))
+          })) {
         return false;
+      }
 
       auto yieldOp = cast<scf::YieldOp>(*llvm::find_if(
           users, [](Operation *user) { return isa<scf::YieldOp>(user); }));
@@ -187,8 +204,9 @@ private:
         OpResult res = forOp->getResult(operand.getOperandNumber());
         return !res.getUsers().empty();
       };
-      if (yieldedValUsedAfterLoop())
+      if (yieldedValUsedAfterLoop()) {
         return false;
+      }
 
       nextOp = *llvm::find_if(
           users, [](Operation *user) { return !isa<scf::YieldOp>(user); });
