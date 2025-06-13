@@ -153,6 +153,11 @@ bool isExpensiveLoadOrStore(Operation *op) {
   return false;
 }
 
+bool isBlockIONoOpConversion(RankedTensorType srcType,
+                             RankedTensorType dstType) {
+  return hasSubgroup2DBlockEncoding(srcType) && hasDotDpasEncoding(dstType);
+}
+
 bool hasSubgroup2DBlockEncoding(RankedTensorType tensorType) {
   if (!tensorType.getEncoding())
     return false;

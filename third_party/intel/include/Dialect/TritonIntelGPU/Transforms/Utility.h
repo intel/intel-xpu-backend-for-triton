@@ -33,6 +33,12 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 // Retuns true if the operation is an expensive load or store operation.
 bool isExpensiveLoadOrStore(Operation *op);
 
+// Returns true if the conversion between tensor types should be a no-op. Will
+// be removed once layout conversion for BlockIO types is lifted from
+// LoadStoreOpToLLVM.cpp
+bool isBlockIONoOpConversion(RankedTensorType srcType,
+                             RankedTensorType dstType);
+
 // Returns true if the tensor type has a subgroup 2d block io encoding
 bool hasSubgroup2DBlockEncoding(RankedTensorType tensorType);
 
