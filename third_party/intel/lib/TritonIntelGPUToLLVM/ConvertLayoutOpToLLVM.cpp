@@ -34,9 +34,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         // from LoadStoreOpToLLVM.
         if (intel::hasSubgroup2DBlockEncoding(srcTensorTy) &&
             intel::hasDotDpasEncoding(dstTensorTy)) {
-          // need to delete the op and do nothing
-          llvm::errs() << "need to delete op " << op << "\n";
-          // what if we just delete it
           rewriter.replaceOp(op, op.getSrc());
           return success();
         }
