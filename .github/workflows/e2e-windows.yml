@@ -224,6 +224,31 @@ jobs:
           extra-cache-key: ${{ env.PYTORCH_VERSION }}
           workspace: /c/gh${{ github.run_id }}
 
+      - name: Clone pytorch benchmark
+        if: inputs.suite == 'all' || inputs.suite == 'torchbench'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BENCHMARK_REPO }}
+          ref: ${{ env.BENCHMARK_COMMIT_ID }}
+          submodules: recursive
+          path: benchmark
+
+      - name: Install pytorch benchmark
+        if: inputs.suite == 'all' || inputs.suite == 'torchbench'
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          bash -c "
+          cd benchmark
+          if [[ "${{ inputs.only_one_model }}" ]]; then
+            python install.py "${{ inputs.only_one_model }}"
+          else
+            # install all models
+            python install.py
+          fi
+          pip install -e .
+          "
+
       - name: Identify GPU
         run: |
           # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
