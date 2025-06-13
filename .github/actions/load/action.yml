@@ -34,16 +34,23 @@ runs:
       id: load
       shell: bash
       run: |
+        if [[ ! -d ${{ inputs.root }} ]]; then
+          echo "${{ inputs.root }} does not exist, cache disabled"
+          echo "status=miss" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
         ITEM_PATH="${{ inputs.root }}/${{ inputs.key }}"
         echo "dest=$ITEM_PATH" >> $GITHUB_OUTPUT
         if [[ -d ${{ inputs.path }} ]]; then
           echo "Directory ${{ inputs.path }} already exists and will be removed"
           rm -rf ${{ inputs.path }}
         fi
+
         if [[ ${{ inputs.enabled == 'true' }} && -d $ITEM_PATH ]]; then
           echo "Cache hit for ${{ inputs.key }}"
           echo "status=hit" >> $GITHUB_OUTPUT
-          if [[ ${{ inputs.symlink }} == true ]]; then
+          if [[ ${{ inputs.symlink }} == true && $OSTYPE != msys ]]; then
             mkdir -p $(dirname ${{ inputs.path }})
             ln -s $ITEM_PATH ${{ inputs.path }}
           else
