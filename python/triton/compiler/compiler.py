@@ -320,6 +320,8 @@ def compile(src, target=None, options=None):
         **options.__dict__,
         **env_vars,
     }
+
+    metadata["cache_dir"] = fn_cache_manager.cache_dir
     metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
