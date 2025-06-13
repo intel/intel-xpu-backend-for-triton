@@ -119,6 +119,7 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   // intel_sub_group_2d_block_read_8b_16r16x2c
   // intel_sub_group_2d_block_read_8b_8r16x1c
   // intel_sub_group_2d_block_read_8b_8r16x2c
+  // intel_sub_group_2d_block_read_16b_16r8x4c
   if ((op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
        op.getTileWidth() == 16 && op.getVBlocks() == 1 &&
        !op.getVnniTransform()) ||
@@ -133,6 +134,9 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
        !op.getVnniTransform()) ||
       (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
        op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
+       !op.getVnniTransform()) ||
+      (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
+       op.getTileWidth() == 8 && op.getVBlocks() == 4 &&
        !op.getVnniTransform())) {
     return false;
   }
