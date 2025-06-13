@@ -128,6 +128,23 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
                 {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, FP16_16x16x2_M256_N32_K32_B) {
+  EXPECT_EQ(subgroup2DBlockToLinearLayout(
+                /*shape*/ {32, 256},
+                sdb(/*instrShape*/ {16, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
+                    /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
+                    /*blockShape*/ {32, 256}, /*opsPerChannel*/ 2,
+                    /*opIdx*/ 1),
+                /*kWidth*/ 2),
+            LinearLayout(
+                {{S("register"),
+                  {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}, {16, 0}, {0, 128}}},
+                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                 {S("warp"), {{0, 32}, {0, 64}, {0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, I8_16x32x1_M64_N128_K32_A) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
