@@ -721,9 +721,9 @@ SmallVector<unsigned, 3> Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
   const bool isOperandA = opIdx == 0;
   const unsigned dimOuter = bool(opIdx) ? rank - 1 : rank - 2;
   unsigned dpasOperandsPerTileX =
-      isOperandA ? repCluster[dimOuter] : numReps[unsigned(opIdx) ? 1 : 2];
+      isOperandA ? repCluster[dimOuter] : numReps[1];
   unsigned dpasOperandsPerTileY =
-      isOperandA ? numReps[unsigned(opIdx) ? 1 : 2] : repCluster[dimOuter];
+      isOperandA ? numReps[2] : repCluster[dimOuter];
 
   if (isTransposeRequired) {
     std::swap(tileWidth, tileHeight);
