@@ -238,7 +238,7 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          bash -c "
+          bash -c '
           cd benchmark
           if [[ "${{ inputs.only_one_model }}" ]]; then
             python install.py "${{ inputs.only_one_model }}"
@@ -247,7 +247,7 @@ jobs:
             python install.py
           fi
           pip install -e .
-          "
+          '
 
       - name: Identify GPU
         run: |
