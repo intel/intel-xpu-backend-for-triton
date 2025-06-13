@@ -9,8 +9,7 @@
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f16(
-  // CHECK-SAME:                                      %[[VAL_0:.*]]: !llvm.struct<(f16)>
-  // CHECK-SAME:                                      %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-SAME:                                      %[[VAL_0:.*]]: !llvm.struct<(f16)>)
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f16)>
   // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK:           llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[VAL_2]], %[[VAL_4]])
@@ -50,8 +49,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_bf16(
-  // CHECK-SAME:                                       %[[VAL_0:.*]]: !llvm.struct<(bf16)>
-  // CHECK-SAME:                                       %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-SAME:                                       %[[VAL_0:.*]]: !llvm.struct<(bf16)>)
   // CHECK:           %[[VAL_1:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(bf16)>
   // CHECK:           %[[VAL_2:.*]] = llvm.bitcast %[[VAL_1]] : bf16 to i16
   // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -93,8 +91,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_i1(
-  // CHECK-SAME:                                     %[[VAL_0:.*]]: !llvm.struct<(i1)>
-  // CHECK-SAME:                                     %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-SAME:                                     %[[VAL_0:.*]]: !llvm.struct<(i1)>)
   // CHECK:           %[[VAL_1:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(i1)>
   // CHECK:           %[[VAL_2:.*]] = llvm.zext %[[VAL_1]] : i1 to i8
   // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -136,8 +133,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_ptr(
-  // CHECK-SAME:                                      %[[VAL_0:.*]]: !llvm.struct<(ptr<1>)>
-  // CHECK-SAME:                                      %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-SAME:                                      %[[VAL_0:.*]]: !llvm.struct<(ptr<1>)>)
   // CHECK:           %[[VAL_1:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(ptr<1>)>
   // CHECK:           %[[VAL_2:.*]] = llvm.ptrtoint %[[VAL_1]] : !llvm.ptr<1> to i64
   // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -190,8 +186,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_f32(
-  // CHECK-SAME:                                       %[[VAL_0:.*]]: !llvm.struct<(f32)>
-  // CHECK-SAME:                                       %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-SAME:                                       %[[VAL_0:.*]]: !llvm.struct<(f32)>)
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f32)>
   // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK:           llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_2]], %[[VAL_4]])
@@ -274,8 +269,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_non_sliced_multi_register(
-  // CHECK-SAME:                                                            %[[VAL_0:.*]]: !llvm.struct<(f64, f64)>
-  // CHECK-SAME:                                                            %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-SAME:                                                            %[[VAL_0:.*]]: !llvm.struct<(f64, f64)>)
   // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f64, f64)>
   // CHECK:           %[[VAL_3:.*]] = llvm.extractvalue %[[VAL_0]][1] : !llvm.struct<(f64, f64)>
   // CHECK:           %[[VAL_5:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -376,8 +370,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_contiguous(
-  // CHECK-SAME:                                             %[[VAL_0:.*]]: !llvm.struct<(f16, f16)>
-  // CHECK-SAME:                                             %[[PTR_1:.*]]: !llvm.ptr<1>
+  // CHECK-SAME:                                             %[[VAL_0:.*]]: !llvm.struct<(f16, f16)>)
   tt.func @test_contiguous(%arg0: tensor<32xf16, #ttg.slice<{dim = 1, parent = #blocked}>>) -> tensor<32xf16, #ttg.slice<{dim = 1, parent = #blocked1}>> {
     // CHECK:           %[[VAL_1:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(f16, f16)>
     // CHECK:           %[[VAL_2:.*]] = llvm.extractvalue %[[VAL_0]][1] : !llvm.struct<(f16, f16)>
