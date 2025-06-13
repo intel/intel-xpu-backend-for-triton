@@ -25,18 +25,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
-    auto srcTy = op.getSrc().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    if (auto srcTensorTy = cast<RankedTensorType>(srcTy)) {
-      if (auto dstTensorTy = cast<RankedTensorType>(dstTy)) {
+    if (auto dstTensorTy = cast<RankedTensorType>(dstTy)) {
+      if (intel::isBlockIONoOpConversion(srcTy, dstTensorTy)) {
         // TODO: replace this with proper conversion once conversion is removed
         // from LoadStoreOpToLLVM.
-        if (intel::hasSubgroup2DBlockEncoding(srcTensorTy) &&
-            intel::hasDotDpasEncoding(dstTensorTy)) {
-          rewriter.replaceOp(op, op.getSrc());
-          return success();
-        }
+        rewriter.replaceOp(op, op.getSrc());
+        return success();
       }
     }
 
