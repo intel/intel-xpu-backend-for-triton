@@ -2,8 +2,7 @@
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 8, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 32], B = [32, 8], C = [8, 8]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL:   llvm.func spir_kernelcc @test_mma_layout_emit_off(
-  // CHECK-SAME:    %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_mma_layout_emit_off()
   tt.func public @test_mma_layout_emit_off() {
     %cst = arith.constant dense<4> : tensor<32x32xi32, #mma>
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -64,8 +63,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 8, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 32], B = [32, 8], C = [8, 8]}>
 #dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL:   llvm.func spir_kernelcc @test_dot_mma_layout_emit_off(
-  // CHECK-SAME:    %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_dot_mma_layout_emit_off()
   tt.func public @test_dot_mma_layout_emit_off() {
     %cst = arith.constant dense<4> : tensor<32x32xi32, #dot_op_a>
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -170,8 +168,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
 #slice = #ttg.slice<{dim = 1, parent = #dot_op_a}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL:   llvm.func spir_kernelcc @test_slice_dot_mma_layout_emit_off(
-  // CHECK-SAME:    %[[PTR_1:.*]]: !llvm.ptr<1>)
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_slice_dot_mma_layout_emit_off()
   tt.func public @test_slice_dot_mma_layout_emit_off() {
     %cst = arith.constant dense<4> : tensor<32xi32, #slice>
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32

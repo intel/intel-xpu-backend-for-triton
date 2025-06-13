@@ -3,7 +3,7 @@
 #dpas = #ttig.dpas<{repeatCount=8, systolicDepth=8, executionSize = 8, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA=[1, 1], repCluster=[2, 2]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset(%arg0: !llvm.ptr<1>)
+  // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset()
   tt.func public @dot_layout_emit_offset() {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot_operand_a>
     // CHECK-COUNT-64:  {{.*}} = llvm.extractvalue {{.*}}
@@ -324,7 +324,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 #dot_operand_b = #ttg.dot_op<{opIdx=1, parent=#dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
-  // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset(%arg0: !llvm.ptr<1>)
+  // CHECK-LABEL:   llvm.func spir_kernelcc @dot_layout_emit_offset()
   tt.func public @dot_layout_emit_offset() {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot_operand_b>
     // CHECK-COUNT-64:           {{.*}} = llvm.extractvalue {{.*}}
