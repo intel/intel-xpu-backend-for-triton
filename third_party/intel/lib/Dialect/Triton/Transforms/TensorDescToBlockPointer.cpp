@@ -95,7 +95,9 @@ public:
           .Default([&](auto) { return WalkResult::advance(); });
     });
 
-    finalize();
+    if (!cleanUp.empty())
+      tt::intel::eraseOperations(cleanUp);
+
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -265,31 +267,6 @@ private:
     cleanUp.insert(op);
 
     return success();
-  }
-
-  void finalize() {
-    // Cleanup unused operations.
-    bool erasedOperation;
-    do {
-      erasedOperation = false;
-      SmallPtrSet<Operation *, 8> erased;
-      for (Operation *op : cleanUp) {
-        if (!op->getUsers().empty() || !op->getRegions().empty())
-          continue;
-
-        erased.insert(op);
-        op->erase();
-        erasedOperation = true;
-      }
-      cleanUp.remove_if([&](Operation *op) { return erased.contains(op); });
-    } while (erasedOperation);
-
-    // Remove operations that contain a region.
-    for (Operation *op : cleanUp) {
-      if (!op->getUsers().empty())
-        continue;
-      op->erase();
-    }
   }
 
 private:

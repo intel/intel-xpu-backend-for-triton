@@ -29,6 +29,9 @@ bool isConstant(Value val, int64_t expected);
 
 Value getFinalValue(Value value);
 
+// Erase the operations in \p operations.
+void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
+
 } // namespace mlir::triton::intel
 
 #endif // TRITON_INTEL_UTILS_UTILITY_H

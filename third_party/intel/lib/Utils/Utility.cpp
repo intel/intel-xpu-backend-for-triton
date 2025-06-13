@@ -193,4 +193,28 @@ Value getFinalValue(Value value) {
   return value;
 }
 
+void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
+  bool erasedOperation;
+  do {
+    erasedOperation = false;
+    SmallPtrSet<Operation *, 8> erased;
+    for (Operation *op : operations) {
+      if (!op->getUsers().empty() || !op->getRegions().empty())
+        continue;
+
+      erased.insert(op);
+      op->erase();
+      erasedOperation = true;
+    }
+    operations.remove_if([&](Operation *op) { return erased.contains(op); });
+  } while (erasedOperation);
+
+  // Remove operations that contain a region.
+  for (Operation *op : operations) {
+    if (!op->getUsers().empty())
+      continue;
+    op->erase();
+  }
+}
+
 } // namespace mlir::triton::intel
