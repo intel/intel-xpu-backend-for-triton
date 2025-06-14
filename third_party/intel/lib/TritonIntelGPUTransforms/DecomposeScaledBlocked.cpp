@@ -31,8 +31,7 @@ public:
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
     // Types
-    auto computeType = getComputeType(scaledDotOp.getAElemType(),
-                                      scaledDotOp.getBElemType(), rewriter);
+    auto computeType = getComputeType(scaledDotOp, rewriter);
     auto loc = scaledDotOp.getLoc();
 
     auto cvtDotOperand = [&](TypedValue<RankedTensorType> v,
@@ -60,11 +59,37 @@ public:
   }
 
 private:
-  FloatType getComputeType(ScaleDotElemType aType, ScaleDotElemType bType,
-                           PatternRewriter &rewriter) const {
-    if (aType == ScaleDotElemType::FP16 || bType == ScaleDotElemType::FP16)
-      return rewriter.getF16Type();
-    return rewriter.getBF16Type();
+  static FloatType getComputeType(DotScaledOp &op, PatternRewriter &rewriter) {
+    auto bf16Ty = rewriter.getBF16Type();
+    if (op.getAElemType() == ScaleDotElemType::BF16 ||
+        op.getBElemType() == ScaleDotElemType::BF16) {
+      return bf16Ty;
+    }
+
+    auto isBf16 = [bf16Ty](Type t) {
+      if (t == bf16Ty) {
+        return true;
+      }
+      if (auto rt = dyn_cast_or_null<RankedTensorType>(t);
+          rt && rt.getElementType() == bf16Ty) {
+        return true;
+      }
+      return false;
+    };
+    for (auto u : op.getOperation()->getUsers()) {
+      for (auto t : u->getResultTypes()) {
+        if (isBf16(t)) {
+          return bf16Ty;
+        }
+      }
+      for (auto operand : u->getOperands()) {
+        if (isBf16(operand.getType())) {
+          return bf16Ty;
+        }
+      }
+    }
+
+    return rewriter.getF16Type();
   }
 
   TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,
