@@ -215,15 +215,15 @@ jobs:
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
+          cd pytorch
+
           export WORKSPACE=$GITHUB_WORKSPACE
 
-          if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" == "1" ]] ; then
+          if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" = "1" ]] ; then
             export TORCH_COMPILE_DEBUG="1"
             # torch will save debug logs to $TORCH_COMPILE_DEBUG_DIR/torch_compile_debug
             export TORCH_COMPILE_DEBUG_DIR=$GITHUB_WORKSPACE
           fi
-
-          cd pytorch
 
           # if "only_one_model" is set, then test this model
           # if "models" == "subset", then test the models from .github/models/{accuracy,performance}/{suite}.txt
