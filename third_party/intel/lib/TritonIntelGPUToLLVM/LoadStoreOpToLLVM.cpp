@@ -2239,8 +2239,8 @@ struct LoadOpConversion
     auto opType = op.getType();
     // TODO: Override the OpType since conversion is still happening during Load
     // lowering. Once we materialize ConvertLayoutOp this can be removed.
-    if (auto tensorTy = dyn_cast<RankedTensorType>(opType);
-        hasSubgroup2DBlockEncoding(tensorTy))
+    auto tensorTy = dyn_cast<RankedTensorType>(opType);
+    if (tensorTy && hasSubgroup2DBlockEncoding(tensorTy))
       opType = getDpasTypeFromCVTOp(op.getResult());
 
     // Determine the vectorization size
@@ -2256,9 +2256,11 @@ struct LoadOpConversion
 
     if (isTensorPointerType(ptr.getType())) {
       // fallback to gather load.
-      auto tensorType = cast<RankedTensorType>(opType);
+      // make sure we use the modified opType from above, "seeing through" any
+      // post-subgroup 2d block encoding CVT.
+      auto blockPtrTensorType = cast<RankedTensorType>(opType);
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
-          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+          loc, adaptor.getPtr(), blockPtrTensorType, valueElemTy, rewriter,
           op.getBoundaryCheck(), op.getPadding());
     } else {
       Value other = op.getOther();
