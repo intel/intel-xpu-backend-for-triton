@@ -573,7 +573,7 @@ def get_benchmark(
                     for z in [1, 2, 4, 8, 16, 32]
                     for (h, dhead) in [(16, 128), (32, 64)]
                     for causal in [False, True]
-                    for mode in [fa_kernel_mode]]
+                    for mode in [fa_kernel_mode]]  #
             + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
