@@ -201,7 +201,6 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
     fn_tor = partial(torch.mm, X if not TRANSPOSE_A else X.T, Y if not TRANSPOSE_B else Y.T)
     fn_tri = partial(triton_mm, X, Y, transpose_x=TRANSPOSE_A, transpose_y=TRANSPOSE_B)
 
-    rtol = 1e-3
     result_tor = fn_tor()
     result_tri = fn_tri()
-    torch.testing.assert_close(result_tri, result_tor, atol=1e-2, rtol=rtol)
+    torch.testing.assert_close(result_tri, result_tor, atol=1e-2, rtol=1e-3)
