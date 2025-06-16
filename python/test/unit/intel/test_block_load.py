@@ -89,18 +89,17 @@ def test_block_load_dpas_layout(M, N, dtype_str, transpose, device, tmp_path: pa
 @pytest.mark.xfail(
     not (torch.xpu.get_device_capability()['has_subgroup_2d_block_io']
          and torch.xpu.get_device_capability()['has_subgroup_matrix_multiply_accumulate']),
-    reason="Block loads not supported on this architecture")
+    reason="Block loads and/or DPAS not supported on this architecture")
 def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, TRANSPOSE_A, TRANSPOSE_B,
                                 device):
     if GROUP_SIZE_M == 1 and (BLOCK_SIZE_M > 64 or BLOCK_SIZE_N > 64):
         # skip large block sizes as they will be too slow
-        pytest.skip("Skipping slow combinations")
+        pytest.xfail("Skipping slow combinations")
 
     @triton.jit
     def matmul_kernel_with_block_pointers(
             # Pointers to matrices
-            a_ptr, b_ptr,  #bias_ptr,
-            c_ptr,
+            a_ptr, b_ptr, c_ptr,
             # Matrix dimensions
             M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
             # The stride variables represent how much to increase the ptr by when moving by 1
@@ -108,10 +107,9 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
             # by to get the element one row down (A has M rows).
             stride_am: tl.constexpr, stride_ak: tl.constexpr,  #
             stride_bk: tl.constexpr, stride_bn: tl.constexpr,  #
-            stride_cm: tl.constexpr, stride_cn: tl.constexpr, BIAS_REQD: tl.constexpr,
+            stride_cm: tl.constexpr, stride_cn: tl.constexpr,  #
             # Meta-parameters
-            BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-            GROUP_SIZE_M: tl.constexpr):
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr):
         """Kernel for computing the matmul C = A x B.
         A has shape (M, K), B has shape (K, N) and C has shape (M, N)
         """
@@ -162,15 +160,7 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
             a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_SIZE_K))
             b_block_ptr = tl.advance(b_block_ptr, (BLOCK_SIZE_K, 0))
         c = accumulator.to(tl.float32)
-        # add bias to accumulator
 
-        #if BIAS_REQD:
-        #    offs_yn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-        #    bias = tl.load(bias_ptr + offs_yn, mask=offs_yn < N, other=0.0).to(tl.float32)
-        #    c += bias[None, :]
-        # ----------------------------------------------------------------
-        # Write back the block of the output matrix C with boundary checks.
-        # See above `Load/Store a Block Pointer` section for details.
         c_block_ptr = tl.make_block_ptr(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                         offsets=(pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N),
                                         block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N), order=(1, 0))
@@ -195,9 +185,8 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
         matmul_kernel_with_block_pointers[grid](X, Y, Z, M, N, K, Xstride0, Xstride1, Wstride0, Wstride1, Z.stride(0),
-                                                Z.stride(1), BIAS_REQD=b is not None, BLOCK_SIZE_M=BLOCK_SIZE_M,
-                                                BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
-                                                GROUP_SIZE_M=GROUP_SIZE_M)
+                                                Z.stride(1), BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N,
+                                                BLOCK_SIZE_K=BLOCK_SIZE_K, GROUP_SIZE_M=GROUP_SIZE_M)
 
         return Z
 
