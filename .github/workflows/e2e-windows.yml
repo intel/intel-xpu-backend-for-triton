@@ -252,7 +252,6 @@ jobs:
       - name: Run e2e tests
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
-          HF_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
