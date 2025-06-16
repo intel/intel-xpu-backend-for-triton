@@ -132,7 +132,7 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
     xetla_assert_result=False,
-    xetla_warn_mismatch=True,
+    xetla_warn_mismatch=False,
 ):
     return flash_attention_benchmark.get_benchmark(
         providers_filter=providers_filter,
@@ -147,6 +147,6 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
         xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '0') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)

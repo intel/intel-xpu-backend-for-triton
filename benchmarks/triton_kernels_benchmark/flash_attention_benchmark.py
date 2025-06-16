@@ -546,7 +546,7 @@ def get_benchmark(
     fa_kernel_mode='fwd',
     attn_fwd=_attn_fwd_with_block_pointers,
     xetla_assert_result=False,
-    xetla_warn_mismatch=True,
+    xetla_warn_mismatch=False,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -727,6 +727,6 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
         xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '0') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)
