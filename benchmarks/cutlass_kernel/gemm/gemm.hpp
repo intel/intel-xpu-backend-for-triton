@@ -1,44 +1,13 @@
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "cutlass/gemm/device/gemm_universal.h"
-#include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/gemm.h"
 
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/epilogue/fusion/callbacks.hpp"
 #include "cutlass/epilogue/thread/activation.h"
 
-#include "cutlass/util/device_memory.h"
-#include "cutlass/util/packed_stride.hpp"
-
 #include <exception>
 #include <iostream>
-
-#define CUTLASS_CHECK(status)                                                  \
-  {                                                                            \
-    cutlass::Status error = status;                                            \
-    if (error != cutlass::Status::kSuccess) {                                  \
-      auto msg = std::string("[") + __FILE__ +                                 \
-                 "] Got cutlass error: " + cutlassGetStatusString(error) +     \
-                 " at: " + std::to_string(__LINE__);                           \
-      throw std::runtime_error(msg);                                           \
-    }                                                                          \
-  }
-
-using ElementAccumulator = float;
-using ElementComputeEpilogue = float;
-using ElementInputA = cutlass::bfloat16_t;
-using ElementInputB = cutlass::bfloat16_t;
-using ElementOutput = float;
-
-using LayoutA = typename cutlass::layout::RowMajor;
-using LayoutB = typename cutlass::layout::RowMajor;
-using LayoutC = typename cutlass::layout::RowMajor;
-using LayoutD = typename cutlass::layout::RowMajor;
-
-constexpr int AlignmentA = sizeof(ElementInputA);
-constexpr int AlignmentB = sizeof(ElementInputB);
-constexpr int AlignmentC = sizeof(ElementAccumulator);
-constexpr int AlignmentD = sizeof(ElementOutput);
 
 ////////////////////////////////////////////////////////////////////////////////
 // PRIVATE FUNCTION
@@ -49,6 +18,22 @@ static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
                      const int M, const int N, const int K, const int L)
     -> int {
   RECORD_FUNCTION("cutlass gemm", {});
+
+  using ElementAccumulator = float;
+  using ElementComputeEpilogue = float;
+  using ElementInputA = cutlass::bfloat16_t;
+  using ElementInputB = cutlass::bfloat16_t;
+  using ElementOutput = float;
+
+  using LayoutA = typename cutlass::layout::RowMajor;
+  using LayoutB = typename cutlass::layout::RowMajor;
+  using LayoutC = typename cutlass::layout::RowMajor;
+  using LayoutD = typename cutlass::layout::RowMajor;
+
+  constexpr int AlignmentA = sizeof(ElementInputA);
+  constexpr int AlignmentB = sizeof(ElementInputB);
+  constexpr int AlignmentC = sizeof(ElementAccumulator);
+  constexpr int AlignmentD = sizeof(ElementOutput);
 
   /// MAIN LOOP ///
 

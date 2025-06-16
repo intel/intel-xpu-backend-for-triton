@@ -9,6 +9,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import cutlass_kernel
 import numpy as np
 
 
@@ -556,6 +557,7 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
         'xetla': 'XeTLA',
+        'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -571,7 +573,7 @@ def get_benchmark(
                     for z in [1, 2, 4, 8, 16, 32]
                     for (h, dhead) in [(16, 128), (32, 64)]
                     for causal in [False, True]
-                    for mode in [fa_kernel_mode]]  #
+                    for mode in [fa_kernel_mode]]
             + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
@@ -707,6 +709,35 @@ def get_benchmark(
                 n_repeat=10,
                 quantiles=quantiles,
             )
+
+        elif provider == 'cutlass':
+            cutlass_fn = None
+
+            if MODE == 'fwd':
+                name = 'attention'
+                func = getattr(cutlass_kernel, name)
+                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+
+                def cutlass_fwd_fn():
+                    func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
+                    return out
+
+                benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
+                cutlass_fn = cutlass_fwd_fn
+
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    cutlass_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
+
+            else:
+                cutlass_fn = None
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')

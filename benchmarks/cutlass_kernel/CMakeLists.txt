@@ -19,6 +19,6 @@ target_link_libraries(cutlass_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LI
 target_include_directories(cutlass_kernel PUBLIC "${CUTLASSLibrary_INCLUDE_DIR}" "${CUTLASSLibrary_INCLUDE_TOOL_DIR}" "${CUTLASSLibrary_INCLUDE_APPLICATION_DIR}")
 
 add_subdirectory(gemm)
-# add_subdirectory(attention)
+add_subdirectory(attention)
 
 install(TARGETS cutlass_kernel LIBRARY DESTINATION .)
