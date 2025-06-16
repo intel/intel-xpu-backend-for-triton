@@ -34,7 +34,7 @@ def get_xpu_config(*args, **kwargs):  # pylint: disable=unused-argument
 
 
 # There is a auto-tuning requirement to get the best configuration for the flex attention.
-# The pytorch flex attention doesn't support auto-tuning by user in default.
+# The pytorch flex attention doesn't support auto-tuning by user by default.
 # Overriding the _get_xpu_config method to provide custom configurations for auto-tuning on XPU.
 flex_attn._get_xpu_config = get_xpu_config  # pylint: disable=protected-access
 
