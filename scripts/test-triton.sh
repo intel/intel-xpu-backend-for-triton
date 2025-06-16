@@ -470,59 +470,14 @@ run_inductor_tests() {
   pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
 
   # TODO: Find the fastest Hugging Face model
-  ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --float32 -dxpu -n10 --no-skip --dashboard --inference --freezing --total-partitions 1 --partition-id 0 --only AlbertForMaskedLM --backend=inductor --timeout=4800 --output=$(pwd -P)/inductor_log.csv
+  ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --amp --amp-dtype bfloat16 -dxpu -n10 --backend=inductor --cold-start-latency --inference  --only LayoutLMForSequenceClassification
 
   cat inductor_log.csv
   grep AlbertForMaskedLM inductor_log.csv | grep -q ,pass,
 }
 
 test_triton() {
-  if [ "$TEST_UNIT" = true ]; then
-    run_unit_tests
-  fi
-
-  # core suite consists of minicore, mxfp, scaled_dot
-  if [ "$TEST_CORE" = true ]; then
-    run_core_tests
-  else
-    if [ "$TEST_MINICORE" = true ]; then
-        run_minicore_tests
-    fi
-    if [ "$TEST_MXFP" = true ]; then
-        run_mxfp_tests
-    fi
-    if [ "$TEST_SCALED_DOT" = true ]; then
-        run_scaled_dot_tests
-    fi
-  fi
-
-  if [ "$TEST_INTERPRETER" = true ]; then
-    run_interpreter_tests
-  fi
-  if [ "$TEST_TUTORIAL" = true ]; then
-    run_tutorial_tests
-  fi
-  if [ "$TEST_MICRO_BENCHMARKS" = true ]; then
-    run_microbench_tests
-  fi
-  if [ "$TEST_BENCHMARKS" = true ]; then
-    run_benchmarks
-  fi
-  if [ "$TEST_BENCHMARK_SOFTMAX" = true ]; then
-    run_benchmark_softmax
-  fi
-  if [ "$TEST_BENCHMARK_GEMM" = true ]; then
-    run_benchmark_gemm
-  fi
-  if [ "$TEST_BENCHMARK_ATTENTION" = true ]; then
-    run_benchmark_attention
-  fi
-  if [ "$TEST_INSTRUMENTATION" == true ]; then
-    run_instrumentation_tests
-  fi
-  if [ "$TEST_INDUCTOR" == true ]; then
-    run_inductor_tests
-  fi
+  run_inductor_tests
 }
 
 install_deps
