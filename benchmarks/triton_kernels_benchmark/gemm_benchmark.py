@@ -249,6 +249,7 @@ X_VALS = [  #
     [1, 3072, 3072, 4096],  # FIXME: Remove this case when gemm_streamk_benchmark can get better performance
     [1, 4096, 8192, 16384],
     [1, 8192, 1024, 16384],
+    [1, 8192, 4096, 4096],
     [1, 8192, 4096, 16384],
     [1, 16384, 1024, 8192],
     [1, 16384, 4096, 8192],
@@ -259,7 +260,6 @@ X_VALS = [  #
     [32, 4096, 128, 4096],
     [4096, 8, 128, 16384],
     [4096, 8, 16384, 128],
-    [1, 8192, 4096, 4096],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -313,7 +313,7 @@ def get_benchmark(
             # argument names to use as an x-axis for the plot
             x_names=['B', 'M', 'N', 'K'],
             # different possible values for `x_name`
-            x_vals=X_VALS,
+            x_vals=sorted(X_VALS),
             line_arg='provider',
             # argument name whose value corresponds to a different line in the plot
             # possible values for `line_arg``
