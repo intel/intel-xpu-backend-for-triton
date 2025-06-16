@@ -468,6 +468,7 @@ run_inductor_tests() {
   )
 
   pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec
+  pip install --force-reinstall git+https://github.com/huggingface/transformers@243e186efbf7fb93328dd6b34927a4e8c8f24395
 
   # TODO: Find the fastest Hugging Face model
   ZE_AFFINITY_MASK=0 python pytorch/benchmarks/dynamo/huggingface.py --accuracy --amp --amp-dtype bfloat16 -dxpu -n10 --backend=inductor --cold-start-latency --inference  --only LayoutLMForSequenceClassification
