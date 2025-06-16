@@ -126,7 +126,6 @@ def test_block_load_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_
         group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
         pid_m = first_pid_m + (pid % group_size_m)
         pid_n = (pid % num_pid_in_group) // group_size_m
-        #tl.device_print("pid", pid_m)
 
         # ----------------------------------------------------------
         # Create block pointers for the first blocks of A and B.
