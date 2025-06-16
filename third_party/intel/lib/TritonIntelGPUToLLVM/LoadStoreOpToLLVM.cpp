@@ -343,6 +343,15 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             : getDotEncoding(tensorTy).value().getParent());
   }
 
+  static RankedTensorType getDpasTypeFromCVTOp(Value opResult) {
+    for (OpOperand user : opResult.getUsers()) {
+      if (auto cvt = dyn_cast<ConvertLayoutOp>(user.getOwner())) {
+        return cast<RankedTensorType>(cvt.getResult().getType());
+      }
+    }
+    llvm_unreachable("expected to find a cvt op with dpas layout");
+  }
+
   // Returns the pitch (stride in bytes) of \p ptr.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
                  const std::map<SmallVector<unsigned>, Value> &ptrs,
@@ -1418,16 +1427,6 @@ struct LoadOpConversion
 
     const bool memoryRowMajor = isMemoryRowMajor(op);
 
-    auto getDpasTypeFromCVTOp = [&](Value opResult) -> RankedTensorType {
-      for (OpOperand user : opResult.getUsers()) {
-        if (auto cvt = dyn_cast<ConvertLayoutOp>(user.getOwner())) {
-          return cast<RankedTensorType>(cvt.getResult().getType());
-          // return getDpasLayout(cvt.getResult().getType());
-        }
-      }
-      llvm_unreachable("expected to find a cvt op with dpas layout");
-    };
-
     auto dpasTensorType = hasSubgroup2DBlockEncoding(tensorType)
                               ? getDpasTypeFromCVTOp(op.getResult())
                               : tensorType;
@@ -2213,6 +2212,8 @@ struct LoadOpConversion
     }
 
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    LLVM_DEBUG(llvm::dbgs() << "Packing load result in struct "
+                            << llvmResultStructTy << "\n");
     Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
@@ -2235,10 +2236,16 @@ struct LoadOpConversion
     Value mask = op.getMask();
     Value llMask = adaptor.getMask();
 
+    auto opType = op.getType();
+    // TODO: Override the OpType since conversion is still happening during Load
+    // lowering. Once we materialize ConvertLayoutOp this can be removed.
+    if (auto tensorTy = dyn_cast<RankedTensorType>(opType);
+        hasSubgroup2DBlockEncoding(tensorTy))
+      opType = getDpasTypeFromCVTOp(op.getResult());
+
     // Determine the vectorization size
-    Type valueElemTy =
-        typeConverter->convertType(getElementTypeOrSelf(op.getType()));
-    unsigned numElems = getTotalElemsPerThread(op.getType());
+    Type valueElemTy = typeConverter->convertType(getElementTypeOrSelf(opType));
+    unsigned numElems = getTotalElemsPerThread(opType);
     unsigned vec = getVectorSize(ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
@@ -2249,7 +2256,7 @@ struct LoadOpConversion
 
     if (isTensorPointerType(ptr.getType())) {
       // fallback to gather load.
-      auto tensorType = cast<RankedTensorType>(op.getType());
+      auto tensorType = cast<RankedTensorType>(opType);
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
           loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
           op.getBoundaryCheck(), op.getPadding());
@@ -2396,7 +2403,7 @@ struct LoadOpConversion
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Type llvmResultStructTy = typeConverter->convertType(opType);
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
