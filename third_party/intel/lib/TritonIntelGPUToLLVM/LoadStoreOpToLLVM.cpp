@@ -2211,7 +2211,7 @@ struct LoadOpConversion
       }
     }
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Type llvmResultStructTy = typeConverter->convertType(dpasTensorType);
     LLVM_DEBUG(llvm::dbgs() << "Packing load result in struct "
                             << llvmResultStructTy << "\n");
     Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
