@@ -222,6 +222,15 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
       return;
 
     auto dotOperandType = cast<RankedTensorType>(operand.getType());
+    auto layout = ttg::toLinearEncoding(dotOperandType);
+    auto order = layout.getThreadOrder();
+    auto rank = order.size();
+    if (rank != 2) {
+      loadOp.emitWarning(
+          "Subgroup 2D Block Encoding layouts only support rank 2 operands.");
+      return;
+    }
+
     auto dotOperandEncoding =
         cast<DotOperandEncodingAttr>(dotOperandType.getEncoding());
     // layout width is determined by the DPAS operand encoding width
@@ -231,6 +240,23 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
         loadOp->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr)
       return;
+
+    const bool valueRowMajor =
+        getOrderForDotOperand(0, rank, /*kContig=*/true) == order;
+    const bool memoryRowMajor =
+        blockIOAttr == StringAttr::get(&getContext(), "row_major");
+    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
+    LLVM_DEBUG({
+      DBGS() << "Original layout: " << dotOperandEncoding << "\n";
+      DBGS() << "\tvalueRowMajor = " << valueRowMajor << "\n";
+      DBGS() << "\tmemoryRowMajor = " << memoryRowMajor << "\n";
+      DBGS() << "\tisTransposeRequired = " << isTransposeRequired << "\n";
+    });
+    if (dotOperandEncoding.getOpIdx() == 0 && isTransposeRequired) {
+      LLVM_DEBUG(DBGS() << "Transposed 'A' operand does not yet support "
+                           "Subgroup 2D Block Encoding layout.\n");
+      return;
+    }
 
     // get the MakeTensorPtr Op for the load
     Value ptr = loadOp.getPtr();
@@ -261,16 +287,15 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
 
     auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
         cast<DistributedEncodingTrait>(dotOperandEncoding),
-        oldTensorType.getShape(),
-        blockIOAttr == StringAttr::get(&getContext(), "row_major"),
-        elemSizeInBits / 8, &getContext());
+        oldTensorType.getShape(), memoryRowMajor, elemSizeInBits / 8,
+        &getContext());
     SmallVector<unsigned> instrShape{tileParams[0], tileParams[1]};
     const unsigned vBlocks = tileParams[2];
 
     auto subgroup2DBlockEncoding = Subgroup2DBlockEncodingAttr::get(
         &getContext(), dpasLayout.getWarpsPerCTA(), CTALayout, instrShape,
         tileParams[2],
-        getOrderForDotOperand(dotOperandEncoding.getOpIdx(), /*rank*/ 2,
+        getOrderForDotOperand(dotOperandEncoding.getOpIdx(), /*rank*/ rank,
                               /*kContig*/ true),
         kWidth, dpasLayout.getThreadsPerWarp());
 

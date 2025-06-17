@@ -2247,6 +2247,11 @@ struct LoadOpConversion
     Type valueElemTy = typeConverter->convertType(getElementTypeOrSelf(opType));
     unsigned numElems = getTotalElemsPerThread(opType);
     unsigned vec = getVectorSize(ptr);
+    LLVM_DEBUG({
+      llvm::dbgs() << "Vectorization for gather load:\n";
+      llvm::dbgs() << "\t" << valueElemTy << " [" << numElems << "]\n";
+      llvm::dbgs() << "\tvector size = " << vec << " for " << ptr << "\n";
+    });
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
