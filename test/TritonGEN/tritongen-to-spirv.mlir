@@ -15,3 +15,21 @@ llvm.func @triton_gen.barrier.global() {
   triton_gen.barrier { mem_fence = Global }
   llvm.return
 }
+
+// -----
+
+llvm.func @triton_gen.split_barrier_arrive() {
+  // CHECK-LABEL: triton_gen.split_barrier_arrive() {
+  // CHECK:       spirv.INTEL.ControlBarrierArrive <Workgroup> <Workgroup> <None>
+  triton_gen.split_barrier_arrive {execution_scope=WorkGroup, memory_scope=WorkGroup}
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.split_barrier_wait() {
+  // CHECK-LABEL: triton_gen.split_barrier_wait() {
+  // CHECK:       spirv.INTEL.ControlBarrierWait <Workgroup> <Workgroup> <None>
+  triton_gen.split_barrier_wait {execution_scope=WorkGroup, memory_scope=WorkGroup}
+  llvm.return
+}
