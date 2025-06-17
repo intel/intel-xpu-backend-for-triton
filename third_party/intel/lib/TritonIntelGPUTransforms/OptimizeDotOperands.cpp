@@ -51,10 +51,10 @@ private:
   SmallPtrSet<Operation *, 8> cleanUp;
 
 public:
-  FuseTransWithLoad(tt::FuncOp funcOp) : funcOp(funcOp) {}
+  FuseTransWithLoad() = default;
 
-  void run() {
-    funcOp.walk([&](tt::TransOp transOp) {
+  void run(ModuleOp moduleOp) {
+    moduleOp.walk([&](tt::TransOp transOp) {
       if (isCandidate(transOp))
         fuse(transOp);
     });
@@ -62,7 +62,6 @@ public:
     if (!cleanUp.empty())
       tt::intel::eraseOperations(cleanUp);
 
-    [[maybe_unused]] auto moduleOp = funcOp->getParentOfType<ModuleOp>();
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
@@ -375,9 +374,7 @@ public:
 
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
-    moduleOp.walk([](tt::FuncOp funcOp) {
-      FuseTransWithLoad fuser(funcOp);
-      fuser.run();
-    });
+    FuseTransWithLoad fuser;
+    fuser.run(moduleOp);
   }
 };
