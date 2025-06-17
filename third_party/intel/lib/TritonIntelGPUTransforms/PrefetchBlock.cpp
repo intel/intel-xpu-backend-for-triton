@@ -39,6 +39,8 @@
 
 #include "TritonToTritonGPUWarp/TritonToTritonGPUWarpPass.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -204,14 +206,12 @@ private:
   /// Insert prefetch operations in the preheader of the given \p loop and
   /// return them in \p prefetchPtrs.
   void injectPrefetchOpsInPreheader(scf::ForOp loop,
-                                    SmallVectorImpl<Value> &prefetchPtrs,
-                                    Value &bData) const;
+                                    SmallVectorImpl<Value> &prefetchPtrs) const;
 
   /// Insert prefetch operations in the body of the given \p loop and return
   /// them in \p prefetchPtrs.
   void injectPrefetchOpsInBody(scf::ForOp loop,
-                               SmallVectorImpl<Value> &prefetchPtrs,
-                               Value bData) const;
+                               SmallVectorImpl<Value> &prefetchPtrs) const;
 
   /// Map between a SCF loop and the candidate loads for the transformation.
   DenseMap<scf::ForOp, SmallVector<tt::LoadOp>> loopLoads;
@@ -329,14 +329,13 @@ PrefetchBlockPass::findDefiningMakeTensorPtrOp(scf::ForOp loop,
 
 void PrefetchBlockPass::transformLoop(scf::ForOp loop) const {
   SmallVector<Value> prefetchPtrs;
-  Value bData;
-  injectPrefetchOpsInPreheader(loop, prefetchPtrs, bData);
-  injectPrefetchOpsInBody(loop, prefetchPtrs, bData);
+  injectPrefetchOpsInPreheader(loop, prefetchPtrs);
+  injectPrefetchOpsInBody(loop, prefetchPtrs);
 }
 
 /// Add prefetch operations in the loop pre-header.
 void PrefetchBlockPass::injectPrefetchOpsInPreheader(
-    scf::ForOp loop, SmallVectorImpl<Value> &prefetchPtrs, Value &bData) const {
+    scf::ForOp loop, SmallVectorImpl<Value> &prefetchPtrs) const {
   assert(prefetchPtrs.empty() && "Expecting an empty vector");
 
   OpBuilder b(loop);
@@ -367,18 +366,18 @@ void PrefetchBlockPass::injectPrefetchOpsInPreheader(
   if (injectSplitBarriers) {
     Location loc = loop.getLoc();
     b.setInsertionPoint(loop);
-    Type smemPtrTy = LLVM::LLVMPointerType::get(b.getContext(), 3);
-    bData = b.create<tt::TritonGEN::SplitBarrierInitOp>(loc, smemPtrTy, 32, 32);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(loc, bData);
+    b.create<spirv::INTELControlBarrierArriveOp>(loc, spirv::Scope::Workgroup,
+                                                 spirv::Scope::Workgroup,
+                                                 spirv::MemorySemantics::None);
     b.setInsertionPoint(loop->getNextNode());
-    b.create<tt::TritonGEN::SplitBarrierWaitOp>(loc, bData);
-    b.create<mlir::gpu::BarrierOp>(loc);
-    b.create<tt::TritonGEN::SplitBarrierReleaseOp>(loc, bData);
+    b.create<spirv::INTELControlBarrierWaitOp>(loc, spirv::Scope::Workgroup,
+                                               spirv::Scope::Workgroup,
+                                               spirv::MemorySemantics::None);
   }
 }
 
 void PrefetchBlockPass::injectPrefetchOpsInBody(
-    scf::ForOp loop, SmallVectorImpl<Value> &prefetchPtrs, Value bData) const {
+    scf::ForOp loop, SmallVectorImpl<Value> &prefetchPtrs) const {
   assert(!prefetchPtrs.empty() && "Expecting an non-empty vector");
 
   OpBuilder b(loop);
@@ -454,8 +453,12 @@ void PrefetchBlockPass::injectPrefetchOpsInBody(
   if (injectSplitBarriers) {
     Location loc = newLoop.getLoc();
     b.setInsertionPoint(yield);
-    b.create<tt::TritonGEN::SplitBarrierWaitOp>(loc, bData);
-    b.create<tt::TritonGEN::SplitBarrierSignalOp>(loc, bData);
+    b.create<spirv::INTELControlBarrierWaitOp>(loc, spirv::Scope::Workgroup,
+                                               spirv::Scope::Workgroup,
+                                               spirv::MemorySemantics::None);
+    b.create<spirv::INTELControlBarrierArriveOp>(loc, spirv::Scope::Workgroup,
+                                                 spirv::Scope::Workgroup,
+                                                 spirv::MemorySemantics::None);
   }
 
   yield.getResultsMutable().append(advances);
