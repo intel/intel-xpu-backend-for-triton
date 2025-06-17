@@ -179,19 +179,18 @@ private:
 
       if (op->hasOneUse())
         return true;
-      if (!op->getParentOfType<scf::ForOp>()) {
+      if (!op->getParentOfType<scf::ForOp>())
         return false;
-      }
+
+      auto forOp = op->getParentOfType<scf::ForOp>();
+      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
 
       SmallVector<Operation *> users(op->getUsers());
-      if (users.size() > 2 || llvm::none_of(users, [](Operation *op) {
-            return isa<scf::YieldOp>(op);
-          })) {
+      if (users.size() > 2 || llvm::none_of(users, [&](Operation *user) {
+            return user == yieldOp;
+          }))
         return false;
-      }
 
-      auto yieldOp = cast<scf::YieldOp>(*llvm::find_if(
-          users, [](Operation *user) { return isa<scf::YieldOp>(user); }));
       auto yieldedValUsedAfterLoop = [&op, &yieldOp]() {
         auto it =
             llvm::find_if(yieldOp->getOpOperands(), [&op](OpOperand &operand) {
@@ -203,9 +202,9 @@ private:
         OpResult res = forOp->getResult(operand.getOperandNumber());
         return !res.getUsers().empty();
       };
-      if (yieldedValUsedAfterLoop()) {
+
+      if (yieldedValUsedAfterLoop())
         return false;
-      }
 
       nextOp = *llvm::find_if(
           users, [](Operation *user) { return !isa<scf::YieldOp>(user); });
@@ -215,7 +214,8 @@ private:
     while (currentOp != end) {
       Operation *user = nullptr;
       if (!validate(currentOp, user)) {
-        LLVM_DEBUG(llvm::dbgs() << *currentOp << " fails safety checks\n");
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Fails safety checks: " << *currentOp << "\n");
         return false;
       }
 
