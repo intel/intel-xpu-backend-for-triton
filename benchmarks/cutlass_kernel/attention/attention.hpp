@@ -7,11 +7,6 @@
 
 #include "cutlass/gemm/dispatch_policy.hpp"
 
-#include "cute/arch/mma_xe.hpp"
-#include "cute/arch/xe_copy_2B.hpp"
-#include "cute/arch/xe_copy_4B.hpp"
-#include "cute/atom/mma_atom.hpp"
-
 #include <exception>
 #include <iostream>
 
@@ -53,8 +48,8 @@ template <typename FMHA> static auto run(typename FMHA::Params params) -> void {
   EventManager::getInstance().addEvent(event);
 }
 
-template <bool Causal, typename TileShape,
-          typename TiledMMA> //, class Scheduler>
+template <bool Causal, typename TileShapeQK, typename TileShapePV,
+          typename TileShapeOutput, typename SubgroupLayout, int PipelineStages>
 static auto attention_run(const at::Tensor &Q, const at::Tensor &K,
                           const at::Tensor &V, at::Tensor &O, int Batch,
                           int NumHeadsQ, int NumHeadsKV, int SeqLengthQO,
@@ -72,14 +67,15 @@ static auto attention_run(const at::Tensor &Q, const at::Tensor &K,
   using LayoutV = cutlass::layout::RowMajor;
   using LayoutO = cutlass::layout::RowMajor;
 
-  constexpr int PipelineStages = 2;
   using GEMMDispatchPolicy =
       cutlass::gemm::MainloopIntelXeXMX16<PipelineStages>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
 
-  using GmemTiledCopyQ = cute::XE_2D_U16x16x32_LD_N;
+  using MMAOperation = cute::XE_8x16x16_F32F16F16F32_TT;
+
+  using GmemTiledCopyQ = cute::XE_2D_U16x8x32_LD_N;
   using GmemTiledCopyK = cute::XE_2D_U16x16x16_LD_T;
-  using GmemTiledCopyV = cute::XE_2D_U16x32x32_LD_V;
+  using GmemTiledCopyV = cute::XE_2D_U16x16x32_LD_V;
   using GmemTiledCopyStore = cute::XE_2D_U32x8x16_ST_N;
 
   using ProblemShapeType = cute::tuple<int, int, int, int, int, int, int>;
@@ -88,10 +84,11 @@ static auto attention_run(const at::Tensor &Q, const at::Tensor &K,
 
   using CollectiveMainloop =
       cutlass::flash_attention::collective::FlashPrefillMma<
-          GEMMDispatchPolicy, ProblemShapeType, TileShape, ElementInputQ,
+          GEMMDispatchPolicy, ProblemShapeType, ElementInputQ,
           cutlass::gemm::TagToStrideA_t<LayoutQ>, ElementInputKV,
           cutlass::gemm::TagToStrideB_t<LayoutK>, ElementInputKV,
-          cutlass::gemm::TagToStrideB_t<LayoutV>, TiledMMA,
+          cutlass::gemm::TagToStrideB_t<LayoutV>, MMAOperation, TileShapeQK,
+          TileShapePV, SubgroupLayout,
           GmemTiledCopyQ, // Q
           GmemTiledCopyK, // K
           GmemTiledCopyV, // V,
@@ -104,9 +101,9 @@ static auto attention_run(const at::Tensor &Q, const at::Tensor &K,
           Causal, EpilogueDispatchPolicy, ElementAccumulator>;
   using CollectiveEpilogue =
       cutlass::flash_attention::collective::FlashPrefillEpilogue<
-          EpilogueDispatchPolicy, TileShape, ElementAccumulator,
-          cutlass::gemm::TagToStrideC_t<LayoutO>, ElementOutput,
-          GmemTiledCopyStore>;
+          EpilogueDispatchPolicy, MMAOperation, TileShapeOutput, SubgroupLayout,
+          ElementAccumulator, cutlass::gemm::TagToStrideC_t<LayoutO>,
+          ElementOutput, GmemTiledCopyStore>;
 
   /// FA ///
 
@@ -211,30 +208,34 @@ auto attention(const at::Tensor &Q, const at::Tensor &K, const at::Tensor &V,
                at::Tensor &O, int Batch, int NumHeadsQ, int NumHeadsKV,
                int SeqLengthQO, int SeqLengthKV, int HeadSizeQK, int HeadSizeVO,
                bool Causal, float sm_scale) -> int {
+  constexpr int PipelineStages = 2;
   FARunPtr f = nullptr;
 
   if (HeadSizeVO == 64) {
-    using TiledMMA = typename cute::TiledMMAHelper<
-        cute::MMA_Atom<cute::XE_8x16x16_F32F16F16F32_TT>,
-        cute::Layout<cute::Shape<cute::_128, cute::_64, cute::_64>>,
+    using ShapeQK = cute::Shape<cute::_128, cute::_64, cute::_64>;
+    using ShapePV = cute::Shape<cute::_128, cute::_32, cute::_64>;
+    using ShapeOutPut = cute::Shape<cute::_128, cute::_64, cute::_64>;
+    using SubgroupLayout =
         cute::Layout<cute::Shape<cute::_8, cute::_1, cute::_1>,
-                     cute::Stride<cute::_1, cute::_1, cute::_1>>>::TiledMMA;
-    using TileShape =
-        typename cute::Shape<cute::_128, cute::_64, cute::_64, cute::_64>;
+                     cute::Stride<cute::_1, cute::_1, cute::_1>>;
 
-    f = Causal ? attention_run<true, TileShape, TiledMMA>
-               : attention_run<false, TileShape, TiledMMA>;
+    f = Causal ? attention_run<true, ShapeQK, ShapePV, ShapeOutPut,
+                               SubgroupLayout, PipelineStages>
+               : attention_run<false, ShapeQK, ShapePV, ShapeOutPut,
+                               SubgroupLayout, PipelineStages>;
+
   } else if (HeadSizeVO == 128) {
-    using TiledMMA = typename cute::TiledMMAHelper<
-        cute::MMA_Atom<cute::XE_8x16x16_F32F16F16F32_TT>,
-        cute::Layout<cute::Shape<cute::_128, cute::_128, cute::_64>>,
-        cute::Layout<cute::Shape<cute::_8, cute::_2, cute::_1>,
-                     cute::Stride<cute::_2, cute::_1, cute::_1>>>::TiledMMA;
-    using TileShape =
-        typename cute::Shape<cute::_128, cute::_128, cute::_64, cute::_64>;
+    using ShapeQK = cute::Shape<cute::_128, cute::_64, cute::_64>;
+    using ShapePV = cute::Shape<cute::_128, cute::_32, cute::_64>;
+    using ShapeOutPut = cute::Shape<cute::_128, cute::_128, cute::_64>;
+    using SubgroupLayout =
+        cute::Layout<cute::Shape<cute::_16, cute::_1, cute::_1>,
+                     cute::Stride<cute::_1, cute::_1, cute::_1>>;
 
-    f = Causal ? attention_run<true, TileShape, TiledMMA>
-               : attention_run<false, TileShape, TiledMMA>;
+    f = Causal ? attention_run<true, ShapeQK, ShapePV, ShapeOutPut,
+                               SubgroupLayout, PipelineStages>
+               : attention_run<false, ShapeQK, ShapePV, ShapeOutPut,
+                               SubgroupLayout, PipelineStages>;
   } else {
     std::cerr << "Unsupported HeadSizeVO: " << HeadSizeVO << std::endl;
     return -1;
