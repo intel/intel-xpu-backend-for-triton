@@ -678,8 +678,8 @@ struct PrefetchOpConversion
         masks[offset] = maskElems[i];
     }
 
-    Value baseWidth =
-        b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
+    Value baseWidth = b.i32_val(
+        std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
     Value rowStrideInBytes =
         getPitch(rewriter, op.getPtr(), baseAddrs, baseWidth, elemSizeInBits);
     if (!rowStrideInBytes)
@@ -1134,7 +1134,8 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    Value baseWidth = b.i32_val(vBlocks * tileWidth * (elemSizeInBits / 8));
+    Value baseWidth =
+        b.i32_val(std::max(64u, vBlocks * tileWidth * (elemSizeInBits / 8)));
     Value pitch = getPitch(rewriter, ptr, ptrs, baseWidth, elemSizeInBits);
     if (!pitch)
       return failure();

@@ -27,7 +27,23 @@ template <typename Op> static LogicalResult verifyMatrixInput(Op op) {
                 "Unexpected template parameter");
 
   std::optional<int64_t> width = getConstantIntValue(op.getBaseWidth());
+  if (width) {
+    if (*width > (1 << 24) - 1)
+      return op->emitOpError("2nd operand (base width) should be <= 24 bits");
+    if (*width < 64)
+      return op->emitOpError("2nd operand (base width) should be >= 64");
+  }
+  std::optional<int64_t> height = getConstantIntValue(op.getBaseHeight());
+  if (height)
+    if (*height > (1 << 24) - 1)
+      return op->emitOpError("3rd operand (base height) should be <= 24 bits");
   std::optional<int64_t> pitch = getConstantIntValue(op.getBasePitch());
+  if (pitch) {
+    if (*pitch > (1 << 24) - 1)
+      return op->emitOpError("4th operand (base pitch) should be <= 24 bits");
+    if (*pitch < 64)
+      return op->emitOpError("4th operand (base pitch) should be >= 64");
+  }
   if (pitch && width && *pitch < *width)
     return op->emitOpError(
         "4th operand (base pitch) should be >= 2nd operand (base width)");
