@@ -380,7 +380,7 @@ class XPUBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_spv(src, metadata, options):
+    def make_spv(src, metadata, options, device_arch):
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
         if options.grf_mode == 'small':
@@ -414,8 +414,8 @@ class XPUBackend(BaseBackend):
                 fbin = fsrc.name + '.o'
 
                 ocloc_cmd = [
-                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', 'pvc', '-options',
-                    metadata["build_flags"] + shader_dump_opt
+                    'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', device_arch,
+                    '-options', metadata["build_flags"] + shader_dump_opt
                 ]
 
                 try:
@@ -468,7 +468,7 @@ class XPUBackend(BaseBackend):
         elif language == Language.GLUON:
             stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)
+        stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options, self.device_arch)
 
     @functools.lru_cache()
     def hash(self):
