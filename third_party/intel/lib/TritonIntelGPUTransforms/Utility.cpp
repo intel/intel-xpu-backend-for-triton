@@ -182,7 +182,8 @@ LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation,
-    std::function<Value(OpOperand &, Attribute)> getExistingConversion) {
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion,
+    bool includeForOp) {
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
@@ -216,10 +217,7 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isTensorOrTensorPointerType(currentValue.getType()))
       continue;
-    // Skip propagating through for op results for now.
-    // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>())
-      return failure();
+
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
 
@@ -229,6 +227,22 @@ LogicalResult getConvertBackwardSlice(
       if (failed(updateLayout(existing, encoding)))
         return failure();
       currentValue = existing;
+    }
+
+    if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
+      if (!includeForOp)
+        return failure();
+      if (stopPropagation && stopPropagation(forOp))
+        continue;
+      unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
+      int numIndVars = forOp.getNumInductionVars();
+      Block &loopBody = *forOp.getBody();
+      auto blockArg = loopBody.getArgument(argIdx + numIndVars);
+      OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
+      OpOperand &yieldOperand = loopBody.getTerminator()->getOpOperand(argIdx);
+      enqueue(*initOperand, encoding);
+      enqueue(yieldOperand, encoding);
+      continue;
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
