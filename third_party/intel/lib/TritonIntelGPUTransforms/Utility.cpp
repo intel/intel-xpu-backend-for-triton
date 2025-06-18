@@ -185,7 +185,8 @@ LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation,
-    std::function<Value(OpOperand &, Attribute)> getExistingConversion) {
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion,
+    bool includeForOp) {
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
   SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
