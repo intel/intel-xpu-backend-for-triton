@@ -23,7 +23,7 @@ public:
   Subgroup2DBlockEncodingAttr
   sdb(ArrayRef<unsigned> instrShape, unsigned numBlocks, unsigned kWidth,
       ArrayRef<unsigned> warpsPerCTA, ArrayRef<unsigned> repCluster,
-      ArrayRef<int64_t> blockShape, unsigned opsPerChannel, unsigned opIdx) {
+      ArrayRef<int64_t> blockShape, unsigned opsPerChannel, unsigned opIdx, bool transform = false) {
     auto dpasLayout = DpasEncodingAttr::get(
         &ctx, /*repeatCount=*/8, /*systolicDepth=*/8, /*executionSize=*/16,
         opsPerChannel, warpsPerCTA, repCluster,
@@ -37,7 +37,7 @@ public:
             dpasLayout.getCTASplitNum(), dpasLayout.getCTAOrder()),
         instrShape, numBlocks,
         getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
-        dpasLayout.getThreadsPerWarp());
+        dpasLayout.getThreadsPerWarp(), opIdx, transform);
     return layout;
   }
 

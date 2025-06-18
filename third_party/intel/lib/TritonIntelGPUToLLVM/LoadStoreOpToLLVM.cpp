@@ -1415,31 +1415,28 @@ struct LoadOpConversion
     assert(isTensorPointerType(ptr.getType()) &&
            "Expecting tensor pointer type");
 
-    if (!isLoadCandidate(op))
-      return failure();
-
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type resultType = op.getType();
+    auto tensorType = dyn_cast<RankedTensorType>(resultType);
+    LLVM_DEBUG(llvm::dbgs() << "Checking candidate tensor pointer load op " << op << "\n");
+    if (!tensorType || !hasSubgroup2DBlockEncoding(tensorType))
+      return failure();
+
     Value mask = op.getMask();
     Value other = op.getOther();
-    Type resultType = op.getType();
-    auto tensorType = cast<RankedTensorType>(resultType);
 
     const bool memoryRowMajor = isMemoryRowMajor(op);
 
-    auto dpasTensorType = hasSubgroup2DBlockEncoding(tensorType)
-                              ? getDpasTypeFromCVTOp(op.getResult())
-                              : tensorType;
-    DpasEncodingAttr dpasLayout = getDpasLayout(dpasTensorType);
+    // auto dpasTensorType = getDpasTypeFromCVTOp(op.getResult());
+    // DpasEncodingAttr dpasLayout = getDpasLayout(dpasTensorType);
+    Subgroup2DBlockEncodingAttr encoding = tensorType.getEncoding();
 
-    DpasEncodingAttr::OpIdx opIdx = getOpIdx(dpasTensorType);
+    DpasEncodingAttr::OpIdx opIdx = encoding.getOpIdx(); // getOpIdx(dpasTensorType);
 
     LLVM_DEBUG(llvm::dbgs() << "Tensor type for op " << int(opIdx) << ": "
                             << tensorType << "\n");
 
-    Attribute encoding = tensorType.getEncoding();
-    // TODO: this gives us the linear layour corresponding
-    // to the subgroup 2d block encoding, not the dpas encoding...
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
@@ -1477,11 +1474,11 @@ struct LoadOpConversion
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
-    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
+    auto warpsPerCTA = encoding.getWarpsPerCTA();
     SmallVector<unsigned> dpasWarpsOrder =
         getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
     unsigned threadsPerWarp =
-        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
+        product<unsigned>(getThreadsPerWarp(encoding, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,

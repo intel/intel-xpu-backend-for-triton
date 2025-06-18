@@ -78,9 +78,25 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
   return success();
 };
 
+static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
+                                        bool &value, StringRef desc) {
+  auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
+  if (!boolAttr) {
+    parser.emitError(parser.getNameLoc(), "expected a bool type in ") << desc;
+    return failure();
+  }
+  value = boolAttr.getValue();
+  return success();
+}
+
 static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
                                unsigned &value, StringRef desc) {
   return parseIntAttrValue(parser, attr.getValue(), value, desc);
+};
+
+static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
+                               bool &value, StringRef desc) {
+  return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
 //===----------------------------------------------------------------------===//
@@ -532,7 +548,7 @@ LogicalResult Subgroup2DBlockEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<unsigned> warpsPerCTA, CTALayoutAttr CTALayout,
     ArrayRef<unsigned> instrShape, unsigned numBlocks, ArrayRef<unsigned> order,
-    unsigned kWidth, unsigned threadsPerWarp) {
+    unsigned kWidth, unsigned threadsPerWarp, unsigned opIdx, bool transform) {
   if (instrShape.size() != 2) {
     return emitError() << "instrShape must be rank 2 but was: "
                        << instrShape.size();
@@ -550,6 +566,9 @@ LogicalResult Subgroup2DBlockEncodingAttr::verify(
   if (!(threadsPerWarp == 16)) {
     return emitError() << "threadsPerWarp must be 16, but was: "
                        << threadsPerWarp;
+  }
+  if (!(opIdx == 0 || opIdx == 1 || opIdx == 2)) {
+    return emitError() << "opIdx must be either 0, 1, or 2 but was: " << opIdx;
   }
   return success();
 }
@@ -572,6 +591,8 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> order;
   unsigned kWidth = 0;
   unsigned threadsPerWarp = 0;
+  unsigned opIdx = 0;
+  bool transform = false; 
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "warpsPerCTA") {
@@ -613,6 +634,14 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseUInt(parser, attr, threadsPerWarp, "threadsPerWarp").failed())
         return {};
     }
+    if (attr.getName() == "opIdx") {
+      if (parseUInt(parser, attr, opIdx, "opIdx").failed())
+        return {};
+    }
+    if (attr.getName() == "transform") {
+      if (parseBool(parser, attr, transform, "transform").failed())
+        return {};
+    }
   }
 
   std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
@@ -622,7 +651,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<Subgroup2DBlockEncodingAttr>(
       parser.getContext(), warpsPerCTA, *CTALayout, instrShape, numBlocks,
-      order, kWidth, threadsPerWarp);
+      order, kWidth, threadsPerWarp, opIdx, transform);
 }
 
 SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
@@ -652,9 +681,9 @@ void Subgroup2DBlockEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(), getRank());
 
   printer << ", instrShape = [" << getInstrShape()
-          << "], numBlocks=" << getNumBlocks() << ", order=[" << getOrder()
-          << "], kWidth=" << getKWidth()
-          << ", threadsPerWarp=" << getThreadsPerWarp() << "}>";
+          << "], numBlocks = " << getNumBlocks() << ", transform = " << getTransform() << ", order = [" << getOrder()
+          << "], kWidth = " << getKWidth()
+          << ", threadsPerWarp = " << getThreadsPerWarp() << ", opIdx = " << getOpIdx() << "}>";
 }
 
 LinearLayout

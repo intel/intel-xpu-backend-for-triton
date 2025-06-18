@@ -302,6 +302,8 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     - `order` : The order within the block, used to determine along which dimension to broadcast.
     - `kWidth` : Currently unused, but keeping because we will likely need it for layout conversions.
     - `CTALayout` : Describes how blocks are distributed among work-groups/thread blocks.
+    - `opIdx`: Temporary parameter to reduce dependence on DPAS layouts. Should be removed as block IO layouts should be agnostic to Dot operands.
+    - `transform` : If true, uses the Transform variation of the Subgroup 2D Block IO instruction which packs elements from multiple rows into packed 32-bit values. Typically used for Dot product B-matrix operands. 
   }];
 
   let parameters = (
@@ -312,7 +314,9 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     "unsigned":$numBlocks,
     ArrayRefParameter<"unsigned">:$order,
     "unsigned":$kWidth,
-    "unsigned":$threadsPerWarp
+    "unsigned":$threadsPerWarp,
+    "unsigned":$opIdx,
+    "bool":$transform
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{

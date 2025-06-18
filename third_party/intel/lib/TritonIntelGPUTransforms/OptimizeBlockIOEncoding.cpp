@@ -297,7 +297,7 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
         tileParams[2],
         getOrderForDotOperand(dotOperandEncoding.getOpIdx(), /*rank*/ rank,
                               /*kContig*/ true),
-        kWidth, dpasLayout.getThreadsPerWarp());
+        kWidth, dpasLayout.getThreadsPerWarp(), dotOperandEncoding.getOpIdx(), /*transform*/!(dotOperandEncoding.getOpIdx() == 0) && !isTransposeRequired);
 
     LLVM_DEBUG(DBGS() << "Generated new encoding: " << subgroup2DBlockEncoding
                       << " for op : " << loadOp << "\n");

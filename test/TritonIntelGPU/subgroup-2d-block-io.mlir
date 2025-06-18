@@ -3,6 +3,7 @@
 
 
 // COM: A matrix, 16x16 block size, 1 warp w/ repCluster=1
+#subgroup2dblock = #ttig.subgroup_2d_block<{warpsPerCTA = [1, 1], instrShape = [16, 8], numBlocks=1, order=[1,0], kWidth=1, threadsPerWarp=16}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
     tt.func public @subgroup_2d_block_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16: i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16: i32}) attributes {noinline = false} {
@@ -14,8 +15,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 
         // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
         // CHECK-NOT: triton_gen.2Dblockload
-        %1 = tt.make_tensor_ptr %arg0, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%0, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>>
-        %2 = tt.load %1 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>>
+        %1 = tt.make_tensor_ptr %arg0, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%0, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x16xf16, #subgroup2dblock>>
+        %2 = tt.load %1 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<16x16xf16, #subgroup2dblock>>
 
         tt.return
     }
