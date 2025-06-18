@@ -24,6 +24,17 @@ using namespace mlir::triton;
 
 namespace {
 
+static spirv::Scope getSpirvScope(TritonGEN::MemScope scope) {
+  switch (scope) {
+  case TritonGEN::MemScope::WORK_GROUP:
+    return spirv::Scope::Workgroup;
+  case TritonGEN::MemScope::SUB_GROUP:
+    return spirv::Scope::Subgroup;
+  default:
+    llvm_unreachable("unexpected MemScope value");
+  }
+}
+
 struct TritonGENBarrierLowering
     : public OpConversionPattern<TritonGEN::BarrierOp> {
   using OpConversionPattern<TritonGEN::BarrierOp>::OpConversionPattern;
@@ -53,6 +64,35 @@ struct TritonGENBarrierLowering
     };
     rewriter.replaceOpWithNewOp<spirv::ControlBarrierOp>(op, scope, scope,
                                                          memorySemantics);
+    return success();
+  }
+};
+
+struct TritonGENSplitBarrierArriveLowering
+    : public OpConversionPattern<TritonGEN::SplitBarrierArriveOp> {
+  using OpConversionPattern<
+      TritonGEN::SplitBarrierArriveOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<spirv::INTELControlBarrierArriveOp>(
+        op, getSpirvScope(op.getExecutionScope()),
+        getSpirvScope(op.getMemoryScope()), spirv::MemorySemantics::None);
+    return success();
+  }
+};
+
+struct TritonGENSplitBarrierWaitLowering
+    : public OpConversionPattern<TritonGEN::SplitBarrierWaitOp> {
+  using OpConversionPattern<TritonGEN::SplitBarrierWaitOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SplitBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<spirv::INTELControlBarrierWaitOp>(
+        op, getSpirvScope(op.getExecutionScope()),
+        getSpirvScope(op.getMemoryScope()), spirv::MemorySemantics::None);
     return success();
   }
 };
@@ -100,5 +140,6 @@ struct ConvertTritonGENToSPIRV
 
 void mlir::triton::populateTritonGENToSPIRVConversionPatterns(
     RewritePatternSet &patterns) {
-  patterns.add<TritonGENBarrierLowering>(patterns.getContext());
+  patterns.add<TritonGENBarrierLowering, TritonGENSplitBarrierArriveLowering,
+               TritonGENSplitBarrierWaitLowering>(patterns.getContext());
 }
