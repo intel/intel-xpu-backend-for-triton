@@ -161,12 +161,14 @@ public:
   getConvertBackwardSlice(OpOperand &root, Attribute rootEncoding,
                           SetVector<Value> &slice,
                           DenseMap<Value, Attribute> &layout,
-                          std::function<bool(Operation *)> stopPropagation);
+                          std::function<bool(Operation *)> stopPropagation,
+                          bool includeForOp = false);
 
   LogicalResult getRematerializableSlice(
       OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
       DenseMap<Value, Attribute> &layout,
-      std::function<bool(Operation *)> stopPropagation = nullptr);
+      std::function<bool(Operation *)> stopPropagation = nullptr,
+      bool includeForOp = false);
 
 private:
   // Forward remat to clean the value,
@@ -1264,6 +1266,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
       deadOps.push_back(forOp.getOperation());
       Block &loopBody = *newForOp.getBody();
       for (auto m : argMapping) {
+        mapping.map(newForOp.getResult(m.first), newForOp.getResult(m.second));
         mapping.map(forOp.getResult(m.first), newForOp.getResult(m.second));
         int numIndVars = newForOp.getNumInductionVars();
         mapping.map(loopBody.getArgument(m.first + numIndVars),
@@ -1374,8 +1377,12 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     builder.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
   }
 
-  for (Operation *op : deadOps)
-    opToDelete.insert(op);
+  for (Operation *op : deadOps) {
+    if (!isa<scf::ForOp>(op))
+      opToDelete.insert(op);
+    else
+      op->erase();
+  }
 }
 
 void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
@@ -1550,7 +1557,7 @@ void LayoutRematerialization::forwardRematClean(
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation) {
+    std::function<bool(Operation *)> stopPropagation, bool includeForOp) {
   // Allow re-using existing conversions for a value. Check dominance of any
   // reusable materializations against the root value. This is sufficient
   // because the conversions are processed in post-order.
@@ -1579,15 +1586,16 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
   };
 
   return ttgi::getConvertBackwardSlice(root, slice, rootEncoding, layout,
-                                       stopPropagation, getExistingConversion);
+                                       stopPropagation, getExistingConversion,
+                                       includeForOp);
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation) {
-  LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
-                                                 layout, stopPropagation);
+    std::function<bool(Operation *)> stopPropagation, bool includeForOp) {
+  LogicalResult result = getConvertBackwardSlice(
+      root, rootEncoding, slice, layout, stopPropagation, includeForOp);
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1712,8 +1720,9 @@ void LayoutRematerialization::backwardRematerialization(
   // rematerialized.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  LogicalResult result = getRematerializableSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout);
+  LogicalResult result = getRematerializableSlice(convertOp.getSrcMutable(),
+                                                  targetType.getEncoding(),
+                                                  slice, layout, nullptr, true);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
     return;
