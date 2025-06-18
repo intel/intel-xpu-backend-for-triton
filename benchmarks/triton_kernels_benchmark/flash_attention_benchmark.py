@@ -546,8 +546,6 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
     attn_fwd=_attn_fwd_with_block_pointers,
-    xetla_assert_result=False,
-    xetla_warn_mismatch=False,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -647,33 +645,6 @@ def get_benchmark(
             )
 
         elif provider == 'xetla':
-            xetla_fn = None
-            if MODE == 'fwd':
-                module_name = f'flash_attn_causal_{CAUSAL}'.lower()
-                func = getattr(xetla_kernel, module_name)
-                out = torch.empty_like(q, device='xpu', dtype=dtype)
-                size_score = Z * H * N_CTX * N_CTX
-                size_attn_mask = Z * N_CTX * N_CTX
-                dropout_mask = torch.empty((size_score, ), device='xpu', dtype=torch.uint8)
-                bias = torch.empty((size_attn_mask, ), device='xpu', dtype=dtype)
-                size_ml = Z * H * N_CTX
-                m = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-                l = torch.empty((size_ml, ), device='xpu', dtype=torch.float)
-
-                def xetla_fwd_fn():
-                    func(q, k, v, out, dropout_mask, bias, m, l, Z, H, D_HEAD, N_CTX, N_CTX, sm_scale)
-                    return out
-
-                xetla_fn = xetla_fwd_fn
-
-                def check_xetla_fwd_result():
-                    if xetla_assert_result:
-                        benchmark_suite.assert_close(xetla_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='xetla to torch')
-                    elif xetla_warn_mismatch:
-                        check_close(xetla_fn, torch_fn, atol, 1e-3)
-
-                check_xetla_fwd_result()
-
             if MODE == 'bwd':
                 module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
                 func = getattr(xetla_kernel, module_name)
@@ -701,18 +672,20 @@ def get_benchmark(
                          bias_strideN, bias_strideF, attn_mask_padding)
                     return out
 
-                xetla_fn = xetla_bwd_fn
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    xetla_bwd_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
 
-            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
-                xetla_fn,
-                n_warmup=10,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            else:
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
 
         elif provider == 'cutlass':
-            cutlass_fn = None
-
             if MODE == 'fwd':
                 name = 'attention'
                 func = getattr(cutlass_kernel, name)
@@ -723,17 +696,15 @@ def get_benchmark(
                     return out
 
                 benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
-                cutlass_fn = cutlass_fwd_fn
 
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
-                    cutlass_fn,
+                    cutlass_fwd_fn,
                     n_warmup=10,
                     n_repeat=10,
                     quantiles=quantiles,
                 )
 
             else:
-                cutlass_fn = None
                 min_ms = float('nan')
                 max_ms = float('nan')
                 mean = float('nan')
@@ -755,9 +726,5 @@ def get_benchmark(
 
 
 if __name__ == '__main__':
-    _benchmark = get_benchmark(
-        fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
-        xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '0') == '1'),
-    )
+    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'), )
     _benchmark.run(show_plots=False, print_data=True)
