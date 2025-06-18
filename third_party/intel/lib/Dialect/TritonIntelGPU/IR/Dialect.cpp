@@ -754,6 +754,11 @@ SmallVector<unsigned, 3> Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
     dpasOperandsPerTileY = 1;
   }
 
+  // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
+  // enlarging the tileHeight.
+  dpasOperandsPerTileX = std::min(dpasOperandsPerTileX, 32 / tileHeight);
+  tileHeight = tileHeight * dpasOperandsPerTileX;
+
   // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
   // by enlarging the number of blocks.
   const unsigned totalBytesPerRowPerDPASOp = tileWidth * kWidth;

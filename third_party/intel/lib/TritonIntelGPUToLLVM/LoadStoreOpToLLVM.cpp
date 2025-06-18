@@ -1437,17 +1437,25 @@ struct LoadOpConversion
     LLVM_DEBUG(llvm::dbgs() << "Tensor type for op " << int(opIdx) << ": "
                             << tensorType << "\n");
 
-    Attribute encoding = tensorType.getEncoding();
-    // TODO: this gives us the linear layour corresponding
-    // to the subgroup 2d block encoding, not the dpas encoding...
-    std::optional<LinearLayout> llEncoding =
-        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
-            tensorType.getShape());
-    assert(llEncoding.has_value() && "invalid dot layout to linear layout");
+    auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
+    LinearLayout llEncoding = encoding.toLinearLayout(tensorType.getShape());
     LinearEncodingAttr llAttr =
-        LinearEncodingAttr::get(rewriter.getContext(), *llEncoding);
+        LinearEncodingAttr::get(rewriter.getContext(), llEncoding);
     SmallVector<unsigned> threadOrder = llAttr.getThreadOrder();
     size_t rank = threadOrder.size();
+
+    SmallVector<unsigned> sizePerThread = llAttr.getSizePerThread();
+    llvm::errs() << "sizePerThread:\n";
+    for (auto i : sizePerThread) {
+      llvm::errs() << i << "\n";
+    }
+
+    SmallVector<unsigned> shapePerCTATile = llAttr.getShapePerCTATile();
+    llvm::errs() << "shapePerCTATile:\n";
+    for (auto i : shapePerCTATile) {
+      llvm::errs() << i << "\n";
+    }
+
     const bool valueRowMajor =
         (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
     assert((valueRowMajor ||
@@ -1473,6 +1481,11 @@ struct LoadOpConversion
       }
     };
     auto [tileHeight, tileWidth, vBlocks] = getTileParams();
+    LLVM_DEBUG({
+      llvm::dbgs() << "tileHeight = " << tileHeight << "\n";
+      llvm::dbgs() << "tileWidth = " << tileWidth << "\n";
+      llvm::dbgs() << "vBlocks = " << vBlocks << "\n";
+    });
 
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -1624,6 +1637,8 @@ struct LoadOpConversion
     LLVMTypeConverter *typeConverter = getTypeConverter();
     Type unpackedDPASOperandType = LLVM::getVectorType(
         typeConverter->convertType(eltTy), elemsPerLanePerDPASInst);
+
+    const unsigned origTileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
 
     // By default, use the unpacked type for the 2D load result type.
     Type loadResultElemType = typeConverter->convertType(eltTy);
@@ -1803,11 +1818,9 @@ struct LoadOpConversion
       numOperandsPer2DloadN = 1;
     }
 
-    // TODO: move this logic to the instr shape computation
-    // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
-    // enlarging the tileHeight.
-    numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
-    tileHeight = tileHeight * numOperandsPer2DLoadM;
+    numOperandsPer2DLoadM =
+        std::min(numOperandsPer2DLoadM, 32 / origTileHeight);
+    // tileHeight = tileHeight * numOperandsPer2DLoadM;
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
