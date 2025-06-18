@@ -347,9 +347,8 @@ private:
       llvm::dbgs() << "newVal: " << newVal << "\n";
     });
 
-    for (auto [initArg, rgnInitArg, yieldVal, loopRes] :
-         llvm::zip(loopOp.getInitsMutable(), loopOp.getRegionIterArgs(),
-                   loopOp.getYieldedValues(), loopOp->getResults())) {
+    for (auto [initArg, rgnInitArg] :
+         llvm::zip(loopOp.getInitsMutable(), loopOp.getRegionIterArgs())) {
       if (initArg.get() == origVal) {
         initArg.set(newVal);
         rgnInitArg.setType(initArg.get().getType());
