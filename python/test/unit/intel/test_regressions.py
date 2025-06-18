@@ -118,7 +118,7 @@ def test_regression_4441(device, tmp_path: pathlib.Path):
     }
     """
 
-    temp_file = tmp_path / "test_block_load_dpas_layout.ttgir"
+    temp_file = tmp_path / "test_regression_4441.ttgir"
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
 
