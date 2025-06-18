@@ -209,9 +209,54 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height 
 
 // -----
 
+llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  %base_width = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockload' op 2nd operand (base width) should be <= 24 bits}}
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  %base_width = llvm.mlir.constant(0 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockload' op 2nd operand (base width) should be >= 64}}
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  %base_height = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockload' op 3rd operand (base height) should be <= 24 bits}}
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %x : i32, %y : i32) {
+  %base_pitch = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockload' op 4th operand (base pitch) should be <= 24 bits}}
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %x : i32, %y : i32) {
+  %base_pitch = llvm.mlir.constant(0 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockload' op 4th operand (base pitch) should be >= 64}}
+  %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
+  llvm.return
+}
+
+// -----
+
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %x : i32, %y : i32) {
-  %base_width = llvm.mlir.constant(4 : i32) : i32
-  %base_pitch = llvm.mlir.constant(2 : i32) : i32
+  %base_width = llvm.mlir.constant(68 : i32) : i32
+  %base_pitch = llvm.mlir.constant(64 : i32) : i32
   // expected-error @+1 {{'triton_gen.2Dblockload' op 4th operand (base pitch) should be >= 2nd operand (base width)}}
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32) -> vector<8xi16>
   llvm.return
@@ -273,11 +318,56 @@ llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height
   llvm.return
 }
 
+
+// -----
+
+llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi8>) {
+  %base_width = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op 2nd operand (base width) should be <= 24 bits}}
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xi8>)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi8>) {
+  %base_width = llvm.mlir.constant(0 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op 2nd operand (base width) should be >= 64}}
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xi8>)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi8>) {
+  %base_height = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op 3rd operand (base height) should be <= 24 bits}}
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xi8>)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %x : i32, %y : i32, %stored_val : vector<8xi8>) {
+  %base_pitch = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op 4th operand (base pitch) should be <= 24 bits}}
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xi8>)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %x : i32, %y : i32, %stored_val : vector<8xi8>) {
+  %base_pitch = llvm.mlir.constant(0 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockstore' op 4th operand (base pitch) should be >= 64}}
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xi8>)
+  llvm.return
+}
 // -----
 
 llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_height : i32, %x : i32, %y : i32, %stored_val : vector<8xi8>) {
-  %base_width = llvm.mlir.constant(4 : i32) : i32
-  %base_pitch = llvm.mlir.constant(2 : i32) : i32
+  %base_width = llvm.mlir.constant(68 : i32) : i32
+  %base_pitch = llvm.mlir.constant(64 : i32) : i32
   // expected-error @+1 {{'triton_gen.2Dblockstore' op 4th operand (base pitch) should be >= 2nd operand (base width)}}
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32, vector<8xi8>)
   llvm.return
@@ -325,9 +415,54 @@ llvm.func @matrix_2Dblockstore(%ptr : !llvm.ptr, %base_width : i32, %base_height
 
 // -----
 
+llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  %base_width = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op 2nd operand (base width) should be <= 24 bits}}
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  %base_width = llvm.mlir.constant(0 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op 2nd operand (base width) should be >= 64}}
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  %base_height = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op 3rd operand (base height) should be <= 24 bits}}
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %x : i32, %y : i32) {
+  %base_pitch = llvm.mlir.constant(16777216 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op 4th operand (base pitch) should be <= 24 bits}}
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
+  llvm.return
+}
+
+// -----
+
+llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_height : i32, %x : i32, %y : i32) {
+  %base_pitch = llvm.mlir.constant(0 : i32) : i32
+  // expected-error @+1 {{'triton_gen.2Dblockprefetch' op 4th operand (base pitch) should be >= 64}}
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
+  llvm.return
+}
+
+// -----
+
 llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_height : i32, %x : i32, %y : i32) {
-  %base_width = llvm.mlir.constant(4 : i32) : i32
-  %base_pitch = llvm.mlir.constant(2 : i32) : i32
+  %base_width = llvm.mlir.constant(68 : i32) : i32
+  %base_pitch = llvm.mlir.constant(64 : i32) : i32
   // expected-error @+1 {{'triton_gen.2Dblockprefetch' op 4th operand (base pitch) should be >= 2nd operand (base width)}}
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
