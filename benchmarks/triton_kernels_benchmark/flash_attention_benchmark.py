@@ -10,7 +10,6 @@ import triton.language as tl
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import cutlass_kernel
-import numpy as np
 
 
 # pylint: disable=unused-argument
@@ -527,19 +526,6 @@ class _attention(torch.autograd.Function):
 
 
 attention = _attention.apply
-
-
-def check_close(f_val, f_ref, atol, rtol):
-    x = f_val()
-    y = f_ref()
-    x = x.cpu().detach().numpy()
-    y = y.cpu().detach().numpy()
-    close = np.isclose(x, y, atol=atol, rtol=rtol)
-    num_close = np.count_nonzero(close)
-    num_not_close = close.size - num_close
-    num_perc = num_not_close / close.size * 100
-    if num_not_close != 0:
-        print(f'Warning: {num_not_close}, out of {close.size} elements do not match ({num_perc:.2f}%) in XeTLA impl')
 
 
 def get_benchmark(
