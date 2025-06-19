@@ -1240,35 +1240,42 @@ struct LoadOpToBlockIOConversion
                   loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
             }
 
-            // Create a predicated load operation.
-            Block &endBlock = LLVM::intel::createPredicatedBlock(
-                rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-                  // Use the top-left address of the block to load the data.
-                  Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
-                                             ptr_ty(ctx, 1 /*global*/));
-                  addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+            auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
+              // Use the top-left address of the block to load the data.
+              Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
+                                         ptr_ty(ctx, 1 /*global*/));
+              addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
-                  auto load2dOp =
-                      rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-                          loc, load2DGenXType,
-                          /*ptr*/ addrElem,
-                          /*base_width*/ baseWidth,
-                          /*base_height*/ baseHeight,
-                          /*base_pitch*/ pitch,
-                          /*x*/ b.i32_val(0),
-                          /*y*/ b.i32_val(0),
-                          /*elem_size_in_bits*/ elemSizeInBits,
-                          /*tile_width*/ tileWidth,
-                          /*tile_height*/ tileHeight,
-                          /*v_blocks*/ vBlocks,
-                          /*transpose*/ false,
-                          /*vnni_transform*/
-                          (usePackedType &&
-                           opIdx == DpasEncodingAttr::OpIdx::OperandB &&
-                           !isTransposeRequired && originalElemBits != 32));
-                  return SmallVector<Value, 1>{load2dOp};
-                });
-            Value ret = *endBlock.args_begin();
+              auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+                  loc, load2DGenXType,
+                  /*ptr*/ addrElem,
+                  /*base_width*/ baseWidth,
+                  /*base_height*/ baseHeight,
+                  /*base_pitch*/ pitch,
+                  /*x*/ b.i32_val(0),
+                  /*y*/ b.i32_val(0),
+                  /*elem_size_in_bits*/ elemSizeInBits,
+                  /*tile_width*/ tileWidth,
+                  /*tile_height*/ tileHeight,
+                  /*v_blocks*/ vBlocks,
+                  /*transpose*/ false,
+                  /*vnni_transform*/
+                  (usePackedType &&
+                   opIdx == DpasEncodingAttr::OpIdx::OperandB &&
+                   !isTransposeRequired && originalElemBits != 32));
+              return {load2dOp};
+            };
+
+            Value ret;
+            // Create a predicated load operation.
+            if (llMask) {
+              Block &endBlock = LLVM::intel::createPredicatedBlock(
+                  rewriter, loc, pred, SmallVector<Value, 1>{other_},
+                  createLoadInstruction);
+              ret = *endBlock.args_begin();
+            } else {
+              ret = createLoadInstruction()[0];
+            }
 
             unsigned numOperandsM = opIdx != DpasEncodingAttr::OpIdx::OperandB
                                         ? numOperandsOuterDimPerLoad

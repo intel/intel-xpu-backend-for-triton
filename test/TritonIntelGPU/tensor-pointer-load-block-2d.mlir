@@ -145,6 +145,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
                                            %arg1: tensor<256x64x!tt.ptr<f16>, #mma_1>,
                                            %arg2: tensor<128x64x!tt.ptr<f16>, #mma_2>,
                                            %arg3: tensor<256x64x!tt.ptr<f16>, #mma_2>) {
+    // CHECK-NOT: llvm.cond_br
     // CHECK-COUNT-4: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
     %0 = tt.load %arg0 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
 
