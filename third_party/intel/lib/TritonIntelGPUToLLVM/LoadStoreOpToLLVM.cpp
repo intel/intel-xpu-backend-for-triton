@@ -1444,18 +1444,6 @@ struct LoadOpConversion
     SmallVector<unsigned> threadOrder = llAttr.getThreadOrder();
     size_t rank = threadOrder.size();
 
-    SmallVector<unsigned> sizePerThread = llAttr.getSizePerThread();
-    llvm::errs() << "sizePerThread:\n";
-    for (auto i : sizePerThread) {
-      llvm::errs() << i << "\n";
-    }
-
-    SmallVector<unsigned> shapePerCTATile = llAttr.getShapePerCTATile();
-    llvm::errs() << "shapePerCTATile:\n";
-    for (auto i : shapePerCTATile) {
-      llvm::errs() << i << "\n";
-    }
-
     const bool valueRowMajor =
         (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
     assert((valueRowMajor ||
