@@ -231,6 +231,8 @@ private:
       if (isa<scf::IfOp>(user))
         return false;
 
+      [[maybe_unused]] Operation *oldCurrentOp = currentOp;
+
       // Find the next operation in the def-use chain inside the loop body.
       if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
         for (auto [arg, init] :
@@ -244,6 +246,8 @@ private:
           }
         }
       }
+
+      assert(currentOp != oldCurrentOp && "Infinite loop detected!");
     }
 
     return true;
