@@ -139,7 +139,7 @@ struct LoadStoreConversionBase {
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
-  unsigned getStride(Value ptr, unsigned dim) const {
+  int getStride(Value ptr, unsigned dim) const {
     AxisInfo *axisInfo =
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(ptr);
@@ -349,8 +349,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    unsigned stride = getStride(ptr, 0);
-    if (stride != -1)
+    int stride = getStride(ptr, 0);
+    // If the stride is 0, we assume a minimum pitch of 64 bytes.
+    constexpr int MIN_PITCH = 64;
+    if (stride == 0)
+      return b.i32_val(MIN_PITCH);
+    else if (stride != -1)
       return b.i32_val(stride * elemSizeInBits / 8);
 
     // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
@@ -685,7 +689,9 @@ struct PrefetchOpConversion
     if (!rowStrideInBytes)
       return failure();
 
-    Value baseHeight = b.i32_val(tileHeightInElem);
+    // If the stride is 0, we want to load only the first row.
+    int stride = getStride(op.getPtr(), 0);
+    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
 
@@ -1140,7 +1146,10 @@ struct LoadOpToBlockIOConversion
     if (!pitch)
       return failure();
 
-    Value baseHeight = b.i32_val(tileHeight);
+    // If the stride is 0, we want to load only the first row.
+    int stride = getStride(ptr, 0);
+    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeight);
+
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
