@@ -210,8 +210,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32} {
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32} {
-  // COM: tt.load -> tt.trans -> tt.dot chain, in a loop.
-  // COM: where the 'make_tensor_ptr' result is not loop carried.
+  // COM: Ensure load is not fused with transpose if the block ptr used by the load operation is yielded by a if statement (current limitation).
   tt.func public @doNotFuseLoadWithTrans3(%arg0: !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>, %arg1: !tt.ptr<bf16>, %cond: i1) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
@@ -241,5 +240,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32} {
     tt.return
   }
   // CHECK-LABEL: doNotFuseLoadWithTrans3
+  // CHECK: tt.trans
+}
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[32, 0], [64, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32} {
+  // COM: Ensure load is not fused with transpose when it is in a while loop (current limitation).
+  tt.func public @doNotFuseLoadWithTrans4(%arg0: !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i32 = arith.constant 32 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %c1024_i64 = arith.constant 1024 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
+    %0 = tt.make_tensor_ptr %arg1, [%c1024_i64, %c1_i64], [%c1_i64, %c1024_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<256x32xbf16, #linear>>
+    %1:2 = scf.while (%arg3 = %0, %arg4 = %c0_i32) : (!tt.ptr<tensor<256x32xbf16, #linear>>, i32) -> (!tt.ptr<tensor<256x32xbf16, #linear>>, i32) {
+      scf.condition(%arg2) %arg3, %arg4 : !tt.ptr<tensor<256x32xbf16, #linear>>, i32
+    } do {
+    ^bb0(%arg3: !tt.ptr<tensor<256x32xbf16, #linear>>, %arg4: i32):
+      %2 = tt.load %arg0 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+      %3 = tt.advance %arg3, [%c256_i32, %c0_i32] : <tensor<256x32xbf16, #linear>>
+      %4 = tt.load %3 {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "column_major"} : !tt.ptr<tensor<256x32xbf16, #linear>>
+      %5 = tt.trans %4 {order = array<i32: 1, 0>} : tensor<256x32xbf16, #linear> -> tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %6 = tt.dot %2, %5, %cst, inputPrecision = tf32 : tensor<256x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<256x256xf32, #mma>
+      %7 = arith.addi %arg4, %c32_i32 : i32
+      scf.yield %3, %7 : !tt.ptr<tensor<256x32xbf16, #linear>>, i32
+    }
+    tt.return
+  }
+  // CHECK-LABEL: doNotFuseLoadWithTrans4
   // CHECK: tt.trans
 }

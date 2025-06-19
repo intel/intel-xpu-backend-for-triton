@@ -6,6 +6,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/Passes.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-optimize-dot-operands"
@@ -179,11 +181,12 @@ private:
 
       if (op->hasOneUse())
         return true;
-      if (!op->getParentOfType<scf::ForOp>())
+      if (!op->getParentOfType<LoopLikeOpInterface>())
         return false;
 
-      auto forOp = op->getParentOfType<scf::ForOp>();
-      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+      auto loopOp = op->getParentOfType<LoopLikeOpInterface>();
+      auto yieldOp = cast<scf::YieldOp>(
+          loopOp.getYieldedValues()[0].getParentBlock()->getTerminator());
 
       SmallVector<Operation *> users(op->getUsers());
       if (users.size() > 2 || llvm::none_of(users, [&](Operation *user) {
@@ -198,8 +201,8 @@ private:
             });
         assert(it != yieldOp->getOpOperands().end());
         OpOperand &operand = *it;
-        auto forOp = cast<scf::ForOp>(yieldOp->getParentOp());
-        OpResult res = forOp->getResult(operand.getOperandNumber());
+        auto loopOp = cast<LoopLikeOpInterface>(yieldOp->getParentOp());
+        OpResult res = loopOp->getResult(operand.getOperandNumber());
         return !res.getUsers().empty();
       };
 
@@ -225,11 +228,14 @@ private:
         continue;
       }
 
+      if (isa<scf::IfOp>(user))
+        return false;
+
       // Find the next operation in the def-use chain inside the loop body.
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        for (BlockArgument arg : forOp.getRegionIterArgs()) {
-          Value initArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-          if (initArg == currentOp->getResult(0)) {
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(user)) {
+        for (auto [arg, init] :
+             llvm::zip(loopOp.getRegionIterArgs(), loopOp.getInits())) {
+          if (init == currentOp->getResult(0)) {
             if (!arg.hasOneUse())
               return false;
 
@@ -327,16 +333,15 @@ private:
 
       // Update the yield's parent operation result type.
       Operation *parentOp = yieldOp->getParentOp();
-      for (OpResult res : parentOp->getOpResults()) {
-        int resNum = res.getResultNumber();
-        if (resNum == opNum)
-          res.setType(newVal.getType());
-      }
+      OpResult res = parentOp->getOpResult(opNum);
+      res.setType(newVal.getType());
       return;
     }
 
     if (auto forOp = dyn_cast<scf::ForOp>(user))
       return propagateToLoop(newVal, origVal, forOp, sentinel);
+
+    llvm_unreachable("Unexpected kind of user");
   }
 
   void propagateToLoop(Value newVal, Value origVal, LoopLikeOpInterface loopOp,
