@@ -557,6 +557,7 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
         'xetla': 'XeTLA',
+        'onednn': 'OneDNN',
         'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -619,7 +620,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 torch_fn,
                 n_warmup=10,
-                n_repeat=10,
+                n_repeat=1000,
                 quantiles=quantiles,
             )
 
@@ -642,7 +643,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 triton_fn,
                 n_warmup=10,
-                n_repeat=10,
+                n_repeat=1000,
                 quantiles=quantiles,
             )
 
@@ -706,7 +707,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 xetla_fn,
                 n_warmup=10,
-                n_repeat=10,
+                n_repeat=1000,
                 quantiles=quantiles,
             )
 
@@ -728,7 +729,7 @@ def get_benchmark(
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                     cutlass_fn,
                     n_warmup=10,
-                    n_repeat=10,
+                    n_repeat=1000,
                     quantiles=quantiles,
                 )
 
