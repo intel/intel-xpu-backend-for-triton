@@ -287,14 +287,14 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
 
     auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
         cast<DistributedEncodingTrait>(dotOperandEncoding),
-        oldTensorType.getShape(), memoryRowMajor, elemSizeInBits / 8,
-        &getContext());
+        oldTensorType.getShape(), memoryRowMajor, isTransposeRequired,
+        elemSizeInBits / 8, &getContext());
     SmallVector<unsigned> instrShape{tileParams[0], tileParams[1]};
     const unsigned vBlocks = tileParams[2];
 
     auto subgroup2DBlockEncoding = Subgroup2DBlockEncodingAttr::get(
         &getContext(), dpasLayout.getWarpsPerCTA(), CTALayout, instrShape,
-        tileParams[2],
+        tileParams[2], isTransposeRequired,
         getOrderForDotOperand(dotOperandEncoding.getOpIdx(), /*rank*/ rank,
                               /*kContig*/ true),
         kWidth, dpasLayout.getThreadsPerWarp());

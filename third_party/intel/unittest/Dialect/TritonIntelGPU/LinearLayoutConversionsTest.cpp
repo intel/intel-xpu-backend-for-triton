@@ -21,9 +21,10 @@ public:
 
   // Create a Subgroup2DBlockEncoding layout based on a DPAS layout
   Subgroup2DBlockEncodingAttr
-  sdb(ArrayRef<unsigned> instrShape, unsigned numBlocks, unsigned kWidth,
-      ArrayRef<unsigned> warpsPerCTA, ArrayRef<unsigned> repCluster,
-      ArrayRef<int64_t> blockShape, unsigned opsPerChannel, unsigned opIdx) {
+  sdb(ArrayRef<unsigned> instrShape, unsigned numBlocks, bool isTransposed,
+      unsigned kWidth, ArrayRef<unsigned> warpsPerCTA,
+      ArrayRef<unsigned> repCluster, ArrayRef<int64_t> blockShape,
+      unsigned opsPerChannel, unsigned opIdx) {
     auto dpasLayout = DpasEncodingAttr::get(
         &ctx, /*repeatCount=*/8, /*systolicDepth=*/8, /*executionSize=*/16,
         opsPerChannel, warpsPerCTA, repCluster,
@@ -35,7 +36,7 @@ public:
         CTALayoutAttr::get(
             &ctx, dpasLayout.getCTAsPerCGA(), // TODO: add to DpasLayout?
             dpasLayout.getCTASplitNum(), dpasLayout.getCTAOrder()),
-        instrShape, numBlocks,
+        instrShape, numBlocks, isTransposed,
         getOrderForDotOperand(opIdx, /*rank*/ 2, /*kContig*/ true), kWidth,
         dpasLayout.getThreadsPerWarp());
     return layout;
@@ -51,7 +52,8 @@ TEST_F(LinearLayoutConversionsTest, FP32_32x8x2_M256_N128_K32_A) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
           /*blockShape*/ {256, 32},
-          sdb(/*instrShape*/ {32, 8}, /*numBlocks*/ 2, /*kWidth*/ 4,
+          sdb(/*instrShape*/ {32, 8}, /*numBlocks*/ 2, /*isTransposed*/ false,
+              /*kWidth*/ 4,
               /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 1},
               /*blockShape*/ {256, 32}, /*opsPerChannel*/ 1, /*opIdx*/ 0),
           /*kWidth*/ 4),
@@ -67,7 +69,8 @@ TEST_F(LinearLayoutConversionsTest, FP32_32x16x1_M256_N128_K32_B) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
           /*blockShape*/ {32, 128},
-          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*kWidth*/ 4,
+          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*isTransposed*/ false,
+              /*kWidth*/ 4,
               /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 1},
               /*blockShape*/ {32, 128}, /*opsPerChannel*/ 1, /*opIdx*/ 1),
           /*kWidth*/ 4),
@@ -83,7 +86,8 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x32x1_M256_N32_K32_A) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
           /*blockShape*/ {256, 32},
-          sdb(/*instrShape*/ {32, 32}, /*numBlocks*/ 1, /*kWidth*/ 2,
+          sdb(/*instrShape*/ {32, 32}, /*numBlocks*/ 1, /*isTransposed*/ false,
+              /*kWidth*/ 2,
               /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
               /*blockShape*/ {256, 32}, /*opsPerChannel*/ 2, /*opIdx*/ 0),
           /*kWidth*/ 2),
@@ -99,7 +103,8 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_A) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
           /*blockShape*/ {256, 32},
-          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
+          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2, /*isTransposed*/ false,
+              /*kWidth*/ 2,
               /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
               /*blockShape*/ {256, 32}, /*opsPerChannel*/ 2, /*opIdx*/ 0),
           /*kWidth*/ 2),
@@ -114,7 +119,8 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_A) {
 TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
   EXPECT_EQ(subgroup2DBlockToLinearLayout(
                 /*shape*/ {32, 256},
-                sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
+                sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 2,
+                    /*isTransposed*/ false, /*kWidth*/ 2,
                     /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
                     /*blockShape*/ {32, 256}, /*opsPerChannel*/ 2,
                     /*opIdx*/ 1),
@@ -131,7 +137,8 @@ TEST_F(LinearLayoutConversionsTest, FP16_32x16x2_M256_N32_K32_B) {
 TEST_F(LinearLayoutConversionsTest, FP16_16x16x2_M256_N32_K32_B) {
   EXPECT_EQ(subgroup2DBlockToLinearLayout(
                 /*shape*/ {32, 256},
-                sdb(/*instrShape*/ {16, 16}, /*numBlocks*/ 2, /*kWidth*/ 2,
+                sdb(/*instrShape*/ {16, 16}, /*numBlocks*/ 2,
+                    /*isTransposed*/ false, /*kWidth*/ 2,
                     /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
                     /*blockShape*/ {32, 256}, /*opsPerChannel*/ 2,
                     /*opIdx*/ 1),
@@ -145,11 +152,32 @@ TEST_F(LinearLayoutConversionsTest, FP16_16x16x2_M256_N32_K32_B) {
                 {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, FP16_32x16x1_M256_N32_K32_TRANSPOSE_B) {
+  // Note that the instrShape is pre-transpose
+  EXPECT_EQ(
+      subgroup2DBlockToLinearLayout(
+          /*shape*/ {32, 256},
+          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*isTransposed*/ true,
+              /*kWidth*/ 2,
+              /*warpsPerCTA*/ {8, 4}, /*repCluster*/ {4, 2},
+              /*blockShape*/ {256, 32}, /*opsPerChannel*/ 2,
+              /*opIdx*/ 1),
+          /*kWidth*/ 2),
+      LinearLayout(
+          {{S("register"),
+            {{0, 1}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {0, 128}}},
+           {S("lane"), {{0, 2}, {0, 4}, {0, 8}, {0, 16}}},
+           {S("warp"), {{0, 32}, {0, 64}, {0, 0}, {0, 0}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, I8_16x32x1_M64_N128_K32_A) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
           /*shape*/ {64, 32},
-          sdb(/*instrShape*/ {16, 32}, /*numBlocks*/ 1, /*kWidth*/ 1,
+          sdb(/*instrShape*/ {16, 32}, /*numBlocks*/ 1, /*isTransposed*/ false,
+              /*kWidth*/ 1,
               /*warpsPerCTA*/ {4, 8}, /*repCluster*/ {2, 1},
               /*blockShape*/ {64, 32}, /*opsPerChannel*/ 4,
               /*opIdx*/ 0),
@@ -165,7 +193,8 @@ TEST_F(LinearLayoutConversionsTest, I8_32x32x1_M64_N128_K32_B) {
   EXPECT_EQ(
       subgroup2DBlockToLinearLayout(
           /*shape*/ {32, 128},
-          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*kWidth*/ 1,
+          sdb(/*instrShape*/ {32, 16}, /*numBlocks*/ 1, /*isTransposed*/ false,
+              /*kWidth*/ 1,
               /*warpsPerCTA*/ {4, 8}, /*repCluster*/ {2, 1},
               /*blockShape*/ {32, 128}, /*opsPerChannel*/ 4,
               /*opIdx*/ 1),

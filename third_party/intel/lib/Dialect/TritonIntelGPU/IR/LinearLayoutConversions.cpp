@@ -602,10 +602,14 @@ subgroup2DBlockToLinearLayout(ArrayRef<int64_t> blockShape,
   assert(rank == layout.getRank() && "unexpected block shape rank, layout rank "
                                      "and block shape rank must be equal");
   auto dimNames = standardOutDimNames(ctx, rank);
-  auto loadTileSize = layout.getInstrShape();
+  auto loadTileSize = SmallVector<unsigned>(layout.getInstrShape());
+  assert(loadTileSize.size() == 2);
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
+
+  if (layout.getIsTransposed())
+    std::swap(loadTileSize[0], loadTileSize[1]);
 
   // Start by creating register/lane bases corresponding to the desired load
   // tile size
