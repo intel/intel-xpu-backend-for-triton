@@ -68,7 +68,8 @@ public:
 
     auto addUsers = [](Operation *op, Operations &users) {
       auto addUsers = [&](Operation *op) {
-        // Add users of the block arguments in the 'after' region of a while loop.
+        // Add users of the block arguments in the 'after' region of a while
+        // loop.
         if (auto condOp = dyn_cast<scf::ConditionOp>(op)) {
           if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
             for (BlockArgument arg : whileOp.getAfterArguments())
@@ -83,7 +84,7 @@ public:
 
       auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp) {
         for (Value val : loopOp.getRegionIterArgs())
-          for (Operation *user : val.getUsers()) 
+          for (Operation *user : val.getUsers())
             addUsers(user);
       };
 
@@ -117,7 +118,7 @@ public:
       }
     }
 
-    llvm::errs() << "consumer: " << *consumer << "\n";    
+    llvm::errs() << "consumer: " << *consumer << "\n";
     return users.contains(consumer);
   }
 
