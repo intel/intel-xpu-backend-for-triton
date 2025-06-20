@@ -40,7 +40,7 @@ namespace {
 // operation 'end'.
 class Chain {
   friend raw_ostream &operator<<(raw_ostream &os, const Chain &chain);
-  using Operations = llvm::SmallSetVector<Operation *, 4>;
+  using Operations = llvm::SmallSetVector<Operation *, 32>;
 
 public:
   Chain(Operation *start, tt::TransOp end) : start(start), end(end) {
@@ -67,6 +67,8 @@ public:
     assert(producer && consumer && "Expecting valid operations");
 
     auto addUsers = [](Operation *op, Operations &users) {
+      assert(op && "Expecting valid operation");
+
       auto addUsers = [&](Operation *op) {
         // Add users of the block arguments in the 'after' region of a while
         // loop.
@@ -97,28 +99,16 @@ public:
     Operations users;
     addUsers(producer, users);
 
-    llvm::errs() << "producer: " << *producer << "\n";
-    llvm::errs() << "users\n";
-    for (Operation *user : users) {
-      llvm::errs() << *user << "\n";
-    }
-
     while (!users.contains(consumer)) {
       unsigned currentSize = users.size();
-      for (Operation *user : users)
+      Operations copyUsers = users;
+      for (Operation *user : copyUsers)
         addUsers(user, users);
 
-      if (users.size() == currentSize) {
-        llvm::errs() << "at line: " << __LINE__ << "\n";
+      if (users.size() == currentSize)
         break;
-      }
-      llvm::errs() << "users\n";
-      for (Operation *user : users) {
-        llvm::errs() << *user << "\n";
-      }
     }
 
-    llvm::errs() << "consumer: " << *consumer << "\n";
     return users.contains(consumer);
   }
 
