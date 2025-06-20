@@ -7,7 +7,7 @@ def test_regression_4441(device, tmp_path: pathlib.Path):
     ir = """
     #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
     module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64"} {
-      tt.func public @triton_red_fused__softmax_backward_data_div_masked_fill_native_dropout_backward_threshold_backward_10(%arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg4: f32, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32) {
+      tt.func public @triton_red_fused__softmax_backward_data_div_masked_fill_native_dropout_backward_threshold_backward_10(%arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg4: f32) {
         %cst_1 = arith.constant dense<0> : tensor<64x4xi8, #blocked>
         %c4_i32 = arith.constant 4 : i32
         %c204_i32 = arith.constant 204 : i32
@@ -25,10 +25,10 @@ def test_regression_4441(device, tmp_path: pathlib.Path):
         %26 = tt.splat %arg3 : !tt.ptr<i8> -> tensor<64x4x!tt.ptr<i8>, #blocked>
         %29 = tt.splat %arg4 : f32 -> tensor<64x4xf32, #blocked>
         scf.for %arg7 = %c0_i32 to %c204_i32 step %c4_i32  : i32 {
-          %40 = tt.load %26, %14, %cst_1 evictionPolicy = evict_first : tensor<64x4x!tt.ptr<i8>, #blocked>
+          %40 = tt.load %26, %14, %cst_1 : tensor<64x4x!tt.ptr<i8>, #blocked>
           %41 = arith.cmpi ne, %40, %cst_1 : tensor<64x4xi8, #blocked>
           %43 = tt.addptr %13, %16 : tensor<64x4x!tt.ptr<f32>, #blocked>, tensor<64x4xi32, #blocked>
-          %44 = tt.load %43, %14, %cst_2 evictionPolicy = evict_first : tensor<64x4x!tt.ptr<f32>, #blocked>
+          %44 = tt.load %43, %14, %cst_2 : tensor<64x4x!tt.ptr<f32>, #blocked>
           %57 = tt.extern_elementwise %44, %cst_2, %29 {libname = "", libpath = "", pure = true, symbol = "__imf_fmaf"} : (tensor<64x4xf32, #blocked>, tensor<64x4xf32, #blocked>, tensor<64x4xf32, #blocked>) -> tensor<64x4xf32, #blocked>
           %58 = arith.select %41, %cst_2, %57 : tensor<64x4xi1, #blocked>, tensor<64x4xf32, #blocked>
           %59 = arith.divf %58, %29 : tensor<64x4xf32, #blocked>
