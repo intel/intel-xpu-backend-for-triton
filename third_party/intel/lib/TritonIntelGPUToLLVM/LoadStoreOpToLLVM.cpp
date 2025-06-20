@@ -1467,7 +1467,8 @@ struct LoadOpConversion
       } else {
         auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
             cast<DistributedEncodingTrait>(encoding), tensorType.getShape(),
-            memoryRowMajor, elemSizeInBits / 8, rewriter.getContext());
+            memoryRowMajor, isTransposeRequired, elemSizeInBits / 8,
+            rewriter.getContext());
         return std::make_tuple(tileParams[0], tileParams[1], tileParams[2]);
       }
     };
