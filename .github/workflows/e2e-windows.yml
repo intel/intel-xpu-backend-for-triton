@@ -4,6 +4,10 @@ run-name: ${{ inputs.run_name }}
 on:
   workflow_dispatch:
     inputs:
+      test_mode:
+        description: accuracy or performance
+        type: string
+        default: accuracy
       suite:
         description: Test suite
         type: choice
@@ -71,59 +75,8 @@ env:
   BENCHMARK_REPO: pytorch/benchmark
 
 jobs:
-  setup:
-    name: Setup
-    runs-on: linux
-    outputs:
-      suite: ${{ steps.set-matrix.outputs.suite }}
-      mode: ${{ steps.set-matrix.outputs.mode }}
-      dtype: ${{ steps.set-matrix.outputs.dtype }}
-      models: ${{ steps.set-matrix.outputs.models }}
-    timeout-minutes: 10
-    steps:
-      - name: Set matrix
-        id: set-matrix
-        run: |
-          if [[ -z "${{ inputs.suite }}" || "${{ inputs.suite }}" == "all" ]]; then
-            suite='["huggingface", "timm_models", "torchbench"]'
-          else
-            suite='["${{ inputs.suite }}"]'
-          fi
-          if [[ -z "${{ inputs.mode }}" || "${{ inputs.mode }}" == "all" ]]; then
-            mode='["inference", "inference-with-freezing", "training"]'
-          else
-            mode='["${{ inputs.mode }}"]'
-          fi
-          if [[ -z "${{ inputs.dtype }}" || "${{ inputs.dtype }}" == "all" ]]; then
-            dtype='["amp_bf16", "amp_fp16", "bfloat16", "float16", "float32"]'
-          else
-            dtype='["${{ inputs.dtype }}"]'
-          fi
-          if [[ -z "${{ inputs.models }}" ]]; then
-            models="subset"
-          else
-            models="${{ inputs.models }}"
-          fi
-          echo "suite=$suite" >> $GITHUB_OUTPUT
-          echo "mode=$mode" >> $GITHUB_OUTPUT
-          echo "dtype=$dtype" >> $GITHUB_OUTPUT
-          echo "models=$models" >> $GITHUB_OUTPUT
-
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(github.event.inputs) }}
-          EOF
-
-      - name: Print setup outputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(steps.set-matrix.outputs) }}
-          EOF
-
   tests:
     name: Tests
-    needs: setup
     runs-on:
       - windows
       - ${{ inputs.runner_label }}
@@ -131,6 +84,13 @@ jobs:
     strategy:
       fail-fast: false
     steps:
+      - name: Print inputs
+        shell: bash
+        run: |
+          cat <<EOF
+          ${{ toJSON(github.event.inputs) }}
+          EOF
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -153,12 +113,6 @@ jobs:
         run:
           python -m venv .venv
 
-      # https://github.com/pytorch/data/blob/e316c5ca1ab2a4f69dd6d48e8fc9c6f8d0c7c468/README.md?plain=1#L6-L15
-      - name: Install pinned torchdata
-        run: |
-          .venv\Scripts\activate.ps1
-          pip install torchdata==0.9.0
-
       - name: Install PyTorch (source)
         run: |
           .venv\Scripts\activate.ps1
@@ -174,7 +128,7 @@ jobs:
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          python -c 'import torch;print(torch.__version__)' Tee-Object -Variable PYTORCH_VERSION
+          python -c 'import torch; print(torch.__version__)' | Tee-Object -Variable PYTORCH_VERSION
           echo "PYTORCH_VERSION=$PYTORCH_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Clean up Triton cache
@@ -200,8 +154,9 @@ jobs:
           python -c 'import triton; print(triton.__version__)'
 
       - name: Identify pinned versions
+        shell: bash
         run: |
-          cd c:/pytorch
+          cd /c/pytorch
           echo "BENCHMARK_COMMIT_ID=$(<.github/ci_commit_pins/torchbench.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
           echo "TORCHTEXT_COMMIT_ID=$(<.github/ci_commit_pins/text.txt)" | tee -a "$GITHUB_ENV"
@@ -209,17 +164,173 @@ jobs:
           echo "TRANSFORMERS_VERSION=$(<.ci/docker/ci_commit_pins/huggingface.txt)" | tee -a "$GITHUB_ENV"
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a "$GITHUB_ENV"
 
+      - name: Install pinned torchdata
+        run: |
+          .venv\Scripts\activate.ps1
+          # Pinned torchdata
+          # https://github.com/pytorch/data/blob/e316c5ca1ab2a4f69dd6d48e8fc9c6f8d0c7c468/README.md?plain=1#L6-L15
+          pip install pyyaml pandas scipy numpy psutil pyre_extensions torchrec torchdata==0.9.0
+
+      - name: Install transformers package
+        if: inputs.suite == 'all' || inputs.suite == 'huggingface'
+        uses: ./.github/actions/install-dependency
+        with:
+          package: transformers
+          repository: huggingface/transformers
+          ref: ${{ env.TRANSFORMERS_VERSION }}
+          try-tag-prefix: v
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          workspace: /c/gh${{ github.run_id }}
+
+      - name: Install torchvision package
+        if: inputs.suite == 'all' || inputs.suite == 'timm_models' || inputs.suite == 'torchbench'
+        env:
+          DISTUTILS_USE_SDK: '1'
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchvision
+          repository: pytorch/vision
+          ref: ${{ env.TORCHVISION_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          workspace: /c/gh${{ github.run_id }}
+
+      - name: Install torchtext package
+        if: inputs.suite == 'all' || inputs.suite == 'torchbench'
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchtext
+          repository: pytorch/text
+          ref: ${{ env.TORCHTEXT_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          workspace: /c/gh${{ github.run_id }}
+
+      - name: Install torchaudio package
+        if: inputs.suite == 'all' || inputs.suite == 'torchbench'
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchaudio
+          repository: pytorch/audio
+          ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          workspace: /c/gh${{ github.run_id }}
+
+      - name: Install timm package
+        if: inputs.suite == 'all' || inputs.suite == 'timm_models' || inputs.suite == 'torchbench'
+        uses: ./.github/actions/install-dependency
+        with:
+          package: timm
+          repository: huggingface/pytorch-image-models
+          ref: ${{ env.TIMM_COMMIT_ID }}
+          extra-cache-key: ${{ env.PYTORCH_VERSION }}
+          workspace: /c/gh${{ github.run_id }}
+
+      - name: Clone pytorch benchmark
+        if: inputs.suite == 'all' || inputs.suite == 'torchbench'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BENCHMARK_REPO }}
+          ref: ${{ env.BENCHMARK_COMMIT_ID }}
+          submodules: recursive
+          path: benchmark
+
+      - name: Install pytorch benchmark
+        if: inputs.suite == 'all' || inputs.suite == 'torchbench'
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          bash -c '
+          cd benchmark
+          if [[ "${{ inputs.only_one_model }}" ]]; then
+            python install.py "${{ inputs.only_one_model }}"
+          else
+            # install all models
+            python install.py
+          fi
+          pip install -e .
+          '
+
+      - name: Run e2e tests
+        env:
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+
+          bash -c '
+          cd /c/pytorch
+
+          export WORKSPACE="/c/gh${{ github.run_id }}"
+
+          if [[ "${{ inputs.TORCH_COMPILE_DEBUG }}" = "1" ]] ; then
+            export TORCH_COMPILE_DEBUG="1"
+            # torch will save debug logs to $TORCH_COMPILE_DEBUG_DIR/torch_compile_debug
+            export TORCH_COMPILE_DEBUG_DIR=$WORKSPACE
+          fi
+
+          if [[ "${{ inputs.suite }}" = "all" ]]; then
+            suites=("huggingface" "timm_models" "torchbench")
+          else
+            suites=("${{ inputs.suite }}")
+          fi
+
+          if [[ "${{ inputs.mode }}" = "all" ]]; then
+            modes=("inference" "inference-with-freezing" "training")
+          else
+            modes=("${{ inputs.mode }}")
+          fi
+
+          if [[ "${{ inputs.dtype }}" = "all" ]]; then
+            dtypes=("amp_bf16" "amp_fp16" "bfloat16" "float16" "float32")
+          else
+            dtypes=("${{ inputs.dtype }}")
+          fi
+
+          # if "only_one_model" is set, then test this model
+          # if "models" == "subset", then test the models from .github/models/{accuracy,performance}/{suite}.txt
+          # otherwise test all models.
+
+          for suite in ${suites[@]}; do
+            for mode in ${modes[@]}; do
+              for dtype in ${dtypes[@]}; do
+
+                if [[ "${{ inputs.only_one_model }}" ]]; then
+                  bash -e $WORKSPACE/scripts/inductor_xpu_test.sh $suite $dtype $mode ${{ inputs.test_mode }} xpu 0 static 1 0 ${{ inputs.only_one_model }}
+                elif [[ "${{ inputs.models }}" == "subset" ]]; then
+                  models_subset_file="$WORKSPACE/.github/models/${{ inputs.test_mode }}/$suite.txt"
+                  while read model; do
+                    bash -e $WORKSPACE/scripts/inductor_xpu_test.sh $suite $dtype $mode ${{ inputs.test_mode }} xpu 0 static 1 0 $model
+                  done < $models_subset_file
+                  if [[ "${{ inputs.check_all_subset_models }}" == true ]]; then
+                    python $WORKSPACE/scripts/check_inductor_report.py --models-file="$models_subset_file" \
+                      --suite=$suite \
+                      --dtype=$dtype \
+                      --mode=$mode \
+                      --test_mode=${{ inputs.test_mode }} \
+                      --device=xpu \
+                      --inductor-log-dir="$WORKSPACE/inductor_log"
+                  fi
+                else
+                  bash -e $WORKSPACE/scripts/inductor_xpu_test.sh $suite $dtype $mode ${{ inputs.test_mode }} xpu 0 static 1 0
+                fi
+
+              done
+            done
+          done
+          '
+
+
+      - name: Identify GPU
+        run: |
+          # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          bash -c './scripts/capture-hw-details.sh | tee -a $GITHUB_ENV'
+
       - name: Report environment details
         shell: bash
         run: |
-          mkdir -p ${{ env.NEW_WORKSPACE }}\inductor_log
+          mkdir -p /c/gh${{ github.run_id }}/inductor_log
+          cat <<EOF | tee /c/gh${{ github.run_id }}/inductor_log/e2e.env
           TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
-
-          source ./scripts/capture-hw-details.sh --quiet
-
-          cat <<EOF | tee ${{ env.NEW_WORKSPACE }}\inductor_log\.env
-          TIMESTAMP=$TIMESTAMP
           JOB_NAME=${{ join(inputs.*, '-') }}
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
@@ -245,6 +356,7 @@ jobs:
           LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
           GPU_DEVICE=$GPU_DEVICE
           AGAMA_VERSION=$AGAMA_VERSION
+          OS=${{ runner.os }}
           EOF
 
       - name: Upload test logs

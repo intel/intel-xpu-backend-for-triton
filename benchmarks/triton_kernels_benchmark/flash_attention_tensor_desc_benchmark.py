@@ -29,7 +29,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     offsetk_y = offset_y + lo
     offsetv_y = offset_y + lo
     # loop over k, v and update accumulator
-    for start_n in range(lo, hi, BLOCK_N):
+    for start_n in tl.range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         # -- compute qk ----
         k = desc_k.load([0, offsetk_y])
@@ -44,16 +44,17 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
             qk = qk * qk_scale - m_ij[:, None]
         p = tl.math.exp2(qk)
-        l_ij = tl.sum(p, 1)
         # -- compute correction factor
         alpha = tl.math.exp2(m_i - m_ij)
+        l_ij = tl.sum(p, 1)
         l_i = l_i * alpha + l_ij
         # -- update output accumulator --
         acc = acc * alpha[:, None]
         # prepare p and v for the dot
         v = desc_v.load([offsetv_y, 0])
+        p = p.to(dtype)
         # note that this non transposed v for FP8 is only supported on Blackwell
-        acc += tl.dot(p.to(tl.float16), v)
+        acc = tl.dot(p, v, acc)
         # update m_i and l_i
         # place this at the end of the loop to reduce register pressure
         m_i = m_ij
@@ -141,7 +142,7 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
     xetla_assert_result=False,
-    xetla_warn_mismatch=True,
+    xetla_warn_mismatch=False,
 ):
     return flash_attention_benchmark.get_benchmark(
         providers_filter=providers_filter,
@@ -156,6 +157,6 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
         xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '0') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)

@@ -489,6 +489,7 @@ class nvidia_knobs(base_knobs):
 class intel_knobs(base_knobs):
     spirv_dis: env_intel_tool = env_intel_tool("spirv-dis")
 
+    dump_shader_info: env_bool = env_bool("TRITON_INTEL_ENABLE_IGC_SHADER_DUMP", False)
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     tile_load_ll: env_bool = env_bool("TRITON_XPU_ENABLE_TILE_LOAD_LINEAR_LAYOUT", True)
     advanced_path: env_bool = env_bool("TRITON_INTEL_ADVANCED_PATH", False)
@@ -523,7 +524,7 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_path: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
 
 
 build = build_knobs()

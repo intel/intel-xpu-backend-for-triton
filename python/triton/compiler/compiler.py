@@ -10,8 +10,6 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass, get_spvdis
-# TODO: this shouldn't be here
-from .code_generator import ast_to_ttir
 from pathlib import Path
 import re
 import functools
@@ -81,6 +79,7 @@ class ASTSource:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
         return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
                            module_map=module_map)
 
@@ -320,6 +319,8 @@ def compile(src, target=None, options=None):
         **options.__dict__,
         **env_vars,
     }
+
+    metadata["cache_dir"] = fn_cache_manager.cache_dir
     metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()

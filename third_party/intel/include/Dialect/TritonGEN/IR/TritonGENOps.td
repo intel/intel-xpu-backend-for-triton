@@ -47,6 +47,59 @@ def TritonGEN_BarrierOp : TritonGEN_Op<"barrier"> {
   }];
 }
 
+def TritonGEN_SplitBarrierArriveOp : TritonGEN_Op<"split_barrier_arrive"> {
+  let summary = "Split barrier signal";
+  let description = [{
+    Indicates that an invocation has arrived at a split control barrier. This
+    may allow other invocations waiting on the split control barrier to continue
+    executing.
+
+    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
+    invocations within `Execution` execute the same dynamic instance of this
+    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
+    this instruction in non-uniform control flow is defined by the client API.
+
+    If `Semantics` is not `None`, this instruction also serves as the start of a
+    memory barrier similar to an `OpMemoryBarrier` instruction with the same
+    `Memory` and `Semantics` operands. This allows atomically specifying both a
+    control barrier and a memory barrier (that is, without needing two
+    instructions). If `Semantics` is `None`, `Memory` is ignored.
+  }];
+  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
+  let results = (outs);
+  let assemblyFormat = [{
+    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
+  }];
+}
+
+def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
+  let summary = "Split barrier wait";
+  let description = [{
+    Waits for other invocations of this module to arrive at a split control
+    barrier.
+
+    When `Execution` is `Workgroup` or larger, behavior is undefined unless all
+    invocations within `Execution` execute the same dynamic instance of this
+    instruction. When `Execution` is `Subgroup` or `Invocation`, the behavior of
+    this instruction in non-uniform control flow is defined by the client API.
+
+    If `Semantics` is not `None`, this instruction also serves as the end of a
+    memory barrier similar to an `OpMemoryBarrier` instruction with the same
+    `Memory` and `Semantics` operands. This ensures that memory accesses issued
+    before arriving at the split barrier are observed before memory accesses
+    issued after this instruction. This control is ensured only for memory
+    accesses issued by this invocation and observed by another invocation
+    executing within `Memory` scope. This allows atomically specifying both a
+    control barrier and a memory barrier (that is, without needing two
+    instructions). If `Semantics` is `None`, `Memory` is ignored.
+  }];
+  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
+  let results = (outs);
+  let assemblyFormat = [{
+    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Matrix operations
 //===----------------------------------------------------------------------===//

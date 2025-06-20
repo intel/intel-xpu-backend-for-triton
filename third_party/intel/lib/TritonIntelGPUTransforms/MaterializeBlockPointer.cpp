@@ -186,9 +186,8 @@ private:
       }
 
       // Value -1 is used to represent the unknown stride.
-      if (axisInfo->getStride(otherDim) <= 0) {
-        LDBG("Found unknown or non positive stride: "
-             << axisInfo->getStride(otherDim));
+      if (axisInfo->getStride(otherDim) < 0) {
+        LDBG("Found unknown stride: " << axisInfo->getStride(otherDim));
         return false;
       }
 

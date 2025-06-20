@@ -54,9 +54,11 @@ _IMPORT_FROM_TRITON: List[str] = [
     "reshape",
     "split",
     "static_assert",
+    "static_print",
     "store",
     "to_tensor",
     "where",
+    "inline_asm_elementwise",
 ]
 
 __all__ = [
@@ -91,6 +93,7 @@ __all__ = [
     "tensor",
     "tuple",
     "tuple_type",
+    "thread_barrier",
     "arange",
     "full",
     "convert_layout",
@@ -170,7 +173,7 @@ class shared_memory_descriptor_type(base_type):
         out.append(self.to_ir(builder))
 
     def __str__(self) -> str:
-        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}>"
+        return f"shared_memory_descriptor<{self.element_ty}, {self.shape}, {self.layout}, {self.alloc_shape}>"
 
     def __eq__(self, other) -> bool:
         return (type(self) is type(other) and self.shape == other.shape and self.layout == other.layout
@@ -205,6 +208,10 @@ class shared_memory_descriptor(base_value):
     def rank(self):
         return len(self.shape)
 
+    @property
+    def layout(self):
+        return self.type.layout
+
     def __str__(self) -> str:
         return str(self.type)
 
@@ -218,31 +225,16 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_store(self, value)
 
     @builtin
-    def split(self, offset, size, dim=None, layout=None, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
-        if layout is None:
-            layout = self.type.layout
-        if dim is None:
-            dim = 0
-
-        offset = _unwrap_if_constexpr(offset)
-        size = _unwrap_if_constexpr(size)
+    def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+        start = _unwrap_if_constexpr(start)
+        length = _unwrap_if_constexpr(length)
         dim = _unwrap_if_constexpr(dim)
-        layout = _unwrap_if_constexpr(layout)
-
-        return _semantic.memdesc_split(self, offset, size, dim, layout)
+        return _semantic.memdesc_slice(self, start, length, dim)
 
     @builtin
-    def subslice(self, index, shape=None, layout=None, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
-        if layout is None:
-            layout = self.type.layout
-        if shape is None:
-            shape = self.shape[1:]
-
+    def index(self, index, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         index = _unwrap_if_constexpr(index)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
-
-        return _semantic.memdesc_slice(self, index, shape, layout)
+        return _semantic.memdesc_index(self, index)
 
     @builtin
     def permute(self, order, _semantic: GluonSemantic) -> shared_memory_descriptor:
@@ -313,3 +305,8 @@ def warp_specialize(args, default_partition, worker_partitions, worker_num_warps
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
     return _semantic.warp_specialize(args, default_partition, worker_partitions, worker_num_warps,  #
                                      worker_num_regs, _generator)
+
+
+@builtin
+def thread_barrier(_semantic=None):
+    return _semantic.debug_barrier()

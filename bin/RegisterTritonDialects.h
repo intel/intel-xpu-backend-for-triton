@@ -48,6 +48,7 @@ void registerTestAxisInfoPass();
 
 void registerTestAliasPass();
 void registerTestAlignmentPass();
+void registerAMDTestAlignmentPass();
 void registerTestAllocationPass();
 void registerTestLivenessPass();
 void registerTestMembarPass();
@@ -65,6 +66,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::intel::registerTestAxisInfoPass();
   mlir::test::registerTestAliasPass();
   mlir::test::registerTestAlignmentPass();
+  mlir::test::registerAMDTestAlignmentPass();
   mlir::test::registerTestAllocationPass();
   mlir::test::registerTestLivenessPass();
   mlir::test::registerTestMembarPass();

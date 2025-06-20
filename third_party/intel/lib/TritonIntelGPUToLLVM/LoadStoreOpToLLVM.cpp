@@ -139,7 +139,7 @@ struct LoadStoreConversionBase {
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass) {}
 
-  unsigned getStride(Value ptr, unsigned dim) const {
+  int getStride(Value ptr, unsigned dim) const {
     AxisInfo *axisInfo =
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(ptr);
@@ -349,8 +349,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    unsigned stride = getStride(ptr, 0);
-    if (stride != -1)
+    int stride = getStride(ptr, 0);
+    // If the stride is 0, we assume a minimum pitch of 64 bytes.
+    constexpr int MIN_PITCH = 64;
+    if (stride == 0)
+      return b.i32_val(MIN_PITCH);
+    else if (stride != -1)
       return b.i32_val(stride * elemSizeInBits / 8);
 
     // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
@@ -678,14 +682,16 @@ struct PrefetchOpConversion
         masks[offset] = maskElems[i];
     }
 
-    Value baseWidth =
-        b.i32_val(vBlocks * tileWidthInElem * (elemSizeInBits / 8));
+    Value baseWidth = b.i32_val(
+        std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
     Value rowStrideInBytes =
         getPitch(rewriter, op.getPtr(), baseAddrs, baseWidth, elemSizeInBits);
     if (!rowStrideInBytes)
       return failure();
 
-    Value baseHeight = b.i32_val(tileHeightInElem);
+    // If the stride is 0, we want to load only the first row.
+    int stride = getStride(op.getPtr(), 0);
+    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
 
@@ -1134,12 +1140,16 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    Value baseWidth = b.i32_val(vBlocks * tileWidth * (elemSizeInBits / 8));
+    Value baseWidth =
+        b.i32_val(std::max(64u, vBlocks * tileWidth * (elemSizeInBits / 8)));
     Value pitch = getPitch(rewriter, ptr, ptrs, baseWidth, elemSizeInBits);
     if (!pitch)
       return failure();
 
-    Value baseHeight = b.i32_val(tileHeight);
+    // If the stride is 0, we want to load only the first row.
+    int stride = getStride(ptr, 0);
+    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeight);
+
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
@@ -1239,35 +1249,42 @@ struct LoadOpToBlockIOConversion
                   loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
             }
 
-            // Create a predicated load operation.
-            Block &endBlock = LLVM::intel::createPredicatedBlock(
-                rewriter, loc, pred, SmallVector<Value, 1>{other_}, [&]() {
-                  // Use the top-left address of the block to load the data.
-                  Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
-                                             ptr_ty(ctx, 1 /*global*/));
-                  addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+            auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
+              // Use the top-left address of the block to load the data.
+              Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
+                                         ptr_ty(ctx, 1 /*global*/));
+              addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
 
-                  auto load2dOp =
-                      rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-                          loc, load2DGenXType,
-                          /*ptr*/ addrElem,
-                          /*base_width*/ baseWidth,
-                          /*base_height*/ baseHeight,
-                          /*base_pitch*/ pitch,
-                          /*x*/ b.i32_val(0),
-                          /*y*/ b.i32_val(0),
-                          /*elem_size_in_bits*/ elemSizeInBits,
-                          /*tile_width*/ tileWidth,
-                          /*tile_height*/ tileHeight,
-                          /*v_blocks*/ vBlocks,
-                          /*transpose*/ false,
-                          /*vnni_transform*/
-                          (usePackedType &&
-                           opIdx == DpasEncodingAttr::OpIdx::OperandB &&
-                           !isTransposeRequired && originalElemBits != 32));
-                  return SmallVector<Value, 1>{load2dOp};
-                });
-            Value ret = *endBlock.args_begin();
+              auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+                  loc, load2DGenXType,
+                  /*ptr*/ addrElem,
+                  /*base_width*/ baseWidth,
+                  /*base_height*/ baseHeight,
+                  /*base_pitch*/ pitch,
+                  /*x*/ b.i32_val(0),
+                  /*y*/ b.i32_val(0),
+                  /*elem_size_in_bits*/ elemSizeInBits,
+                  /*tile_width*/ tileWidth,
+                  /*tile_height*/ tileHeight,
+                  /*v_blocks*/ vBlocks,
+                  /*transpose*/ false,
+                  /*vnni_transform*/
+                  (usePackedType &&
+                   opIdx == DpasEncodingAttr::OpIdx::OperandB &&
+                   !isTransposeRequired && originalElemBits != 32));
+              return {load2dOp};
+            };
+
+            Value ret;
+            // Create a predicated load operation.
+            if (llMask) {
+              Block &endBlock = LLVM::intel::createPredicatedBlock(
+                  rewriter, loc, pred, SmallVector<Value, 1>{other_},
+                  createLoadInstruction);
+              ret = *endBlock.args_begin();
+            } else {
+              ret = createLoadInstruction()[0];
+            }
 
             unsigned numOperandsM = opIdx != DpasEncodingAttr::OpIdx::OperandB
                                         ? numOperandsOuterDimPerLoad
@@ -1439,6 +1456,14 @@ struct LoadOpConversion
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+    auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
+        cast<DistributedEncodingTrait>(encoding), tensorType.getShape(),
+        memoryRowMajor, elemSizeInBits / 8, rewriter.getContext());
+    unsigned tileHeight = tileParams[0];
+    const unsigned tileWidth = tileParams[1];
+    const unsigned vBlocks = tileParams[2];
+
     DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -1476,8 +1501,7 @@ struct LoadOpConversion
 
       Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
 
-      SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
-      int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
+      const unsigned elemsPerLane = tileWidth * tileHeight / threadsPerWarp;
       Type load2DGenXType =
           LLVM::getVectorType(IntegerType::get(ctx, elemSizeInBits),
                               elemsPerLane); // make it opaque type.
@@ -1527,12 +1551,12 @@ struct LoadOpConversion
           for (int repM = 0; repM < repCluster[0]; ++repM) {
 
             Value offsetY =
-                b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
-                                               repM * elemsPerInstr[0]));
+                b.add(warpId0Offset,
+                      b.i32_val(m * replicaStride[0] + repM * tileHeight));
             for (int repN = 0; repN < repCluster[1]; ++repN) {
               Value offsetX =
-                  b.add(warpId1Offset, b.i32_val(n * replicaStride[1] +
-                                                 repN * elemsPerInstr[1]));
+                  b.add(warpId1Offset,
+                        b.i32_val(n * replicaStride[1] + repN * tileWidth));
 
               auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
                   loc, load2DGenXType,
@@ -1543,9 +1567,9 @@ struct LoadOpConversion
                   /*x*/ b.trunc(i32_ty, offsetX),
                   /*y*/ b.trunc(i32_ty, offsetY),
                   /*elem_size_in_bits*/ elemSizeInBits,
-                  /*tile_width*/ elemsPerInstr[1],
-                  /*tile_height*/ elemsPerInstr[0],
-                  /*v_blocks*/ 1,
+                  /*tile_width*/ tileWidth,
+                  /*tile_height*/ tileHeight,
+                  /*v_blocks*/ vBlocks,
                   /*transpose*/ false,
                   /*vnni_transform*/ false);
               if (failed(load2dOp.verify())) {
@@ -1659,9 +1683,6 @@ struct LoadOpConversion
           offsetBaseY] =
         getValuesFromBlockPointerStruct(adaptor.getPtr(), rewriter);
 
-    unsigned tileWidth = elemsPerDPASInst[threadOrder[rank - 2]];
-    unsigned tileHeight = elemsPerDPASInst[threadOrder[rank - 1]];
-
     MLIRContext *ctx = rewriter.getContext();
     const StringAttr dimOuterStr = S("dim" + std::to_string(dimOuter));
     const StringAttr dimInnerStr = S("dim" + std::to_string(dimInner));
@@ -1739,7 +1760,6 @@ struct LoadOpConversion
       llvm::dbgs() << "tile layout done\n";
     });
 
-    unsigned vBlocks = 1;
     unsigned numOperandsOuterDimPerLoad = 1;
     unsigned numOperandsInnerDimPerLoad = 1;
 
@@ -1756,11 +1776,10 @@ struct LoadOpConversion
       if (!usePackedType)
         return failure();
 
-      std::swap(tileHeight, tileWidth);
-
       if (oneMatrixPerLoadForBT) {
         // Only load 1 operand per inst on row.
         numOperandsPer2DLoadM = 1;
+        tileHeight = elemsPerDPASInst[threadOrder[rank - 2]];
       } else {
         // We can decompose the matrix returned by transposed large 2d load
         // when threads per warp < column size. Otherwise we have to load one
@@ -1775,6 +1794,7 @@ struct LoadOpConversion
       numOperandsPer2DloadN = 1;
     }
 
+    // TODO: move this logic to the instr shape computation
     // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
     // enlarging the tileHeight.
     numOperandsPer2DLoadM = std::min(numOperandsPer2DLoadM, 32 / tileHeight);
@@ -1785,7 +1805,6 @@ struct LoadOpConversion
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
     numOperandsPer2DloadN =
         std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
-    vBlocks = numOperandsPer2DloadN;
 
     numOperandsOuterDimPerLoad =
         isOperandA ? numOperandsPer2DLoadM : numOperandsPer2DloadN;
@@ -1960,7 +1979,6 @@ struct LoadOpConversion
     if (isTransposeRequired) {
       // adjust the block io parameter to align HW's limitations on
       // transposing load.
-      tileWidth = tileWidth / (32 / originalElemBits);
       elemSizeInBits = 32;
     }
     Value elemSizeInBytes = b.i32_val(originalElemBits / 8);

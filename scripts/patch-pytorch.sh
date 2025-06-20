@@ -25,10 +25,10 @@ apply_patch() {
     echo "Applying patch $1"
     cd "$REPO_ROOT"
     if [[ -f $SCRIPTS_DIR/$1 ]]; then
-        git apply "$SCRIPTS_DIR/$1"
+        git apply --3way "$SCRIPTS_DIR/$1"
     else
         fetch_patch "$1"
-        git apply "$SCRIPTS_DIR/$(basename "$1")"
+        git apply --3way "$SCRIPTS_DIR/$(basename "$1")"
     fi
 }
 
@@ -36,3 +36,5 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch https://github.com/pytorch/pytorch/pull/143553.diff
+apply_patch pytorch_fp64.patch
+apply_patch ./patch/Patch_torch_flex_attention_for_autotune_in_benchmark.patch

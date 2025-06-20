@@ -1,0 +1,23 @@
+Subject: [PATCH] Patch torch flex attention for autotune in benchmark
+---
+Index: torch/_inductor/kernel/flex_attention.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/torch/_inductor/kernel/flex_attention.py b/torch/_inductor/kernel/flex_attention.py
+--- a/torch/_inductor/kernel/flex_attention.py	(revision 71e4cab58c04534b7608b4b01685180797271407)
++++ b/torch/_inductor/kernel/flex_attention.py	(date 1749737580817)
+@@ -1643,7 +1643,11 @@
+ 
+     choices: list[Any] = []
+     configs: list[tuple[int, int, int, int]] = []
+-    configs.append(_get_default_config_fwd(query))
++    default_configs = _get_default_config_fwd(query)
++    if isinstance(default_configs, tuple):
++        configs.append(default_configs)
++    else:
++        configs.extend(default_configs)
+     if config.max_autotune:
+         configs += [
+             (128, 64, 4, 3),
