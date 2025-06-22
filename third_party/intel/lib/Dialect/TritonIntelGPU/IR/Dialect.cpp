@@ -1222,40 +1222,30 @@ struct TritonIntelGPUVerifyTensorLayoutInterface
         if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
           elemTy = ptrTy.getPointeeType();
         }
-        const auto elemTyBitWidth = elemTy.getIntOrFloatBitWidth();
+        const unsigned elemTyBitWidth = elemTy.getIntOrFloatBitWidth();
 
         // We know opsPerChannel is either 1, 4, or 8 because of the DPAS
         // verifier when the DPAS attribute is created. Here we verify that
         // opsPerChannel matches the tensor type.
-        if (dpasEncoding.getOpsPerChannel() == 4 && elemTyBitWidth != 8) {
+        if (dpasEncoding.getOpsPerChannel() * elemTyBitWidth != 32) {
           return makeErr() << layout << ".\nLayout has opsPerChannel = "
                            << dpasEncoding.getOpsPerChannel()
                            << " but tensor element type is " << elemTy
-                           << ". Expected 8 bit type.";
-        } else if (dpasEncoding.getOpsPerChannel() == 2 &&
-                   elemTyBitWidth != 16) {
-          return makeErr() << layout << ".\nLayout has opsPerChannel = "
-                           << dpasEncoding.getOpsPerChannel()
-                           << " but tensor element type is " << elemTy
-                           << ". Expected 16 bit type.";
-        } else if (dpasEncoding.getOpsPerChannel() == 1 &&
-                   elemTyBitWidth != 32) {
-          return makeErr() << layout << ".\nLayout has opsPerChannel = "
-                           << dpasEncoding.getOpsPerChannel()
-                           << " but tensor element type is " << elemTy
-                           << ". Expected 32 bit type.";
+                           << ". Expected "
+                           << 32 / dpasEncoding.getOpsPerChannel()
+                           << " bit type.";
         }
         return success();
       };
 
-      if (isa<DotOp>(op)) {
-        auto dotOp = cast<DotOp>(op);
+      if (auto dotOp = dyn_cast<DotOp>(op)) {
         auto aElemTy = dotOp.getA().getType().getElementType();
-        auto result = validateDotDpasLayout(aElemTy);
-        if (result.failed())
-          return result;
-
         auto bElemTy = dotOp.getB().getType().getElementType();
+
+        auto aResult = validateDotDpasLayout(aElemTy);
+        if (aResult.failed())
+          return aResult;
+
         return validateDotDpasLayout(bElemTy);
       }
     }
