@@ -1,4 +1,4 @@
-setuptools==70.2.0
+setuptools>=70.2.0
 wheel
 cmake>=3.20,<4.0
 ninja>=1.11.1
