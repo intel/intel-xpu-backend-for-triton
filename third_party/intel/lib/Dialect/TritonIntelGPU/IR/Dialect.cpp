@@ -1213,7 +1213,7 @@ struct TritonIntelGPUVerifyTensorLayoutInterface
 
     // Verify that the DPAS layout opsPerChannel param matches the A and B
     // operand types. Because the DotOperand layout is not part of the Triton
-    // Intel GPU dialect, we need to first check for a TT.Dot operation. Then,
+    // Intel GPU dialect, we need to first check for a tt.dot operation. Then,
     // we can compare the type of each operand to the Dot operation with the
     // DPAS layout attached to the Dot operation.
     if (auto dpasEncoding = dyn_cast<DpasEncodingAttr>(layout)) {
