@@ -817,7 +817,7 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     install_requires=[
-        "setuptools>=78.1.0",
+        "setuptools>=70.2.0",
         "importlib-metadata; python_version < '3.10'",
     ],
     packages=list(get_packages()),
