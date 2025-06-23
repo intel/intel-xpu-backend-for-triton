@@ -77,7 +77,7 @@ struct EncodingInfo {
  * def-use chain in both directions starting from the Load Op. We store the
  * values that need to be updated along with the new encoding in the
  * `valueToEncodingInfo` MapVector. After all value/encoding pairs have been
- * determined, we update the encoding for each value, adding aa conversion to
+ * determined, we update the encoding for each value, adding a conversion to
  * the existing Load Op result layout for users of the load.
  */
 void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
@@ -213,8 +213,7 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
         }
         break;
       }
-      return isa<LoadOp>(v.getDefiningOp()) ? cast<LoadOp>(v.getDefiningOp())
-                                            : nullptr;
+      return dyn_cast<LoadOp>(v.getDefiningOp());
     };
 
     LoadOp loadOp = isCandidateLoad(operand);
