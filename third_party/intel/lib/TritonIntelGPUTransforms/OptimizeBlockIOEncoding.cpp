@@ -48,19 +48,6 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
   return {};
 }
 
-Type getNewType(Type type, Attribute encoding) {
-  RankedTensorType tensorType = cast<RankedTensorType>(type);
-  return RankedTensorType::get(tensorType.getShape(),
-                               tensorType.getElementType(), encoding);
-}
-
-Type getNewPointerType(Type type, Attribute encoding) {
-  assert(isa<PointerType>(type) && "expected a ptr type!");
-  auto oldPointerType = cast<PointerType>(type);
-  return PointerType::get(getNewType(oldPointerType.getPointeeType(), encoding),
-                          oldPointerType.getAddressSpace());
-}
-
 struct EncodingInfo {
   Attribute desiredEncoding;
   bool requiresConvert = false;
