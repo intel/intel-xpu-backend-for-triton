@@ -66,12 +66,11 @@ static void pipelineLoop(
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
-    b.create<triton::TritonGEN::SplitBarrierArriveOp>(loc, *barrierScope,
-                                                      *barrierScope);
+    auto bData = b.create<triton::TritonGEN::SplitBarrierArriveOp>(
+        loc, mlir::triton::gpu::lookupNumWarps(loop));
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
-    b.create<triton::TritonGEN::SplitBarrierWaitOp>(loc, *barrierScope,
-                                                    *barrierScope);
+    b.create<triton::TritonGEN::SplitBarrierWaitOp>(loc, bData);
   }
 }
 
