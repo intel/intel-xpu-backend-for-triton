@@ -833,6 +833,7 @@ struct ConvertTritonGENToLLVM
     LowerToLLVMOptions options(ctx);
     LLVMTypeConverter typeConverter(ctx, options);
     LLVMConversionTarget target(*ctx);
+    TritonLLVMOpBuilder::CacheGuard bcGuard;
 
     populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
 
