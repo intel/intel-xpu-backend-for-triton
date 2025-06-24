@@ -39,11 +39,11 @@ namespace {
 // Represent a def-use chain rooted at 'start' and terminating at tt.trans
 // operation 'end'.
 class Chain {
-  friend raw_ostream &operator<<(raw_ostream &os, const Chain &chain);
+  friend raw_ostream &operator<<(raw_ostream &, const Chain &);
   using Operations = llvm::SmallSetVector<Operation *, 32>;
 
 public:
-  Chain(Operation *start, tt::TransOp end) : start(start), end(end) {
+  Chain(Operation *start, Operation *end) : start(start), end(end) {
     assert(start && end && "Expecting valid operations");
     assert(start != end && "Expecting distinct operations");
     assert(
@@ -52,14 +52,32 @@ public:
         "operation");
   }
   bool operator<(const Chain &other) const {
-    return start < other.start || end < other.end;
+    if (start == other.start)
+      return end < other.end;
+    return start < other.start;
   }
   bool operator==(const Chain &other) const {
     return start == other.start && end == other.end;
   }
 
   Operation *getStart() const { return start; }
-  tt::TransOp getEnd() const { return end; }
+  Operation *getEnd() const { return end; }
+
+  // Returns true if this chain and \p other contain any common operation.
+  bool overlap(const Chain &other) const {
+    if (other.getStart() == start || other.getEnd() == end)
+      return true;
+
+    if (isTransitivelyUsedBy(other.getStart(), end))
+      return true;
+
+    for (Operation *user : other.getStart()->getUsers()) {
+      if (isTransitivelyUsedBy(user, end))
+        return true;
+    }
+
+    return false;
+  }
 
   // Returns true if \p producer yields a result that is used (directly or
   // indirectly) by \p consumer.
@@ -114,13 +132,13 @@ public:
 
 private:
   Operation *start = nullptr;
-  tt::TransOp end = nullptr;
+  Operation *end = nullptr;
 };
 
 raw_ostream &operator<<(raw_ostream &os, const Chain &chain) {
-  os << "[" << chain.start << ", " << &chain.end << "]\n";
+  os << "[" << chain.start << ", " << chain.end << "]\n";
   os.indent(2) << "start: " << *chain.start << "\n";
-  os.indent(2) << "end: " << chain.end << "\n";
+  os.indent(2) << "end: " << *chain.end << "\n";
   return os;
 }
 
@@ -147,10 +165,10 @@ public:
   void run(ModuleOp moduleOp) {
     Chains chains;
 
-    // Collect def-use chains originating at a `tt::MakeTensorPtrOp` operation
+    // Collect def-use chains originating at a `MakeTensorPtrOp` operation
     // and terminating at a candidate `tt::TransOp` operation.
-    // Note: A candidate `tt::TransOp` must use the result of a `tt.LoadOp`
-    // using a ptr created the `tt::MakeTensorPtrOp` rooting the def-use chain.
+    // Note: A candidate `TransOp` must use the result of a `LoadOp` using a ptr
+    // created the `MakeTensorPtrOp` rooting the def-use chain.
     moduleOp.walk([&](tt::TransOp transOp) {
       if (isCandidate(transOp)) {
         auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
@@ -170,54 +188,11 @@ public:
         llvm::dbgs() << chain << "\n";
     });
 
-    // If the same operation is the root of multiple chains, duplicate it to
-    // make each chain disjoint from the others.
-    if (chains.size() >= 2) {
-      std::map<Operation *, Chains> rootToChains;
-      for (const Chain &chain : chains) {
-        Operation *start = chain.getStart();
-        if (!rootToChains[start].empty())
-          continue;
-
-        Chains sameRootChains{chain};
-        rootToChains[start] = sameRootChains;
-        for (const Chain &otherChain : chains) {
-          if (otherChain == chain || otherChain.getStart() != start)
-            continue;
-
-          Chains &sameRootChains = rootToChains[start];
-          sameRootChains.insert(otherChain);
-          rootToChains[start] = sameRootChains;
-        }
-      }
-
-      for (auto &entry : rootToChains) {
-        if (entry.second.size() == 1)
-          continue;
-
-        // duplicate the root operation.
-        for (auto it = ++entry.second.begin(); it != entry.second.end(); ++it) {
-          const Chain &chain = *it;
-          Operation *start = chain.getStart();
-          OpBuilder builder(start);
-          Operation *duplicate = builder.insert(start->clone());
-          assert(start->getNumResults() == 1);
-
-          Value res = start->getResult(0);
-          Value dupRes = duplicate->getResult(0);
-          res.replaceUsesWithIf(dupRes, [&](OpOperand &operand) {
-            return Chain::isTransitivelyUsedBy(operand.getOwner(),
-                                               chain.getEnd());
-          });
-
-          // remove the chain and insert a new one, rooted by the duplicated
-          // operation.
-          Chain newChain(duplicate, chain.getEnd());
-          chains.insert(newChain);
-          chains.erase(chain);
-        }
-      }
-    }
+    // Attempt to duplicate the root operation of chains that overlap (at the
+    // root), give up if overlap still exist after duplication.
+    duplicateIfOverlap(chains);
+    if (overlap(chains))
+      return;
 
     LLVM_DEBUG({
       llvm::dbgs() << "[Before Pruning]:\n";
@@ -243,6 +218,89 @@ public:
       tt::intel::eraseOperations(cleanUp);
 
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
+  }
+
+  bool overlap(const Chains &chains) const {
+    assert(!chains.empty() && "Expecting at least one chain");
+    if (chains.size() < 2)
+      return false;
+
+    for (auto it1 = chains.begin(); it1 != chains.end(); ++it1) {
+      for (auto it2 = it1; it2 != chains.end(); ++it2) {
+        if (it2 == it1)
+          continue;
+        if (it2->overlap(*it1))
+          return true;
+      }
+    }
+
+    return false;
+  }
+
+  // Attempt to duplicate operations in the given \p chains if there is an
+  // overlap.
+  // Limitation: currently this member function handles overlap at the root
+  // operation only.
+  void duplicateIfOverlap(Chains &chains) const {
+    assert(!chains.empty() && "Expecting at least one chain");
+    if (!overlap(chains))
+      return;
+
+    LLVM_DEBUG(llvm::dbgs() << "Detected overlap\n";);
+
+    // If the same operation is the root of multiple chains, duplicate it to
+    // make each chain disjoint from the others.
+    std::map<Operation *, Chains> rootToChains;
+    for (const Chain &chain : chains) {
+      Operation *start = chain.getStart();
+      if (!rootToChains[start].empty())
+        continue;
+
+      Chains sameRootChains{chain};
+      rootToChains[start] = sameRootChains;
+      for (const Chain &otherChain : chains) {
+        if (otherChain == chain || otherChain.getStart() != start)
+          continue;
+
+        rootToChains[start].insert(otherChain);
+      }
+    }
+
+    for (auto &entry : rootToChains) {
+      Chains &sameRootChains = entry.second;
+      if (sameRootChains.size() == 1)
+        continue;
+
+      duplicateRoot(sameRootChains, chains);
+    }
+  }
+
+  // Duplicate the root operation of \p sameRootChains and update \p chains.
+  void duplicateRoot(Chains &sameRootChains, Chains &chains) const {
+    assert(sameRootChains.size() > 1 && "expecting at least 2 chains");
+    assert(llvm::all_of(sameRootChains, [&](const Chain &chain) {
+      const Chain &firstChain = *sameRootChains.begin();
+      return firstChain.getStart() == chain.getStart();
+    }));
+
+    for (auto it = ++sameRootChains.begin(); it != sameRootChains.end(); ++it) {
+      const Chain &chain = *it;
+      Operation *start = chain.getStart();
+      OpBuilder builder(start);
+      Operation *duplicate = builder.insert(start->clone());
+      assert(start->getNumResults() == 1);
+
+      Value res = start->getResult(0);
+      Value dupRes = duplicate->getResult(0);
+      res.replaceUsesWithIf(dupRes, [&](OpOperand &operand) {
+        return Chain::isTransitivelyUsedBy(operand.getOwner(), chain.getEnd());
+      });
+
+      // remove the chain and insert a new one, rooted by the new operation.
+      Chain newChain(duplicate, chain.getEnd());
+      chains.insert(newChain);
+      chains.erase(chain);
+    }
   }
 
   void fuse(const Chains &chains) {
@@ -404,9 +462,6 @@ private:
     while (currentOp != chain.getEnd()) {
       Operation *user = nullptr;
       if (!validateOperation(currentOp, user)) {
-        // If the operation has multiple users, attempt to determine whether all
-        // users are in a def-use chain terminated by the equivalent candidate
-        // transpose operations.
         LLVM_DEBUG(llvm::dbgs()
                    << "Fails safety checks: " << *currentOp << "\n");
         return false;
@@ -418,6 +473,7 @@ private:
         continue;
       }
 
+      // Current limitation: give up if the use is a branch.
       if (isa<scf::IfOp>(user))
         return false;
 
@@ -446,7 +502,7 @@ private:
   // Propagate \p newVal to operations in the given def-use chain.
   void propagateToUsers(Value newVal, const Chain &chain) {
     auto start = cast<tt::MakeTensorPtrOp>(chain.getStart());
-    tt::TransOp end = chain.getEnd();
+    Operation *end = chain.getEnd();
     auto it = llvm::find_if(start->getUsers(), [&](Operation *user) {
       return Chain::isTransitivelyUsedBy(user, end);
     });
