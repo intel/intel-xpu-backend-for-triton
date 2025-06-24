@@ -1,5 +1,5 @@
 diff --git a/benchmarks/dynamo/common.py b/benchmarks/dynamo/common.py
-index 1e544f73ea58bd..e1b06fd93a5c78 100644
+index 1088634ce911e8..fbd8b2277b1cf2 100644
 --- a/benchmarks/dynamo/common.py
 +++ b/benchmarks/dynamo/common.py
 @@ -1598,6 +1598,12 @@ def cast_to_fp32(model, inputs):
@@ -15,20 +15,21 @@ index 1e544f73ea58bd..e1b06fd93a5c78 100644
  class DummyGradScaler:
      def scale(self, loss):
          return loss
-@@ -2099,11 +2105,23 @@ def record_status(accuracy_status, dynamo_start_stats):
-             model_ref = None
-             inputs_ref = None
+@@ -2097,13 +2103,27 @@ def record_status(accuracy_status, dynamo_start_stats):
+             model_fp64 = None
+             inputs_fp64 = None
              try:
--                model_ref, inputs_ref = cast_to(
--                    ref_dtype,
+-                model_fp64, inputs_fp64 = cast_to_fp64(
 -                    self.deepcopy_and_maybe_parallelize(model),
 -                    clone_inputs(example_inputs),
 -                )
+-                self.init_optimizer(name, current_device, model_fp64.parameters())
+-                fp64_outputs = self.run_n_iterations(
+-                    model_fp64, inputs_fp64, self.model_iter_fn
 +                # Currently, XPU GEMM FP64 support is WIP. Therefore, we explicitly fallback to
 +                # CPU to execute FP64 and take the result as the gold reference.
 +                if current_device == "xpu":
-+                    model_ref, inputs_ref = cast_to(
-+                        ref_dtype,
++                    model_fp64, inputs_fp64 = cast_to_fp64(
 +                        *cast_to_device(
 +                            "cpu",
 +                            self.deepcopy_and_maybe_parallelize(model),
@@ -36,33 +37,37 @@ index 1e544f73ea58bd..e1b06fd93a5c78 100644
 +                        )
 +                    )
 +                else:
-+                    model_ref, inputs_ref = cast_to(
-+                        ref_dtype,
++                    model_fp64, inputs_fp64 = cast_to_fp64(
 +                        self.deepcopy_and_maybe_parallelize(model),
 +                        clone_inputs(example_inputs),
 +                    )
-                 self.init_optimizer(name, current_device, model_ref.parameters())
-                 ref_outputs = self.run_n_iterations(
-                     model_ref, inputs_ref, self.model_iter_fn
-@@ -2114,12 +2132,20 @@ def record_status(accuracy_status, dynamo_start_stats):
++
++                # current_device of init_optimizer only impacts which optimizer will be applied. It does
++                # not change any tensor internally. Hence, we leave as it is rather than passing cpu.
++                self.init_optimizer(name, current_device, model_ref.parameters())
++                ref_outputs = self.run_n_iterations(
++                    model_ref, inputs_ref, self.model_iter_fn
+                 )
+                 fp64_outputs = tree_map(
+                     lambda x: x.to(torch.float64)
+@@ -2111,11 +2131,19 @@ def record_status(accuracy_status, dynamo_start_stats):
                      else x,
-                     ref_outputs,
+                     fp64_outputs,
                  )
 -            except Exception:
 +                if current_device == "xpu":
-+                    ref_outputs = tree_map_only(
++                    fp64_outputs = tree_map_only(
 +                        torch.Tensor,
 +                        lambda x: x.to(device=current_device),
-+                        ref_outputs,
++                        fp64_outputs,
 +                    )
 +            except Exception as e:
                  log.warning(
-                     "%s golden ref were not generated for %s. Setting accuracy check to cosine",
-                     ref_dtype.__name__,
+                     "fp64 golden ref were not generated for %s. Setting accuracy check to cosine",
                      name,
                  )
 +                error_msg = f"current_device={current_device}; error:{str(e)}"
 +                log.warning(error_msg)
                  self.args.cosine = True
-                 ref_outputs = None
+                 fp64_outputs = None
              finally:
