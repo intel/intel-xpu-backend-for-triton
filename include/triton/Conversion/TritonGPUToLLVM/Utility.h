@@ -248,25 +248,301 @@ struct TritonLLVMOpBuilder {
     return builder->create<LLVM::CallOp>(loc, std::forward<Args>(args)...);
   }
   // Constants
+  Value constant(Type type, Attribute attr, bool isIndex = false) {
+    // Find the top-level isolated block.
+    Block *block = builder->getInsertionBlock();
+    for (auto op = block->getParentOp(); op; op = op->getParentOp()) {
+      if (op->hasTrait<OpTrait::IsIsolatedFromAbove>()) {
+        if (op->hasTrait<OpTrait::OneRegion>()) {
+          block = &op->getRegion(0).front();
+        }
+        break;
+      }
+    }
+
+    // llvm::errs() << "Const cache size: " << get_const_cache().size() << "\n";
+    Value &value = get_const_cache()[block][type][attr];
+    if (value) {
+      assert(block == value.getDefiningOp()->getBlock());
+      assert(builder->getInsertionPoint() == block->end() ||
+             value.getDefiningOp()->isBeforeInBlock(
+                 &*builder->getInsertionPoint()));
+      return value;
+      // llvm::errs() << "Found cached value: " << attr << " = " << value <<
+      // ".\n"; if (auto op = value.getDefiningOp(); block == op->getBlock()) {
+      //   if (auto ip = builder->getInsertionPoint();
+      //       ip == block->end() || op->isBeforeInBlock(&*ip)) {
+      //     // llvm::errs() << "Reusing cached value: " << value << ".\n";
+      //     return value;
+      //   }
+      // }
+    }
+    create_constant(block, value, type, attr, isIndex);
+    // llvm::errs() << "Cached new value: " << value << ".\n";
+    return value;
+
+    // static llvm::SmallDenseMap<Type, DenseMap<Attribute, Value>> cache;
+    // Value& value = cache[type][attr];
+    // if (!value) {
+    //   value = builder->create<LLVM::ConstantOp>(loc, type, attr);
+    // }
+    // return value;
+
+    // static DenseMap<Type, DenseMap<Attribute, Value>> cache;
+    // Value& value = cache[type][attr];
+    // if (!value) {
+    //   value = builder->create<LLVM::ConstantOp>(loc, type, attr);
+    // }
+    // return value;
+
+    // static DenseMap<std::pair<Type, Attribute>, Value> cache;
+    // auto key = std::make_pair(type, attr);
+    // Value& value = cache[key];
+    // if (!value) {
+    //   value = builder->create<LLVM::ConstantOp>(loc, type, attr);
+    // }
+    // return value;
+
+    // Block *block = builder->getInsertionBlock();
+    // for (auto op = block->getParentOp(); op; op = op->getParentOp()) {
+    //   if (op->hasTrait<OpTrait::IsIsolatedFromAbove>()) {
+    //     if (op->hasTrait<OpTrait::OneRegion>()) {
+    //       block = &op->getRegion(0).front();
+    //     }
+    //     break;
+    //   }
+    // }
+
+    // Operation *ip = nullptr;
+
+    // for (Operation &op : block->getOperations()) {
+    //   if (auto c = dyn_cast_or_null<LLVM::ConstantOp>(op)) {
+    //     if (c.getType() == type) {
+    //       if (c.getValue() == attr) {
+    //         return c;
+    //       }
+    //       ip = c.getResult().getDefiningOp();
+    //     } else if (ip) {
+    //       break;
+    //     }
+    //   } else {
+    //     break;
+    //   }
+    // }
+
+    // OpBuilder::InsertionGuard guard(*builder);
+    // if (ip) {
+    //   builder->setInsertionPointAfter(ip);
+    // } else {
+    //   builder->setInsertionPointToStart(block);
+    // }
+    // return create_constant(type, attr);
+  }
   Value int_val(short bitwidth, int64_t val) {
     Type ty = builder->getIntegerType(bitwidth);
-    return builder->create<LLVM::ConstantOp>(loc, ty,
-                                             builder->getIntegerAttr(ty, val));
+    Attribute attr = builder->getIntegerAttr(ty, val);
+    return constant(ty, attr);
   }
   Value i1_val(int64_t val) { return int_val(1, val); }
   Value true_val() { return int_val(1, true); }
   Value false_val() { return int_val(1, false); }
-  Value f16_val(float v) { return LLVM::createConstantF16(loc, *builder, v); }
-  Value bf16_val(float v) { return LLVM::createConstantBF16(loc, *builder, v); }
-  Value f32_val(float v) { return LLVM::createConstantF32(loc, *builder, v); }
-  Value f64_val(double v) { return LLVM::createConstantF64(loc, *builder, v); }
+  Value f16_val(float v) {
+    return constant(type::f16Ty(builder->getContext()),
+                    builder->getF16FloatAttr(v));
+  }
+  Value bf16_val(float v) {
+    APFloat apf(v);
+    bool ignored;
+    apf.convert(APFloat::BFloat(), APFloat::rmNearestTiesToEven, &ignored);
+    auto type = type::bf16Ty(builder->getContext());
+    auto attr = FloatAttr::get(type, apf);
+    return constant(type, attr);
+  }
+  Value f32_val(float v) {
+    return constant(type::f32Ty(builder->getContext()),
+                    builder->getF32FloatAttr(v));
+  }
+  Value f64_val(double v) {
+    return constant(type::f64Ty(builder->getContext()),
+                    builder->getF64FloatAttr(v));
+  }
   Value i8_val(int64_t val) { return int_val(8, val); }
   Value i16_val(int64_t val) { return int_val(16, val); }
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
+  Value idx_val(int64_t val) {
+    return constant(builder->getIndexType(), builder->getIndexAttr(val), true);
+  }
+  Value dense_val(const ShapedType &type, ArrayRef<Attribute> values) {
+    auto attr = DenseElementsAttr::get(type, values);
+    return constant(type, attr);
+  }
+
+  static void clear_cache(Block *block, bool reset = false,
+                          bool removeFunc = true) {
+    for (auto &op : block->getOperations()) {
+      for (auto &r : op.getRegions()) {
+        for (auto &b : r.getBlocks()) {
+          clear_cache(&b, false, false);
+        }
+      }
+    }
+
+    if (!block->getParentOp()->hasTrait<OpTrait::IsIsolatedFromAbove>()) {
+      return;
+    }
+
+    auto &keepAliveCache = get_keep_alive_cache();
+    if (auto keepAliveCall = keepAliveCache.find(block);
+        keepAliveCall != keepAliveCache.end()) {
+      auto &constCache = get_const_cache();
+      auto blockCache = constCache.find(block);
+      assert(blockCache != get_const_cache().end() &&
+             "Constant cache should exist for this block");
+      // Delete the function call and all the referenced arguments, if they have
+      // no users;
+      SmallVector<Value> args(keepAliveCall->second.getOperands());
+      keepAliveCall->second.erase();
+      for (Value arg : args) {
+        auto op = arg.getDefiningOp();
+
+        if (!op->use_empty()) {
+          continue;
+        }
+
+        Attribute attr;
+        if (auto icast = dyn_cast_or_null<mlir::arith::IndexCastOp>(op)) {
+          op = icast->getOperand(0).getDefiningOp();
+          icast.erase();
+          if (!op->use_empty()) {
+            continue;
+          }
+          attr = dyn_cast<arith::ConstantIndexOp>(op).getValueAttr();
+        } else {
+          attr = dyn_cast<LLVM::ConstantOp>(op).getValueAttr();
+        }
+
+        auto typeCache = blockCache->second.find(op->getResult(0).getType());
+        assert(typeCache != blockCache->second.end() &&
+               "Type cache should exist for this constant");
+
+        auto cachedValue = typeCache->second.find(attr);
+        assert(cachedValue != typeCache->second.end() &&
+               "Attribute should exist in type cache");
+        assert(cachedValue->second.getDefiningOp() == op);
+        cachedValue->second = Value();
+        typeCache->second.erase(cachedValue);
+        llvm::errs() << "Type cache size: " << typeCache->second.size() << "\n";
+        llvm::errs() << "Erasing cached constant: " << attr << "\n";
+        op->erase();
+
+        if (typeCache->second.empty()) {
+          llvm::errs() << "Erasing type cache for constant: " << attr << "\n";
+          blockCache->second.erase(typeCache);
+          llvm::errs() << "Block cache size: " << blockCache->second.size()
+                       << "\n";
+        }
+      }
+
+      if (blockCache->second.empty()) {
+        llvm::errs() << "Erasing constant cache for block: " << "\n";
+        constCache.erase(blockCache);
+        llvm::errs() << "Const cache size: " << constCache.size() << "\n";
+        if (constCache.empty()) {
+          constCache.shrink_and_clear();
+        }
+      }
+
+      keepAliveCache.erase(keepAliveCall);
+      llvm::errs() << "Keep alive cache size: " << keepAliveCache.size()
+                   << "\n";
+      if (keepAliveCache.empty()) {
+        keepAliveCache.shrink_and_clear();
+      }
+    }
+
+    if (removeFunc) {
+      if (auto op = block->getParentOp()) {
+        if (auto module = op->getParentOfType<ModuleOp>()) {
+          if (auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(
+                  "TritonLLVMOpBuilder_keep_alive_hook");
+              fn && fn.use_empty()) {
+            fn.erase();
+          }
+        }
+      }
+    }
+
+    if (reset) {
+      keepAliveCache.shrink_and_clear();
+      get_const_cache().shrink_and_clear();
+    }
+  }
 
   Location loc;
   OpBuilder *builder;
+
+private:
+  static inline DenseMap<Block *, DenseMap<Type, DenseMap<Attribute, Value>>> &
+  get_const_cache() {
+    static DenseMap<Block *, DenseMap<Type, DenseMap<Attribute, Value>>> cache;
+    return cache;
+  }
+
+  static inline DenseMap<Block *, LLVM::CallOp> &get_keep_alive_cache() {
+    static DenseMap<Block *, LLVM::CallOp> cache;
+    return cache;
+  }
+
+  void create_constant(Block *block, Value &value, Type type, Attribute attr,
+                       bool isIndex) {
+    Value keepAliveValue;
+    OpBuilder::InsertionGuard guard(*builder);
+    builder->setInsertionPointToStart(block);
+
+    if (isIndex) {
+      value = builder->create<arith::ConstantIndexOp>(
+          loc, dyn_cast<IntegerAttr>(attr).getInt());
+      keepAliveValue = builder->create<mlir::arith::IndexCastOp>(
+          loc, builder->getI64Type(), value);
+    } else {
+      value = keepAliveValue =
+          builder->create<LLVM::ConstantOp>(loc, type, attr);
+    }
+
+    // Lookup or create an external vararg function
+    // "TritonLLVMOpBuilder_keep_alive_hook". This function is used to keep
+    // references to the cached constants to protect them from elimination.
+    auto module = value.getDefiningOp()->getParentOfType<ModuleOp>();
+    auto keepAliveFunc = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(
+        "TritonLLVMOpBuilder_keep_alive_hook");
+    if (!keepAliveFunc) {
+      builder->setInsertionPointToStart(module.getBody());
+      keepAliveFunc = builder->create<LLVM::LLVMFuncOp>(
+          loc, "TritonLLVMOpBuilder_keep_alive_hook",
+          LLVM::LLVMFunctionType::get(
+              LLVM::LLVMVoidType::get(builder->getContext()), ArrayRef<Type>{},
+              /*isVarArg=*/true));
+      keepAliveFunc.setLinkage(LLVM::Linkage::External);
+    }
+
+    auto &keepAliveCall = get_keep_alive_cache()[block];
+    if (keepAliveCall) {
+      // If exists, replace the function call and add one more argument.
+      SmallVector<Value> args(keepAliveCall.getOperands());
+      args.push_back(keepAliveValue);
+      builder->setInsertionPoint(keepAliveCall.getOperation());
+      auto newKeepAliveCall =
+          builder->create<LLVM::CallOp>(loc, keepAliveFunc, args);
+      keepAliveCall.replaceAllUsesWith(newKeepAliveCall);
+      keepAliveCall.erase();
+      keepAliveCall = newKeepAliveCall;
+    } else {
+      builder->setInsertionPointAfterValue(keepAliveValue);
+      keepAliveCall = builder->create<LLVM::CallOp>(
+          loc, keepAliveFunc, ArrayRef<Value>{keepAliveValue});
+    }
+  }
 };
 
 // This builder combines an IRRewriter and a TritonLLVMOpBuilder into one,

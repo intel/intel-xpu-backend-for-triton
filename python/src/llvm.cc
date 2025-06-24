@@ -31,6 +31,8 @@
 #include <pybind11/stl.h>
 #include <stdexcept>
 
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+
 namespace py = pybind11;
 
 namespace llvm {
@@ -236,7 +238,7 @@ void init_triton_llvm(py::module &&m) {
                      ValueAsMetadata::get(fn),
                      MDString::get(fn->getContext(), "maxnreg"),
                      ConstantAsMetadata::get(ConstantInt::get(
-                         Type::getInt32Ty(fn->getContext()), maxnreg)),
+                         llvm::Type::getInt32Ty(fn->getContext()), maxnreg)),
                  });
              fn->getParent()
                  ->getOrInsertNamedMetadata("nvvm.annotations")
@@ -262,6 +264,7 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
+        TritonLLVMOpBuilder::clear_cache(mod.getBody(), true);
         std::unique_ptr<llvm::Module> llvmMod =
             mlir::translateModuleToLLVMIR(mod, ctx);
         if (!llvmMod) {
