@@ -1,11 +1,11 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-optimize-block-io-encoding | FileCheck %s
+// RUN: triton-opt %s -split-input-file  -allow-unregistered-dialect --tritonintelgpu-optimize-block-io-encoding | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 2], order = [1, 0]}>
-// CHECK: #[[$SUBGROUP_BLOCK_A:.+]] = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [8, 16], numBlocks=2, order=[1, 0], kWidth=1, threadsPerWarp=16}>
-// CHECK: #[[$SUBGROUP_BLOCK_B:.+]] = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [16, 16], numBlocks=2, order=[0, 1], kWidth=2, threadsPerWarp=16}>
-// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+// CHECK-DAG: #[[$SUBGROUP_BLOCK_A:.+]] = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [8, 16], numBlocks=2, order=[1, 0], kWidth=1, threadsPerWarp=16}>
+// CHECK-DAG: #[[$SUBGROUP_BLOCK_B:.+]] = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [16, 16], numBlocks=2, order=[0, 1], kWidth=2, threadsPerWarp=16}>
+// CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
   tt.func public @matmul_kernel_with_block_pointers(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
@@ -63,5 +63,76 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     %16 = ttg.convert_layout %15 : tensor<256x256xf16, #blocked> -> tensor<256x256xf16, #blocked2>
     tt.store %14, %16 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<256x256xf16, #blocked2>>
     tt.return
+  }
+}
+
+// -----
+
+// COM: test complex control flow
+// COM: Note that instead of using tt.advance we make a new tensor ptr each time. This is nice, because it lets us test that we can find MakeTensorPtr op inside the scf.if.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 2], order = [1, 0]}>
+// CHECK-DAG: #[[$SUBGROUP_BLOCK_A:.+]] = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [8, 16], numBlocks=2, order=[1, 0], kWidth=1, threadsPerWarp=16}>
+// CHECK-DAG: #[[$SUBGROUP_BLOCK_B:.+]] = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [16, 16], numBlocks=2, order=[0, 1], kWidth=2, threadsPerWarp=16}>
+// CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
+// CHECK-LABEL: @matmul_change_block_ptr_in_prologue
+tt.func @matmul_change_block_ptr_in_prologue(%a_base: !tt.ptr<f16>,
+  %b_base: !tt.ptr<f16>) {
+  %c0_i64 = arith.constant 0 : i64
+  %c1_i64 = arith.constant 1 : i64
+  %k_tiles = arith.constant 32 : i64
+  %true = arith.constant true
+  %false = arith.constant false
+
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
+
+  // CHECK: %[[A_UNDEF:.*]] = ub.poison : !tt.ptr<tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]>>
+  // CHECK: %[[B_UNDEF:.*]] = ub.poison : !tt.ptr<tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]>>
+  %a_ptr_undef = ub.poison : !tt.ptr<tensor<128x64xf16, #blocked1>>
+  %b_ptr_undef = ub.poison : !tt.ptr<tensor<64x128xf16, #blocked2>>
+  // CHECK: scf.for {{.*}} iter_args({{.*}} = {{.*}}, %[[A_PTR:.*]] = %[[A_UNDEF]], %[[B_PTR:.*]] = %[[B_UNDEF]])
+  scf.for %k = %c0_i64 to %k_tiles step %c1_i64 iter_args(%acc = %zero, %flag = %true, %a_ptr = %a_ptr_undef, %b_ptr = %b_ptr_undef) -> (tensor<128x128xf32, #blocked>, i1, !tt.ptr<tensor<128x64xf16, #blocked1>>, !tt.ptr<tensor<64x128xf16, #blocked2>>) : i64 {
+    %do_prologue = "prologue_cond"(%k) : (i64) -> i1
+    // CHECK: %[[PTRS:.*]]:2 = scf.if {{.*}} -> (!tt.ptr<tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]>>, !tt.ptr<tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]>>)
+    %cur_a_ptr, %cur_b_ptr = scf.if %do_prologue -> (!tt.ptr<tensor<128x64xf16, #blocked1>>, !tt.ptr<tensor<64x128xf16, #blocked2>>) {
+      %off_m, %off_n, %off_k = "get_offsets"(%k) : (i64) -> (i32, i32, i32)
+      // CHECK tt.make_tensor_ptr {{.*}} : <tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]>>
+      %next_a_ptr = tt.make_tensor_ptr %a_base, [%k, %k], [%c1_i64, %c1_i64], [%off_m, %off_k] {order = array<i32: 1, 0>} : <tensor<128x64xf16, #blocked1>>
+      // CHECK tt.make_tensor_ptr {{.*}} : <tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]>>
+      %next_b_ptr = tt.make_tensor_ptr %b_base, [%k, %k], [%c1_i64, %c1_i64], [%off_n, %off_k] {order = array<i32: 1, 0>} : <tensor<64x128xf16, #blocked2>>
+      // CHECK: scf.yield {{.*}} : !tt.ptr<tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]>>, !tt.ptr<tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]>>
+      scf.yield %next_a_ptr, %next_b_ptr : !tt.ptr<tensor<128x64xf16, #blocked1>>, !tt.ptr<tensor<64x128xf16, #blocked2>>
+    } else {
+      // CHECK: scf.yield {{.*}} : !tt.ptr<tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]>>, !tt.ptr<tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]>>
+      scf.yield %a_ptr, %b_ptr : !tt.ptr<tensor<128x64xf16, #blocked1>>, !tt.ptr<tensor<64x128xf16, #blocked2>>
+    }
+
+    // CHECK: %[[A:.*]] = tt.load %[[PTRS]]#0 {{.*}} : !tt.ptr<tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]>>
+    %a = tt.load %cur_a_ptr {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<128x64xf16, #blocked1>>
+    // CHECK: ttg.convert_layout %[[A]] : tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]> -> tensor<128x64xf16, #blocked1>
+    // CHECK: %[[B:.*]] = tt.load %[[PTRS]]#1 {{.*}} : !tt.ptr<tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]>>
+    %b = tt.load %cur_b_ptr {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"} : !tt.ptr<tensor<64x128xf16, #blocked2>>
+    // CHECK: {{.*}} = ttg.convert_layout %[[B]] : tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]> -> tensor<64x128xf16, #blocked2>
+    %a_dot = ttg.convert_layout %a : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b_dot = ttg.convert_layout %b : tensor<64x128xf16, #blocked2> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %a_dot_dpas = ttg.convert_layout %a_dot : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %b_dot_dpas = ttg.convert_layout %b_dot : tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+    %accum = ttg.convert_layout %acc : tensor<128x128xf32, #blocked> -> tensor<128x128xf32, #mma>
+    %c = tt.dot %a_dot_dpas, %b_dot_dpas, %accum, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
+    %c_out = ttg.convert_layout %c : tensor<128x128xf32, #mma> -> tensor<128x128xf32, #blocked>
+
+    %do_epilogue = arith.cmpi eq, %k, %c0_i64 : i64
+    %use_acc = arith.select %do_epilogue, %false, %true : i1
+    scf.if %do_epilogue {
+      "acc_user"(%c_out) : (tensor<128x128xf32, #blocked>) -> ()
+    }
+    // CHECK: scf.yield {{.*}} : {{.*}}, i1, !tt.ptr<tensor<128x64xf16, #[[$SUBGROUP_BLOCK_A]]>>, !tt.ptr<tensor<64x128xf16, #[[$SUBGROUP_BLOCK_B]]>>
+    scf.yield %c_out, %use_acc, %cur_a_ptr, %cur_b_ptr : tensor<128x128xf32, #blocked>, i1, !tt.ptr<tensor<128x64xf16, #blocked1>>, !tt.ptr<tensor<64x128xf16, #blocked2>>
+  }
+
+  tt.return
   }
 }
