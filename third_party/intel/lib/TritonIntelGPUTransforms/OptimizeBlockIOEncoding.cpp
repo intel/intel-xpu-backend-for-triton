@@ -229,9 +229,6 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
       return;
     }
     MakeTensorPtrOp makeTensorPtrOp = getMakeTensorPtrOp(ptr);
-    assert(makeTensorPtrOp &&
-           "expecting a tensor pointer parent to block io load "
-           "with tensor pointer type");
 
     auto oldTensorPtrType = cast<PointerType>(makeTensorPtrOp.getType());
     auto oldTensorType =
