@@ -226,7 +226,7 @@ class XPUBackend(BaseBackend):
 
     @staticmethod
     def get_split_barrier_scope(opt):
-        split_barriers_scope = intel.SplitBarrierScope.none
+        split_barriers_scope = intel.SplitBarrierScope.Workgroup
         if opt.split_barriers_scope == 'Workgroup':
             split_barriers_scope = intel.SplitBarrierScope.Workgroup
         elif opt.split_barriers_scope == 'Subgroup':
