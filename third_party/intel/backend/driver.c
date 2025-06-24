@@ -19,6 +19,7 @@
 #endif
 
 #include "sycl_functions.h"
+namespace syclex = sycl::ext::oneapi::experimental;
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
@@ -42,6 +43,24 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
     return NULL;
   }
   const auto device = g_sycl_l0_device_list[device_id];
+
+  syclex::cl_version version;
+
+  std::vector<std::string> extensions{
+      "cl_intel_subgroup_matrix_multiply_accumulate",
+      "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32",
+      "cl_intel_subgroup_2d_block_io", "cl_intel_bfloat16_conversions"};
+  for (const auto &extension : extensions) {
+    if (device.first.ext_oneapi_supports_cl_extension(extension, &version)) {
+      std::cout << extension
+                << " supported "
+                   "(version: "
+                << version.major << "." << version.minor << "." << version.patch
+                << ")\n";
+    } else {
+      std::cout << extension << " not supported";
+    }
+  }
 
   // Get device handle
   ze_device_handle_t phDevice = device.second;
