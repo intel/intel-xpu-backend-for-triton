@@ -76,6 +76,7 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    TritonLLVMOpBuilder::CacheGuard bcGuard;
 
     bool isAdvancedPathEnabled =
         mlir::triton::tools::getBoolEnv("TRITON_INTEL_ADVANCED_PATH") ||
