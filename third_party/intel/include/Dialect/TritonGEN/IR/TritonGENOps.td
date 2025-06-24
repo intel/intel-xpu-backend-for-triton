@@ -65,10 +65,10 @@ def TritonGEN_SplitBarrierArriveOp : TritonGEN_Op<"split_barrier_arrive"> {
     control barrier and a memory barrier (that is, without needing two
     instructions). If `Semantics` is `None`, `Memory` is ignored.
   }];
-  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
-  let results = (outs);
+  let arguments = (ins I32Attr:$count);
+  let results = (outs LLVM_PointerInAddressSpace<3>:$bData);
   let assemblyFormat = [{
-    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
+    ` ` `{` `count` `=` $count `}` attr-dict
   }];
 }
 
@@ -93,11 +93,9 @@ def TritonGEN_SplitBarrierWaitOp : TritonGEN_Op<"split_barrier_wait"> {
     control barrier and a memory barrier (that is, without needing two
     instructions). If `Semantics` is `None`, `Memory` is ignored.
   }];
-  let arguments = (ins TritonGEN_MemScope:$execution_scope, TritonGEN_MemScope:$memory_scope);
+  let arguments = (ins LLVM_PointerInAddressSpace<3>:$bData);
   let results = (outs);
-  let assemblyFormat = [{
-    ` ` `{` `execution_scope` `=` $execution_scope `,` `memory_scope` `=` $memory_scope `}` attr-dict
-  }];
+  let assemblyFormat = "operands attr-dict";
 }
 
 //===----------------------------------------------------------------------===//
