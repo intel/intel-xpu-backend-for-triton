@@ -117,6 +117,12 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
       } else if (isa<scf::YieldOp>(op)) {
         auto vals = getTiedArgs(op->getParentOp(), use.getOperandNumber());
         updateEncoding(vals, EncodingInfo{encoding});
+      } else if (isa<AdvanceOp>(op)) {
+        // The operand will be updated when the MakeTensorPtr op result is
+        // updated. Make sure the result type matches.
+        for (auto result : op->getResults())
+          if (auto desc = dyn_cast<TypedValue<PointerType>>(result))
+            updateEncoding(desc, EncodingInfo{encoding});
       }
     }
 
