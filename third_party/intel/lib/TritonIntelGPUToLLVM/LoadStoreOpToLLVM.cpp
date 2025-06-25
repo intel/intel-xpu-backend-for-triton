@@ -14,6 +14,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Tools/LinearLayout.h"
+#include <triton/Tools/Sys/GetEnv.hpp>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -2643,6 +2644,11 @@ struct StoreOpToBlockIOConversion
       offsetBaseX = b.trunc(i32_ty, offsetX);
       offsetBaseY = b.trunc(i32_ty, offsetY);
     } else {
+
+      bool enableBlockStore = triton::tools::getBoolEnv(
+          "TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR");
+      if (!enableBlockStore)
+        return failure();
       // Get the LLVM values for pointers
       ptrElems = unpackLLElements(loc, llPtr, rewriter);
       assert(ptrElems.size() == numElems &&
