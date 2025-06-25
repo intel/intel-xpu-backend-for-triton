@@ -102,8 +102,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     # try to catch:
     # L0 build module failed. Log: IGC: Internal Compiler Error: Segmentation violation
-    # Error during Intel loadBinary: Triton Error [ZE]: 0x70000004
-    # RuntimeError: Triton Error [ZE]: 0x70000004
+    # Error during Intel loadBinary: Triton Error [ZE]: 0x78000011
+    # RuntimeError: Triton Error [ZE]: 0x78000011
     module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
         kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
         not kernel.metadata.generate_native_code, device)
