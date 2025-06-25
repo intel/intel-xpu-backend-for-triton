@@ -1208,11 +1208,47 @@ struct LoadOpToBlockIOConversion
                  << ", loadOuter:" << loadOuter << " offset: [" << offsetM
                  << ", " << offsetN << "]");
 
-            Value pred =
-                masks.size() ? masks[{offsetM, offsetN}] : b.int_val(1, 1);
-            pred = targetInfo.shuffleIdx(rewriter, loc, pred, 0);
-            Value other_ = b.undef(load2DGenXType);
+            Value offsetY = b.i32_val(0);
+            Value pred;
+            if (llMask) {
+              assert(masks.size() && "Invalid size of the masks.");
+              pred = targetInfo.shuffleIdx(rewriter, loc,
+                                           masks[{offsetM, offsetN}], 0);
+              // We leverage the GPU block I/O hardware out-of-bound protection
+              // feature by setting the offset to an invalid value when 'pred'
+              // is false (the HW will not read out-of-bounds values). Later on,
+              // after issuing the 2d block read operation, we will select the
+              // result of the load only if the mask evaluate to true, otherwise
+              // we will use 'other'.
+              offsetY = b.select(pred, offsetY, baseHeight);
+            }
+
+            // Use the top-left address of the block to load the data.
+            Value addrElem =
+                b.bitcast(ptrs[{offsetM, offsetN}], ptr_ty(ctx, 1 /*global*/));
+            addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
+
+            Value ret = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
+                loc, load2DGenXType,
+                /*ptr*/ addrElem,
+                /*base_width*/ baseWidth,
+                /*base_height*/ baseHeight,
+                /*base_pitch*/ pitch,
+                /*x*/ b.i32_val(0),
+                /*y*/ offsetY,
+                /*elem_size_in_bits*/ elemSizeInBits,
+                /*tile_width*/ tileWidth,
+                /*tile_height*/ tileHeight,
+                /*v_blocks*/ vBlocks,
+                /*transpose*/ false,
+                /*vnni_transform*/
+                (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
+                 !isTransposeRequired && originalElemBits != 32));
+
             if (others.size()) {
+              assert(masks.size() == others.size() &&
+                     "The mask value has to be provided when "
+                     "the other value is provided.");
               VectorType vecTy =
                   vec_ty(eltTy, numValuesPerLoad * packedElemsNum);
 
@@ -1241,49 +1277,8 @@ struct LoadOpToBlockIOConversion
                     }
                   }
                 }
-
-              other_ = b.bitcast(v, load2DGenXType);
-
-            } else {
-              other_ = rewriter.create<LLVM::ConstantOp>(
-                  loc, load2DGenXType, rewriter.getZeroAttr(load2DGenXType));
-            }
-
-            auto createLoadInstruction = [&]() -> SmallVector<Value, 1> {
-              // Use the top-left address of the block to load the data.
-              Value addrElem = b.bitcast(ptrs[{offsetM, offsetN}],
-                                         ptr_ty(ctx, 1 /*global*/));
-              addrElem = targetInfo.shuffleIdx(rewriter, loc, addrElem, 0);
-
-              auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
-                  loc, load2DGenXType,
-                  /*ptr*/ addrElem,
-                  /*base_width*/ baseWidth,
-                  /*base_height*/ baseHeight,
-                  /*base_pitch*/ pitch,
-                  /*x*/ b.i32_val(0),
-                  /*y*/ b.i32_val(0),
-                  /*elem_size_in_bits*/ elemSizeInBits,
-                  /*tile_width*/ tileWidth,
-                  /*tile_height*/ tileHeight,
-                  /*v_blocks*/ vBlocks,
-                  /*transpose*/ false,
-                  /*vnni_transform*/
-                  (usePackedType &&
-                   opIdx == DpasEncodingAttr::OpIdx::OperandB &&
-                   !isTransposeRequired && originalElemBits != 32));
-              return {load2dOp};
-            };
-
-            Value ret;
-            // Create a predicated load operation.
-            if (llMask) {
-              Block &endBlock = LLVM::intel::createPredicatedBlock(
-                  rewriter, loc, pred, SmallVector<Value, 1>{other_},
-                  createLoadInstruction);
-              ret = *endBlock.args_begin();
-            } else {
-              ret = createLoadInstruction()[0];
+              Value others = b.bitcast(v, load2DGenXType);
+              ret = b.select(pred, ret, others);
             }
 
             unsigned numOperandsM = opIdx != DpasEncodingAttr::OpIdx::OperandB
