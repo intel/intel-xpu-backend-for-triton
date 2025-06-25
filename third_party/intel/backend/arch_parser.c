@@ -47,7 +47,8 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
     arch = "ptl_h";
     break;
   default:
-    std::cerr << "sycl_arch not recognized: " << (uint64_t)sycl_arch << std::endl;
+    std::cerr << "sycl_arch not recognized: " << (uint64_t)sycl_arch
+              << std::endl;
   }
 
   return arch;
