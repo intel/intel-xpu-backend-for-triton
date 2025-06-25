@@ -36,8 +36,7 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-// Represent a def-use chain rooted at 'start' and terminating at tt.trans
-// operation 'end'.
+// Represent a def-use chain rooted at 'start' and terminating at 'end'.
 class Chain {
   friend raw_ostream &operator<<(raw_ostream &, const Chain &);
   using Operations = llvm::SmallSetVector<Operation *, 32>;
