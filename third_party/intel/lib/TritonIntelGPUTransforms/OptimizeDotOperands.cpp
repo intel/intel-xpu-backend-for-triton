@@ -68,15 +68,7 @@ public:
     if (other.getStart() == start || other.getEnd() == end)
       return true;
 
-    if (isTransitivelyUsedBy(other.getStart(), end))
-      return true;
-
-    for (Operation *user : other.getStart()->getUsers()) {
-      if (isTransitivelyUsedBy(user, end))
-        return true;
-    }
-
-    return false;
+    return isTransitivelyUsedBy(other.getStart(), end);
   }
 
   // Returns true if \p producer yields a result that is used (directly or
