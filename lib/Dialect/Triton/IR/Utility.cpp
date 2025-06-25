@@ -89,6 +89,9 @@ tt::MakeTensorPtrOp tt::getMakeTensorPtrOp(Value v) {
                : condBr.getFalseDestOperands()[argNum]);
     return tt::getMakeTensorPtrOp(argOwner->getOperand(argNum));
   }
+  if (auto whileOp = dyn_cast<scf::WhileOp>(argOwner)) {
+    return tt::getMakeTensorPtrOp(whileOp.getOperand(argNum));
+  }
   llvm_unreachable("Unable to getMakeTensorPtr()");
 }
 
