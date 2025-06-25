@@ -620,7 +620,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 torch_fn,
                 n_warmup=10,
-                n_repeat=1000,
+                n_repeat=100,
                 quantiles=quantiles,
             )
 
@@ -643,7 +643,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 triton_fn,
                 n_warmup=10,
-                n_repeat=1000,
+                n_repeat=100,
                 quantiles=quantiles,
             )
 
@@ -707,7 +707,7 @@ def get_benchmark(
             _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                 xetla_fn,
                 n_warmup=10,
-                n_repeat=1000,
+                n_repeat=100,
                 quantiles=quantiles,
             )
 
@@ -729,7 +729,7 @@ def get_benchmark(
                 _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
                     cutlass_fn,
                     n_warmup=10,
-                    n_repeat=1000,
+                    n_repeat=100,
                     quantiles=quantiles,
                 )
 
