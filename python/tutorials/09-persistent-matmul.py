@@ -77,7 +77,7 @@ def supports_tma():
 
 
 def is_hopper():
-    return torch.cuda.get_device_capability()[0] == 9
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 9
 
 
 def supports_ws():
