@@ -351,7 +351,7 @@ is_opencl_extension_supported(int device_id, const char *extension) {
     std::cerr << "Device is not found " << std::endl;
     return NULL;
   }
-  const auto &device = g_sycl_l0_device_list[device_id].first;
+  const sycl::device &device = g_sycl_l0_device_list[device_id].first;
 
   sycl::ext::oneapi::experimental::cl_version version;
   if (device.ext_oneapi_supports_cl_extension(extension, &version))

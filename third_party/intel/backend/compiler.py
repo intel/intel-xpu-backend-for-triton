@@ -147,20 +147,6 @@ class XPUBackend(BaseBackend):
             dev_prop.update(self.device_props[self.device_arch])
             return dev_prop
 
-        from triton.runtime.driver import driver
-        device = driver.active.get_current_device()
-        check = driver.active.utils.is_opencl_extension_supported
-
-        ocloc_dev_prop = {}
-        ocloc_dev_prop['has_subgroup_matrix_multiply_accumulate'] = check(
-            device, b'cl_intel_subgroup_matrix_multiply_accumulate')
-        ocloc_dev_prop['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = check(
-            device, b'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32')
-        ocloc_dev_prop['has_subgroup_2d_block_io'] = check(device, b'cl_intel_subgroup_2d_block_io')
-        ocloc_dev_prop['has_bfloat16_conversions'] = check(device, b'cl_intel_bfloat16_conversions')
-        self.device_props[self.device_arch] = ocloc_dev_prop
-        dev_prop.update(ocloc_dev_prop)
-
         return dev_prop
 
     def parse_options(self, opts) -> Any:
