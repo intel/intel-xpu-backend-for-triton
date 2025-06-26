@@ -147,9 +147,10 @@ private:
     if (!loadOp->hasOneUse() || !loadOpHasBlockIOAttr)
       return false;
 
-    auto ptrType = cast<tt::PointerType>(loadOp.getPtr().getType());
-    if (!isTensorPointerType(ptrType) ||
-        cast<RankedTensorType>(ptrType.getPointeeType()).getRank() != 2)
+    Type ptrType = loadOp.getPtr().getType();
+    if (!triton::isTensorPointerType(ptrType) ||
+        cast<RankedTensorType>(cast<tt::PointerType>(ptrType).getPointeeType())
+                .getRank() != 2)
       return false;
 
     std::optional<tt::MakeTensorPtrOp> defOp =
