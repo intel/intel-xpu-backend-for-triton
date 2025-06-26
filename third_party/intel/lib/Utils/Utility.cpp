@@ -147,6 +147,9 @@ Value getFinalValue(Value value) {
     BlockArgument blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      if (blockArg == forOp.getInductionVar())
+        return value;
+
       int numIVs = forOp.getNumInductionVars();
       int initArgIdx = blockArg.getArgNumber() - numIVs;
       auto initArgs = forOp.getInitArgs();

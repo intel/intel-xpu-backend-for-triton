@@ -36,8 +36,7 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-// Represent a def-use chain rooted at 'start' and terminating at tt.trans
-// operation 'end'.
+// Represent a def-use chain rooted at 'start' and terminating at 'end'.
 class Chain {
   friend raw_ostream &operator<<(raw_ostream &, const Chain &);
   using Operations = llvm::SmallSetVector<Operation *, 32>;
@@ -451,9 +450,10 @@ private:
     if (!loadOp->hasOneUse() || !loadOpHasBlockIOAttr)
       return false;
 
-    auto ptrType = cast<tt::PointerType>(loadOp.getPtr().getType());
-    if (!isTensorPointerType(ptrType) ||
-        cast<RankedTensorType>(ptrType.getPointeeType()).getRank() != 2)
+    Type ptrType = loadOp.getPtr().getType();
+    if (!tt::isTensorPointerType(ptrType) ||
+        cast<RankedTensorType>(cast<tt::PointerType>(ptrType).getPointeeType())
+                .getRank() != 2)
       return false;
 
     std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
@@ -517,7 +517,7 @@ private:
   //                                              -> yield -> load (NOT OK)
   //
   bool validateChain(const Chain &chain) const {
-    auto validateOperation = [&](Operation *op, Operation *&nextOp) {
+    auto validateOperation = [](Operation *op, Operation *&nextOp) {
       assert(nextOp == nullptr);
       if (op->hasOneUse())
         return true;

@@ -8,7 +8,6 @@
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/StringRef.h"
@@ -1284,7 +1283,7 @@ LinearLayout ColumnAction::apply(const LinearLayout &layout) const {
   assert(layout.hasInDim(inDim));
   assert(layout.getInDimSizeLog2(inDim) == inSizeLog2 &&
          "Layout has a different size than the ColumnAction");
-  if (isIdentity) {
+  if (m_isIdentity) {
     return layout;
   }
 
@@ -1310,7 +1309,7 @@ SmallVector<Value> ColumnAction::apply(ValueRange values) const {
          "Values have a different size than the ColumnAction");
   assert(inDim.str() == "register" && "Values are in registers, so we can only "
                                       "apply ColumnAction to registers");
-  if (isIdentity) {
+  if (m_isIdentity) {
     return values;
   }
   auto permLL = apply(LinearLayout::identity1D(values.size(), inDim, inDim));
