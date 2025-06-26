@@ -13,13 +13,6 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
-typedef struct l0_resc_handles {
-  ze_context_handle_t context;
-  ze_device_handle_t device;
-  ze_command_queue_handle_t queue;
-  ze_command_list_handle_t cmd_list;
-} l0_resc_handles;
-
 // Create an exception handler for asynchronous SYCL exceptions
 auto exception_handler = [](sycl::exception_list e_list) {
   for (std::exception_ptr const &e : e_list) {
