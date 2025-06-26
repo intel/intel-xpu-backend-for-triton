@@ -3000,7 +3000,9 @@ scan_layouts = [
 ]
 
 
-def test_no_rematerialization_op():
+def test_no_rematerialization_op(device):
+    if is_xpu():
+        pytest.skip("handle on XPU")
 
     if torch.version.hip:
         pytest.skip("test not supported on AMD")
@@ -3024,7 +3026,6 @@ def test_no_rematerialization_op():
             sum_plus_0 = tl.full((1, 2), 0, tl.float32) + accum[:, None]
             tl.store(out_1 + my_idxs[:, None] * 2 + tl.arange(0, 2)[None, :], sum_plus_0)
 
-    device = "cuda"
     data_len = 32
     data_dim = 64
     torch.manual_seed(0)
