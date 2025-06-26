@@ -1,10 +1,10 @@
 // RUN: triton-opt --split-input-file %s -triton-licm | FileCheck %s
 
-tt.func @hoist_load_without_mask(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
+tt.func @hoist_load_without_mask1(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32
   // Check if the load is hoisted
-  // CHECK-LABEL: hoist_load_without_mask
+  // CHECK-LABEL: hoist_load_without_mask1
   // CHECK: %[[TRIP_COUNT_CMP:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
   // CHECK: %[[SPLAT:.*]] = tt.splat %[[TRIP_COUNT_CMP]]
   // CHECK: %[[LOAD:.*]] = tt.load %[[_:.*]], %[[SPLAT]]
@@ -18,6 +18,29 @@ tt.func @hoist_load_without_mask(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor
     scf.yield %4 : tensor<1024xf32>
   }
   tt.store %arg5, %1 : tensor<1024x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+tt.func @hoist_load_without_mask2(%arg0: !tt.ptr<tensor<1024xf32>>, %arg3: i32, %arg4 : i32, %arg5: !tt.ptr<tensor<1024xf32>>) {
+  %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
+  %c1_i32 = arith.constant 1 : i32
+  // Check if the load is hoisted
+  // CHECK-LABEL: hoist_load_without_mask2
+  // CHECK: %[[TRIP_COUNT_CMP:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
+  // CHECK: %[[SPLAT:.*]] = tt.splat %[[TRIP_COUNT_CMP]]
+  // CHECK: %[[LOAD:.*]] = tt.load %[[_:.*]], %[[SPLAT]]
+  // CHECK: arith.addf %[[LOAD]], %[[LOAD]]
+  // CHECK: scf.for
+  // CHECK-NOT: tt.load
+  %1 = scf.for %arg7 = %arg3 to %arg4 step %c1_i32 iter_args(%arg6 = %cst) -> (tensor<1024xf32>)  : i32 {
+    %2 = tt.load %arg0 : !tt.ptr<tensor<1024xf32>>
+    %3 = arith.addf %2, %2 : tensor<1024xf32>
+    %4 = arith.addf %arg6, %3 : tensor<1024xf32>
+    scf.yield %4 : tensor<1024xf32>
+  }
+  tt.store %arg5, %1 : !tt.ptr<tensor<1024xf32>>
   tt.return
 }
 

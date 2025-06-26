@@ -161,9 +161,8 @@ static Operation *predicateOp(RewriterBase &rewriter, Operation *op,
   return TypeSwitch<Operation *, Operation *>(op)
       .Case<tt::LoadOp, ttgi::PrefetchOp>([&](auto op) {
         rewriter.setInsertionPoint(op);
-        Value mask =
-            tt::getPredMask(rewriter, tt::getPointeeType(op.getPtr().getType()),
-                            op.getMask(), pred);
+        Value mask = tt::getPredMask(rewriter, op.getPtr().getType(),
+                                     op.getMask(), pred);
         op.getMaskMutable().assign(mask);
         return op;
       });
