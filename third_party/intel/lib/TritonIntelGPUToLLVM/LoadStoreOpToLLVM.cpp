@@ -302,7 +302,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     // Only lower loadOp with dpas layout encoding.
     auto tensorTy = cast<RankedTensorType>(op.getType());
-    return hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
+    return hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy) ||
+           hasSubgroup2DBlockEncoding(tensorTy);
   }
 
   template <
@@ -340,6 +341,15 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         hasDpasEncoding(tensorTy)
             ? encoding
             : getDotEncoding(tensorTy).value().getParent());
+  }
+
+  static RankedTensorType getDpasTypeFromCVTOp(Value opResult) {
+    for (OpOperand user : opResult.getUsers()) {
+      if (auto cvt = dyn_cast<ConvertLayoutOp>(user.getOwner())) {
+        return cast<RankedTensorType>(cvt.getResult().getType());
+      }
+    }
+    llvm_unreachable("expected to find a cvt op with dpas layout");
   }
 
   // Returns the pitch (stride in bytes) of \p ptr.
@@ -1436,12 +1446,20 @@ struct LoadOpConversion
     auto tensorType = cast<RankedTensorType>(resultType);
 
     const bool memoryRowMajor = isMemoryRowMajor(op);
-    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
+
+    auto dpasTensorType = hasSubgroup2DBlockEncoding(tensorType)
+                              ? getDpasTypeFromCVTOp(op.getResult())
+                              : tensorType;
+    DpasEncodingAttr dpasLayout = getDpasLayout(dpasTensorType);
+
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(dpasTensorType);
 
     LLVM_DEBUG(llvm::dbgs() << "Tensor type for op " << int(opIdx) << ": "
                             << tensorType << "\n");
 
     Attribute encoding = tensorType.getEncoding();
+    // TODO: this gives us the linear layour corresponding
+    // to the subgroup 2d block encoding, not the dpas encoding...
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorType.getShape());
@@ -1460,14 +1478,21 @@ struct LoadOpConversion
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
-    auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
-        cast<DistributedEncodingTrait>(encoding), tensorType.getShape(),
-        memoryRowMajor, elemSizeInBits / 8, rewriter.getContext());
-    unsigned tileHeight = tileParams[0];
-    const unsigned tileWidth = tileParams[1];
-    const unsigned vBlocks = tileParams[2];
+    auto getTileParams = [&]() -> std::tuple<unsigned, unsigned, unsigned> {
+      if (hasSubgroup2DBlockEncoding(tensorType)) {
+        auto encoding =
+            cast<Subgroup2DBlockEncodingAttr>(tensorType.getEncoding());
+        auto shape = encoding.getInstrShape();
+        return std::make_tuple(shape[0], shape[1], encoding.getNumBlocks());
+      } else {
+        auto tileParams = Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
+            cast<DistributedEncodingTrait>(encoding), tensorType.getShape(),
+            memoryRowMajor, elemSizeInBits / 8, rewriter.getContext());
+        return std::make_tuple(tileParams[0], tileParams[1], tileParams[2]);
+      }
+    };
+    auto [tileHeight, tileWidth, vBlocks] = getTileParams();
 
-    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     unsigned numElems = getTotalElemsPerThread(resultType);
     SmallVector<int64_t> numReps =
@@ -2206,7 +2231,9 @@ struct LoadOpConversion
       }
     }
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Type llvmResultStructTy = typeConverter->convertType(dpasTensorType);
+    LLVM_DEBUG(llvm::dbgs() << "Packing load result in struct "
+                            << llvmResultStructTy << "\n");
     Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
@@ -2229,11 +2256,22 @@ struct LoadOpConversion
     Value mask = op.getMask();
     Value llMask = adaptor.getMask();
 
+    auto opType = op.getType();
+    // TODO: Override the OpType since conversion is still happening during Load
+    // lowering. Once we materialize ConvertLayoutOp this can be removed.
+    auto tensorTy = dyn_cast<RankedTensorType>(opType);
+    if (tensorTy && hasSubgroup2DBlockEncoding(tensorTy))
+      opType = getDpasTypeFromCVTOp(op.getResult());
+
     // Determine the vectorization size
-    Type valueElemTy =
-        typeConverter->convertType(getElementTypeOrSelf(op.getType()));
-    unsigned numElems = getTotalElemsPerThread(op.getType());
+    Type valueElemTy = typeConverter->convertType(getElementTypeOrSelf(opType));
+    unsigned numElems = getTotalElemsPerThread(opType);
     unsigned vec = getVectorSize(ptr);
+    LLVM_DEBUG({
+      llvm::dbgs() << "Vectorization for gather load:\n";
+      llvm::dbgs() << "\t" << valueElemTy << " [" << numElems << "]\n";
+      llvm::dbgs() << "\tvector size = " << vec << " for " << ptr << "\n";
+    });
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
@@ -2243,9 +2281,11 @@ struct LoadOpConversion
 
     if (isTensorPointerType(ptr.getType())) {
       // fallback to gather load.
-      auto tensorType = cast<RankedTensorType>(op.getType());
+      // make sure we use the modified opType from above, "seeing through" any
+      // post-subgroup 2d block encoding CVT.
+      auto blockPtrTensorType = cast<RankedTensorType>(opType);
       std::tie(ptrElems, maskElems, otherElems) = convertBlockPtrToTensorOfPtr(
-          loc, adaptor.getPtr(), tensorType, valueElemTy, rewriter,
+          loc, adaptor.getPtr(), blockPtrTensorType, valueElemTy, rewriter,
           op.getBoundaryCheck(), op.getPadding());
     } else {
       Value other = op.getOther();
@@ -2390,7 +2430,7 @@ struct LoadOpConversion
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Type llvmResultStructTy = typeConverter->convertType(opType);
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
