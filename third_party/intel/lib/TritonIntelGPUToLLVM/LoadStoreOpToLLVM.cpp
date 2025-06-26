@@ -354,8 +354,16 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     constexpr int MIN_PITCH = 64;
     if (stride == 0)
       return b.i32_val(MIN_PITCH);
-    else if (stride != -1)
-      return b.i32_val(stride * elemSizeInBits / 8);
+    else if (stride > 0) {
+      // Only support stride > 0 for 2d block io.
+      unsigned pitch = (unsigned)stride * elemSizeInBits / 8;
+      if (pitch < MIN_PITCH)
+        return nullptr; // return null for unsupported pitch.
+      else
+        return b.i32_val(pitch);
+    } else if (stride < 0) {
+      assert(stride == -1 && "invalid stride < 0");
+    }
 
     // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
     // pitch.
