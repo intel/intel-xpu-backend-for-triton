@@ -148,7 +148,7 @@ private:
       return false;
 
     Type ptrType = loadOp.getPtr().getType();
-    if (!triton::isTensorPointerType(ptrType) ||
+    if (!tt::isTensorPointerType(ptrType) ||
         cast<RankedTensorType>(cast<tt::PointerType>(ptrType).getPointeeType())
                 .getRank() != 2)
       return false;
