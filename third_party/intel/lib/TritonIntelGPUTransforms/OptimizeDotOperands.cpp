@@ -6,6 +6,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <optional>
@@ -34,6 +36,103 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
+// Represent a def-use chain rooted at 'start' and terminating at 'end'.
+class Chain {
+  friend raw_ostream &operator<<(raw_ostream &, const Chain &);
+  using Operations = llvm::SmallSetVector<Operation *, 32>;
+
+public:
+  Chain(Operation *start, Operation *end) : start(start), end(end) {
+    assert(start && end && "Expecting valid operations");
+    assert(start != end && "Expecting distinct operations");
+    assert(
+        isTransitivelyUsedBy(start, end) &&
+        "'end' operation should (transitively) use the result of the 'start' "
+        "operation");
+  }
+  bool operator<(const Chain &other) const {
+    if (start == other.start)
+      return end < other.end;
+    return start < other.start;
+  }
+  bool operator==(const Chain &other) const {
+    return start == other.start && end == other.end;
+  }
+
+  Operation *getStart() const { return start; }
+  Operation *getEnd() const { return end; }
+
+  // Returns true if this chain and \p other contain any common operation.
+  bool overlap(const Chain &other) const {
+    if (other.getStart() == start || other.getEnd() == end)
+      return true;
+
+    return isTransitivelyUsedBy(other.getStart(), end);
+  }
+
+  // Returns true if \p producer yields a result that is used (directly or
+  // indirectly) by \p consumer.
+  static bool isTransitivelyUsedBy(Operation *producer, Operation *consumer) {
+    assert(producer && consumer && "Expecting valid operations");
+
+    auto addUsers = [](Operation *op, Operations &users) {
+      assert(op && "Expecting valid operation");
+
+      auto addUsers = [&](Operation *op) {
+        // Add users of the block arguments in the 'after' region of a while
+        // loop.
+        if (auto condOp = dyn_cast<scf::ConditionOp>(op)) {
+          if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
+            for (BlockArgument arg : whileOp.getAfterArguments())
+              for (Operation *user : arg.getUsers())
+                users.insert(user);
+          }
+        }
+
+        for (Operation *user : op->getUsers())
+          users.insert(user);
+      };
+
+      auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp) {
+        for (Value val : loopOp.getRegionIterArgs())
+          for (Operation *user : val.getUsers())
+            addUsers(user);
+      };
+
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op))
+        addInitArgsUsers(loopOp);
+      else
+        addUsers(op);
+    };
+
+    Operations users;
+    addUsers(producer, users);
+
+    while (!users.contains(consumer)) {
+      unsigned currentSize = users.size();
+      Operations copyUsers = users;
+      for (Operation *user : copyUsers)
+        addUsers(user, users);
+
+      if (users.size() == currentSize)
+        break;
+    }
+
+    return users.contains(consumer);
+  }
+
+private:
+  Operation *start = nullptr;
+  Operation *end = nullptr;
+};
+
+raw_ostream &operator<<(raw_ostream &os, const Chain &chain) {
+  os << "[" << chain.start << ", " << chain.end << "]\n";
+  os.indent(2) << "start: " << *chain.start << "\n";
+  os.indent(2) << "end: " << *chain.end << "\n";
+  return os;
+}
+
 // Transform:
 //   %ptr = make_block_ptr [shapeN, shapeK], [strideN, strideK], [offN, offK]
 //        : tt.ptr<tensor<NxK, enc>
@@ -49,31 +148,169 @@ namespace {
 //   tt.dot(%a, %load)
 class FuseTransWithLoad {
 private:
-  tt::FuncOp funcOp;
   SmallPtrSet<Operation *, 8> cleanUp;
 
 public:
-  FuseTransWithLoad() = default;
+  using Chains = std::set<Chain>;
 
   void run(ModuleOp moduleOp) {
+    Chains chains;
+
+    // Collect def-use chains originating at a `MakeTensorPtrOp` operation
+    // and terminating at a candidate `tt::TransOp` operation.
+    // Note: A candidate `TransOp` must use the result of a `LoadOp` using a ptr
+    // created the `MakeTensorPtrOp` rooting the def-use chain.
     moduleOp.walk([&](tt::TransOp transOp) {
-      if (isCandidate(transOp))
-        fuse(transOp);
+      if (isCandidate(transOp)) {
+        auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
+        tt::MakeTensorPtrOp makeTensorPtrOp =
+            *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
+        Chain chain(makeTensorPtrOp, transOp);
+        chains.insert(chain);
+      }
     });
 
+    if (chains.empty())
+      return;
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "[Initial set of chains]:\n";
+      for (const Chain &chain : chains)
+        llvm::dbgs() << chain << "\n";
+    });
+
+    // Attempt to duplicate the root operation of chains that overlap (at the
+    // root), give up if overlap still exist after duplication.
+    duplicateIfOverlap(chains);
+    if (overlap(chains))
+      return;
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "[Before Pruning]:\n";
+      for (const Chain &chain : chains)
+        llvm::dbgs() << chain << "\n";
+    });
+
+    // Prune candidate chains containing load/trans operations that cannot be
+    // safely fused.
+    prune(chains);
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "[After Pruning]:\n";
+      for (const Chain &chain : chains)
+        llvm::dbgs() << chain << "\n";
+    });
+
+    // Fuse operations.
+    fuse(chains);
+
+    // Remove operations that are no longer used.
     if (!cleanUp.empty())
       tt::intel::eraseOperations(cleanUp);
 
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
-  void fuse(tt::TransOp transOp) {
-    LLVM_DEBUG(llvm::dbgs() << "Found candidate:\n\t" << transOp << "\n");
+  bool overlap(const Chains &chains) const {
+    assert(!chains.empty() && "Expecting at least one chain");
+    if (chains.size() < 2)
+      return false;
+
+    for (auto it1 = chains.begin(); it1 != chains.end(); ++it1) {
+      for (auto it2 = it1; it2 != chains.end(); ++it2) {
+        if (it2 == it1)
+          continue;
+        if (it2->overlap(*it1))
+          return true;
+      }
+    }
+
+    return false;
+  }
+
+  // Attempt to duplicate operations in the given \p chains if there is an
+  // overlap.
+  // Limitation: currently this member function handles overlap at the root
+  // operation only.
+  void duplicateIfOverlap(Chains &chains) const {
+    assert(!chains.empty() && "Expecting at least one chain");
+    if (!overlap(chains))
+      return;
+
+    LLVM_DEBUG(llvm::dbgs() << "Detected overlap\n";);
+
+    // If the same operation is the root of multiple chains, duplicate it to
+    // make each chain disjoint from the others.
+    std::map<Operation *, Chains> rootToChains;
+    for (const Chain &chain : chains) {
+      Operation *start = chain.getStart();
+      if (!rootToChains[start].empty())
+        continue;
+
+      Chains sameRootChains{chain};
+      rootToChains[start] = sameRootChains;
+      for (const Chain &otherChain : chains) {
+        if (otherChain == chain || otherChain.getStart() != start)
+          continue;
+
+        rootToChains[start].insert(otherChain);
+      }
+    }
+
+    for (auto &entry : rootToChains) {
+      Chains &sameRootChains = entry.second;
+      if (sameRootChains.size() == 1)
+        continue;
+
+      duplicateRoot(sameRootChains, chains);
+    }
+  }
+
+  // Duplicate the root operation of \p sameRootChains and update \p chains.
+  void duplicateRoot(Chains &sameRootChains, Chains &chains) const {
+    assert(sameRootChains.size() > 1 && "expecting at least 2 chains");
+    assert(llvm::all_of(sameRootChains, [&](const Chain &chain) {
+      const Chain &firstChain = *sameRootChains.begin();
+      return firstChain.getStart() == chain.getStart();
+    }));
+
+    for (auto it = ++sameRootChains.begin(); it != sameRootChains.end(); ++it) {
+      const Chain &chain = *it;
+      Operation *start = chain.getStart();
+      OpBuilder builder(start);
+      Operation *duplicate = builder.insert(start->clone());
+      assert(start->getNumResults() == 1);
+
+      Value res = start->getResult(0);
+      Value dupRes = duplicate->getResult(0);
+      res.replaceUsesWithIf(dupRes, [&](OpOperand &operand) {
+        return Chain::isTransitivelyUsedBy(operand.getOwner(), chain.getEnd());
+      });
+
+      // remove the chain and insert a new one, rooted by the new operation.
+      Chain newChain(duplicate, chain.getEnd());
+      chains.insert(newChain);
+      chains.erase(chain);
+    }
+  }
+
+  void fuse(const Chains &chains) {
+    for (const Chain &chain : chains)
+      fuseTransOpInChain(chain);
+  }
+
+  void fuseTransOpInChain(const Chain &chain) {
+    assert(
+        isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
+        "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
+    assert(isa<tt::TransOp>(chain.getEnd()) &&
+           "Expecting 'chain' to be terminated by a 'tt.trans' operation");
+
+    auto makeTensorPtrOp = cast<tt::MakeTensorPtrOp>(chain.getStart());
+    auto transOp = cast<tt::TransOp>(chain.getEnd());
     auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
-    tt::MakeTensorPtrOp makeTensorPtrOp =
-        *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
     LLVM_DEBUG(llvm::dbgs()
-               << "makeTensorPtrOp:\n\t" << makeTensorPtrOp << "\n");
+               << "Fusing:\n  " << transOp << "\nwith:\n  " << loadOp << "\n");
 
     // Create a MakeTensorPtrOp yielding a block pointer to the transposed
     // tensor...
@@ -89,11 +326,11 @@ public:
     Value ptr = builder.create<tt::MakeTensorPtrOp>(
         makeTensorPtrOp.getLoc(), newPtrType, makeTensorPtrOp.getBase(),
         newShape, newStrides, newOffsets, makeTensorPtrOp.getOrderAttr());
-    assert(makeTensorPtrOp->hasOneUse() && "Expecting single user");
-    LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n\t" << ptr << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "newMakeTensorPtrOp:\n  " << ptr << "\n");
 
     // ... and propagate it through the def-use chain.
-    propagateToUsers(ptr, makeTensorPtrOp, makeTensorPtrOp, transOp);
+    propagateToUsers(ptr, chain);
+    cleanUp.insert(makeTensorPtrOp);
   }
 
 private:
@@ -102,15 +339,11 @@ private:
   // Where:
   //  - the transpose result is used by the dot operation, and
   //  - the transpose operation uses the result of a 2-dim load operation on a
-  //    block pointer (transitively) defined by a `make_tensor_ptr` in the same
-  //    function, and
-  //  - each operation in the def-use chain origination at the `make_tensor_ptr`
-  //    and terminating at the load has a single user.
+  //    block pointer (transitively) defined by a `make_tensor_ptr` operation.
   bool isCandidate(tt::TransOp transOp) const {
     assert(transOp && "Expecting a valid transpose operation");
 
-    // Check whether \p transOp is used by a `dotOp` directly or indirectly
-    // (each operation in the def-use chain need to have a single user).
+    // Check whether \p transOp is used by a `dotOp` (directly or indirectly).
     auto usedByDotOp = [](tt::TransOp transOp) {
       if (!transOp->hasOneUse())
         return false;
@@ -136,35 +369,42 @@ private:
     if (!defOp || !isa<tt::LoadOp>(defOp))
       return false;
 
-    return isCandidate(cast<tt::LoadOp>(defOp));
-  }
-
-  bool isCandidate(tt::LoadOp loadOp) const {
-    assert(loadOp && "Expecting a valid load operation");
-
+    auto loadOp = cast<tt::LoadOp>(defOp);
     bool loadOpHasBlockIOAttr = loadOp->hasAttrOfType<StringAttr>(
         ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
     if (!loadOp->hasOneUse() || !loadOpHasBlockIOAttr)
       return false;
 
-    auto ptrType = cast<tt::PointerType>(loadOp.getPtr().getType());
-    if (!isTensorPointerType(ptrType) ||
-        cast<RankedTensorType>(ptrType.getPointeeType()).getRank() != 2)
+    Type ptrType = loadOp.getPtr().getType();
+    if (!tt::isTensorPointerType(ptrType) ||
+        cast<RankedTensorType>(cast<tt::PointerType>(ptrType).getPointeeType())
+                .getRank() != 2)
       return false;
 
-    std::optional<tt::MakeTensorPtrOp> defOp =
+    std::optional<tt::MakeTensorPtrOp> makeTensorPtrOp =
         triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
-    if (!defOp || !singleUsersInChain(*defOp, loadOp))
-      return false;
 
-    return true;
+    return makeTensorPtrOp.has_value();
   }
 
-  // Determine whether all operations in the def-use chain from \p start to
-  // \p end have a single user.
+  // Each operation in the def-use chain must have a single user, except in
+  // special circumstances. Prune chains that do not satisfy this condition.
+  void prune(Chains &chains) const {
+    assert(!chains.empty() && "Expecting at least one candidate chain");
+    for (auto it = chains.begin(); it != chains.end();) {
+      if (!validateChain(*it))
+        it = chains.erase(it);
+      else
+        ++it;
+    }
+  }
+
+  // Determine whether all operations in the given def-use chain have a single
+  // user.
   // Note: we allow an operation in the def-use chain to have an additional user
-  // if the operation is in a for loop, and the additional user is the yield
-  // operation, provided that the result yielded is not used after the loop.
+  // if the operation is in a for loop, and the additional user is the loop
+  // yield operation, provided that the result yielded is not used after the
+  // loop.
   // Example:
   //   make_tensor_ptr -> advance -> load (OK)
   //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
@@ -172,13 +412,9 @@ private:
   //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
   //                                              -> yield -> load (NOT OK)
   //
-  bool singleUsersInChain(Operation *start, Operation *end) const {
-    assert(start && end && "Expecting valid operations");
-    Operation *currentOp = start;
-
-    auto validate = [](Operation *op, Operation *&nextOp) {
+  bool validateChain(const Chain &chain) const {
+    auto validateOperation = [](Operation *op, Operation *&nextOp) {
       assert(nextOp == nullptr);
-
       if (op->hasOneUse())
         return true;
       if (!op->getParentOfType<LoopLikeOpInterface>())
@@ -214,9 +450,10 @@ private:
       return true;
     };
 
-    while (currentOp != end) {
+    Operation *currentOp = chain.getStart();
+    while (currentOp != chain.getEnd()) {
       Operation *user = nullptr;
-      if (!validate(currentOp, user)) {
+      if (!validateOperation(currentOp, user)) {
         LLVM_DEBUG(llvm::dbgs()
                    << "Fails safety checks: " << *currentOp << "\n");
         return false;
@@ -228,6 +465,7 @@ private:
         continue;
       }
 
+      // Current limitation: give up if the use is a branch.
       if (isa<scf::IfOp>(user))
         return false;
 
@@ -253,6 +491,19 @@ private:
     return true;
   }
 
+  // Propagate \p newVal to operations in the given def-use chain.
+  void propagateToUsers(Value newVal, const Chain &chain) {
+    auto start = cast<tt::MakeTensorPtrOp>(chain.getStart());
+    Operation *end = chain.getEnd();
+    auto it = llvm::find_if(start->getUsers(), [&](Operation *user) {
+      return Chain::isTransitivelyUsedBy(user, end);
+    });
+    assert(it != start->getUsers().end() && "Expecting valid iterator");
+
+    Operation *nextOp = *it;
+    propagateToUser(newVal, start.getResult(), nextOp, end);
+  }
+
   // Propagate \p newVal to users of \p origOp.
   void propagateToUsers(Value newVal, Value origVal, Operation *origOp,
                         Operation *sentinel) {
@@ -271,14 +522,14 @@ private:
 
     LLVM_DEBUG({
       llvm::dbgs() << "In " << __func__ << "\n";
-      llvm::dbgs() << "user of ";
+      llvm::dbgs() << "user of:";
       if (origVal.getDefiningOp()) {
-        llvm::dbgs() << "\n\t" << *origVal.getDefiningOp() << "\n";
+        llvm::dbgs() << "\n  " << *origVal.getDefiningOp() << "\n";
       } else {
         origVal.printAsOperand(llvm::dbgs(), {});
         llvm::dbgs() << " ";
       }
-      llvm::dbgs() << "is:\n\t";
+      llvm::dbgs() << "is:\n  ";
       user->dumpPretty();
     });
 
@@ -295,7 +546,8 @@ private:
       SmallVector<Value> newOffsets(llvm::reverse(advanceOp.getOffsets()));
       auto newAdvanceOp = rewriter.create<tt::AdvanceOp>(loc, newVal.getType(),
                                                          newVal, newOffsets);
-      LLVM_DEBUG(llvm::dbgs() << "\tnewAdvanceOp: " << newAdvanceOp << "\n");
+      LLVM_DEBUG(llvm::dbgs().indent(2)
+                 << "newAdvanceOp: " << newAdvanceOp << "\n");
       cleanUp.insert(advanceOp);
       return propagateToUsers(newAdvanceOp, advanceOp.getResult(), advanceOp,
                               sentinel);
@@ -320,7 +572,7 @@ private:
       assert(newAttr && "Expecting a valid blockIO attribute");
 
       newLoadOp->setAttr(blockIOAttrName, newAttr);
-      LLVM_DEBUG(llvm::dbgs() << "\tnewLoadOp: " << newLoadOp << "\n");
+      LLVM_DEBUG(llvm::dbgs().indent(2) << "newLoadOp: " << newLoadOp << "\n");
       cleanUp.insert(loadOp);
       return propagateToUsers(newLoadOp, loadOp.getResult(), loadOp, sentinel);
     }

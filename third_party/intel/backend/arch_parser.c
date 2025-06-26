@@ -43,8 +43,12 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
     arch = "pvc";
     break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_ptl_h:
+    arch = "ptl_h";
+    break;
   default:
-    std::cerr << "sycl_arch not recognized: " << (int)sycl_arch << std::endl;
+    std::cerr << "sycl_arch not recognized: " << (uint64_t)sycl_arch
+              << std::endl;
   }
 
   return arch;
