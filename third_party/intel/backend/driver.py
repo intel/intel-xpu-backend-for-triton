@@ -187,15 +187,17 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "is_opencl_extension_supported")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
+        self.shared_library.is_opencl_extension_supported.restype = ctypes.py_object
+        self.shared_library.is_opencl_extension_supported.argtypes = (ctypes.c_int, ctypes.c_char_p)
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "is_opencl_extension_supported"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -311,6 +313,7 @@ class XPUUtils(object):
         self.get_device_properties = self.mod.get_device_properties
         self.device_count = self.mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
+        self.is_opencl_extension_supported = self.mod.is_opencl_extension_supported
 
     def get_current_device(self):
         import torch
