@@ -107,6 +107,17 @@ private:
   // operation is reached.
   static void addUsers(Operation *producer, Operation *consumer,
                        Operations &ops) {
+    // Problem: there may be more than one path from start to end. This code
+    // will find one and then stop.
+    // Can use a recursive function to collect all possible path to the end ?
+    //           -> E -> END (return true and adds END to the list, then E gets
+    //           added, and then B, A)
+    //    A -> B -> D
+    //           -> C -> F -> END (same as above)
+
+    // We need a chain manager to build chains so that each chain is a unique
+    // path, the manager is the only class that can construct a Chain.
+
     addUsers(producer, ops);
     while (!ops.contains(consumer)) {
       unsigned currentSize = ops.size();
@@ -162,8 +173,7 @@ private:
       return;
     }
 
-    // Step 2: prune collected operations that do not have a path to the end
-    // operation.
+    // Step 2: prune operations that do not have a path to 'end'.
     ops.remove_if([&](Operation *user) {
       if (user == start || user == end)
         return false;
@@ -180,7 +190,7 @@ raw_ostream &operator<<(raw_ostream &os, const Chain &chain) {
   os << "[" << chain.start << ", " << chain.end << "]\n";
   os.indent(2) << "start: " << *chain.start << "\n";
   os.indent(2) << "end: " << *chain.end << "\n";
-  os.indent(2) << "ops:\n";
+  os.indent(2) << "ops (" << chain.ops.size() << "):\n";
   for (Operation *op : chain.ops)
     os.indent(4) << *op << "\n";
   return os;
@@ -232,23 +242,8 @@ public:
         llvm::dbgs() << chain << "\n";
     });
 
-    // Prune overlapping chains, unless they only overlap at the start.
-    Chains overlappingChains = getOverlappingChains(chains);
-    for (const Chain &chain : overlappingChains) {
-      for (const Chain &other : overlappingChains) {
-        if (chain == other || !other.overlap(chain))
-          continue;
-
-        auto intersection = other.intersect(chain);
-        if (intersection.size() != 1 ||
-            !intersection.contains(chain.getStart())) {
-          LLVM_DEBUG({
-            llvm::dbgs() << "Pruned (overlapping):\n" << other << "\n";
-          });
-          chains.erase(other);
-        }
-      }
-    }
+    // Prune chains that overlap with other chains (except at the root).
+    pruneOverlapping(chains);
     if (chains.empty())
       return;
 
@@ -260,13 +255,10 @@ public:
       }
     });
 
-    // At this point overlap, if present, can only happen at the root.
-    if (overlap(chains))
-      duplicateRoot(chains);
-
-    // Prune candidate chains containing load/trans operations that cannot be
-    // safely fused.
-    prune(chains);
+    // Prune chains that cannot be fused.
+    pruneInvalid(chains);
+    if (chains.empty())
+      return;
 
     LLVM_DEBUG({
       llvm::dbgs() << "[Before fusion]:\n";
@@ -274,8 +266,8 @@ public:
         llvm::dbgs() << chain << "\n";
     });
 
-    // Fuse operations.
-    fuse(chains);
+    // Fuse tt.LoadOp->tt.TransOp operations.
+    fuseTransOp(chains);
 
     // Remove operations that are no longer used.
     if (!cleanUp.empty())
@@ -284,6 +276,7 @@ public:
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 
+private:
   bool overlap(const Chains &chains) const {
     assert(!chains.empty() && "Expecting at least one chain");
     if (chains.size() < 2)
@@ -323,8 +316,6 @@ public:
 
   // Duplicate the root operation of the given chains.
   void duplicateRoot(Chains &chains) const {
-    assert(!chains.empty() && "Expecting at least one chain");
-
     std::map<Operation *, Chains> rootToChains;
     for (const Chain &chain : chains) {
       Operation *start = chain.getStart();
@@ -343,24 +334,25 @@ public:
 
     for (auto &entry : rootToChains) {
       Chains &sameRootChains = entry.second;
-      if (sameRootChains.size() == 1)
-        continue;
-
       duplicateRoot(sameRootChains, chains);
     }
   }
 
   // Duplicate the root operation of \p sameRootChains and update \p chains.
   void duplicateRoot(Chains &sameRootChains, Chains &chains) const {
-    assert(sameRootChains.size() > 1 && "expecting at least 2 chains");
     assert(llvm::all_of(sameRootChains, [&](const Chain &chain) {
       const Chain &firstChain = *sameRootChains.begin();
       return firstChain.getStart() == chain.getStart();
     }));
 
-    for (auto it = ++sameRootChains.begin(); it != sameRootChains.end(); ++it) {
+    for (auto it = sameRootChains.begin(); it != sameRootChains.end(); ++it) {
       const Chain &chain = *it;
       Operation *start = chain.getStart();
+      auto users = start->getUsers();
+      if (std::count_if(users.begin(), users.end(),
+                        [](auto) { return true; }) == 1)
+        continue;
+
       OpBuilder builder(start);
       Operation *duplicate = builder.insert(start->clone());
       assert(start->getNumResults() == 1);
@@ -378,12 +370,12 @@ public:
     }
   }
 
-  void fuse(const Chains &chains) {
+  void fuseTransOp(const Chains &chains) {
     for (const Chain &chain : chains)
-      fuseTransOpInChain(chain);
+      fuseTransOp(chain);
   }
 
-  void fuseTransOpInChain(const Chain &chain) {
+  void fuseTransOp(const Chain &chain) {
     assert(
         isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
         "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
@@ -470,14 +462,43 @@ private:
     return makeTensorPtrOp.has_value();
   }
 
-  // Each operation in the def-use chain must have a single user, except in
-  // special circumstances. Prune chains that do not satisfy this condition.
-  void prune(Chains &chains) const {
+  // Prune overlapping chains, unless they only overlap at the start.
+  void pruneOverlapping(Chains &chains) const {
     assert(!chains.empty() && "Expecting at least one candidate chain");
+
+    Chains overlappingChains = getOverlappingChains(chains);
+    for (const Chain &chain : overlappingChains) {
+      for (const Chain &other : overlappingChains) {
+        if (chain == other || !other.overlap(chain))
+          continue;
+
+        auto intersection = other.intersect(chain);
+        if (intersection.size() != 1 ||
+            !intersection.contains(chain.getStart())) {
+          LLVM_DEBUG({
+            llvm::dbgs() << "Pruned (overlapping):\n" << other << "\n";
+          });
+          chains.erase(other);
+        }
+      }
+    }
+  }
+
+  // Prune chains that cannot be handled during fusion. For example, operations
+  // in the def-use chain should have a single user, except in special
+  // circumstances (e.g. the root operation of a chain might have more than one
+  // user).
+  void pruneInvalid(Chains &chains) const {
+    assert(!chains.empty() && "Expecting at least one candidate chain");
+
+    // Duplicate the root operation if necessary.
+    // Note: at this point overlap, if present, can only happen at the root.
+    duplicateRoot(chains);
+
     for (auto it = chains.begin(); it != chains.end();) {
-      if (!validateChain(*it))
+      if (!validateChain(*it)) {
         it = chains.erase(it);
-      else
+      } else
         ++it;
     }
   }
@@ -503,7 +524,6 @@ private:
       if (!op->getParentOfType<LoopLikeOpInterface>())
         return false;
 
-      llvm::errs() << "op: " << *op << "\n";
       auto loopOp = op->getParentOfType<LoopLikeOpInterface>();
       auto yieldOp = cast<scf::YieldOp>(
           loopOp.getYieldedValues()[0].getParentBlock()->getTerminator());
@@ -511,10 +531,8 @@ private:
       SmallVector<Operation *> users(op->getUsers());
       if (users.size() > 2 || llvm::none_of(users, [&](Operation *user) {
             return user == yieldOp;
-          })) {
-        llvm::errs() << "at line: " << __LINE__ << "\n";
+          }))
         return false;
-      }
 
       auto yieldedValUsedAfterLoop = [&op, &yieldOp]() {
         auto it =
