@@ -39,19 +39,13 @@ namespace {
 // Represent a def-use chain rooted at 'start' and terminating at 'end'.
 class Chain {
   friend raw_ostream &operator<<(raw_ostream &, const Chain &);
-  using Operations = llvm::SmallSetVector<Operation *, 32>;
 
 public:
-  Chain(Operation *start, Operation *end) : start(start), end(end) {
+  using Operations = llvm::SmallSetVector<Operation *, 32>;
+
+  Chain(const Operations &ops) : start(ops.front()), end(ops.back()), ops(ops) {
     assert(start && end && "Expecting valid operations");
     assert(start != end && "Expecting distinct operations");
-
-    populate(start, end);
-
-    assert(
-        ops.contains(start) && ops.contains(end) &&
-        "'end' operation should (transitively) use the result of the 'start' "
-        "operation");
     assert(llvm::all_of(ops, [&](Operation *op) {
       return (op != end) ? isTransitivelyUsedBy(op, end) : true;
     }));
@@ -158,28 +152,6 @@ private:
       addUsers(op);
   }
 
-  // Collect operations in the def-use chain rooted by \p start and terminated
-  // by \p end.
-  void populate(Operation *start, Operation *end) {
-    assert(start && end && start != end && "Incorrect usage");
-    assert(ops.empty() && "Expecting 'ops' to be empty");
-
-    // Step 1: transitively collect users of the start operation.
-    ops.insert(start);
-    addUsers(start, end, ops);
-    if (!ops.contains(end)) {
-      ops.clear();
-      return;
-    }
-
-    // Step 2: prune operations that do not have a path to 'end'.
-    ops.remove_if([&](Operation *user) {
-      if (user == start || user == end)
-        return false;
-      return !isTransitivelyUsedBy(user, end);
-    });
-  }
-
   Operations ops;             //< operations in the chain
   Operation *start = nullptr; //< first operation in the chain
   Operation *end = nullptr;   //< last operation in the chain
@@ -192,6 +164,148 @@ raw_ostream &operator<<(raw_ostream &os, const Chain &chain) {
   os.indent(2) << "ops (" << chain.ops.size() << "):\n";
   for (Operation *op : chain.ops)
     os.indent(4) << *op << "\n";
+  return os;
+}
+
+class ChainsManager {
+  friend raw_ostream &operator<<(raw_ostream &, const ChainsManager &);
+
+public:
+  using Chains = std::set<Chain>;
+
+  // Create all def-use chains rooted at \p start and terminated by \p end.
+  void createChains(Operation *start, Operation *end) {
+    assert(start && end && "Expecting valid operations");
+    assert(start != end && "Expecting distinct operations");
+
+    Chain::Operations path;
+    SmallVector<Chain::Operations, 32> allPaths;
+    findAllPaths(start, end, path, allPaths);
+
+    for (Chain::Operations &path : allPaths) {
+      Chain chain(path);
+      chains.insert(chain);
+    }
+  }
+
+  // Prune overlapping chains.
+  // Include the start operation unless \p includeStart is false.
+  void pruneOverlappingChains(bool includeStart) {
+    Chains overlappingChains = getOverlappingChains();
+    for (const Chain &chain : overlappingChains) {
+      for (const Chain &other : overlappingChains) {
+        if (chain == other || !other.overlap(chain))
+          continue;
+
+        Chain::Operations intersection = other.intersect(chain);
+        if (intersection.empty())
+          continue;
+
+        if (includeStart) {
+          chains.erase(other);
+          continue;
+        }
+
+        if (intersection.size() != 1 ||
+            !intersection.contains(chain.getStart())) {
+          assert(!includeStart && "Expecting 'includeStart' to be false");
+          LLVM_DEBUG({
+            llvm::dbgs() << "Pruned (overlapping):\n" << other << "\n";
+          });
+          chains.erase(other);
+        }
+      }
+    }
+  }
+
+  Chains getOverlappingChains() const {
+    if (chains.size() < 2)
+      return {};
+
+    Chains overlappingChains;
+    for (auto it1 = chains.begin(); it1 != chains.end(); ++it1) {
+      for (auto it2 = it1; it2 != chains.end(); ++it2) {
+        if (it2 == it1)
+          continue;
+        if (it2->overlap(*it1)) {
+          overlappingChains.insert(*it1);
+          overlappingChains.insert(*it2);
+        }
+      }
+    }
+
+    return overlappingChains;
+  }
+
+  Chains &getChains() { return chains; }
+  const Chains &getChains() const { return chains; }
+
+private:
+  // Find app def-use paths from \p start to \p end and add them to \p allPaths.
+  void findAllPaths(Operation *start, Operation *end, Chain::Operations &path,
+                    llvm::SmallVectorImpl<Chain::Operations> &allPaths) {
+    assert(start && end && "Incorrect usage");
+
+    // Add the current node to the path.
+    path.insert(start);
+
+    // Reached the end, add the path to allPaths and end the recursion.
+    if (start == end) {
+      allPaths.push_back(path);
+      path.pop_back();
+      return;
+    }
+
+    Chain::Operations users;
+    addUsers(start, users);
+
+    // Recur for all users of the current operation.
+    for (Operation *user : users) {
+      auto it = std::find_if(path.begin(), path.end(),
+                             [&](Operation *op) { return op == user; });
+      if (it == path.end())
+        findAllPaths(user, end, path, allPaths);
+    }
+
+    path.pop_back();
+  }
+
+  // Add the users of \p op to \p users.
+  static void addUsers(Operation *op, Chain::Operations &users) {
+    assert(op && "Expecting valid operation");
+
+    auto addUsers = [&](Operation *op) {
+      // Add users of the block arguments in the 'after' region of a while loop.
+      if (auto condOp = dyn_cast<scf::ConditionOp>(op)) {
+        if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
+          for (BlockArgument arg : whileOp.getAfterArguments())
+            for (Operation *user : arg.getUsers())
+              users.insert(user);
+        }
+      }
+
+      for (Operation *user : op->getUsers())
+        users.insert(user);
+    };
+
+    auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp) {
+      for (Value val : loopOp.getRegionIterArgs())
+        for (Operation *user : val.getUsers())
+          addUsers(user);
+    };
+
+    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op))
+      addInitArgsUsers(loopOp);
+    else
+      addUsers(op);
+  }
+
+  Chains chains;
+};
+
+raw_ostream &operator<<(raw_ostream &os, const ChainsManager &manager) {
+  for (const Chain &chain : manager.getChains())
+    os << chain << "\n";
   return os;
 }
 
@@ -213,45 +327,40 @@ private:
   SmallPtrSet<Operation *, 8> cleanUp;
 
 public:
-  using Chains = std::set<Chain>;
+  using Chains = ChainsManager::Chains;
 
   void run(ModuleOp moduleOp) {
     // Collect def-use chains originating at a `MakeTensorPtrOp` operation
     // and terminating at a candidate `tt::TransOp` operation.
     // Note: A candidate `TransOp` must use the result of a `LoadOp` using a ptr
     // created the `MakeTensorPtrOp` rooting the def-use chain.
-    Chains chains;
+
+    ChainsManager manager;
     moduleOp.walk([&](tt::TransOp transOp) {
       if (isCandidate(transOp)) {
         auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
         tt::MakeTensorPtrOp makeTensorPtrOp =
             *triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
-        Chain chain(makeTensorPtrOp, transOp);
-        chains.insert(chain);
+        manager.createChains(makeTensorPtrOp, transOp);
       }
     });
+
+    Chains &chains = manager.getChains();
     if (chains.empty())
       return;
 
-    unsigned numChainsCollected = chains.size();
-
-    LLVM_DEBUG({
-      llvm::dbgs() << "[Initial set of chains]:\n";
-      for (const Chain &chain : chains)
-        llvm::dbgs() << chain << "\n";
-    });
+    LLVM_DEBUG(llvm::dbgs() << "[Initial set of chains]:\n" << manager << "\n");
 
     // Prune chains that overlap with other chains (except at the root).
-    pruneOverlapping(chains);
+    unsigned numChainsCollected = chains.size();
+    bool includeStart = false;
+    manager.pruneOverlappingChains(includeStart);
     if (chains.empty())
       return;
 
     LLVM_DEBUG({
-      if (chains.size() != numChainsCollected) {
-        llvm::dbgs() << "[After pruning]:\n";
-        for (const Chain &chain : chains)
-          llvm::dbgs() << chain << "\n";
-      }
+      if (chains.size() != numChainsCollected)
+        llvm::dbgs() << "[After pruning]:\n" << manager << "\n";
     });
 
     // Prune chains that cannot be fused.
@@ -259,11 +368,7 @@ public:
     if (chains.empty())
       return;
 
-    LLVM_DEBUG({
-      llvm::dbgs() << "[Before fusion]:\n";
-      for (const Chain &chain : chains)
-        llvm::dbgs() << chain << "\n";
-    });
+    LLVM_DEBUG(llvm::dbgs() << "[Before fusion]:\n" << manager << "\n");
 
     // Fuse tt.LoadOp->tt.TransOp operations.
     fuseTransOp(chains);
@@ -276,43 +381,6 @@ public:
   }
 
 private:
-  bool overlap(const Chains &chains) const {
-    assert(!chains.empty() && "Expecting at least one chain");
-    if (chains.size() < 2)
-      return false;
-
-    for (auto it1 = chains.begin(); it1 != chains.end(); ++it1) {
-      for (auto it2 = it1; it2 != chains.end(); ++it2) {
-        if (it2 == it1)
-          continue;
-        if (it2->overlap(*it1))
-          return true;
-      }
-    }
-
-    return false;
-  }
-
-  Chains getOverlappingChains(const Chains &chains) const {
-    assert(!chains.empty() && "Expecting at least one chain");
-    if (chains.size() < 2)
-      return {};
-
-    Chains overlappingChains;
-    for (auto it1 = chains.begin(); it1 != chains.end(); ++it1) {
-      for (auto it2 = it1; it2 != chains.end(); ++it2) {
-        if (it2 == it1)
-          continue;
-        if (it2->overlap(*it1)) {
-          overlappingChains.insert(*it1);
-          overlappingChains.insert(*it2);
-        }
-      }
-    }
-
-    return overlappingChains;
-  }
-
   // Duplicate the root operation of the given chains.
   void duplicateRoot(Chains &chains) const {
     std::map<Operation *, Chains> rootToChains;
@@ -362,9 +430,16 @@ private:
         return Chain::isTransitivelyUsedBy(operand.getOwner(), chain.getEnd());
       });
 
-      // remove the chain and insert a new one, rooted by the new operation.
-      Chain newChain(duplicate, chain.getEnd());
-      chains.insert(newChain);
+      // remove the chain and insert a new ones, rooted by the new operation.
+      // TODO: instead of creating a newChain using the manager we should xreate
+      // it based on the ops in the old chain we wan to remove.
+
+      Chain newChain = chain;
+
+      ChainsManager manager;
+      manager.createChains(duplicate, chain.getEnd());
+      for (Chain newChain : manager.getChains())
+        chains.insert(newChain);
       chains.erase(chain);
     }
   }
@@ -408,7 +483,6 @@ private:
     cleanUp.insert(makeTensorPtrOp);
   }
 
-private:
   // Candidate is of the form:
   //   tt.dot(tt.trans(tt.load(..., {blockIO=...})))
   // Where:
@@ -460,28 +534,6 @@ private:
         triton::intel::findDefiningMakeTensorPtrOp(loadOp.getPtr());
 
     return makeTensorPtrOp.has_value();
-  }
-
-  // Prune overlapping chains, unless they only overlap at the start.
-  void pruneOverlapping(Chains &chains) const {
-    assert(!chains.empty() && "Expecting at least one candidate chain");
-
-    Chains overlappingChains = getOverlappingChains(chains);
-    for (const Chain &chain : overlappingChains) {
-      for (const Chain &other : overlappingChains) {
-        if (chain == other || !other.overlap(chain))
-          continue;
-
-        auto intersection = other.intersect(chain);
-        if (intersection.size() != 1 ||
-            !intersection.contains(chain.getStart())) {
-          LLVM_DEBUG({
-            llvm::dbgs() << "Pruned (overlapping):\n" << other << "\n";
-          });
-          chains.erase(other);
-        }
-      }
-    }
   }
 
   // Prune chains that cannot be handled during fusion. For example, operations
