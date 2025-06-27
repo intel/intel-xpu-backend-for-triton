@@ -242,10 +242,6 @@ class TritonIntelGPUOptimizeBlockIOEncodingPass
     auto oldTensorPtrType = cast<PointerType>(makeTensorPtrOp.getType());
     auto oldTensorType =
         cast<RankedTensorType>(oldTensorPtrType.getPointeeType());
-    // Note: we need the old layout to get the order for the load, but it is not
-    // clear the layout will always be Blocked. Is there a better way to get
-    // this info?
-    auto oldLayout = cast<BlockedEncodingAttr>(oldTensorType.getEncoding());
 
     auto CTALayout = getCTALayout(dpasLayout);
     const unsigned elemSizeInBits =
