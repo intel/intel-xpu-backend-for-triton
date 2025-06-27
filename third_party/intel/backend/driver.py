@@ -187,17 +187,17 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "is_opencl_extension_supported")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
-        self.shared_library.is_opencl_extension_supported.restype = ctypes.py_object
-        self.shared_library.is_opencl_extension_supported.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.has_opencl_extension.restype = ctypes.py_object
+        self.shared_library.has_opencl_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "is_opencl_extension_supported"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -313,7 +313,7 @@ class XPUUtils(object):
         self.get_device_properties = self.mod.get_device_properties
         self.device_count = self.mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
-        self.is_opencl_extension_supported = self.mod.is_opencl_extension_supported
+        self.has_opencl_extension = self.mod.has_opencl_extension
 
     def get_current_device(self):
         import torch
@@ -750,7 +750,7 @@ class XPUDriver(DriverBase):
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
 
-        check = self.utils.is_opencl_extension_supported
+        check = self.utils.has_opencl_extension
         dev_property['has_subgroup_matrix_multiply_accumulate'] = check(
             device, b'cl_intel_subgroup_matrix_multiply_accumulate')
         dev_property['has_subgroup_matrix_multiply_accumulate_tensor_float32'] = check(
