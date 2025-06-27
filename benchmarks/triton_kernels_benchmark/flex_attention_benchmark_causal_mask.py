@@ -9,26 +9,27 @@ from torch.nn.attention.flex_attention import (
 
 import torch
 import torch.nn.functional as F
-import torch._inductor
-import torch._inductor.lowering
-import torch._inductor.kernel
-import torch._inductor.kernel.flex_attention as flex_attn
-import torch._inductor.virtualized
+import torch._inductor.template_heuristics as inductor_heuristics
+from torch._inductor.template_heuristics import FlexConfig
 
 import triton_kernels_benchmark as benchmark_suit
 
 # Use TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 or uncomment the following line to print the auto-tune results.
 # torch._inductor.config.max_autotune_gemm = True
 
+old_get_flex_attn_fwd_configs = inductor_heuristics.XPUConfigHeuristic.get_flex_attn_fwd_configs
 
-def get_xpu_config(*args, **kwargs):  # pylint: disable=unused-argument
-    # BLOCK_M, BLOCK_N, num_warps, num_stages
-    configs = [
-        (32, 16, 4, 2),
-        (128, 64, 16, 2),
-        (128, 64, 8, 2),
-        (128, 32, 16, 2),
-        (128, 32, 8, 2),
+
+def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argument
+    configs = old_get_flex_attn_fwd_configs(*args, **kwargs)
+    # Add our own configurations for FlexAttention forward pass.
+    # BLOCK_M, BLOCK_N, num_stages, num_warps
+    configs += [
+        FlexConfig(32, 16, 2, 4),
+        FlexConfig(128, 64, 2, 16),
+        FlexConfig(128, 64, 2, 8),
+        FlexConfig(128, 32, 2, 16),
+        FlexConfig(128, 32, 2, 8),
     ]
     return configs
 
@@ -36,7 +37,7 @@ def get_xpu_config(*args, **kwargs):  # pylint: disable=unused-argument
 # There is a auto-tuning requirement to get the best configuration for the flex attention.
 # The pytorch flex attention doesn't support auto-tuning by user by default.
 # Overriding the _get_xpu_config method to provide custom configurations for auto-tuning on XPU.
-flex_attn._get_xpu_config = get_xpu_config  # pylint: disable=protected-access
+inductor_heuristics.XPUConfigHeuristic.get_flex_attn_fwd_configs = get_flex_attn_fwd_configs  # pylint: disable=protected-access
 
 torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
