@@ -68,7 +68,7 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           .venv\Scripts\activate.ps1
           cd pytorch
-          pip install cibuildwheel
+          pip install "cibuildwheel<3"
 
       - name: Identify runtime dependencies
         run: |
