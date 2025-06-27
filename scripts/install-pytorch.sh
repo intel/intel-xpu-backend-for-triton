@@ -10,8 +10,10 @@ CHECK_WHEEL=false
 PYTORCH_CURRENT_COMMIT=""
 VENV=false
 CLEAN=true
-for arg in "$@"; do
-  case $arg in
+TRITON_REPO=intel/intel-xpu-backend-for-triton
+TRITON_REPO_BRANCH=main
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --source)
       BUILD_PYTORCH=true
       ;;
@@ -33,12 +35,43 @@ for arg in "$@"; do
     -nc|--no-clean)
       CLEAN=false
       ;;
+    --triton-repo)
+      TRITON_REPO="$2"
+      shift 2
+      ;;
+    --triton-repo-branch)
+      TRITON_REPO_BRANCH="$2"
+      shift 2
+      ;;
     --help)
-      echo "Example usage: ./install-pytorch.sh [--source | --latest | --force-reinstall | --check-wheel | --venv]"
+        cat <<EOF
+Usage: ./install-pytorch.sh [options]
+
+Options:
+  --source                Build PyTorch from source using pinned commit.
+  --latest                Build PyTorch from the latest commit in the main branch.
+  --force-reinstall       Force reinstallation of PyTorch and pinned dependencies.
+  --check-wheel           Check if a prebuilt PyTorch wheel already exists before building.
+  --venv                  Activate Python virtual environment from .venv/ before installation.
+  -nc, --no-clean         Do not clean existing PyTorch source directory before build.
+
+  --triton-repo <repo>          GitHub repo to fetch prebuilt PyTorch wheels from
+                                (default: intel/intel-xpu-backend-for-triton)
+
+  --triton-repo-branch <branch> Branch to fetch prebuilt PyTorch wheels from
+                                (default: main)
+
+  --help                  Show this help message and exit.
+
+Examples:
+  ./install-pytorch.sh --source
+  ./install-pytorch.sh --latest --venv
+  ./install-pytorch.sh --triton-repo my_fork/intel-xpu-backend-for-triton --triton-repo-branch dev
+EOF
       exit 1
       ;;
     *)
-      echo "Unknown argument: $arg."
+      echo "Unknown argument: $1."
       exit 1
       ;;
   esac
@@ -117,11 +150,11 @@ if [ "$BUILD_PYTORCH" = false ]; then
   fi
   echo "**** Download nightly builds. ****"
   PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-  RUN_ID=$(gh run list --workflow nightly-wheels.yml --branch main -R intel/intel-xpu-backend-for-triton --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
+  RUN_ID=$(gh run list --workflow nightly-wheels.yml --branch $TRITON_REPO_BRANCH -R $TRITON_REPO --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')
   TEMP_DIR=$(mktemp -d)
   WHEEL_PATTERN="wheels-pytorch-py${PYTHON_VERSION}*"
   gh run download $RUN_ID \
-    --repo intel/intel-xpu-backend-for-triton \
+    --repo $TRITON_REPO \
     --pattern "$WHEEL_PATTERN" \
     --dir $TEMP_DIR
   cd $TEMP_DIR/$WHEEL_PATTERN
