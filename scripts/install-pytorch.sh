@@ -16,24 +16,30 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --source)
       BUILD_PYTORCH=true
+      shift
       ;;
     --latest)
       # Build from the latest pytorch commit in the main branch.
       BUILD_PYTORCH=true
       BUILD_LATEST=true
+      shift
       ;;
     --force-reinstall)
       FORCE_REINSTALL=true
+      shift
       ;;
     --check-wheel)
       # Check if PyTorch wheel exists
       CHECK_WHEEL=true
+      shift
       ;;
     --venv)
       VENV=true
+      shift
       ;;
     -nc|--no-clean)
       CLEAN=false
+      shift
       ;;
     --triton-repo)
       TRITON_REPO="$2"
