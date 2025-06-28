@@ -759,6 +759,8 @@ class XPUDriver(DriverBase):
             device, b'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32')
         dev_property['has_subgroup_2d_block_io'] = check(device, b'cl_intel_subgroup_2d_block_io')
         dev_property['has_bfloat16_conversions'] = check(device, b'cl_intel_bfloat16_conversions')
+        # DEBUG; removeme
+        print(dev_property)
 
         warp_size = 32
         return GPUTarget("xpu", dev_property, warp_size)
