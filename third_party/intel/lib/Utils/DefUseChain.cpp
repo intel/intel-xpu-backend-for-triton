@@ -12,7 +12,7 @@ namespace mlir::triton::intel {
 
 DefUseChain::Operations DefUseChain::intersect(const DefUseChain &other) const {
   // Algorithm: I(S1,S2) = U(S1,S2) - U(S1-S2, S2-S1).
-  
+
   Operations U = ops;
   if (!U.set_union(other.ops))
     return ops;
@@ -94,7 +94,7 @@ raw_ostream &operator<<(raw_ostream &os, const DefUseChain &chain) {
 void DefUseChainManager::createChains(Operation *start, Operation *end) {
   assert(start && end && "Expecting valid operations");
   assert(start != end && "Expecting distinct operations");
- 
+
   Operations path;
   SmallVector<Operations, 32> allPaths;
   findAllPaths(start, end, path, allPaths);

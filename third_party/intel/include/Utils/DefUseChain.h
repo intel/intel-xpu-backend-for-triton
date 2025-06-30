@@ -12,14 +12,14 @@ namespace mlir::triton::intel {
 /// Note: a \class DefUseChain can only be constructed by a \class
 /// DefUseChainManager.
 class DefUseChain {
-  friend class DefUseChainManager;  
+  friend class DefUseChainManager;
   friend raw_ostream &operator<<(raw_ostream &, const DefUseChain &);
 
 public:
   using Operations = llvm::SmallSetVector<Operation *, 32>;
 
   DefUseChain() = delete;
-  
+
   bool operator<(const DefUseChain &other) const {
     if (start == other.start)
       return end < other.end;
@@ -33,7 +33,7 @@ public:
   Operation *getEnd() const { return end; }
 
   /// Compute the intersection between the ops in this chain and the ops in \p
-  /// other. 
+  /// other.
   Operations intersect(const DefUseChain &other) const;
 
   /// Returns true if this chain and \p other contain one or more common
