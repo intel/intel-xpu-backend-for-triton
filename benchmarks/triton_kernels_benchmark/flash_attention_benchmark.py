@@ -453,7 +453,7 @@ class _attention(torch.autograd.Function):
                 N_CTX=q.shape[2],  #
                 BLOCK_DMODEL=Lk,  #
                 STAGE=stage,  #
-                split_barriers_scope='None',  # possible scope value: 'Subgroup','Workgroup'
+                split_barriers_scope='Workgroup',  # possible scope value: 'Subgroup','Workgroup'
             )
         else:
             _attention.attn_fwd[grid](  # pylint: disable=unsubscriptable-object
