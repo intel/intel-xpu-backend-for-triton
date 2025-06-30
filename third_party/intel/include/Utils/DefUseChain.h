@@ -38,7 +38,9 @@ public:
 
   /// Returns true if this chain and \p other contain one or more common
   /// operations, and false otherwise.
-  bool overlap(const DefUseChain &other) const { return !intersect(other).empty(); }
+  bool overlap(const DefUseChain &other) const {
+    return !intersect(other).empty();
+  }
 
   // Return true if the chain contains the given operation \p op, and false
   // otherwise.
@@ -87,7 +89,8 @@ public:
   void pruneOverlappingChains(bool includeStart);
 
 private:
-  /// Find all def-use paths from \p start to \p end and add them to \p allPaths.
+  /// Find all def-use paths from \p start to \p end and add them to \p
+  /// allPaths.
   void findAllPaths(Operation *start, Operation *end, Operations &path,
                     SmallVectorImpl<Operations> &allPaths);
 
