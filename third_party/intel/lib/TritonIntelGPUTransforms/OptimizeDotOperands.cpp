@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Utils/DefUseChain.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -36,279 +37,6 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-// Represent a def-use chain rooted at 'start' and terminating at 'end'.
-class Chain {
-  friend raw_ostream &operator<<(raw_ostream &, const Chain &);
-
-public:
-  using Operations = llvm::SmallSetVector<Operation *, 32>;
-
-  Chain(const Operations &ops) : start(ops.front()), end(ops.back()), ops(ops) {
-    assert(start && end && "Expecting valid operations");
-    assert(start != end && "Expecting distinct operations");
-    assert(llvm::all_of(ops, [&](Operation *op) {
-      return (op != end) ? isTransitivelyUsedBy(op, end) : true;
-    }));
-  }
-
-  bool operator<(const Chain &other) const {
-    if (start == other.start)
-      return end < other.end;
-    return start < other.start;
-  }
-  bool operator==(const Chain &other) const { return ops == other.ops; }
-
-  const Operations &getOps() const { return ops; }
-  Operation *getStart() const { return start; }
-  Operation *getEnd() const { return end; }
-
-  // Compute the intersection between the ops in this chain and the ops in \p
-  // other.
-  // Algorithm: I(S1,S2) = U(S1,S2) - U(S1-S2, S2-S1).
-  Operations intersect(const Chain &other) const {
-    Operations U = ops;
-    if (!U.set_union(other.ops))
-      return ops;
-
-    Operations D1 = ops;
-    Operations D2 = other.ops;
-    D1.set_subtract(other.ops);
-    D2.set_subtract(ops);
-
-    Operations &U1 = D1;
-    U1.set_union(D2);
-    U.set_subtract(U1);
-
-    return U;
-  }
-
-  // Returns true if this chain and \p other contain any common operation.
-  bool overlap(const Chain &other) const { return !intersect(other).empty(); }
-
-  // Returns true if \p producer yields a result that is used (directly or
-  // indirectly) by \p consumer.
-  static bool isTransitivelyUsedBy(Operation *producer, Operation *consumer) {
-    assert(producer && consumer && "Expecting valid operations");
-    assert(producer != consumer && "Expecting distinct operations");
-    Operations ops;
-    addUsers(producer, consumer, ops);
-    return ops.contains(consumer);
-  }
-
-private:
-  // Transitively collect users of \p producer in \p ops, until the \p consumer
-  // operation is reached.
-  static void addUsers(Operation *producer, Operation *consumer,
-                       Operations &ops) {
-    // Problem: there may be more than one path from start to end. This code
-    // will find one and then stop.
-    // Can use a recursive function to collect all possible path to the end ?
-    //           -> E -> END (return true and adds END to the list, then E gets
-    //           added, and then B, A)
-    //    A -> B -> D
-    //           -> C -> F -> END (same as above)
-
-    // We need a chain manager to build chains so that each chain is a unique
-    // path, the manager is the only class that can construct a Chain.
-
-    addUsers(producer, ops);
-    while (!ops.contains(consumer)) {
-      unsigned currentSize = ops.size();
-      Operations copyUsers = ops;
-      for (Operation *user : copyUsers)
-        addUsers(user, ops);
-      if (ops.size() == currentSize)
-        break;
-    }
-  }
-
-  // Add the users of \p op to \p users.
-  static void addUsers(Operation *op, Operations &users) {
-    assert(op && "Expecting valid operation");
-
-    auto addUsers = [&](Operation *op) {
-      // Add users of the block arguments in the 'after' region of a while loop.
-      if (auto condOp = dyn_cast<scf::ConditionOp>(op)) {
-        if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
-          for (BlockArgument arg : whileOp.getAfterArguments())
-            for (Operation *user : arg.getUsers())
-              users.insert(user);
-        }
-      }
-
-      for (Operation *user : op->getUsers())
-        users.insert(user);
-    };
-
-    auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp) {
-      for (Value val : loopOp.getRegionIterArgs())
-        for (Operation *user : val.getUsers())
-          addUsers(user);
-    };
-
-    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op))
-      addInitArgsUsers(loopOp);
-    else
-      addUsers(op);
-  }
-
-  Operations ops;             //< operations in the chain
-  Operation *start = nullptr; //< first operation in the chain
-  Operation *end = nullptr;   //< last operation in the chain
-};
-
-raw_ostream &operator<<(raw_ostream &os, const Chain &chain) {
-  os << "[" << chain.start << ", " << chain.end << "]\n";
-  os.indent(2) << "start: " << *chain.start << "\n";
-  os.indent(2) << "end: " << *chain.end << "\n";
-  os.indent(2) << "ops (" << chain.ops.size() << "):\n";
-  for (Operation *op : chain.ops)
-    os.indent(4) << *op << "\n";
-  return os;
-}
-
-class ChainsManager {
-  friend raw_ostream &operator<<(raw_ostream &, const ChainsManager &);
-
-public:
-  using Chains = std::set<Chain>;
-
-  // Create all def-use chains rooted at \p start and terminated by \p end.
-  void createChains(Operation *start, Operation *end) {
-    assert(start && end && "Expecting valid operations");
-    assert(start != end && "Expecting distinct operations");
-
-    Chain::Operations path;
-    SmallVector<Chain::Operations, 32> allPaths;
-    findAllPaths(start, end, path, allPaths);
-
-    for (Chain::Operations &path : allPaths) {
-      Chain chain(path);
-      chains.insert(chain);
-    }
-  }
-
-  // Prune overlapping chains.
-  // Include the start operation unless \p includeStart is false.
-  void pruneOverlappingChains(bool includeStart) {
-    Chains overlappingChains = getOverlappingChains();
-    for (const Chain &chain : overlappingChains) {
-      for (const Chain &other : overlappingChains) {
-        if (chain == other || !other.overlap(chain))
-          continue;
-
-        Chain::Operations intersection = other.intersect(chain);
-        if (intersection.empty())
-          continue;
-
-        if (includeStart) {
-          chains.erase(other);
-          continue;
-        }
-
-        if (intersection.size() != 1 ||
-            !intersection.contains(chain.getStart())) {
-          assert(!includeStart && "Expecting 'includeStart' to be false");
-          LLVM_DEBUG({
-            llvm::dbgs() << "Pruned (overlapping):\n" << other << "\n";
-          });
-          chains.erase(other);
-        }
-      }
-    }
-  }
-
-  Chains getOverlappingChains() const {
-    if (chains.size() < 2)
-      return {};
-
-    Chains overlappingChains;
-    for (auto it1 = chains.begin(); it1 != chains.end(); ++it1) {
-      for (auto it2 = it1; it2 != chains.end(); ++it2) {
-        if (it2 == it1)
-          continue;
-        if (it2->overlap(*it1)) {
-          overlappingChains.insert(*it1);
-          overlappingChains.insert(*it2);
-        }
-      }
-    }
-
-    return overlappingChains;
-  }
-
-  Chains &getChains() { return chains; }
-  const Chains &getChains() const { return chains; }
-
-private:
-  // Find app def-use paths from \p start to \p end and add them to \p allPaths.
-  void findAllPaths(Operation *start, Operation *end, Chain::Operations &path,
-                    llvm::SmallVectorImpl<Chain::Operations> &allPaths) {
-    assert(start && end && "Incorrect usage");
-
-    // Add the current node to the path.
-    path.insert(start);
-
-    // Reached the end, add the path to allPaths and end the recursion.
-    if (start == end) {
-      allPaths.push_back(path);
-      path.pop_back();
-      return;
-    }
-
-    Chain::Operations users;
-    addUsers(start, users);
-
-    // Recur for all users of the current operation.
-    for (Operation *user : users) {
-      auto it = std::find_if(path.begin(), path.end(),
-                             [&](Operation *op) { return op == user; });
-      if (it == path.end())
-        findAllPaths(user, end, path, allPaths);
-    }
-
-    path.pop_back();
-  }
-
-  // Add the users of \p op to \p users.
-  static void addUsers(Operation *op, Chain::Operations &users) {
-    assert(op && "Expecting valid operation");
-
-    auto addUsers = [&](Operation *op) {
-      // Add users of the block arguments in the 'after' region of a while loop.
-      if (auto condOp = dyn_cast<scf::ConditionOp>(op)) {
-        if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
-          for (BlockArgument arg : whileOp.getAfterArguments())
-            for (Operation *user : arg.getUsers())
-              users.insert(user);
-        }
-      }
-
-      for (Operation *user : op->getUsers())
-        users.insert(user);
-    };
-
-    auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp) {
-      for (Value val : loopOp.getRegionIterArgs())
-        for (Operation *user : val.getUsers())
-          addUsers(user);
-    };
-
-    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op))
-      addInitArgsUsers(loopOp);
-    else
-      addUsers(op);
-  }
-
-  Chains chains;
-};
-
-raw_ostream &operator<<(raw_ostream &os, const ChainsManager &manager) {
-  for (const Chain &chain : manager.getChains())
-    os << chain << "\n";
-  return os;
-}
-
 // Transform:
 //   %ptr = make_block_ptr [shapeN, shapeK], [strideN, strideK], [offN, offK]
 //        : tt.ptr<tensor<NxK, enc>
@@ -327,15 +55,16 @@ private:
   SmallPtrSet<Operation *, 8> cleanUp;
 
 public:
-  using Chains = ChainsManager::Chains;
+  using DefUseChain = tt::intel::DefUseChain;
+  using DefUseChainManager = tt::intel::DefUseChainManager;
+  using DefUseChains = DefUseChainManager::DefUseChains;
 
   void run(ModuleOp moduleOp) {
     // Collect def-use chains originating at a `MakeTensorPtrOp` operation
     // and terminating at a candidate `tt::TransOp` operation.
     // Note: A candidate `TransOp` must use the result of a `LoadOp` using a ptr
     // created the `MakeTensorPtrOp` rooting the def-use chain.
-
-    ChainsManager manager;
+    DefUseChainManager manager;
     moduleOp.walk([&](tt::TransOp transOp) {
       if (isCandidate(transOp)) {
         auto loadOp = cast<tt::LoadOp>(transOp.getSrc().getDefiningOp());
@@ -345,33 +74,32 @@ public:
       }
     });
 
-    Chains &chains = manager.getChains();
-    if (chains.empty())
+    if (manager.getChains().empty())
       return;
 
     LLVM_DEBUG(llvm::dbgs() << "[Initial set of chains]:\n" << manager << "\n");
 
     // Prune chains that overlap with other chains (except at the root).
-    unsigned numChainsCollected = chains.size();
+    unsigned numChainsCollected = manager.getChains().size();
     bool includeStart = false;
     manager.pruneOverlappingChains(includeStart);
-    if (chains.empty())
+    if (manager.getChains().empty())
       return;
 
     LLVM_DEBUG({
-      if (chains.size() != numChainsCollected)
+      if (manager.getChains().size() != numChainsCollected)
         llvm::dbgs() << "[After pruning]:\n" << manager << "\n";
     });
 
     // Prune chains that cannot be fused.
-    pruneInvalid(chains);
-    if (chains.empty())
+    pruneInvalid(manager.getChainsMutable());
+    if (manager.getChains().empty())
       return;
 
     LLVM_DEBUG(llvm::dbgs() << "[Before fusion]:\n" << manager << "\n");
 
     // Fuse tt.LoadOp->tt.TransOp operations.
-    fuseTransOp(chains);
+    fuseTransOp(manager.getChains());
 
     // Remove operations that are no longer used.
     if (!cleanUp.empty())
@@ -382,16 +110,16 @@ public:
 
 private:
   // Duplicate the root operation of the given chains.
-  void duplicateRoot(Chains &chains) const {
-    std::map<Operation *, Chains> rootToChains;
-    for (const Chain &chain : chains) {
+  void duplicateRoot(DefUseChains &chains) const {
+    std::map<Operation *, DefUseChains> rootToChains;
+    for (const DefUseChain &chain : chains) {
       Operation *start = chain.getStart();
       if (!rootToChains[start].empty())
         continue;
 
-      Chains sameRootChains{chain};
+      DefUseChains sameRootChains{chain};
       rootToChains[start] = sameRootChains;
-      for (const Chain &otherChain : chains) {
+      for (const DefUseChain &otherChain : chains) {
         if (otherChain == chain || otherChain.getStart() != start)
           continue;
 
@@ -400,24 +128,23 @@ private:
     }
 
     for (auto &entry : rootToChains) {
-      Chains &sameRootChains = entry.second;
+      DefUseChains &sameRootChains = entry.second;
       duplicateRoot(sameRootChains, chains);
     }
   }
 
   // Duplicate the root operation of \p sameRootChains and update \p chains.
-  void duplicateRoot(Chains &sameRootChains, Chains &chains) const {
-    assert(llvm::all_of(sameRootChains, [&](const Chain &chain) {
-      const Chain &firstChain = *sameRootChains.begin();
+  void duplicateRoot(DefUseChains &sameRootChains, DefUseChains &chains) const {
+    assert(llvm::all_of(sameRootChains, [&](const DefUseChain &chain) {
+      const DefUseChain &firstChain = *sameRootChains.begin();
       return firstChain.getStart() == chain.getStart();
     }));
 
     for (auto it = sameRootChains.begin(); it != sameRootChains.end(); ++it) {
-      const Chain &chain = *it;
+      const DefUseChain &chain = *it;
       Operation *start = chain.getStart();
       auto users = start->getUsers();
-      if (std::count_if(users.begin(), users.end(),
-                        [](auto) { return true; }) == 1)
+      if (llvm::count_if(users, [](auto) { return true; }) == 1)
         continue;
 
       OpBuilder builder(start);
@@ -427,29 +154,24 @@ private:
       Value res = start->getResult(0);
       Value dupRes = duplicate->getResult(0);
       res.replaceUsesWithIf(dupRes, [&](OpOperand &operand) {
-        return Chain::isTransitivelyUsedBy(operand.getOwner(), chain.getEnd());
+        Operation *op = operand.getOwner();
+        return chain.contains(op);
       });
 
-      // remove the chain and insert a new ones, rooted by the new operation.
-      // TODO: instead of creating a newChain using the manager we should xreate
-      // it based on the ops in the old chain we wan to remove.
-
-      Chain newChain = chain;
-
-      ChainsManager manager;
+      DefUseChainManager manager;
       manager.createChains(duplicate, chain.getEnd());
-      for (Chain newChain : manager.getChains())
+      for (DefUseChain newChain : manager.getChains())
         chains.insert(newChain);
       chains.erase(chain);
     }
   }
 
-  void fuseTransOp(const Chains &chains) {
-    for (const Chain &chain : chains)
+  void fuseTransOp(const DefUseChains &chains) {
+    for (const DefUseChain &chain : chains)
       fuseTransOp(chain);
   }
 
-  void fuseTransOp(const Chain &chain) {
+  void fuseTransOp(const DefUseChain &chain) {
     assert(
         isa<tt::MakeTensorPtrOp>(chain.getStart()) &&
         "Expecting 'chain' to be rooted by a 'tt.make_tensor_ptr' operation");
@@ -540,7 +262,7 @@ private:
   // in the def-use chain should have a single user, except in special
   // circumstances (e.g. the root operation of a chain might have more than one
   // user).
-  void pruneInvalid(Chains &chains) const {
+  void pruneInvalid(DefUseChains &chains) const {
     assert(!chains.empty() && "Expecting at least one candidate chain");
 
     // Duplicate the root operation if necessary.
@@ -548,9 +270,9 @@ private:
     duplicateRoot(chains);
 
     for (auto it = chains.begin(); it != chains.end();) {
-      if (!validateChain(*it)) {
+      if (!validateChain(*it))
         it = chains.erase(it);
-      } else
+      else
         ++it;
     }
   }
@@ -568,7 +290,7 @@ private:
   //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
   //                                              -> yield -> load (NOT OK)
   //
-  bool validateChain(const Chain &chain) const {
+  bool validateChain(const DefUseChain &chain) const {
     auto validateOperation = [](Operation *op, Operation *&nextOp) {
       assert(nextOp == nullptr);
       if (op->hasOneUse())
@@ -648,11 +370,11 @@ private:
   }
 
   // Propagate \p newVal to operations in the given def-use chain.
-  void propagateToUsers(Value newVal, const Chain &chain) {
+  void propagateToUsers(Value newVal, const DefUseChain &chain) {
     auto start = cast<tt::MakeTensorPtrOp>(chain.getStart());
     Operation *end = chain.getEnd();
     auto it = llvm::find_if(start->getUsers(), [&](Operation *user) {
-      return Chain::isTransitivelyUsedBy(user, end);
+      return chain.contains(user);
     });
     assert(it != start->getUsers().end() && "Expecting valid iterator");
 
