@@ -8,6 +8,8 @@ import pathlib
 
 import triton
 from triton._internal_testing import is_xpu
+from triton.experimental import gluon
+from triton.experimental.gluon import language as ttgl
 
 
 class DpasLayout:
@@ -219,3 +221,47 @@ def test_block_io(M, N, dtype_str, layout, load_block_ptr, store_block_ptr, tran
         if load_count == 0 and transpose:
             pytest.xfail("no block 2d is used.")
         assert load_count > 0
+
+
+@gluon.jit
+def copy_kernel(out, inp, xnumel, ynumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
+    xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, layout))[:, None]
+    yindex = ttgl.arange(0, YBLOCK, ttgl.SliceLayout(0, layout))[None, :]
+
+    data = ttgl.load(inp + xindex * YBLOCK + yindex, (xindex < xnumel) & (yindex < ynumel))
+    ttgl.store(out + xindex * YBLOCK + yindex, data, (xindex < xnumel) & (yindex < ynumel))
+
+
+@pytest.mark.parametrize("M, N", [[M, N] for M, N in itertools.product([32, 64, 128, 256], [32, 64, 128, 256])])
+@pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8", "bfloat16"])
+@pytest.mark.parametrize("layout", [
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[32], warps_per_cta=[4], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[2], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[4], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
+    ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[32], warps_per_cta=[8], order=[0]),
+])
+@pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
+def test_copy_block_store(M, N, dtype_str, layout, device):
+    torch_dtype = getattr(torch, dtype_str)
+    if torch_dtype.is_floating_point:
+        inp = torch.randn((M, N), dtype=torch_dtype, device=device)
+    else:
+        inp = torch.randint(low=-127, high=128, size=(M, N), dtype=torch_dtype, device=device)
+
+    out = torch.empty_like(inp)
+
+    def next_power_of_2(n):
+        if n <= 0:
+            raise ValueError("Input must be a positive integer.")
+        # If n is already a power of 2, return it
+        if (n & (n - 1)) == 0:
+            return n
+        # Find the next power of 2
+        return 1 << (n - 1).bit_length()
+
+    copy_kernel[(1, )](out, inp, M, N, XBLOCK=next_power_of_2(M), YBLOCK=next_power_of_2(N), layout=layout)
+    assert torch.equal(inp, out)
