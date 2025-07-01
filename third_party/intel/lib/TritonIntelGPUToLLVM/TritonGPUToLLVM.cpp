@@ -25,13 +25,6 @@ namespace mlir::triton::gpu::intel {
 #include "intel/include/TritonIntelGPUToLLVM/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
-namespace mlir {
-FailureOr<LLVM::LLVMFuncOp>
-convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
-                          ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
-}
-
 using namespace mlir;
 
 namespace {
