@@ -35,6 +35,7 @@ apply_patch() {
 echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
-apply_patch https://github.com/pytorch/pytorch/pull/143553.diff
+# trigger build
+apply_patch ./patch/flex_attn_143553.patch
 apply_patch pytorch_fp64.patch
 apply_patch ./patch/pytorch_global_scratch.patch
