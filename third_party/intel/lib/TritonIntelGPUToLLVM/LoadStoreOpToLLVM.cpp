@@ -1283,7 +1283,8 @@ struct LoadOpToBlockIOConversion
 
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(ptr, 0);
-    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeight);
+    unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
+    Value baseHeight = b.i32_val(baseHeightInt);
 
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
@@ -1379,6 +1380,30 @@ struct LoadOpToBlockIOConversion
                 /*vnni_transform*/
                 (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
                  !isTransposeRequired && originalElemBits != 32));
+            assert(tileHeight % baseHeightInt == 0 &&
+                   "Expecting tileHeight to be multiple of baseHeight");
+            if (baseHeightInt < tileHeight) {
+              if (tileWidth < threadsPerWarp) {
+                assert(tileWidth * 2 == threadsPerWarp);
+                for (unsigned i = 0; i < numValuesPerLoad; ++i) {
+                  Value idx = b.i32_val(i);
+                  auto oldVal = b.extract_element(ret, idx);
+                  Value threadId = getThreadId(rewriter, loc);
+                  auto newVal = targetInfo.shuffleIdx(
+                      rewriter, loc, oldVal,
+                      b.urem(threadId, b.i32_val(tileWidth)));
+                  ret = b.insert_element(ret.getType(), ret, newVal, idx);
+                }
+              }
+              SmallVector<int32_t> indices(numValuesPerLoad);
+              for (unsigned i = 0; i < numValuesPerLoad; ++i) {
+                unsigned numIndicesPerMatrix = numValuesPerLoad / vBlocks;
+                indices[i] = (i / numIndicesPerMatrix) * numIndicesPerMatrix;
+              }
+              DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(indices);
+              ret = rewriter.create<LLVM::ShuffleVectorOp>(loc, load2DGenXType,
+                                                           ret, ret, attr);
+            }
 
             if (others.size()) {
               assert(masks.size() == others.size() &&
