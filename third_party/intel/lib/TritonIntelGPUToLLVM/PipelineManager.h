@@ -38,7 +38,8 @@ namespace mlir {
 FailureOr<LLVM::LLVMFuncOp>
 convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
                           ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
+                          const LLVMTypeConverter &converter,
+                          SymbolTableCollection *symbolTables = nullptr);
 }
 
 namespace mlir::triton::intel {

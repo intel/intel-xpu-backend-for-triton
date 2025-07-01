@@ -3,6 +3,7 @@
 #include "passes.h"
 
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
