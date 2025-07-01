@@ -246,3 +246,44 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// COM: Check codegen when base height is 1 and tile height is > 1.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+  // CHECK-LABEL: @baseheight1
+  tt.func public @baseheight1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %18 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>
+    %19 = tt.expand_dims %18 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>> -> tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %20 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %21 = tt.addptr %20, %19 : tensor<1x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>, tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %22 = tt.broadcast %21 : tensor<1x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> -> tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %50 = tt.load %22 {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK: [[LOAD:%.*]] = triton_gen.2Dblockload %{{.*}}, %{{.*}}, [[C1]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 2
+
+    // CHECK: [[C0_:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[OLDVAL:%.*]] = llvm.extractelement [[LOAD]][[[C0_]] : i32] : vector<16xi32>
+    // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[THREADID_i64:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[C0]])
+    // CHECK: [[THREADID:%.*]] = llvm.trunc [[THREADID_i64]] : i64 to i32
+    // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK: [[REM:%.*]] = llvm.urem [[THREADID]], [[C8]] : i32
+    // CHECK: [[NEWVAL:%.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij([[OLDVAL]], [[REM]])
+    // CHECK: [[LOAD1:%.*]] = llvm.insertelement [[NEWVAL]], [[LOAD]][[[C0_]] : i32] : vector<16xi32>
+
+    // CHECK: [[C8_:%.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK: [[OLDVAL:%.*]] = llvm.extractelement [[LOAD1]][[[C8_]] : i32] : vector<16xi32>
+    // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[THREADID_i64:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[C0]])
+    // CHECK: [[THREADID:%.*]] = llvm.trunc [[THREADID_i64]] : i64 to i32
+    // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK: [[REM:%.*]] = llvm.urem [[THREADID]], [[C8]] : i32
+    // CHECK: [[NEWVAL:%.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij([[OLDVAL]], [[REM]])
+    // CHECK: [[LOAD2:%.*]] = llvm.insertelement [[NEWVAL]], [[LOAD1]][[[C8_]] : i32] : vector<16xi32>
+
+    // CHECK: llvm.shufflevector [[LOAD2]], [[LOAD2]] [0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8]
+    tt.return
+  }
+}
