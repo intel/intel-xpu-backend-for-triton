@@ -29,55 +29,7 @@ DefUseChain::Operations DefUseChain::intersect(const DefUseChain &other) const {
   return U;
 }
 
-bool DefUseChain::isTransitivelyUsedBy(Operation *op, Operation *consumer,
-                                       DefUseChain::Operations &path) const {
-  if (!contains(op) || !contains(consumer))
-    return false;
-
-  path.insert(op);
-  if (op == end)
-    return true;
-
-  auto addUsers = [this](Operation *op, Operations &users) {
-    if (auto condOp = dyn_cast<scf::ConditionOp>(op)) {
-      if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
-        for (BlockArgument arg : whileOp.getAfterArguments())
-          for (Operation *user : arg.getUsers())
-            if (contains(user))
-              users.insert(user);
-      }
-    }
-
-    for (Operation *user : op->getUsers()) {
-      if (contains(user))
-        users.insert(user);
-    }
-  };
-
-  auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp, Operations &users) {
-    for (Value val : loopOp.getRegionIterArgs())
-      for (Operation *user : val.getUsers())
-        addUsers(user, users);
-  };
-
-  Operations users;
-  if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op))
-    addInitArgsUsers(loopOp, users);
-  else
-    addUsers(op, users);
-
-  for (Operation *user : users)
-    return isTransitivelyUsedBy(user, end, path);
-
-  return false;
-}
-
 raw_ostream &operator<<(raw_ostream &os, const DefUseChain &chain) {
-  if (!chain.valid) {
-    os << "Chains is invalid";
-    return os;
-  }
-
   os << "[" << chain.start << ", " << chain.end << "]\n";
   os.indent(2) << "start: " << *chain.start << "\n";
   os.indent(2) << "end: " << *chain.end << "\n";
@@ -101,8 +53,7 @@ void DefUseChainManager::createChains(Operation *start, Operation *end) {
 
   for (Operations &path : allPaths) {
     DefUseChain chain(path);
-    if (chain.valid)
-      chains.insert(chain);
+    chains.insert(chain);
   }
 }
 
@@ -130,13 +81,14 @@ void DefUseChainManager::pruneOverlappingChains(bool includeStart) {
   }
 }
 
-// Find all def-use paths from \p start to \p end and add them to \p allPaths.
+// Find all def-use paths originating at \p start and terminating at \p end to
+// \p allPaths. Maintain the current path being constructed in \p path.
 void DefUseChainManager::findAllPaths(Operation *start, Operation *end,
                                       Operations &path,
                                       SmallVectorImpl<Operations> &allPaths) {
   assert(start && end && "Incorrect usage");
 
-  // Add the current node to the path.
+  // Add the current operation to the path.
   path.insert(start);
 
   // Reached the end, add the path to allPaths and end the recursion.
@@ -160,7 +112,7 @@ void DefUseChainManager::findAllPaths(Operation *start, Operation *end,
 }
 
 void DefUseChainManager::addUsers(Operation *op, Operations &users) const {
-  assert(op && "Expecting valid operation");
+  assert(op && "Expecting a valid operation");
 
   auto addUsers = [&](Operation *op) {
     // Add users of the block arguments in the 'after' region of a while loop.

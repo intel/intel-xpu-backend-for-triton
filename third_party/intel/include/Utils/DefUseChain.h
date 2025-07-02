@@ -54,19 +54,11 @@ private:
       : ops(ops), start(ops.front()), end(ops.back()) {
     assert(start && end && "Expecting valid operations");
     assert(start != end && "Expecting distinct operations");
-    Operations path;
-    valid = isTransitivelyUsedBy(start, end, path);
   }
 
-  // Returns true if there is a path from \p op to \consumer containing
-  // only operations in this chain.
-  bool isTransitivelyUsedBy(Operation *op, Operation *consumer,
-                            Operations &path) const;
-
-  Operations ops;             //< operations in the chain
-  Operation *start = nullptr; //< first operation in the chain
-  Operation *end = nullptr;   //< last operation in the chain
-  bool valid = false;         //< true is construction succeeds
+  Operations ops;   //< operations in the chain
+  Operation *start; //< first operation in the chain
+  Operation *end;   //< last operation in the chain
 };
 
 /// \class DefUseChain
