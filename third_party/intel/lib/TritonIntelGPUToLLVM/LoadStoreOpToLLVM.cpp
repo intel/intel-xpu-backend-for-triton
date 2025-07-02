@@ -1382,43 +1382,45 @@ struct LoadOpToBlockIOConversion
                  !isTransposeRequired && originalElemBits != 32));
 
             // When strides[0] is 0, we only want to load the first row, so we
-            // set the base height to be 1. If base height is less than tile
-            // height, only the first row contain valid data. To ensure the
-            // entire tile is filled with valid data, we must replicate the
-            // first row throughout the tile.
+            // set the base height to be 1. If tile height is bigger than 1,
+            // then only the first row contain valid data. To ensure the entire
+            // tile is filled with valid data, we must replicate the first row
+            // throughout the tile.
             if (baseHeightInt < tileHeight && baseHeightInt == 1) {
+              unsigned numIndicesPerMatrix = numValuesPerLoad / vBlocks;
               SmallVector<int32_t> shuffleIndices(numValuesPerLoad);
 
-              // Variable to track the start index of the matrix.
-              unsigned startIndex = 0;
+              // Create a vector to store the data of the first index of each
+              // matrix.
+              VectorType vecTy = vec_ty(loadResultElemType, vBlocks);
+              Value firstIndexVec = b.undef(vecTy);
 
-              unsigned numIndicesPerMatrix = numValuesPerLoad / vBlocks;
               for (unsigned valueIndex = 0; valueIndex < numValuesPerLoad;
                    ++valueIndex) {
-                // Check if the current index is the start of the matrix.
+                unsigned firstIndexVecIdx = valueIndex / numIndicesPerMatrix;
+                // Handle case where an index spans two rows.
                 if (valueIndex % numIndicesPerMatrix == 0) {
-                  // Special handling when an index is spread across more than
-                  // one row.
+                  Value oldVal = b.extract_element(ret, b.i32_val(valueIndex));
+                  Value newVal = oldVal;
                   if (tileWidth < threadsPerWarp) {
                     assert(tileWidth * 2 == threadsPerWarp &&
                            "Expecting tileWidth to be 2x threadsPerWarp");
-                    Value idx = b.i32_val(valueIndex);
-                    Value oldVal = b.extract_element(ret, idx);
                     Value threadId = getThreadId(rewriter, loc);
-                    Value newVal = targetInfo.shuffleIdx(
+                    newVal = targetInfo.shuffleIdx(
                         rewriter, loc, oldVal,
                         b.urem(threadId, b.i32_val(tileWidth)));
-                    ret = b.insert_element(ret.getType(), ret, newVal, idx);
                   }
-
-                  startIndex = valueIndex;
+                  firstIndexVec =
+                      b.insert_element(firstIndexVec.getType(), firstIndexVec,
+                                       newVal, b.i32_val(firstIndexVecIdx));
                 }
-                shuffleIndices[valueIndex] = startIndex;
+
+                shuffleIndices[valueIndex] = firstIndexVecIdx;
               }
               DenseI32ArrayAttr attr =
                   rewriter.getDenseI32ArrayAttr(shuffleIndices);
-              ret = rewriter.create<LLVM::ShuffleVectorOp>(loc, load2DGenXType,
-                                                           ret, ret, attr);
+              ret = rewriter.create<LLVM::ShuffleVectorOp>(
+                  loc, load2DGenXType, firstIndexVec, firstIndexVec, attr);
             }
 
             if (others.size()) {

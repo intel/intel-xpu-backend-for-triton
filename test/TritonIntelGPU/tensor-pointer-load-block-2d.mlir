@@ -263,27 +263,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     // CHECK: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: [[LOAD:%.*]] = triton_gen.2Dblockload %{{.*}}, %{{.*}}, [[C1]], %{{.*}}, %{{.*}}, %{{.*}} {elem_size_in_bits = 32, tile_width = 8, tile_height = 16, v_blocks = 2
 
-    // CHECK: [[C0_:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: [[OLDVAL:%.*]] = llvm.extractelement [[LOAD]][[[C0_]] : i32] : vector<16xi32>
+    // CHECK: [[VEC:%.*]] = llvm.mlir.undef : vector<2xi32>
+
+    // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[OLDVAL:%.*]] = llvm.extractelement [[LOAD]][[[C0]] : i32] : vector<16xi32>
     // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[THREADID_i64:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[C0]])
     // CHECK: [[THREADID:%.*]] = llvm.trunc [[THREADID_i64]] : i64 to i32
     // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK: [[REM:%.*]] = llvm.urem [[THREADID]], [[C8]] : i32
     // CHECK: [[NEWVAL:%.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij([[OLDVAL]], [[REM]])
-    // CHECK: [[LOAD1:%.*]] = llvm.insertelement [[NEWVAL]], [[LOAD]][[[C0_]] : i32] : vector<16xi32>
+    // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: [[VEC1:%.*]] = llvm.insertelement [[NEWVAL]], [[VEC]][[[C0]] : i32] : vector<2xi32>
 
-    // CHECK: [[C8_:%.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: [[OLDVAL:%.*]] = llvm.extractelement [[LOAD1]][[[C8_]] : i32] : vector<16xi32>
+    // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK: [[OLDVAL:%.*]] = llvm.extractelement [[LOAD]][[[C8]] : i32] : vector<16xi32>
     // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[THREADID_i64:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[C0]])
     // CHECK: [[THREADID:%.*]] = llvm.trunc [[THREADID_i64]] : i64 to i32
     // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
     // CHECK: [[REM:%.*]] = llvm.urem [[THREADID]], [[C8]] : i32
     // CHECK: [[NEWVAL:%.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij([[OLDVAL]], [[REM]])
-    // CHECK: [[LOAD2:%.*]] = llvm.insertelement [[NEWVAL]], [[LOAD1]][[[C8_]] : i32] : vector<16xi32>
+    // CHECK: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK: [[VEC2:%.*]] = llvm.insertelement [[NEWVAL]], [[VEC1]][[[C1]] : i32] : vector<2xi32>
 
-    // CHECK: llvm.shufflevector [[LOAD2]], [[LOAD2]] [0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8]
+    // CHECK: llvm.shufflevector [[VEC2]], [[VEC2]] [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]
     tt.return
   }
 }
