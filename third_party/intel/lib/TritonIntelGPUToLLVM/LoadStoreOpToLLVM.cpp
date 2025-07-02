@@ -388,7 +388,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     auto getBase = [&](const std::string &inDim) {
       for (const auto &base : bases) {
         StringAttr attr = base.first;
-        if (attr.getValue().compare(inDim) == 0) 
+        if (attr.getValue().compare(inDim) == 0)
           return base.second;
       }
       llvm_unreachable(("Could not find the input dim:" + inDim +
@@ -396,7 +396,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
                            .c_str());
     };
 
-    using BaseType = LinearLayout::BasesT::value_type::second_type;    
+    using BaseType = LinearLayout::BasesT::value_type::second_type;
     const BaseType &basesOfLane = getBase("lane");
 
     int fastChangeDim = -1;
@@ -461,7 +461,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         int elem = base[i];
         if (elem == 0)
           continue;
-        if (rowDim < 0 && i != fastChangeDim) 
+        if (rowDim < 0 && i != fastChangeDim)
           rowDim = i;
         if (i != rowDim || tileShape[i] != elem)
           break;
@@ -477,7 +477,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     // Increase the tile shape along the column dimension. (Increase the
     // vBlocks.)
-    unsigned vBlocks = 1;    
+    unsigned vBlocks = 1;
     for (; baseIter < basesOfRegister.size(); baseIter++) {
       const std::vector<int> &base = basesOfRegister[baseIter];
       size_t i = 0;
