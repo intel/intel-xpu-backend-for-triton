@@ -69,6 +69,10 @@ jobs:
           .venv\Scripts\activate.ps1
           cd pytorch
           pip install "cibuildwheel<3"
+          curl -k https://s3.amazonaws.com/ossci-windows/libuv-1.40.0-h8ffe710_0.tar.bz2 -o libuv-1.40.0-h8ffe710_0.tar.bz2
+          mkdir libuv-1.40.0
+          tar -xvjf libuv-1.40.0-h8ffe710_0.tar.bz2 -C libuv-1.40.0
+          $env:libuv_ROOT=${{ env.NEW_WORKSPACE }}\pytorch\libuv-1.40.0
 
       - name: Identify runtime dependencies
         run: |
