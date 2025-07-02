@@ -7,6 +7,71 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_xpu
 
+def test_block_load_subgroup_layout(device, tmp_path: pathlib.Path):
+    M = 256
+    N = 32
+    A_width = 1
+    B_width = 2
+    transpose = False
+    ty = "f16"
+    block_io = "row_major"
+    dtype_str = "float16"
+
+    layouts = f"""
+    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2]}}>
+    #mma = #ttig.subgroup_2d_block<{{warpsPerCTA = [8, 4], instrShape = [32, 16], numBlocks = 2, isTransposed = false, order = [1, 0], kWidth = 1, threadsPerWarp = 16}}>
+    #mma1 = #ttig.subgroup_2d_block<{{warpsPerCTA = [8, 4], instrShape = [32, 16], numBlocks = 2, isTransposed = false, order = [0, 1], kWidth = 2, threadsPerWarp = 16}}>
+    """
+
+    ir = layouts + f"""
+    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, ttig.support_dpas, ttig.support_sg_2d_block, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
+        tt.func public @block_load_dpas_layout(%arg0: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg2: !tt.ptr<{ty}> {{tt.divisibility = 16: i32}}, %arg3: !tt.ptr<{ty}> {{tt.divisibility = 16: i32}}) attributes {{noinline = false}} {{
+            %0 = tt.get_program_id x : i32
+            %M_i64 = arith.constant {M} : i64
+            %N_i64 = arith.constant {N} : i64
+            %c1_i64 = arith.constant 1 : i64
+            %c0_i32 = arith.constant 0 : i32
+
+            // A matrix
+            %1 = tt.make_tensor_ptr %arg0, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%0, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}x{ty}, #mma>>
+            %2 = tt.load %1 {{boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"}} : !tt.ptr<tensor<{M}x{N}x{ty}, #mma>>
+            %20 = ttg.convert_layout %2 : tensor<{M}x{N}x{ty}, #mma> -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #dpas, kWidth = {A_width}}}>>
+            %3 = tt.make_tensor_ptr %arg1, [%M_i64, %N_i64], [%N_i64, %c1_i64], [%0, %c0_i32] {{order = array<i32: 1, 0>}} : <tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #dpas, kWidth = {A_width}}}>>>
+            tt.store %3, %20 {{boundaryCheck = array<i32: 0, 1>}} : !tt.ptr<tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #dpas, kWidth = {A_width}}}>>>
+
+            // B matrix
+            %4 = tt.make_tensor_ptr %arg2, [%N_i64, %M_i64], {"[%c1_i64, %N_i64]" if transpose else "[%M_i64, %c1_i64]"}, [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<{N}x{M}x{ty}, #mma1>>
+            %5 = tt.load %4 {{boundaryCheck = array<i32: 0, 1>, ttig.block_io = "{block_io}" }} : !tt.ptr<tensor<{N}x{M}x{ty}, #mma1>>
+            %50 = ttg.convert_layout %5 : tensor<{N}x{M}x{ty}, #mma1> -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #dpas, kWidth = {B_width}}}>>
+            %6 = tt.make_tensor_ptr %arg3, [%N_i64, %M_i64], {"[%c1_i64, %N_i64]" if transpose else "[%M_i64, %c1_i64]"}, [%c0_i32, %0] {{order = array<i32: 1, 0>}} : <tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #dpas, kWidth = {B_width}}}>>>
+            tt.store %6, %50 {{boundaryCheck = array<i32: 0, 1>}} : !tt.ptr<tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #dpas, kWidth = {B_width}}}>>>
+
+            tt.return
+        }}
+    }}
+    """
+
+    torch_dtype = getattr(torch, dtype_str)
+    if torch_dtype.is_floating_point:
+        a = torch.arange(0, M * N, dtype=torch_dtype, device=device).reshape((M, N))
+        b = torch.arange(0, M * N, dtype=torch_dtype, device=device).reshape((N, M))
+    else:
+        a = torch.randint(low=-127, high=128, size=(M, N), dtype=torch_dtype, device=device)
+        b = torch.randint(low=-127, high=128, size=(N, M), dtype=torch_dtype, device=device)
+
+    x = torch.empty_like(a)
+    y = torch.empty_like(b.T if transpose else b)
+
+    temp_file = tmp_path / "test_block_load_dpas_layout.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](a, x, b, y)
+    
+    print(a.int())
+    print(x.int())
+    assert torch.equal(a, x) 
+    assert torch.equal(b.T if transpose else b, y)
 
 @pytest.mark.parametrize("M, N",
                          [[256, 64], [256, 32], [128, 32], [128, 16], [128, 8], [64, 64], [64, 32], [32, 32], [16, 64]])
