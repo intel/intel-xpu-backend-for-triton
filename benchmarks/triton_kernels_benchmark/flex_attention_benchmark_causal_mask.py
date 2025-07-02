@@ -9,7 +9,10 @@ from torch.nn.attention.flex_attention import (
 
 import torch
 import torch.nn.functional as F
-import torch._inductor.template_heuristics as inductor_heuristics
+import torch._inductor
+import torch._inductor.lowering
+import torch._inductor.kernel
+import torch._inductor.kernel.flex_attention as flex_attn
 from torch._inductor.template_heuristics import FlexConfig
 
 import triton_kernels_benchmark as benchmark_suit
@@ -17,14 +20,9 @@ import triton_kernels_benchmark as benchmark_suit
 # Use TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 or uncomment the following line to print the auto-tune results.
 # torch._inductor.config.max_autotune_gemm = True
 
-old_get_flex_attn_fwd_configs = inductor_heuristics.XPUConfigHeuristic.get_flex_attn_fwd_configs
-
 
 def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argument
-    configs = old_get_flex_attn_fwd_configs(*args, **kwargs)
-    # Add our own configurations for FlexAttention forward pass.
-    # BLOCK_M, BLOCK_N, num_stages, num_warps
-    configs += [
+    configs = [
         FlexConfig(32, 16, 2, 4),
         FlexConfig(128, 64, 2, 16),
         FlexConfig(128, 64, 2, 8),
@@ -36,8 +34,8 @@ def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argume
 
 # There is a auto-tuning requirement to get the best configuration for the flex attention.
 # The pytorch flex attention doesn't support auto-tuning by user by default.
-# Overriding the _get_xpu_config method to provide custom configurations for auto-tuning on XPU.
-inductor_heuristics.XPUConfigHeuristic.get_flex_attn_fwd_configs = get_flex_attn_fwd_configs  # pylint: disable=protected-access
+# Overriding the get_flex_attention_fwd_configs method to provide custom configurations for auto-tuning on XPU.
+flex_attn.V.choices.get_flex_attention_fwd_configs = get_flex_attn_fwd_configs
 
 torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
