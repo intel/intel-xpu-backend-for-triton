@@ -1381,12 +1381,12 @@ struct LoadOpToBlockIOConversion
                 (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
                  !isTransposeRequired && originalElemBits != 32));
 
-            // If base height is less than tile height, only the initial
-            // base height rows contain valid data. To ensure the entire tile
-            // is filled with valid data, we must replicate these valid rows
-            // throughout the tile.
-            if (baseHeightInt < tileHeight) {
-              assert(baseHeightInt == 1 && "TODO: support baseHeight > 1");
+            // When strides[0] is 0, we only want to load the first row, so we
+            // set the base height to be 1. If base height is less than tile
+            // height, only the first row contain valid data. To ensure the
+            // entire tile is filled with valid data, we must replicate the
+            // first row throughout the tile.
+            if (baseHeightInt < tileHeight && baseHeightInt == 1) {
               SmallVector<int32_t> shuffleIndices(numValuesPerLoad);
 
               // Variable to track the start index of the matrix.
@@ -1402,17 +1402,13 @@ struct LoadOpToBlockIOConversion
                   if (tileWidth < threadsPerWarp) {
                     assert(tileWidth * 2 == threadsPerWarp &&
                            "Expecting tileWidth to be 2x threadsPerWarp");
-                    // Since tile width is 2x threads per warp, we only need to
-                    // perform special handling when base height is 1.
-                    if (baseHeightInt == 1) {
-                      Value idx = b.i32_val(valueIndex);
-                      Value oldVal = b.extract_element(ret, idx);
-                      Value threadId = getThreadId(rewriter, loc);
-                      Value newVal = targetInfo.shuffleIdx(
-                          rewriter, loc, oldVal,
-                          b.urem(threadId, b.i32_val(tileWidth)));
-                      ret = b.insert_element(ret.getType(), ret, newVal, idx);
-                    }
+                    Value idx = b.i32_val(valueIndex);
+                    Value oldVal = b.extract_element(ret, idx);
+                    Value threadId = getThreadId(rewriter, loc);
+                    Value newVal = targetInfo.shuffleIdx(
+                        rewriter, loc, oldVal,
+                        b.urem(threadId, b.i32_val(tileWidth)));
+                    ret = b.insert_element(ret.getType(), ret, newVal, idx);
                   }
 
                   startIndex = valueIndex;
