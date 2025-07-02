@@ -28,7 +28,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     RankedTensorType srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
     LinearLayout srcLayout =
         toLinearLayout(srcTy.getShape(), srcTy.getEncoding());

@@ -7,6 +7,7 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_xpu
 
+
 def test_block_load_subgroup_layout(device, tmp_path: pathlib.Path):
     M = 256
     N = 32
@@ -17,10 +18,10 @@ def test_block_load_subgroup_layout(device, tmp_path: pathlib.Path):
     block_io = "row_major"
     dtype_str = "float16"
 
-    layouts = f"""
-    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2]}}>
-    #mma = #ttig.subgroup_2d_block<{{warpsPerCTA = [8, 4], instrShape = [32, 16], numBlocks = 2, isTransposed = false, order = [1, 0], kWidth = 1, threadsPerWarp = 16}}>
-    #mma1 = #ttig.subgroup_2d_block<{{warpsPerCTA = [8, 4], instrShape = [32, 16], numBlocks = 2, isTransposed = false, order = [0, 1], kWidth = 2, threadsPerWarp = 16}}>
+    layouts = """
+    #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2]}>
+    #mma = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [32, 16], numBlocks = 2, isTransposed = false, order = [1, 0], kWidth = 1, threadsPerWarp = 16}>
+    #mma1 = #ttig.subgroup_2d_block<{warpsPerCTA = [8, 4], instrShape = [32, 16], numBlocks = 2, isTransposed = false, order = [0, 1], kWidth = 2, threadsPerWarp = 16}>
     """
 
     ir = layouts + f"""
@@ -67,11 +68,12 @@ def test_block_load_subgroup_layout(device, tmp_path: pathlib.Path):
     kernel = triton.compile(str(temp_file))
 
     kernel[(1, 1, 1)](a, x, b, y)
-    
+
     print(a.int())
     print(x.int())
-    assert torch.equal(a, x) 
+    assert torch.equal(a, x)
     assert torch.equal(b.T if transpose else b, y)
+
 
 @pytest.mark.parametrize("M, N",
                          [[256, 64], [256, 32], [128, 32], [128, 16], [128, 8], [64, 64], [64, 32], [32, 32], [16, 64]])
