@@ -28,14 +28,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     RankedTensorType srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    if (auto dstTensorTy = cast<RankedTensorType>(dstTy)) {
-      if (intel::isBlockIONoOpConversion(srcTy, dstTensorTy)) {
-        // TODO: replace this with proper conversion once conversion is removed
-        // from LoadStoreOpToLLVM.
-        rewriter.replaceOp(op, op.getSrc());
-        return success();
-      }
-    }
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
     LinearLayout srcLayout =
@@ -48,6 +40,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
     auto dims = conversion.getInDimNames();
+    llvm::errs() << "dims for conversion: \n";
+    for (auto dim : dims)
+      llvm::errs() << dim << "\n";
     if (llvm::is_contained(dims, kLane)) {
       // If the operation is a supported sub-group shuffle, perform via shuffle
       // operations.
