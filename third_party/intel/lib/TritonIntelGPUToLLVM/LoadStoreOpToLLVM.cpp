@@ -1648,6 +1648,15 @@ struct LoadOpConversion
       usePackedType = true;
     }
 
+    if (isTransposeRequired) {
+      if (!usePackedType) {
+        // use the d32 transpose 2d load.
+        loadResultElemType = i32_ty;
+        packedElemsPerLanePerDPASInst = 32 / elemSizeInBits;
+        usePackedType = true;
+      }
+    }
+
     Type packedDPASOperandType =
         LLVM::getVectorType(loadResultElemType, packedElemsPerLanePerDPASInst);
 
@@ -2105,6 +2114,10 @@ struct LoadOpConversion
             rewriter.eraseOp(load2dOp);
             return failure();
           }
+#if 0
+          targetInfo.printf(rewriter, "base: %p, baseWidth: %d, baseHeight:%d, pitch:%d, offset_x:%d, offset_y:%d, loadVal: %d",
+            {base, base_width, baseHeight, base_pitch, offsetX, offsetY, load2dOp.getResult()});
+#endif
           LLVM_DEBUG(llvm::dbgs() << "Generated load op: " << load2dOp << "\n");
 
           unsigned packedRowNum = opIdx == DpasEncodingAttr::OpIdx::OperandA
@@ -2166,11 +2179,14 @@ struct LoadOpConversion
                                           vblk * packedColNumPerVBlock + col)
                         << ", " << std::to_string(k + row) << "\n";
                   });
+                  auto ret = b.bitcast(loadVal, unpackedDPASOperandType);
+#if 0
+                  targetInfo.printf(rewriter, "loadVal: %d", {ret});
+#endif
                   loadVals[{outer * packedColNum * numLoadPerOutRepCluster +
                                 rep * packedColNum +
                                 vblk * packedColNumPerVBlock + col,
-                            k + row}] =
-                      b.bitcast(loadVal, unpackedDPASOperandType);
+                            k + row}] = ret;
                 } break;
                 case DpasEncodingAttr::OpIdx::OperandC: {
                   llvm_unreachable("unexpected OpIdx::OperandC");
