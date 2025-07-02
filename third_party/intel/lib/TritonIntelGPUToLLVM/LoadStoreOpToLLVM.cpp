@@ -13,6 +13,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Tools/LinearLayout.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -380,36 +381,36 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   static std::tuple<int, int, int, int, int>
   getBlockIOTileSize(const LinearLayout &ll) {
 
-    size_t rank = ll.getOutDims().size();
+    const size_t rank = ll.getOutDims().size();
     std::vector<unsigned> tileShape(rank, 1);
 
-    auto &bases = ll.getBases();
-    auto getBase = [&](std::string inDim) -> auto & {
-      for (auto &base : bases) {
-        if (base.first.getValue().compare(inDim) == 0) {
+    const LinearLayout::BasesT &bases = ll.getBases();
+    auto getBase = [&](const std::string &inDim) {
+      for (const auto &base : bases) {
+        StringAttr attr = base.first;
+        if (attr.getValue().compare(inDim) == 0) 
           return base.second;
-        }
       }
       llvm_unreachable(("Could not find the input dim:" + inDim +
                         ", on the ll:" + ll.toString())
                            .c_str());
     };
-    const auto &basesOfLane = getBase("lane");
+
+    using BaseType = LinearLayout::BasesT::value_type::second_type;    
+    const BaseType &basesOfLane = getBase("lane");
 
     int fastChangeDim = -1;
-    for (auto &base : basesOfLane) {
-      size_t i;
-      for (i = 0; i < rank; i++) {
-        if (base[i]) {
-          if (fastChangeDim < 0)
-            fastChangeDim = i;
-
-          if (tileShape[i] == base[i]) {
-            tileShape[i] <<= 1;
-          } else {
-            break;
-          }
-        }
+    for (const std::vector<int> &base : basesOfLane) {
+      size_t i = 0;
+      for (; i < rank; ++i) {
+        int elem = base[i];
+        if (elem == 0)
+          continue;
+        if (fastChangeDim < 0)
+          fastChangeDim = i;
+        if (tileShape[i] != elem)
+          break;
+        tileShape[i] <<= 1;
       }
       if (i != rank)
         break;
@@ -417,12 +418,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     unsigned numLanes = 1 << basesOfLane.size();
     // The slice of a single name is not in dense.
-    if (mlir::product<unsigned>(tileShape) != numLanes)
+    if (product<unsigned>(tileShape) != numLanes)
       return std::make_tuple(-1, -1, -1, -1, -1);
 
     unsigned sliceRank = 0;
     int rowDim = -1;
-    for (size_t i = 0; i < rank; i++) {
+    for (size_t i = 0; i < rank; ++i) {
       if (tileShape[i] > 1) {
         sliceRank++;
         if (i != fastChangeDim)
@@ -448,62 +449,46 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // └────┴────┴
     // clang-format on
     // TODO: need to improve this.
-    const auto &basesOfRegister = getBase("register");
+    const BaseType &basesOfRegister = getBase("register");
     unsigned numNamesPerTile = 0;
     // Increase the tile shape along the row dimension. (Increase the
     // tileHeight.)
     unsigned baseIter = 0;
     for (; baseIter < basesOfRegister.size(); baseIter++) {
-      auto &base = basesOfRegister[baseIter];
-      size_t i;
-      for (i = 0; i < rank; i++) {
-        if (base[i]) {
-          if (rowDim < 0 && i != fastChangeDim) {
-            rowDim = i;
-          }
-          if (i != rowDim)
-            break;
-          if (tileShape[i] == base[i]) {
-            tileShape[i] <<= 1;
-            numNamesPerTile++;
-          } else {
-            break;
-          }
-        }
+      const std::vector<int> &base = basesOfRegister[baseIter];
+      size_t i = 0;
+      for (; i < rank; ++i) {
+        int elem = base[i];
+        if (elem == 0)
+          continue;
+        if (rowDim < 0 && i != fastChangeDim) 
+          rowDim = i;
+        if (i != rowDim || tileShape[i] != elem)
+          break;
+        tileShape[i] <<= 1;
+        numNamesPerTile++;
       }
-
       if (i != rank)
         break;
     }
 
-    if (rowDim < 0) {
-      if (fastChangeDim) {
-        // choose the first dimension as the row dimension.
-        rowDim = 0;
-      } else {
-        // choose the second dimension as the row dimension.
-        rowDim = 1;
-      }
-    }
+    if (rowDim < 0)
+      rowDim = (fastChangeDim != 0) ? 0 : 1;
 
-    unsigned vBlocks = 1;
     // Increase the tile shape along the column dimension. (Increase the
     // vBlocks.)
+    unsigned vBlocks = 1;    
     for (; baseIter < basesOfRegister.size(); baseIter++) {
-      auto &base = basesOfRegister[baseIter];
-      size_t i;
-      for (i = 0; i < rank; i++) {
-        if (base[i]) {
-          if (i != fastChangeDim)
-            break;
-          if ((tileShape[i] * vBlocks) == base[i]) {
-            vBlocks <<= 1;
-          } else {
-            break;
-          }
-        }
+      const std::vector<int> &base = basesOfRegister[baseIter];
+      size_t i = 0;
+      for (; i < rank; ++i) {
+        int elem = base[i];
+        if (elem == 0)
+          continue;
+        if (i != fastChangeDim || (tileShape[i] * vBlocks) != elem)
+          break;
+        vBlocks <<= 1;
       }
-
       if (i != rank)
         break;
     }
@@ -2569,7 +2554,7 @@ struct StoreOpToBlockIOConversion
       return failure();
 
     Value value = op.getValue();
-    RankedTensorType tensorType = cast<RankedTensorType>(value.getType());
+    auto tensorType = cast<RankedTensorType>(value.getType());
     // Get the max tile shape supported by the layout.
     Attribute encoding = tensorType.getEncoding();
     std::optional<LinearLayout> llEncoding =
@@ -2700,7 +2685,7 @@ struct StoreOpToBlockIOConversion
       // re-arrange the ptrs and masks to for large 2D block IO.
       // Layout is unrelated to the scalar type.
       SmallVector<SmallVector<unsigned>> offsets =
-          mlir::emitOffsetForLayout(encoding, tensorType);
+          emitOffsetForLayout(encoding, tensorType);
       for (size_t i = 0; i < ptrElems.size(); ++i) {
         SmallVector<unsigned> offset = offsets[i];
         ptrs[offset] = ptrElems[i];
@@ -2719,7 +2704,8 @@ struct StoreOpToBlockIOConversion
 
     // Although the getBlockTileShape make sure there is no duplication within
     // warp, still need to deduplicate the value in across warps and blocks;
-    auto freeVarMasks = getFreeVariableMasks(tensorType);
+    const llvm::MapVector<StringAttr, int> &freeVarMasks =
+        getFreeVariableMasks(tensorType);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
@@ -2727,10 +2713,9 @@ struct StoreOpToBlockIOConversion
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
 
     int64_t elemsPerLane = tileHeight * tileWidth / threadsPerWarp;
-    Type opequaType = IntegerType::get(ctx, elemSizeInBits);
+    Type opaqueType = IntegerType::get(ctx, elemSizeInBits);
     Type store2DGenXType =
-        LLVM::getVectorType(opequaType,
-                            elemsPerLane); // make it opaque type.
+        LLVM::getVectorType(opaqueType, elemsPerLane); // make it opaque type.
 
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
@@ -2748,10 +2733,9 @@ struct StoreOpToBlockIOConversion
       Value storeVal = rewriter.create<LLVM::UndefOp>(
           loc,
           LLVM::getVectorType(typeConverter->convertType(eltTy), elemsPerLane));
-      for (size_t i = 0; i < elemsPerLane; ++i) {
+      for (size_t i = 0; i < elemsPerLane; ++i)
         storeVal =
             b.insert_element(storeVal, valElems[valIter + i], b.i32_val(i));
-      }
 
       // TODO: the threadPred has to be the uniform value. Maybe just add an
       // attribute to notify IGC about this information.
@@ -2775,7 +2759,7 @@ struct StoreOpToBlockIOConversion
         if (!boundaryProtect.contains(colDim)) {
           Value off = b.mul(offsetX, elemSizeInBytes);
           addrElem =
-              b.gep(ptr_ty(ctx, 1 /*global*/), opequaType, addrElem, off);
+              b.gep(ptr_ty(ctx, 1 /*global*/), opaqueType, addrElem, off);
           offsetX = b.i32_val(0);
         }
 
@@ -2783,7 +2767,7 @@ struct StoreOpToBlockIOConversion
         if (!boundaryProtect.contains(rowDim)) {
           Value off = b.mul(offsetY, pitch);
           addrElem =
-              b.gep(ptr_ty(ctx, 1 /*global*/), opequaType, addrElem, off);
+              b.gep(ptr_ty(ctx, 1 /*global*/), opaqueType, addrElem, off);
           offsetY = b.i32_val(0);
         }
       } else {
