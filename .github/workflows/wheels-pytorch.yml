@@ -17,7 +17,7 @@ jobs:
   windows:
     runs-on:
       - windows
-      - b580
+      - a770
     strategy:
       matrix:
         python:
