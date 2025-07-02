@@ -3000,6 +3000,51 @@ scan_layouts = [
 ]
 
 
+def test_no_rematerialization_op(device):
+    if is_xpu():
+        pytest.skip("handle on XPU")
+
+    if torch.version.hip:
+        pytest.skip("test not supported on AMD")
+
+    @triton.jit
+    def kernel(
+        input_data,
+        sum_output,
+        out_1,
+        BLOCK_SIZE: tl.constexpr,
+        DATA_DIM: tl.constexpr,
+        DATA_LEN: tl.constexpr,
+        loop_stages: tl.constexpr,
+    ):
+        tl.static_assert(DATA_LEN % BLOCK_SIZE == 0)
+        for curr_block_idx in tl.range(0, DATA_LEN // BLOCK_SIZE, num_stages=loop_stages):
+            my_idxs = BLOCK_SIZE * curr_block_idx + tl.arange(0, BLOCK_SIZE)
+            values = tl.load(input_data + DATA_DIM * my_idxs[:, None] + tl.arange(0, DATA_DIM)[None, :])
+            accum = tl.sum(values, axis=-1).to(tl.float32)
+            tl.store(sum_output + my_idxs, accum)
+            sum_plus_0 = tl.full((1, 2), 0, tl.float32) + accum[:, None]
+            tl.store(out_1 + my_idxs[:, None] * 2 + tl.arange(0, 2)[None, :], sum_plus_0)
+
+    data_len = 32
+    data_dim = 64
+    torch.manual_seed(0)
+    input_data = torch.randn((data_len, data_dim), dtype=torch.float32, device=device)
+    sum_output = torch.full((data_len, ), -1, dtype=torch.float32, device=device)
+    out_1 = torch.full((data_len, 2), -1, dtype=torch.float32, device=device)
+    compiled_kernel = kernel[(1, )](
+        input_data=input_data,
+        sum_output=sum_output,
+        out_1=out_1,
+        DATA_DIM=data_dim,
+        DATA_LEN=data_len,
+        BLOCK_SIZE=16,
+        num_warps=1,
+        loop_stages=2,
+    )
+    assert compiled_kernel.asm["ttgir"].count('"tt.reduce"') == 1, "we shouldn't rematerialize tt.reduce"
+
+
 @pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
 @pytest.mark.parametrize("src_layout", scan_layouts)
 @pytest.mark.parametrize("axis", [0, 1])
@@ -5936,24 +5981,31 @@ def test_num_threads(device):
 
 
 def test_globaltimer(device):
-    if is_hip():
-        pytest.skip("test_globaltimer is not supported in HIP")
     check_cuda_or_hip(device)
 
     @triton.jit
-    def kernel(Out1, Out2):
-        start = tl.extra.intel.globaltimer()
+    def kernel(Out1, Out2, func: tl.constexpr):
+        start = func()
         off = tl.arange(0, 128)
         for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
-        end = tl.extra.intel.globaltimer()
+        end = func()
         tl.store(Out2, end - start)
 
     out1 = to_triton(np.zeros((128, ), dtype=np.int64), device=device)
     out2 = to_triton(np.zeros((1, ), dtype=np.int64), device=device)
-    h = kernel[(1, )](out1, out2)
+    if is_cuda():
+        func = tl.extra.cuda.globaltimer
+    elif is_xpu():
+        func = tl.extra.intel.globaltimer
+    else:
+        func = tl.extra.hip.memrealtime
+    h = kernel[(1, )](out1, out2, func)
     assert out2[0] > 0
-    assert h.asm["ptx"].count("%globaltimer") == 2
+    if is_cuda():
+        assert h.asm["ptx"].count("%globaltimer") == 2
+    else:
+        assert h.asm["amdgcn"].count("s_memrealtime") == 2
 
 
 def test_smid(device):

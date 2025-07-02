@@ -311,14 +311,14 @@ jobs:
         if: matrix.suite == 'mxfp'
         run: |
           cat <<EOF | tee tutorials.txt
-          09-persistent-matmul
+          06-fused-attention
           EOF
 
       - name: Select tutorials to run (scaled_dot)
         if: matrix.suite == 'scaled_dot'
         run: |
           cat <<EOF | tee tutorials.txt
-          06-fused-attention
+          09-persistent-matmul
           EOF
 
       - name: Select tutorials to run (rest)
