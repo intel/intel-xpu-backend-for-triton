@@ -54,7 +54,7 @@ pytest() {
     fi
 
     export TEST_UNSKIP
-    python -u -m pytest -s "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
+    python -u -m pytest "${pytest_extra_args[@]}" "$@" || $TRITON_TEST_IGNORE_ERRORS
 }
 
 run_tutorial_test() {
