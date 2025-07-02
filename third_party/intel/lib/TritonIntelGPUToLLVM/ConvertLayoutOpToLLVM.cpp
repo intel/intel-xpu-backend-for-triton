@@ -3,6 +3,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 namespace mlir::triton::gpu {
 namespace {
@@ -24,8 +25,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
-    auto srcTy = op.getSrc().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
+
+    if (auto dstTensorTy = cast<RankedTensorType>(dstTy)) {
+      if (intel::isBlockIONoOpConversion(srcTy, dstTensorTy)) {
+        // TODO: replace this with proper conversion once conversion is removed
+        // from LoadStoreOpToLLVM.
+        rewriter.replaceOp(op, op.getSrc());
+        return success();
+      }
+    }
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
     LinearLayout srcLayout =
