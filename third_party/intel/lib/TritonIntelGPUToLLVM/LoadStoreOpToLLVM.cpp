@@ -1486,6 +1486,8 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
 
     const unsigned threadsPerWarp = encoding.getThreadsPerWarp();
     LLVM_DEBUG(llvm::dbgs() << "threadsPerWarp = " << threadsPerWarp << "\n");
+    auto warpOrder = llAttr.getWarpOrder();
+
 #if 0
     Type offsetType = i32_ty; // getTypeConverter()->getIndexType();
     llvm::errs() << "offsetType = " << offsetType << "\n";
@@ -1497,7 +1499,8 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
         loc, offsetType, threadsPerWarp);
     Value outerDimWarpId = subGroupId; // b.mul(sgStride, subGroupId);
 #else
-    unsigned dimOuter = 0; // TODO 
+
+    unsigned dimOuter = warpOrder[0]; // TODO 
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -1533,7 +1536,6 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
 
     printVector(threadOrder, "threadOrder");
 
-    auto warpOrder = llAttr.getWarpOrder();
     printVector(warpOrder, "warpOrder");
 
     auto shapePerCTA = getShapePerCTA(tensorType);
@@ -1671,19 +1673,20 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
       Value offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(/*warpOuterStride*/4)), offsetValues[0].second);
       Value offsetY = offsetValues[1].second;
 #else
-      Value offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(/*warpOuterStride*/32)), b.sub(offsetValues[0].second, baseOffsetForWarp[0].second));
+      Value offsetX = b.sub(offsetValues[0].second, baseOffsetForWarp[0].second);
       Value offsetY = b.sub(offsetValues[1].second, baseOffsetForWarp[1].second);
-#endif 
-
-      // llPrintf("warp: %d, x: %ld (base %ld), y: %ld (base %ld)\n", {outerDimWarpId, offsetX, offsetBaseX, offsetY, offsetBaseY}, {true, true, true, true, true}, rewriter, targetInfo);
-#if 1
-      std::swap(offsetX, offsetY);
-#else
       if (warpOrder[0]) {
-        llvm::errs() << "swap x, y\n";
-        std::swap(offsetX, offsetY);
+        llvm::errs() << "adding to Y offset\n";
+        // b matrix 
+        offsetY = b.add(b.mul(outerDimWarpId, b.i32_val(/*warpOuterStride*/32)), offsetY);
+      } else {
+        llvm::errs() << "adding to X offset\n";
+        // a matrix 
+        offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(/*warpOuterStride*/32)), offsetX);
       }
 #endif 
+
+      std::swap(offsetX, offsetY); // TODO: remove? 
 
       offsetX = b.add(offsetX, offsetBaseX); 
       offsetY = b.add(offsetY, offsetBaseY);
