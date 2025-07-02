@@ -23,6 +23,20 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
+Value llPrintf(StringRef msg, ValueRange args, ArrayRef<bool> isSigned,
+                ConversionPatternRewriter &rewriter, const mlir::triton::intel::TargetInfo& targetInfo) {
+  assert(!msg.empty() && "printf with empty string not supported");
+  llvm::SmallString<64> msgNewline(msg);
+  msgNewline.push_back('\n');
+  msgNewline.push_back('\0');
+  Value msgValue = targetInfo.getGlobalStringStart(
+      rewriter.getUnknownLoc(), rewriter, "printfFormat_", msgNewline,
+      /*addressSpace=*/TritonGEN::kUniformConstant);
+  targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args,
+                    isSigned);
+  return msgValue;
+}
+
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   if (a && b) {
@@ -1421,6 +1435,8 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
            "load op passed to subgroup 2d block encoding load codegen must "
            "have subgroup 2d block encoding");
 
+    LLVM_DEBUG(llvm::dbgs() << "Lowering load op with Subgroup 2D Block Encoding: " << op << "\n");
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value mask = op.getMask();
@@ -1430,6 +1446,7 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
 
     auto encoding = cast<Subgroup2DBlockEncodingAttr>(tensorType.getEncoding());
     LinearLayout loadLayout = encoding.toLinearLayout(tensorType.getShape());
+    llvm::errs() << "loadLayout: " << loadLayout << "\n";
     LinearEncodingAttr llAttr =
         LinearEncodingAttr::get(rewriter.getContext(), loadLayout);
     SmallVector<unsigned> threadOrder = llAttr.getThreadOrder();
@@ -1438,18 +1455,13 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
     if (rank != 2) {
       op.emitWarning(
           "Subgroup 2D Block Encoding only supports rank 2 tensors.");
+      return failure();
     }
 
-    const bool valueRowMajor =
-        (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
-    assert((valueRowMajor ||
-            (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
-           "Only row_major or column_major is allowed");
-    const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
-
+    const bool isTransposeRequired = encoding.getIsTransposed();
     if (isTransposeRequired) {
       // hrmm...
-      loadLayout = loadLayout.transposeOuts(llvm::to_vector(llvm::reverse(loadLayout.getOutDimNames())));
+      // loadLayout = loadLayout.transposeOuts(llvm::to_vector(llvm::reverse(loadLayout.getOutDimNames())));
     }
 
     auto instrShape = encoding.getInstrShape();
@@ -1465,21 +1477,52 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
 
     auto warpsPerCTA = encoding.getWarpsPerCTA();
+     LLVM_DEBUG({
+      llvm::dbgs() << "warpsPerCTA: " << warpsPerCTA[0] << ", "
+                   << warpsPerCTA[1] << "\n";
+     });
     SmallVector<unsigned> dpasWarpsOrder =
         getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+
+    const unsigned threadsPerWarp = encoding.getThreadsPerWarp();
+    LLVM_DEBUG(llvm::dbgs() << "threadsPerWarp = " << threadsPerWarp << "\n");
+#if 0
+    Type offsetType = i32_ty; // getTypeConverter()->getIndexType();
+    llvm::errs() << "offsetType = " << offsetType << "\n";
+    Value subGroupId = getValueOrCreateCastToIndexLike(
+        rewriter, loc, offsetType,
+        rewriter.create<mlir::gpu::SubgroupIdOp>(
+            loc, /*upper_bound=*/IntegerAttr{}));
+    Value sgStride = rewriter.create<LLVM::ConstantOp>(
+        loc, offsetType, threadsPerWarp);
+    Value outerDimWarpId = subGroupId; // b.mul(sgStride, subGroupId);
+#else
+    unsigned dimOuter = 0; // TODO 
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc, /*upperBound=*/nullptr));
     SmallVector<Value> multiDimWarpId =
         delinearize(rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
+    // unsigned outerDimRequiredWarpNum = mlir::ceil<unsigned>(
+        // tensorShape[dimOuter], warpShape[dimOuter]); // ceil of ratio
+    unsigned outerDimWarpNum = warpsPerCTA[dimOuter]; //, outerDimRequiredWarpNum);
+    LLVM_DEBUG(llvm::dbgs()
+               << "outerDimWarpNum = " << outerDimWarpNum << "\n");
+#if 1
+    Value outerDimWarpId =
+        b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
+#else
+    Value outerDimWarpId = multiDimWarpId[dimOuter];
+#endif
+#endif 
 
-        Type eltTy = tensorType.getElementType();
+    Type eltTy = tensorType.getElementType();
 
     LLVMTypeConverter *typeConverter = getTypeConverter();
-    Type loadResultElemType = typeConverter->convertType(eltTy);
+    Type valueElemTy = typeConverter->convertType(eltTy);
     LLVM_DEBUG(llvm::dbgs()
-               << "loadResultElemType: " << loadResultElemType << "\n");
+               << "valueElemTy: " << valueElemTy << "\n");
 
     auto printVector = [](auto vector, auto name) {
       llvm::errs() << name << "\n";
@@ -1534,8 +1577,8 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
         llAttr.basesPerDim(kWarp, /*skipBrodcast*/ false); // warps per cta
     printVector(basesPerWarp, "bases per warp");
 
-    auto threadsPerWarp = llAttr.getThreadsPerWarp();
-    printVector(threadsPerWarp, "threads per warp");
+    auto threadsPerWarp2 = llAttr.getThreadsPerWarp();
+    printVector(threadsPerWarp2, "threads per warp");
 
     // auto warpsPerCTA = llAttr.getWarpsPerCTA();
     printVector(warpsPerCTA, "warps per cta");
@@ -1555,14 +1598,25 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
     llvm::errs() << "elemsPerThread tensor type: " << elemsPerThreadTensorTy
                  << "\n";
 
+    auto width = encoding.getKWidth();
+
     unsigned vec = tileHeight * numBlocks;
     llvm::errs() << "vec: " << vec << "\n";
-    unsigned numValuesPerLoad = vec / encoding.getKWidth();
-    if (encoding.getKWidth() == 2)
-      loadResultElemType = i32_ty; // HACK
+    unsigned numValuesPerLoad = vec / width;
+
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
+    llvm::errs() << "elemSizeInBits: " << elemSizeInBits << "\n";
+    llvm::errs() << "elemSizeInBytes: " << elemSizeInBytes << "\n";
+
+    Type packedElemTy = valueElemTy;
+    if (width == 2) {
+      packedElemTy = i32_ty; // HACK
+      // elemSizeInBits = 32;
+    }
 
     Type load2DGenXType =
-        LLVM::getVectorType(loadResultElemType, numValuesPerLoad);
+        LLVM::getVectorType(packedElemTy, numValuesPerLoad);
     // Note: these end up being a mix of float/int vector types... 
     llvm::errs() << "load2DGenXType = " << load2DGenXType << "\n";
 
@@ -1582,11 +1636,22 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
     baseWidth = b.trunc(i32_ty, baseWidth);
     baseHeight = b.trunc(i32_ty, baseHeight);
 
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-    Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
-
     // Dispatch the load instructions from the perspective of a single lane.
     unsigned numElems = elemsPerThreadTensorTy;
+    llvm::errs() << "numElems = " << numElems << "\n";
+    
+    Value zero = b.i32_val(0);
+    auto baseOffsetForWarp = applyLinearLayout(loc, rewriter, loadLayout, {{kRegister, zero}, {kLane, zero}, {kWarp, warpId}, {kBlock, zero}});
+    assert(baseOffsetForWarp.size() == 2);
+
+    // probably always 0? just for fun look at warp 1
+    auto baseOffset = loadLayout.apply({{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+    assert(baseOffset.size() == 2);
+    LLVM_DEBUG({
+      llvm::dbgs() << "base offset: " << baseOffset[0].second << ", " << baseOffset[1].second << "\n";
+    });
+
+    SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       llvm::errs() << "dispatch load " << vecStart << "\n";
 
@@ -1594,18 +1659,35 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
       assert(offset.size() == 2);
       LLVM_DEBUG({
         llvm::dbgs() << "offset: " << offset[0].second << ", " << offset[1].second << "\n";
+        llvm::dbgs() << "offset - base offset: " << offset[0].second - baseOffset[0].second << ", " << offset[1].second - baseOffset[1].second << "\n";
       });
 
       // Lane ID doesn't matter.
-      Value zero = b.i32_val(0);
       Value regIdVal = b.i32_val(vecStart);
       auto offsetValues = applyLinearLayout(loc, rewriter, loadLayout, {{kRegister, regIdVal}, {kLane, zero}, {kWarp, warpId}, {kBlock, zero}});
       assert(offsetValues.size() == 2);
 
-      Value offsetX = b.add(offsetValues[0].second, offsetBaseX);
-      Value offsetY = b.add(offsetValues[1].second, offsetBaseY);
-
 #if 0
+      Value offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(/*warpOuterStride*/4)), offsetValues[0].second);
+      Value offsetY = offsetValues[1].second;
+#else
+      Value offsetX = b.add(b.mul(outerDimWarpId, b.i32_val(/*warpOuterStride*/32)), b.sub(offsetValues[0].second, baseOffsetForWarp[0].second));
+      Value offsetY = b.sub(offsetValues[1].second, baseOffsetForWarp[1].second);
+#endif 
+
+      // llPrintf("warp: %d, x: %ld (base %ld), y: %ld (base %ld)\n", {outerDimWarpId, offsetX, offsetBaseX, offsetY, offsetBaseY}, {true, true, true, true, true}, rewriter, targetInfo);
+#if 1
+      std::swap(offsetX, offsetY);
+#else
+      if (warpOrder[0]) {
+        llvm::errs() << "swap x, y\n";
+        std::swap(offsetX, offsetY);
+      }
+#endif 
+
+      offsetX = b.add(offsetX, offsetBaseX); 
+      offsetY = b.add(offsetY, offsetBaseY);
+
       auto load2dOp = rewriter.create<TritonGEN::Matrix2DBlockLoadOp>(
             loc, load2DGenXType,
             /*ptr*/ base,
@@ -1617,22 +1699,45 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
             /*elem_size_in_bits*/ elemSizeInBits,
             /*tile_width*/ tileWidth,
             /*tile_height*/ tileHeight,
-            /*v_blocks*/ vBlocks,
+            /*v_blocks*/ numBlocks,
             /*transpose*/ isTransposeRequired,
-            /*vnni_transform*/
-            (usePackedType && !isOperandA && !isTransposeRequired &&
-              originalElemBits != 32));
+            /*vnni_transform*/width > 1 && !isTransposeRequired);
+          llvm::errs() << "Generated load2dOp: " << load2dOp << "\n";
           if (failed(load2dOp.verify())) {
             // delete the op so that the verifier will not abort the pass
             // pipeline later, as we can fail this path and try a different
             // approach.
+            assert(false);
             rewriter.eraseOp(load2dOp);
             return failure();
           }
-#endif
-    }
+      
+      
+      llvm::errs() << "llvm type: " << load2DGenXType << "\n";
+      Type llvmResultStructTy = typeConverter->convertType(op.getType()); 
+      
+      // Extract and store return values
+      Value load2dVec = b.bitcast(load2dOp, LLVM::getVectorType(valueElemTy, vec));
+      llvm::errs() << "bitcasted load vec: " << load2dVec << "\n";
+      llvm::errs() << "vec size: " << vec << "\n";
+      for (size_t i = 0; i < vec; i++) {
+         Value vecIdx = createIndexAttrConstant(
+            rewriter, loc, typeConverter->getIndexType(), i);
+        Value loaded = b.extract_element(valueElemTy, load2dVec, vecIdx);
+        loadedVals.push_back(loaded);
+      }
 
-    return failure();
+
+    } // end vec
+    
+    llvm::errs() << "opType: " << op.getType() << "\n";
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    llvm::errs() << "result struct type: " << llvmResultStructTy << "\n";
+    llvm::errs() << "number of load vals: " << loadedVals.size() << "\n";
+    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
+                                        rewriter, llvmResultStructTy);   
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
   }
 
   LogicalResult
@@ -1647,12 +1752,19 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
 
     Type resultType = op.getType();
     auto tensorType = cast<RankedTensorType>(resultType);
+#if 1
     if (hasSubgroup2DBlockEncoding(tensorType)) {
       auto ret = rewriteSubgroup2DBlockEncodingLoad(op, adaptor, rewriter);
+#if 1
+      assert(!ret.failed());
+      return ret;
+#else
       // little hack to make incremental progress
       if (!ret.failed())
         return ret;
+#endif
     }
+#endif 
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1921,7 +2033,7 @@ LogicalResult rewriteSubgroup2DBlockEncodingLoad(
     unsigned outerDimWarpNum =
         std::min<unsigned>(warpsPerCTA[dimOuter], outerDimRequiredWarpNum);
     LLVM_DEBUG(llvm::dbgs()
-               << "outerDimWarpNum = " << outerDimRequiredWarpNum << "\n");
+               << "outerDimWarpNum = " << outerDimWarpNum << "\n");
     Value outerDimWarpId =
         b.urem(multiDimWarpId[dimOuter], b.i32_val(outerDimWarpNum));
 
