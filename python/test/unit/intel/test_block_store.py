@@ -120,3 +120,5 @@ def test_tensor_pointer_block_store(M, N, dtype_str, layout, device, tmp_path: p
 
     kernel[(1, 1, 1)](a, x, a, y)
     assert torch.equal(a, x) and torch.equal(a, y)
+
+    temp_file.unlink()
