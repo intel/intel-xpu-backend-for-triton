@@ -51,7 +51,7 @@ jobs:
         run: |
           cd ${{ env.NEW_WORKSPACE }}
           .venv\Scripts\activate.ps1
-          pip install  "cibuildwheel<3"
+          pip install cibuildwheel
 
       - name: Set Triton version
         shell: bash

@@ -113,6 +113,17 @@ jobs:
         run:
           python -m venv .venv
 
+      - name: Install build dependencies
+        run: |
+          cd ${{ env.NEW_WORKSPACE }}
+          .venv\Scripts\activate.ps1
+          cd pytorch
+          # Ref https://github.com/pytorch/pytorch/blob/8c2e45008282cf5202b72a0ecb0c2951438abeea/.ci/pytorch/windows/setup_build.bat#L23
+          curl -k https://s3.amazonaws.com/ossci-windows/libuv-1.40.0-h8ffe710_0.tar.bz2 -o libuv-1.40.0-h8ffe710_0.tar.bz2
+          mkdir libuv-1.40.0
+          tar -xvjf libuv-1.40.0-h8ffe710_0.tar.bz2 -C libuv-1.40.0
+          echo "libuv_ROOT=${{ env.NEW_WORKSPACE }}\pytorch\libuv-1.40.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install PyTorch (source)
         run: |
           .venv\Scripts\activate.ps1

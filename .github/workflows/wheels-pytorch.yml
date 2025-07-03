@@ -17,7 +17,7 @@ jobs:
   windows:
     runs-on:
       - windows
-      - a770
+      - b580
     strategy:
       matrix:
         python:
@@ -68,7 +68,8 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           .venv\Scripts\activate.ps1
           cd pytorch
-          pip install "cibuildwheel<3"
+          pip install cibuildwheel
+          # Ref https://github.com/pytorch/pytorch/blob/8c2e45008282cf5202b72a0ecb0c2951438abeea/.ci/pytorch/windows/setup_build.bat#L23
           curl -k https://s3.amazonaws.com/ossci-windows/libuv-1.40.0-h8ffe710_0.tar.bz2 -o libuv-1.40.0-h8ffe710_0.tar.bz2
           mkdir libuv-1.40.0
           tar -xvjf libuv-1.40.0-h8ffe710_0.tar.bz2 -C libuv-1.40.0
