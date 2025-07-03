@@ -2645,7 +2645,7 @@ struct StoreOpToBlockIOConversion
       offsetBaseY = b.trunc(i32_ty, offsetY);
     } else {
 
-      bool enableBlockStore = triton::tools::getBoolEnv(
+      static const bool enableBlockStore = triton::tools::getBoolEnv(
           "TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR");
       if (!enableBlockStore)
         return failure();
