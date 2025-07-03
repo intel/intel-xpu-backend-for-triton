@@ -1283,7 +1283,8 @@ struct LoadOpToBlockIOConversion
 
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(ptr, 0);
-    Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeight);
+    unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
+    Value baseHeight = b.i32_val(baseHeightInt);
 
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
@@ -1379,6 +1380,48 @@ struct LoadOpToBlockIOConversion
                 /*vnni_transform*/
                 (usePackedType && opIdx == DpasEncodingAttr::OpIdx::OperandB &&
                  !isTransposeRequired && originalElemBits != 32));
+
+            // When strides[0] is 0, we only want to load the first row, so we
+            // set the base height to be 1. If tile height is bigger than 1,
+            // then only the first row contain valid data. To ensure the entire
+            // tile is filled with valid data, we must replicate the first row
+            // throughout the tile.
+            if (baseHeightInt < tileHeight && baseHeightInt == 1) {
+              unsigned numIndicesPerMatrix = numValuesPerLoad / vBlocks;
+              SmallVector<int32_t> shuffleIndices(numValuesPerLoad);
+
+              // Create a vector to store the data of the first index of each
+              // matrix.
+              VectorType vecTy = vec_ty(loadResultElemType, vBlocks);
+              Value firstIndexVec = b.undef(vecTy);
+
+              for (unsigned valueIndex = 0; valueIndex < numValuesPerLoad;
+                   ++valueIndex) {
+                unsigned firstIndexVecIdx = valueIndex / numIndicesPerMatrix;
+                // Handle case where an index spans two rows.
+                if (valueIndex % numIndicesPerMatrix == 0) {
+                  Value oldVal = b.extract_element(ret, b.i32_val(valueIndex));
+                  Value newVal = oldVal;
+                  if (tileWidth < threadsPerWarp) {
+                    assert(tileWidth * 2 == threadsPerWarp &&
+                           "Expecting tileWidth to be 2x threadsPerWarp");
+                    Value threadId = getThreadId(rewriter, loc);
+                    newVal = targetInfo.shuffleIdx(
+                        rewriter, loc, oldVal,
+                        b.urem(threadId, b.i32_val(tileWidth)));
+                  }
+                  firstIndexVec =
+                      b.insert_element(firstIndexVec.getType(), firstIndexVec,
+                                       newVal, b.i32_val(firstIndexVecIdx));
+                }
+
+                shuffleIndices[valueIndex] = firstIndexVecIdx;
+              }
+              DenseI32ArrayAttr attr =
+                  rewriter.getDenseI32ArrayAttr(shuffleIndices);
+              ret = rewriter.create<LLVM::ShuffleVectorOp>(
+                  loc, load2DGenXType, firstIndexVec, firstIndexVec, attr);
+            }
 
             if (others.size()) {
               assert(masks.size() == others.size() &&
