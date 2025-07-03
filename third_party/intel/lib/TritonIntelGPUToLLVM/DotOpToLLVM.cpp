@@ -7,9 +7,10 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
 namespace fma_details {
-LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
-                            TritonIntelGPUToLLVMTypeConverter *typeConverter,
-                            ConversionPatternRewriter &rewriter);
+LogicalResult
+convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+              const TritonIntelGPUToLLVMTypeConverter *typeConverter,
+              ConversionPatternRewriter &rewriter);
 
 LogicalResult convertDPAS(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           TritonIntelGPUToLLVMTypeConverter *typeConverter,
