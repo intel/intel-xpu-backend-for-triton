@@ -2,6 +2,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include <optional>
@@ -52,20 +53,17 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
 
   if (auto poisonOp = val.getDefiningOp<ub::PoisonOp>())
     return std::nullopt;
+  if (auto callOp = val.getDefiningOp<tt::CallOp>())
+    return std::nullopt;
   if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
     return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
   if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
     return makePtrOp;
   if (auto opRes = dyn_cast<OpResult>(val)) {
     Operation *defOp = opRes.getOwner();
-    if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-      Value val = forOp.getYieldedValues()[opRes.getResultNumber()];
-      return findDefiningMakeTensorPtrOp(val);
-    }
-    if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
-      Value val = whileOp.getYieldedValues()[opRes.getResultNumber()];
-      return findDefiningMakeTensorPtrOp(val);
-    }
+    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp))
+      return findDefiningMakeTensorPtrOp(
+          loopOp.getYieldedValues()[opRes.getResultNumber()]);
     if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
       // Give up if the 2 possible definitions aren't the same.
       Region &thenRgn = ifOp.getThenRegion();
@@ -78,10 +76,10 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
                cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
       Value thenVal = thenYieldOp->getOperand(opRes.getResultNumber()),
             elseVal = elseYieldOp->getOperand(opRes.getResultNumber());
-      std::optional<tt::MakeTensorPtrOp> thenDef =
-          findDefiningMakeTensorPtrOp(thenVal);
-      std::optional<tt::MakeTensorPtrOp> elseDef =
-          findDefiningMakeTensorPtrOp(elseVal);
+      std::optional<tt::MakeTensorPtrOp> thenDef = findDefiningMakeTensorPtrOp(
+                                             thenVal),
+                                         elseDef = findDefiningMakeTensorPtrOp(
+                                             elseVal);
       if (!thenDef || !elseDef || *thenDef != *elseDef)
         return std::nullopt;
       return thenDef;
@@ -90,10 +88,10 @@ std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
       // Give up if the 2 possible definitions aren't the same.
       Value trueVal = selectOp.getTrueValue(),
             falseVal = selectOp.getFalseValue();
-      std::optional<tt::MakeTensorPtrOp> trueDef =
-          findDefiningMakeTensorPtrOp(trueVal);
-      std::optional<tt::MakeTensorPtrOp> falseDef =
-          findDefiningMakeTensorPtrOp(falseVal);
+      std::optional<tt::MakeTensorPtrOp> trueDef = findDefiningMakeTensorPtrOp(
+                                             trueVal),
+                                         falseDef = findDefiningMakeTensorPtrOp(
+                                             falseVal);
       if (!trueDef || !falseDef || *trueDef != *falseDef)
         return std::nullopt;
       return trueDef;
@@ -143,8 +141,8 @@ Value getFinalValue(Value value) {
   assert(value && "Expecting a valid value");
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
-    // look init values outside the loop
-    BlockArgument blockArg = cast<BlockArgument>(value);
+    // Look up init values outside the loop.
+    auto blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
       if (blockArg == forOp.getInductionVar())
