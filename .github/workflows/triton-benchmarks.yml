@@ -310,7 +310,7 @@ jobs:
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
-          python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
+          IGC_VectorizerAllowEXP2=1 TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 IGC_DisableCodeScheduling=0 python flex_attention_benchmark_causal_mask.py --reports $REPORTS --n_runs $N_RUNS
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnCausal-performance.csv $REPORTS/flexAttnCausal-triton-report.csv --benchmark flex-attn-causal --compiler triton --param_cols "Z,H_q,H_kv,N_CTX_q,N_CTX_kv,D_HEAD_qk,D_HEAD_v" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG
@@ -321,7 +321,7 @@ jobs:
         run: |
           export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           cd benchmarks/triton_kernels_benchmark
-          python flex_attention_benchmark_custom_masks.py --reports $REPORTS --n_runs $N_RUNS
+          IGC_VectorizerAllowEXP2=1 TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR=1 TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 IGC_DisableCodeScheduling=0 python flex_attention_benchmark_custom_masks.py --reports $REPORTS --n_runs $N_RUNS
 
           source ../../scripts/capture-hw-details.sh
           python build_report.py $REPORTS/flexAttnMasks-performance.csv $REPORTS/flexAttnMasks-triton-report.csv --benchmark flex-attn-masks --compiler triton --param_cols "Z,H,N_CTX,D_HEAD,MASK" --tflops_col Triton-TFlops --hbm_col "Triton-GB/s" --tag $TAG --mask
