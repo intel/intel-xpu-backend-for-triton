@@ -242,6 +242,17 @@ function build_pytorch {
   pip install 'cmake<4.0.0'
   pip install -r requirements.txt
   pip install cmake ninja
+  if [[ $OSTYPE = msys ]]; then
+    # Another way (but we don't use conda): conda install -c conda-forge libuv=1.40.0
+    # Ref https://github.com/pytorch/pytorch/blob/8c2e45008282cf5202b72a0ecb0c2951438abeea/.ci/pytorch/windows/setup_build.bat#L23
+    # This is an artifact (around 330kb) that PyTorch uses, however it may not be very good to use here.
+    # FIXME: Maybe better to build it ourselves, but for now it is used as a workaround.
+    curl -k https://s3.amazonaws.com/ossci-windows/libuv-1.40.0-h8ffe710_0.tar.bz2 -o libuv-1.40.0-h8ffe710_0.tar.bz2
+    mkdir libuv-1.40.0
+    tar -xvjf libuv-1.40.0-h8ffe710_0.tar.bz2 -C libuv-1.40.0
+    export libuv_ROOT="$PYTORCH_PROJ/libuv-1.40.0"
+  fi
+
   USE_XCCL=1 USE_STATIC_MKL=1 python setup.py bdist_wheel
 }
 
