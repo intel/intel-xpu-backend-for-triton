@@ -14,6 +14,7 @@ namespace mlir::triton {
 inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     // clang-format off
     "AMDGCN_ENABLE_DUMP",
+    "AMDGCN_USE_BUFFER_ATOMICS",
     "AMDGCN_USE_BUFFER_OPS",
     "DISABLE_LLVM_OPT",
     "DISABLE_MMA_V3",
@@ -50,6 +51,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_INTEL_ENABLE_INSTR_SCHED",
     "TRITON_INTEL_FAST_MATH",
     "TRITON_INTEL_REDUCE_TRANSPOSE",
+    "TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR",
     // clang-format on
 };
 
