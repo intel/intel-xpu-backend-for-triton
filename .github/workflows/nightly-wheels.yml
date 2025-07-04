@@ -22,7 +22,7 @@ jobs:
     runs-on:
       - max1550
       - rolling
-      - runner-0.0.22
+      - runner-0.0.23
     strategy:
       matrix:
         python:
