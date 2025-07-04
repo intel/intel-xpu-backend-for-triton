@@ -152,7 +152,7 @@ class XPUBackend(BaseBackend):
 
         if knobs.intel.device_extensions:
             supported_extensions.update(knobs.intel.device_extensions.split(' '))
-        elif False and shutil.which('ocloc'):
+        elif shutil.which('ocloc'):
             try:
                 cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', self.device_arch]
                 with tempfile.TemporaryDirectory() as temp_dir:

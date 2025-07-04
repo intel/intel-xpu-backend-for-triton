@@ -19,7 +19,6 @@ public:
     auto K = a.size();
     assert(b.size() == K);
     Value accum = c;
-    Type tgtTy = accum.getType();
     for (auto [aElem, bElem] : llvm::zip(a, b))
       accum = builder.create<LLVM::FMulAddOp>(loc, aElem, bElem, accum);
     return accum;
