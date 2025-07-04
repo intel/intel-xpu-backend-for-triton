@@ -1565,6 +1565,11 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                          getSupportSG2DBlockAttrName()))
+      return failure();
+
     if (!isLoadCandidate(op))
       return failure();
 
