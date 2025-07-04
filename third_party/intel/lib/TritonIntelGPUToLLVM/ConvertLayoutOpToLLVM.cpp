@@ -3,6 +3,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 
 namespace mlir::triton::gpu {
 namespace {
@@ -24,7 +25,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
-    auto srcTy = op.getSrc().getType();
+    RankedTensorType srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
@@ -38,6 +39,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
     auto dims = conversion.getInDimNames();
+    llvm::errs() << "dims for conversion: \n";
+    for (auto dim : dims)
+      llvm::errs() << dim << "\n";
     if (llvm::is_contained(dims, kLane)) {
       // If the operation is a supported sub-group shuffle, perform via shuffle
       // operations.

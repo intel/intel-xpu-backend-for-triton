@@ -297,6 +297,7 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     For the layout, the following parameters are required:
     - `instrShape` : contains the (height, width) block parameters for the block io operation
     - `numBlocks` : the block count parameter allows a single load to load multiple blocks in row-major order (useful for increasing cache line utilization)
+    - `isTransposed` : indicates whether the data should be transposed post-load. The `instrShape` describes the shape of the data to load pre-transpose, i.e. if this is true then the output from the instruction (load + tranpose) will be the transposed `instrShape`.
     - `threadsPerWarp` : currently a scalar, this parameter allows us to support different subgroup / warp configurations. Because the 2d block io operation is a subgroup operation, the size of the subgroup is important in determining the ordering of the loaded tensor.
     - `warpsPerCTA` : the number of warps per block / subgroups per workgroup and their distribution
     - `order` : The order within the block, used to determine along which dimension to broadcast.
@@ -310,6 +311,7 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape,
     "unsigned":$numBlocks,
+    "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$order,
     "unsigned":$kWidth,
     "unsigned":$threadsPerWarp
@@ -317,7 +319,7 @@ def Subgroup2DBlockEncodingAttr : DistributedEncoding<"Subgroup2DBlockEncoding",
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    static SmallVector<unsigned, 3> getInstrShapeForLayout(DistributedEncodingTrait layout, ArrayRef<int64_t> shape, bool memoryRowMajor, unsigned kWidth, MLIRContext* context);
+    static SmallVector<unsigned, 3> getInstrShapeForLayout(DistributedEncodingTrait layout, ArrayRef<int64_t> shape, bool memoryRowMajor, bool isTransposed, unsigned kWidth, MLIRContext* context);
   }];
 
   let hasCustomAssemblyFormat = 1;
