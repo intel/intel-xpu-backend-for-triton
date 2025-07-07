@@ -97,6 +97,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonGENToSPIRVPasses();
 
   // TritonAMDGPUToLLVM passes
+  mlir::triton::registerAllocateAMDGPUSharedMemory();
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerOptimizeAMDLDSUsage();
