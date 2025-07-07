@@ -36,7 +36,7 @@ public:
   /// other.
   Operations intersect(const DefUseChain &other) const;
 
-  /// Returns true if this chain and \p other contain one or more common
+  /// Return true if this chain and \p other contain one or more common
   /// operations, and false otherwise.
   bool overlap(const DefUseChain &other) const {
     return !intersect(other).empty();
@@ -61,7 +61,7 @@ private:
   Operation *end;   //< last operation in the chain
 };
 
-/// \class DefUseChain
+/// \class DefUseChainManager
 /// Manages collection of one or more \class DefUseChain.
 class DefUseChainManager {
   friend raw_ostream &operator<<(raw_ostream &, const DefUseChainManager &);
@@ -81,15 +81,16 @@ public:
   void pruneOverlappingChains(bool includeStart);
 
 private:
-  /// Find all def-use paths from \p start to \p end and add them to \p
-  /// allPaths.
-  void findAllPaths(Operation *start, Operation *end, Operations &path,
+  /// Find all def-use paths from \p op to \p end and add them to \p allPaths.
+  /// Note: \p path is the current def-use path being constructed.
+  void findAllPaths(Operation *op, Operation *end, Operations &path,
                     SmallVectorImpl<Operations> &allPaths);
 
   /// Add the users of \p op to \p users.
-  void addUsers(Operation *op, Operations &users) const;
+  /// Note: \p path is the def-use path being constructed.
+  void addUsers(Operation *op, const Operations path, Operations &users) const;
 
-  /// Returns def-use chains that overlap.
+  /// Return def-use chains that overlap.
   DefUseChains getOverlappingChains() const;
 
   DefUseChains chains;

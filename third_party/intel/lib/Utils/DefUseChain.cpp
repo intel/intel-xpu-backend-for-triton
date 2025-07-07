@@ -1,6 +1,7 @@
 #include "intel/include/Utils/DefUseChain.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/Support/Debug.h"
 
 using namespace mlir;
 
@@ -81,63 +82,83 @@ void DefUseChainManager::pruneOverlappingChains(bool includeStart) {
   }
 }
 
-// Find all def-use paths originating at \p start and terminating at \p end to
-// \p allPaths. Maintain the current path being constructed in \p path.
-void DefUseChainManager::findAllPaths(Operation *start, Operation *end,
+// Find all def-use paths originating at \p op and terminating at \p end to \p
+// allPaths. Maintain the current path being constructed in \p path.
+void DefUseChainManager::findAllPaths(Operation *op, Operation *end,
                                       Operations &path,
                                       SmallVectorImpl<Operations> &allPaths) {
-  assert(start && end && "Incorrect usage");
+  assert(op && end && "Incorrect usage");
 
   // Add the current operation to the path.
-  path.insert(start);
+  path.insert(op);
 
   // Reached the end, add the path to allPaths and end the recursion.
-  if (start == end) {
+  if (op == end) {
     allPaths.push_back(path);
     path.pop_back();
     return;
   }
 
   Operations users;
-  addUsers(start, users);
+  addUsers(op, path, users);
 
   // Recur for all users of the current operation.
   for (Operation *user : users) {
-    auto it = llvm::find_if(path, [&](Operation *op) { return op == user; });
-    if (it == path.end())
+    bool pathContainsUser = llvm::find_if(path, [&](Operation *op) {
+                              return op == user;
+                            }) != path.end();
+    if (!pathContainsUser)
       findAllPaths(user, end, path, allPaths);
   }
 
   path.pop_back();
 }
 
-void DefUseChainManager::addUsers(Operation *op, Operations &users) const {
+void DefUseChainManager::addUsers(Operation *op, Operations path,
+                                  Operations &users) const {
   assert(op && "Expecting a valid operation");
+  assert(!path.empty() && "path should not be empty");
+  assert(path.back() == op && "path should have 'op' as the last operation");
 
-  auto addUsers = [&](Operation *op) {
-    // Add users of the block arguments in the 'after' region of a while loop.
-    if (auto condOp = dyn_cast<scf::ConditionOp>(op)) {
-      if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
-        for (BlockArgument arg : whileOp.getAfterArguments())
-          for (Operation *user : arg.getUsers())
-            users.insert(user);
+  auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp,
+                              Operation *previousOp) {
+    // Add users of the block arguments initialized by `previousOp`.
+    assert(previousOp && "Expecting valid operation");
+    assert(previousOp->getNumResults() == 1 && "Unexpected operation");
+    for (auto [arg, initVal] :
+         llvm::zip(loopOp.getRegionIterArgs(), loopOp.getInits())) {
+      // Skip arguments that aren't initialized by the previous operation.
+      if (initVal != previousOp->getResult(0))
+        continue;
+
+      for (Operation *user : arg.getUsers()) {
+        // Transfer to the 'after region' arguments of a while loop.
+        if (auto condOp = dyn_cast<scf::ConditionOp>(user)) {
+          if (auto whileOp = condOp->getParentOfType<scf::WhileOp>()) {
+            unsigned argNo = 0;
+            for (Value condOpArg : condOp.getArgs()) {
+              if (condOpArg == arg)
+                break;
+              argNo++;
+            }
+
+            BlockArgument afterRgnArg = whileOp.getAfterArguments()[argNo];
+            users.insert_range(afterRgnArg.getUsers());
+            continue;
+          }
+        }
+        users.insert(user);
       }
     }
-
-    for (Operation *user : op->getUsers())
-      users.insert(user);
   };
 
-  auto addInitArgsUsers = [&](LoopLikeOpInterface loopOp) {
-    for (Value val : loopOp.getRegionIterArgs())
-      for (Operation *user : val.getUsers())
-        addUsers(user);
-  };
-
-  if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op))
-    addInitArgsUsers(loopOp);
-  else
-    addUsers(op);
+  if (auto loopOp = dyn_cast<LoopLikeOpInterface>(op)) {
+    path.pop_back();
+    Operation *previousOp = path.empty() ? nullptr : path.back();
+    addInitArgsUsers(loopOp, previousOp);
+  } else {
+    users.insert_range(op->getUsers());
+  }
 }
 
 DefUseChainManager::DefUseChains
@@ -161,8 +182,9 @@ DefUseChainManager::getOverlappingChains() const {
 }
 
 raw_ostream &operator<<(raw_ostream &os, const DefUseChainManager &manager) {
+  os << "Chains(" << manager.getChains().size() << "):\n";
   for (const DefUseChain &chain : manager.getChains())
-    os << chain << "\n";
+    os.indent(2) << chain << "\n";
   return os;
 }
 
