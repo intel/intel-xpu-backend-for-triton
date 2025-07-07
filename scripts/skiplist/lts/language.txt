@@ -245,3 +245,17 @@ python/test/unit/language/test_core.py::test_convert_mma2mma[mma_pair0-float16-2
 python/test/unit/language/test_matmul.py::test_lhs_in_tmem
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_2d_tma
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/4630
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float32-float8e4nv-nan]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float32-float8e5-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float32-float8e5--inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float16-float8e4nv-nan]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float16-float8e5-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float16-float8e5--inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-max]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-min]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv--inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-nan]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e5-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e5--inf]

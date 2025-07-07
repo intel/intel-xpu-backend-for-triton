@@ -1,2 +1,16 @@
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3870
 python/test/unit/language/test_core.py::test_dot3d[8-2-64-64-64-32-32-float32-float32]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/4630
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float32-float8e4nv-nan]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float32-float8e5-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float32-float8e5--inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float16-float8e4nv-nan]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float16-float8e5-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[float16-float8e5--inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-max]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-min]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv--inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e4nv-nan]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e5-inf]
+python/test/unit/language/test_conversions.py::test_typeconvert_downcast_clamping[bfloat16-float8e5--inf]
