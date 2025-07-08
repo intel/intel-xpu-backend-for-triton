@@ -151,11 +151,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_41:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[offsetX_:.*]] = llvm.add %[[VAL_41]], %[[OFFSET_1]] : i32
     // CHECK:           %[[offsetY_:.*]] = llvm.add %[[VAL_40]], %[[OFFSET_0]] : i32
-    // CHECK:           %[[VAL_44:.*]] = llvm.trunc %[[offsetY_]] : i32 to i32
-    // CHECK:           %[[VAL_45:.*]] = llvm.trunc %[[offsetX_]] : i32 to i32
     // CHECK:           %[[ROW_STRIDE_IN_BYTES:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
     // CHECK:           %[[HEIGHT:.*]] = llvm.mul %[[HEIGHT_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
-    // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[HEIGHT]], %[[WIDTH_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[VAL_45]], %[[VAL_44]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[HEIGHT]], %[[WIDTH_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[offsetX_]], %[[offsetY_]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
     %ptrA = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot0>>
     %A = tt.load %ptrA {boundaryCheck = array<i32: 1>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dot0>>
     %B = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot1>
@@ -216,11 +214,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_40:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[offsetX_:.*]] = llvm.add %[[VAL_39]], %[[OFFSET_1]] : i32
     // CHECK:           %[[offsetY_:.*]] = llvm.add %[[VAL_40]], %[[OFFSET_0]] : i32
-    // CHECK:           %[[VAL_43:.*]] = llvm.trunc %[[offsetY_]] : i32 to i32
-    // CHECK:           %[[VAL_44:.*]] = llvm.trunc %[[offsetX_]] : i32 to i32
     // CHECK:           %[[ROW_STRIDE_IN_BYTES:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
     // CHECK:           %[[HEIGHT:.*]] = llvm.mul %[[HEIGHT_i32]], %[[ELEM_SIZE_IN_BYTES]] : i32
-    // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[HEIGHT]], %[[WIDTH_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[VAL_44]], %[[VAL_43]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = true, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockload %[[BASE]], %[[HEIGHT]], %[[WIDTH_i32]], %[[ROW_STRIDE_IN_BYTES]], %[[offsetX_]], %[[offsetY_]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, transpose = false, vnni_transform = true, cache_control = Default}
     %ptrB = tt.make_tensor_ptr %arg1, [%arg4, %arg3], [%arg7, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dot1>>
     %B = tt.load %ptrB {boundaryCheck = array<i32: 0>, padding = 1 : i32, ttig.block_io = "row_major"} : !tt.ptr<tensor<32x32xf16, #dot1>>
     %A = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dot0>

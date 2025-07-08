@@ -202,9 +202,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_194:.*]] = llvm.insertelement %[[VAL_103]], %[[VAL_192]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_196:.*]] = llvm.insertelement %[[VAL_104]], %[[VAL_194]]{{\[}}{{.*}} : i32] : vector<8xf16>
     // CHECK:           %[[VAL_197:.*]] = llvm.bitcast %[[VAL_196]] : vector<8xf16> to vector<8xi16>
-    // CHECK:           %[[VAL_198:.*]] = llvm.trunc %[[offsetY]] : i32 to i32
-    // CHECK:           %[[VAL_199:.*]] = llvm.trunc %[[offsetX]] : i32 to i32
-    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], %[[VAL_199]], %[[VAL_198]], %[[VAL_197]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK:           triton_gen.2Dblockstore %[[BASE_PTR]], %[[baseWidth]], %[[baseHeight]], %[[basePitch]], %[[offsetX]], %[[offsetY]], %[[VAL_197]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
 
     // COM: replica [0, 1]
     // CHECK:           %[[VAL_207:.*]] = llvm.mlir.constant(16 : i32) : i32
