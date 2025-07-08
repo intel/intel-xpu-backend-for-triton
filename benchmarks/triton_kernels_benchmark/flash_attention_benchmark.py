@@ -155,7 +155,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
 
 
 configs = [
