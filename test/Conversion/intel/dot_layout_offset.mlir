@@ -14,7 +14,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:           %[[VAL_145:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:           %[[LANE_ID:.*]] = llvm.urem %[[THREAD_ID_I32]], %[[VAL_145]]  : i32
     // CHECK:           %[[WARP_ID:.*]] = llvm.udiv %[[THREAD_ID_I32]], %[[VAL_145]]  : i32
-    // CHECK-COUNT-3:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-COUNT-4:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_149:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[VAL_150:.*]] = llvm.and %[[LANE_ID]], %[[VAL_149]]  : i32
     // CHECK:           %[[VAL_151:.*]] = llvm.icmp "eq" %[[VAL_150]], %[[CST_0]] : i32
@@ -336,7 +336,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     // CHECK:           %[[VAL_145:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:           %[[LANE_ID:.*]] = llvm.urem %[[THREAD_ID_I32]], %[[VAL_145]]  : i32
     // CHECK:           %[[WARP_ID:.*]] = llvm.udiv %[[THREAD_ID_I32]], %[[VAL_145]]  : i32
-    // CHECK-COUNT-3:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-COUNT-4:   %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:           %[[VAL_149:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[VAL_150:.*]] = llvm.and %[[LANE_ID]], %[[VAL_149]]  : i32
     // CHECK:           %[[VAL_151:.*]] = llvm.icmp "eq" %[[VAL_150]], %[[CST_0]] : i32
