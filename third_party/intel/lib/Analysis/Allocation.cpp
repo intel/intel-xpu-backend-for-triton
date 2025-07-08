@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h" // isBlockIONoOpConversion
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -11,6 +12,9 @@ constexpr unsigned invalidSize = -1;
 unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
   RankedTensorType srcTy = convertLayout.getSrc().getType();
   RankedTensorType dstTy = convertLayout.getResult().getType();
+
+  if (gpu::intel::isBlockIONoOpConversion(srcTy, dstTy))
+    return 0;
   if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy))
     return 0;
   if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {

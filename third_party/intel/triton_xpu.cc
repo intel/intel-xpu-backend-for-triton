@@ -118,6 +118,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_materialize_block_pointer",
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
+  ADD_PASS_WRAPPER_0(
+      "add_optimize_block_load_encoding",
+      gpu::intel::createTritonIntelGPUOptimizeBlockIOEncodingPass);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
   ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",

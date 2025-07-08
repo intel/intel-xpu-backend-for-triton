@@ -59,6 +59,17 @@ static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
   return success();
 }
 
+static LogicalResult parseBoolAttrValue(AsmParser &parser, Attribute attr,
+                                        bool &value, StringRef desc) {
+  auto boolAttr = mlir::dyn_cast<BoolAttr>(attr);
+  if (!boolAttr) {
+    parser.emitError(parser.getNameLoc(), "expected a bool type in ") << desc;
+    return failure();
+  }
+  value = boolAttr.getValue();
+  return success();
+}
+
 // parse an array of integers
 static LogicalResult parseIntArrayAttr(AsmParser &parser,
                                        const NamedAttribute &attr,
@@ -81,6 +92,11 @@ static LogicalResult parseIntArrayAttr(AsmParser &parser,
 static LogicalResult parseUInt(AsmParser &parser, const NamedAttribute &attr,
                                unsigned &value, StringRef desc) {
   return parseIntAttrValue(parser, attr.getValue(), value, desc);
+};
+
+static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
+                               bool &value, StringRef desc) {
+  return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
 
 //===----------------------------------------------------------------------===//
@@ -531,8 +547,8 @@ void maybePrintCTALayout(mlir::MLIRContext *context, mlir::AsmPrinter &printer,
 LogicalResult Subgroup2DBlockEncodingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     ArrayRef<unsigned> warpsPerCTA, CTALayoutAttr CTALayout,
-    ArrayRef<unsigned> instrShape, unsigned numBlocks, ArrayRef<unsigned> order,
-    unsigned kWidth, unsigned threadsPerWarp) {
+    ArrayRef<unsigned> instrShape, unsigned numBlocks, bool isTransposed,
+    ArrayRef<unsigned> order, unsigned kWidth, unsigned threadsPerWarp) {
   if (instrShape.size() != 2) {
     return emitError() << "instrShape must be rank 2 but was: "
                        << instrShape.size();
@@ -569,6 +585,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAOrder;
   SmallVector<unsigned> instrShape;
   unsigned numBlocks = 0;
+  bool isTransposed = false;
   SmallVector<unsigned> order;
   unsigned kWidth = 0;
   unsigned threadsPerWarp = 0;
@@ -601,6 +618,10 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseUInt(parser, attr, numBlocks, "numBlocks").failed())
         return {};
     }
+    if (attr.getName() == "isTransposed") {
+      if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
+        return {};
+    }
     if (attr.getName() == "order") {
       if (parseIntArrayAttr(parser, attr, order, "order").failed())
         return {};
@@ -622,7 +643,7 @@ Attribute Subgroup2DBlockEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<Subgroup2DBlockEncodingAttr>(
       parser.getContext(), warpsPerCTA, *CTALayout, instrShape, numBlocks,
-      order, kWidth, threadsPerWarp);
+      isTransposed, order, kWidth, threadsPerWarp);
 }
 
 SmallVector<unsigned> Subgroup2DBlockEncodingAttr::getRepOrder() const {
@@ -652,9 +673,10 @@ void Subgroup2DBlockEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(), getRank());
 
   printer << ", instrShape = [" << getInstrShape()
-          << "], numBlocks=" << getNumBlocks() << ", order=[" << getOrder()
-          << "], kWidth=" << getKWidth()
-          << ", threadsPerWarp=" << getThreadsPerWarp() << "}>";
+          << "], numBlocks = " << getNumBlocks()
+          << ", isTransposed = " << getIsTransposed() << ", order = ["
+          << getOrder() << "], kWidth = " << getKWidth()
+          << ", threadsPerWarp = " << getThreadsPerWarp() << "}>";
 }
 
 LinearLayout
@@ -664,20 +686,14 @@ Subgroup2DBlockEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 SmallVector<unsigned, 3> Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
     DistributedEncodingTrait layout, ArrayRef<int64_t> tensorShape,
-    bool memoryRowMajor, unsigned kWidth, MLIRContext *context) {
+    bool memoryRowMajor, bool isTransposed, unsigned kWidth,
+    MLIRContext *context) {
   const auto rank = tensorShape.size();
 
   std::optional<LinearLayout> llEncoding = layout.toLinearLayout(tensorShape);
   assert(llEncoding.has_value() && "invalid dot layout to linear layout");
   LinearEncodingAttr llAttr = LinearEncodingAttr::get(context, *llEncoding);
   SmallVector<unsigned> threadOrder = llAttr.getThreadOrder();
-
-  const bool valueRowMajor =
-      (threadOrder[rank - 2] == 1 && threadOrder[rank - 1] == 0);
-  assert((valueRowMajor ||
-          (threadOrder[rank - 2] == 0 && threadOrder[rank - 1] == 1)) &&
-         "Only row_major or column_major is allowed");
-  const bool isTransposeRequired = valueRowMajor ^ memoryRowMajor;
 
   auto dotEncodingAttr = dyn_cast<DotOperandEncodingAttr>(layout);
   const unsigned opIdx = dotEncodingAttr ? dotEncodingAttr.getOpIdx() : 2;
@@ -725,7 +741,7 @@ SmallVector<unsigned, 3> Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
   unsigned dpasOperandsPerTileY =
       isOperandA ? numReps[2] : repCluster[dimOuter];
 
-  if (isTransposeRequired) {
+  if (isTransposed) {
     std::swap(tileWidth, tileHeight);
 
     const unsigned threadsPerWarp = dpasLayout.getThreadsPerWarp();
@@ -737,6 +753,11 @@ SmallVector<unsigned, 3> Subgroup2DBlockEncodingAttr::getInstrShapeForLayout(
 
     dpasOperandsPerTileY = 1;
   }
+
+  // PVC 2D load supports 32 rows at most. Load multiple dot operands in by
+  // enlarging the tileHeight.
+  dpasOperandsPerTileX = std::min(dpasOperandsPerTileX, 32 / tileHeight);
+  tileHeight = tileHeight * dpasOperandsPerTileX;
 
   // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
   // by enlarging the number of blocks.

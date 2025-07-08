@@ -30,6 +30,8 @@ public:
       auto srcEncoding = srcType.getEncoding();
       if (isa<triton::gpu::SharedEncodingTrait>(srcEncoding))
         return;
+      if (isa<intel::Subgroup2DBlockEncodingAttr>(srcEncoding))
+        return;
       auto dstDotOp =
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
