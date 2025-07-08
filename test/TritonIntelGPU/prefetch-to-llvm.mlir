@@ -50,16 +50,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[VAL_27:.*]] = llvm.add %[[VAL_26]], %[[CST_0]] : i32
     // CHECK:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
     // CHECK:     %[[VAL_28:.*]] = llvm.urem %[[VAL_27]], %[[CST_32]] : i32
-    // CHECK:     %[[VAL_29:.*]] = llvm.add %[[VAL_28]], %[[OFFSET_1]] : i32
+    // CHECK:     %[[ROW_MAJOR_OFFSET_X:.*]] = llvm.add %[[VAL_28]], %[[OFFSET_1]] : i32
     // CHECK:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
     // CHECK:     %[[VAL_30:.*]] = llvm.mul %[[VAL_22]], %[[CST_2]] : i32
     // CHECK:     %[[VAL_31:.*]] = llvm.add %[[VAL_30]], %[[CST_0]] : i32
     // CHECK:     %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:     %[[VAL_32:.*]] = llvm.urem %[[VAL_31]], %[[CST_16]] : i32
-    // CHECK:     %[[VAL_33:.*]] = llvm.add %[[VAL_32]], %[[OFFSET_0]] : i32
-    // CHECK:     %[[ROW_MAJOR_OFFSET_Y:.*]] = llvm.trunc %[[VAL_33]] : i32 to i32
-    // CHECK:     %[[ROW_MAJOR_OFFSET_X:.*]] = llvm.trunc %[[VAL_29]] : i32 to i32
+    // CHECK:     %[[ROW_MAJOR_OFFSET_Y:.*]] = llvm.add %[[VAL_32]], %[[OFFSET_0]] : i32
     // CHECK:     triton_gen.2Dblockprefetch %[[BASE_]], %[[ROW_MAJOR_BASE_WIDTH]], %[[ROW_MAJOR_BASE_HEIGHT]], %[[ROW_MAJOR_PITCH]], %[[ROW_MAJOR_OFFSET_X]], %[[ROW_MAJOR_OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 2, v_blocks = 2, cache_control = L1C_L3C}
     %rowMajorPtr = tt.make_tensor_ptr %arg0, [%arg2, %arg4], [%arg5, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<16x32xf16>>
     ttig.prefetch %rowMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "row_major"} : !tt.ptr<tensor<16x32xf16>>
@@ -101,16 +99,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[VAL_27:.*]] = llvm.add %[[VAL_26]], %[[CST_0]] : i32
     // CHECK:     %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
     // CHECK:     %[[VAL_28:.*]] = llvm.urem %[[VAL_27]], %[[CST_32]] : i32
-    // CHECK:     %[[VAL_29:.*]] = llvm.add %[[VAL_28]], %[[OFFSET_1]] : i32
+    // CHECK:     %[[COL_MAJOR_OFFSET_X:.*]] = llvm.add %[[VAL_28]], %[[OFFSET_1]] : i32
     // CHECK:     %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:     %[[CST_2:.*]] = llvm.mlir.constant(4 : i32) : i32
     // CHECK:     %[[VAL_30:.*]] = llvm.mul %[[VAL_22]], %[[CST_2]] : i32
     // CHECK:     %[[VAL_31:.*]] = llvm.add %[[VAL_30]], %[[CST_0]] : i32
     // CHECK:     %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK:     %[[VAL_32:.*]] = llvm.urem %[[VAL_31]], %[[CST_16]] : i32
-    // CHECK:     %[[VAL_33:.*]] = llvm.add %[[VAL_32]], %[[OFFSET_0]] : i32
-    // CHECK:     %[[COL_MAJOR_OFFSET_Y:.*]] = llvm.trunc %[[VAL_33]] : i32 to i32
-    // CHECK:     %[[COL_MAJOR_OFFSET_X:.*]] = llvm.trunc %[[VAL_29]] : i32 to i32
+    // CHECK:     %[[COL_MAJOR_OFFSET_Y:.*]] = llvm.add %[[VAL_32]], %[[OFFSET_0]] : i32
     // CHECK:     triton_gen.2Dblockprefetch %[[BASE_]], %[[COL_MAJOR_BASE_WIDTH]], %[[COL_MAJOR_BASE_HEIGHT]], %[[COL_MAJOR_PITCH]], %[[COL_MAJOR_OFFSET_X]], %[[COL_MAJOR_OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 1, cache_control = L1C_L3C}
     %columnMajorPtr = tt.make_tensor_ptr %arg0, [%arg4, %arg2], [%c1_i64, %arg5], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x16xf16>>
     ttig.prefetch %columnMajorPtr {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "column_major"} : !tt.ptr<tensor<32x16xf16>>
