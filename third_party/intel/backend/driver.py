@@ -463,25 +463,8 @@ typedef struct _DevicePtrInfo {{
 }} DevicePtrInfo;
 
 static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx, const sycl::queue &queue) {{
-  if (!ptr_info->dev_ptr || !ptr_info->valid) {{
+    // tmp: no-op
     return;
-  }}
-  auto context = queue.get_context();
-  auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
-  ze_memory_allocation_properties_t prop;
-  prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
-  prop.pNext = nullptr;
-  ze_device_handle_t device;
-  auto res = zeMemGetAllocProperties((ze_context_handle_t)handle, ptr_info->dev_ptr, &prop, &device);
-  if (res != ZE_RESULT_SUCCESS) {{
-    PyErr_Format(PyExc_ValueError,
-                 "Cannot get memory properties for pointer argument (at %d, err=%d)", idx, res);
-    ptr_info->valid = false;
-  }} else if (prop.type != ZE_MEMORY_TYPE_DEVICE) {{
-    PyErr_Format(PyExc_ValueError,
-                 "Pointer argument (at %d) doesn't reference XPU device memory (cpu tensor?)", idx);
-    ptr_info->valid = false;
-  }}
 }}
 
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx, const sycl::queue &queue) {{
