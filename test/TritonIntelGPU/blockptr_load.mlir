@@ -355,7 +355,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
-module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_sg_2d_block"} {
+module attributes {"ttg.num-warps" = 1 : i32, "ttig.support_sg_2d_block"} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @invalid_bytes_num_per_row
   tt.func public @invalid_bytes_num_per_row(%arg0: !tt.ptr<f32>, %col_stride: i64) {
       %c64_i64 = arith.constant 64 : i64
