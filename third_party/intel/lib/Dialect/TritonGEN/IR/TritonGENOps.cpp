@@ -86,6 +86,40 @@ static LogicalResult verify2DBlockAddressPayloadRestriction(Op op) {
   return success();
 }
 
+template <typename Op> static LogicalResult verify2DBlockHWRestriction(Op op) {
+  static_assert(llvm::is_one_of<Op, TritonGEN::Matrix2DBlockLoadOp,
+                                TritonGEN::Matrix2DBlockPrefetchOp>::value,
+                "Unexpected template parameter");
+
+  unsigned elemSizeInBits = op.getElemSizeInBits();
+  uint32_t tileWidth = op.getTileWidth();
+  uint32_t vBlocks = op.getVBlocks();
+  if (elemSizeInBits * tileWidth * vBlocks > 512)
+    return op->emitOpError(
+        "expecting elem_size_in_bits * tile_width * v_blocks <= 512");
+
+  switch (elemSizeInBits) {
+  case 8:
+    if (tileWidth < 4)
+      return op->emitOpError("expecting tile_width to be between 4 and 64");
+    break;
+  case 16:
+    if (tileWidth < 2 || tileWidth > 32)
+      return op.emitOpError("expecting tile_width to be between 2 and 32");
+    break;
+  case 32:
+    if (tileWidth > 16)
+      return op.emitOpError("expecting tile_width to be between 1 and 16");
+    if (vBlocks == 4)
+      return op->emitOpError("v_blocks for 32 bit elements should be 1 or 2");
+    break;
+  default:
+    llvm_unreachable("unexpected element size");
+  }
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // gen.matrix.dpas
 //===----------------------------------------------------------------------===//
@@ -202,49 +236,8 @@ verify2DBlockLoadHWRestriction(TritonGEN::Matrix2DBlockLoadOp op) {
     return op.emitOpError(
         "transpose and vnni_transform are mutually exclusive");
 
-  if (!op.getTranspose() && !op.getVnniTransform()) {
-    uint32_t tileWidth = op.getTileWidth();
-    uint32_t vBlocks = op.getVBlocks();
-    switch (op.getElemSizeInBits()) {
-    case 8:
-      if (tileWidth < 4 || tileWidth > 64)
-        return op.emitOpError("expecting tile_width to be between 4 and 64");
-      if (tileWidth * vBlocks > 64)
-        return op.emitOpError(
-            "tile_width * v_blocks should be less than or equal "
-            "to 64 for 8 bit elements");
-      break;
-    case 16:
-      if (tileWidth < 2 || tileWidth > 32)
-        return op.emitOpError("expecting tile_width to be between 2 and 32");
-      if (tileWidth * vBlocks > 32)
-        return op.emitOpError(
-            "tile_width * v_blocks should be less than or equal "
-            "to 32 for 16 bit elements");
-      break;
-    case 32:
-      if (tileWidth < 1 || tileWidth > 16)
-        return op.emitOpError("expecting tile_width to be between 1 and 16");
-      if (vBlocks != 1 && vBlocks != 2)
-        return op.emitOpError("expecting v_blocks to be 1 or 2");
-      if (tileWidth * vBlocks > 16)
-        return op.emitOpError(
-            "tile_width * v_blocks should be less than or equal "
-            "to 16 for 32 bit elements");
-      break;
-    case 64:
-      if (tileWidth < 1 || tileWidth > 8)
-        return op.emitOpError("expecting tile_width to be between 1 and 8");
-      if (vBlocks != 1)
-        return op.emitOpError("expecting v_blocks to be 1");
-      break;
-    default:
-      return op.emitOpError(
-          "expecting elem_size_in_bits to be 8, 16, 32, or 64");
-    }
-
-    return success();
-  }
+  if (!op.getTranspose() && !op.getVnniTransform())
+    return verify2DBlockHWRestriction(op);
 
   if (op.getTranspose()) {
     assert(!op.getVnniTransform() &&
@@ -411,26 +404,5 @@ LogicalResult TritonGEN::Matrix2DBlockPrefetchOp::verify() {
   if (verify2DBlockAddressPayloadRestriction(*this).failed())
     return failure();
 
-  uint32_t tileWidth = getTileWidth();
-  switch (getElemSizeInBits()) {
-  case 8:
-    if (tileWidth != 16 && tileWidth != 32)
-      return emitOpError("tile_width for 8 bit elements should be equal to "
-                         "16 or 32");
-    break;
-  case 16:
-    if (tileWidth != 16)
-      return emitOpError("tile_width for 16 bit elements should be equal "
-                         "to 16");
-    break;
-  case 32:
-    if (tileWidth != 8 && tileWidth != 16)
-      return emitOpError(
-          "tile_width for 32 bit elements should be equal to 8 or 16");
-    break;
-  default:
-    llvm_unreachable("unexpected element size");
-  }
-
-  return success();
+  return verify2DBlockHWRestriction(*this);
 }
