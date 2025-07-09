@@ -144,6 +144,16 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return true;
 }
 
+static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
+  // FIXME: The following signatures are not valid in SPV interface.
+  // intel_sub_group_2d_block_prefetch_16b_2r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 2 && op.getVBlocks() == 1)
+    return false;
+
+  return true;
+}
+
 // HW requires base address to be 64-byte aligned. Compensate the non-64-byte
 // alignment base address by adjusting the base width and x-coordinate offset.
 template <
@@ -651,6 +661,12 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!isSPVBuiltinAvailable(op)) {
+      // Fallback to GenISA interface.
+      rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
