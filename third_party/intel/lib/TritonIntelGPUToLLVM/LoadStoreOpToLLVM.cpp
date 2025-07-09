@@ -2769,17 +2769,17 @@ struct StoreOpToBlockIOConversion
         assert(offsets.size() == 2 && "only support 2D tensor for now.");
         offsetX = b.add(offsetBaseX, offsets[colDim].second);
         if (!boundaryProtect.contains(colDim)) {
-          Value off = b.mul(offsetX, elemSizeInBytes);
+          // The offsetX is number of elements.
           addrElem =
-              b.gep(ptr_ty(ctx, 1 /*global*/), opaqueType, addrElem, off);
+              b.gep(ptr_ty(ctx, 1 /*global*/), opaqueType, addrElem, offsetX);
           offsetX = b.i32_val(0);
         }
 
         offsetY = b.add(offsetBaseY, offsets[rowDim].second);
         if (!boundaryProtect.contains(rowDim)) {
+          // The pitch is number of bytes.
           Value off = b.mul(offsetY, pitch);
-          addrElem =
-              b.gep(ptr_ty(ctx, 1 /*global*/), opaqueType, addrElem, off);
+          addrElem = b.gep(ptr_ty(ctx, 1 /*global*/), i8_ty, addrElem, off);
           offsetY = b.i32_val(0);
         }
       } else {
