@@ -350,3 +350,21 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       tt.return
   }
 }
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttig.support_sg_2d_block"} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @invalid_bytes_num_per_row
+  tt.func public @invalid_bytes_num_per_row(%arg0: !tt.ptr<f32>, %col_stride: i64) {
+      %c64_i64 = arith.constant 64 : i64
+      %c1_i64 = arith.constant 1 : i64
+      %c0_i32 = arith.constant 0 : i32
+      %21 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf32, #dot_a>>
+      // COM: 32 x 4 = 128 bytes, which is >64 bytes
+      // CHECK-NOT:    triton_gen.2Dblockload
+      %45 = tt.load %21 {ttig.block_io = "row_major"} : !tt.ptr<tensor<64x16xf32, #dot_a>>
+      tt.return
+  }
+}
