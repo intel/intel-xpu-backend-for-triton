@@ -347,3 +347,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @regular_pointer_block_io
+  tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
+
+    %a_mask = arith.constant dense<true> : tensor<256x64xi1, #dot_a>
+    %a_other = arith.constant dense<0.00e+00> : tensor<256x64xf32, #dot_a>
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>> -> tensor<256x1xi32, #dot_a>
+    %2 = arith.constant dense<64> : tensor<256x1xi32, #dot_a>
+    %3 = arith.muli %1, %2 : tensor<256x1xi32, #dot_a>
+    %4 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot_a}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot_a}>> -> tensor<1x64xi32, #dot_a>
+    %6 = tt.broadcast %3 : tensor<256x1xi32, #dot_a> -> tensor<256x64xi32, #dot_a>
+    %7 = tt.broadcast %5 : tensor<1x64xi32, #dot_a> -> tensor<256x64xi32, #dot_a>
+    %8 = arith.addi %6, %7 : tensor<256x64xi32, #dot_a>
+    %9 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x64x!tt.ptr<f32>, #dot_a>
+    %10 = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f32>, #dot_a>, tensor<256x64xi32, #dot_a>
+    // COM: 32 x 4 = 128 bytes, which is >64 bytes
+    // CHECK-NOT:    triton_gen.2Dblockload
+    %11 = tt.load %10, %a_mask, %a_other {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f32>, #dot_a>
+
+    tt.return
+  }
+}
