@@ -11,7 +11,6 @@ import hashlib
 import tempfile
 import signal
 import os
-import io
 import shutil
 import subprocess
 from pathlib import Path
@@ -419,12 +418,9 @@ class XPUBackend(BaseBackend):
                     '-options', metadata["build_flags"] + shader_dump_opt
                 ]
 
-                stdout_buffer = io.StringIO()
                 try:
-                    subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=stdout_buffer,
-                                   stderr=subprocess.STDOUT)
-                    logs = stdout_buffer.getvalue().strip()
-                    if 'spilled' in logs and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
+                    output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                    if 'spilled' in output and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
                         """
                         The exact message is something like:
                             warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
@@ -433,13 +429,9 @@ class XPUBackend(BaseBackend):
                         metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
                         # re-run with new build flags
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                        subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=stdout_buffer,
-                                       stderr=subprocess.STDOUT)
-                    stdout_buffer.close()
-                except subprocess.CalledProcessError as e:
-                    logs = stdout_buffer.getvalue()
-                    stdout_buffer.close()
+                        output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
 
+                except subprocess.CalledProcessError as e:
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
                     elif e.returncode == 128 + signal.SIGSEGV:
@@ -448,7 +440,7 @@ class XPUBackend(BaseBackend):
                         error = f'`ocloc` failed with error code {e.returncode}'
 
                     raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{logs}\n'
+                                       f'`ocloc` stderr:\n{output}\n'
                                        f'Repro command: {ocloc_cmd}\n')
 
                 with open(fbin, 'rb') as f:
