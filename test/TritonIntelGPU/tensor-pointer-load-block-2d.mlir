@@ -34,9 +34,10 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     %28 = tt.splat %arg3 : i32 -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>
     %29 = arith.cmpi slt, %20, %28 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>
     %30 = arith.select %29, %20, %cst_2 {tt.contiguity = dense<128> : tensor<1xi32>, tt.divisibility = dense<128> : tensor<1xi32>} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>, tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>
-    %34 = tt.expand_dims %30 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>> -> tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %34 = tt.expand_dims %20 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>> -> tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %35 = tt.splat %arg6 : i32 -> tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
-    %36 = arith.muli %34, %35 : tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %cst_1 = arith.constant dense<512> : tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %36 = arith.muli %34, %cst_1 : tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %37 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>
     %38 = tt.expand_dims %37 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>> -> tensor<1x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
     %39 = tt.broadcast %36 : tensor<128x1xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> -> tensor<128x64xi32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
@@ -103,8 +104,9 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     %44 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>}>>
     %45 = tt.expand_dims %44 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>}>> -> tensor<64x1xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %46 = tt.splat %arg7 : i32 -> tensor<64x1xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    %47 = arith.muli %45, %46 : tensor<64x1xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    %48 = tt.expand_dims %33 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>}>> -> tensor<1x256xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+    %cst_2 = arith.constant dense<512> : tensor<64x1xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+    %47 = arith.muli %45, %cst_2 : tensor<64x1xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+    %48 = tt.expand_dims %26 {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>}>> -> tensor<1x256xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %49 = tt.broadcast %47 : tensor<64x1xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x256xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %50 = tt.broadcast %48 : tensor<1x256xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x256xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %51 = arith.addi %49, %50 : tensor<64x256xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
@@ -141,23 +143,65 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 #mma_2 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2]}>
 module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
-  tt.func public @regular_pointer_block_io(%arg0: tensor<256x64x!tt.ptr<f16>, #mma>,
-                                           %arg1: tensor<256x64x!tt.ptr<f16>, #mma_1>,
-                                           %arg2: tensor<128x64x!tt.ptr<f16>, #mma_2>,
-                                           %arg3: tensor<256x64x!tt.ptr<f16>, #mma_2>) {
+  tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f16>,
+                                           %arg1: !tt.ptr<f16>,
+                                           %arg2: !tt.ptr<f16>,
+                                           %arg3: !tt.ptr<f16>) {
     // CHECK-NOT: llvm.cond_br
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<256x1xi32, #mma>
+    %2 = arith.constant dense<64> : tensor<256x1xi32, #mma>
+    %3 = arith.muli %1, %2 : tensor<256x1xi32, #mma>
+    %4 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x64xi32, #mma>
+    %6 = tt.broadcast %3 : tensor<256x1xi32, #mma> -> tensor<256x64xi32, #mma>
+    %7 = tt.broadcast %5 : tensor<1x64xi32, #mma> -> tensor<256x64xi32, #mma>
+    %8 = arith.addi %6, %7 : tensor<256x64xi32, #mma>
+    %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #mma>
+    %10 = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f16>, #mma>, tensor<256x64xi32, #mma>
     // CHECK-COUNT-4: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
-    %0 = tt.load %arg0 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
+    %11 = tt.load %10 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
 
+    %20 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma_1}>>
+    %21 = tt.expand_dims %20 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma_1}>> -> tensor<256x1xi32, #mma_1>
+    %22 = arith.constant dense<64> : tensor<256x1xi32, #mma_1>
+    %23 = arith.muli %21, %22 : tensor<256x1xi32, #mma_1>
+    %24 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma_1}>>
+    %25 = tt.expand_dims %24 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma_1}>> -> tensor<1x64xi32, #mma_1>
+    %26 = tt.broadcast %23 : tensor<256x1xi32, #mma_1> -> tensor<256x64xi32, #mma_1>
+    %27 = tt.broadcast %25 : tensor<1x64xi32, #mma_1> -> tensor<256x64xi32, #mma_1>
+    %28 = arith.addi %26, %27 : tensor<256x64xi32, #mma_1>
+    %29 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #mma_1>
+    %30 = tt.addptr %29, %28 : tensor<256x64x!tt.ptr<f16>, #mma_1>, tensor<256x64xi32, #mma_1>
     // CHECK-COUNT-16: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1
-    %1 = tt.load %arg1 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma_1>
+    %31 = tt.load %30 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma_1>
 
+    %40 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma_2}>>
+    %41 = tt.expand_dims %40 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma_2}>> -> tensor<256x1xi32, #mma_2>
+    %42 = arith.constant dense<64> : tensor<256x1xi32, #mma_2>
+    %43 = arith.muli %41, %42 : tensor<256x1xi32, #mma_2>
+    %44 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma_2}>>
+    %45 = tt.expand_dims %44 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma_2}>> -> tensor<1x64xi32, #mma_2>
+    %46 = tt.broadcast %43 : tensor<256x1xi32, #mma_2> -> tensor<256x64xi32, #mma_2>
+    %47 = tt.broadcast %45 : tensor<1x64xi32, #mma_2> -> tensor<256x64xi32, #mma_2>
+    %48 = arith.addi %46, %47 : tensor<256x64xi32, #mma_2>
+    %49 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #mma_2>
+    %50 = tt.addptr %49, %48 : tensor<256x64x!tt.ptr<f16>, #mma_2>, tensor<256x64xi32, #mma_2>
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2
-    %2 = tt.load %arg3 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma_2>
+    %51 = tt.load %50 {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma_2>
 
+    %60 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma_2}>>
+    %61 = tt.expand_dims %60 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #mma_2}>> -> tensor<128x1xi32, #mma_2>
+    %62 = arith.constant dense<64> : tensor<128x1xi32, #mma_2>
+    %63 = arith.muli %61, %62 : tensor<128x1xi32, #mma_2>
+    %66 = tt.broadcast %63 : tensor<128x1xi32, #mma_2> -> tensor<128x64xi32, #mma_2>
+    %67 = tt.broadcast %45 : tensor<1x64xi32, #mma_2> -> tensor<128x64xi32, #mma_2>
+    %68 = arith.addi %66, %67 : tensor<128x64xi32, #mma_2>
+    %69 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #mma_2>
+    %70 = tt.addptr %69, %68 : tensor<128x64x!tt.ptr<f16>, #mma_2>, tensor<128x64xi32, #mma_2>
     // COM: The data is duplicated in the warps because the warp shape is 32*8=256 larger than the tensor shape 128
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2
-    %3 = tt.load %arg2 {ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #mma_2>
+    %71 = tt.load %70 {ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #mma_2>
     tt.return
   }
 }
@@ -193,11 +237,23 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
 module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
-  tt.func public @regular_pointer_block_io(%arg0: tensor<256x64x!tt.ptr<f16>, #mma>) {
+  tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f16>) {
 
     %a_mask = arith.constant dense<true> : tensor<256x64xi1, #mma>
     %a_other = arith.constant dense<0.00e+00> : tensor<256x64xf16, #mma>
     // CHECK-NOT: llvm.cond_br
+
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #mma}>> -> tensor<256x1xi32, #mma>
+    %2 = arith.constant dense<64> : tensor<256x1xi32, #mma>
+    %3 = arith.muli %1, %2 : tensor<256x1xi32, #mma>
+    %4 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #mma}>> -> tensor<1x64xi32, #mma>
+    %6 = tt.broadcast %3 : tensor<256x1xi32, #mma> -> tensor<256x64xi32, #mma>
+    %7 = tt.broadcast %5 : tensor<1x64xi32, #mma> -> tensor<256x64xi32, #mma>
+    %8 = arith.addi %6, %7 : tensor<256x64xi32, #mma>
+    %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #mma>
+    %10 = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<f16>, #mma>, tensor<256x64xi32, #mma>
 
     // CHECK: %[[TOP_LEFT_MASK_BOOL_0:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i1, i1, {{.*}}
     // CHECK: %[[TOP_LEFT_MASK_BOOL_32:.*]] = llvm.extractvalue {{.*}}[32] : !llvm.struct<(i1, i1, {{.*}}
@@ -241,7 +297,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
     // CHECK: %[[BASE_Y_3:.*]] = llvm.select %[[PRED_BOOL]], %[[CST0_0]], %[[BLOCK_SHAPE_Y]] : i1, i32
     // CHECK: %[[LOAD_3:.*]] = triton_gen.2Dblockload {{.*}}, %[[BASE_Y_3]]  {elem_size_in_bits = 16, tile_width = 16, tile_height = 16, v_blocks = 2
     // CHECK: llvm.select {{.*}}, %[[LOAD_3]], {{.*}} : i1, vector<32xf16>
-    %0 = tt.load %arg0, %a_mask, %a_other {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
+    %11 = tt.load %10, %a_mask, %a_other {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<f16>, #mma>
 
     tt.return
   }

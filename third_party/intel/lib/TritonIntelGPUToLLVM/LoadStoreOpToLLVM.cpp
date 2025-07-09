@@ -344,8 +344,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   // Returns the pitch (stride in bytes) of \p ptr.
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
-                 const std::map<SmallVector<unsigned>, Value> &ptrs,
-                 Value baseWidth, unsigned elemSizeInBits) const {
+                 unsigned elemSizeInBits) const {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -354,26 +353,16 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     constexpr int MIN_PITCH = 64;
     if (stride == 0)
       return b.i32_val(MIN_PITCH);
-    else if (stride > 0) {
-      // Only support stride > 0 for 2d block io.
+
+    if (stride > 0) {
       unsigned pitch = (unsigned)stride * elemSizeInBits / 8;
       if (pitch < MIN_PITCH)
-        return nullptr; // return null for unsupported pitch.
-      else
-        return b.i32_val(pitch);
-    } else if (stride < 0) {
-      assert(stride == -1 && "invalid stride < 0");
+        return nullptr; // unsupported pitch
+      return b.i32_val(pitch);
     }
 
-    // ptrs[{0, 0}] and ptrs[{1, 0}] are currently used to calculate the
-    // pitch.
-    if (ptrs.count({0, 0}) == 0 || ptrs.count({1, 0}) == 0)
-      return nullptr;
-
-    Value pitch = b.sub(b.ptrtoint(i64_ty, ptrs.at({1, 0})),
-                        b.ptrtoint(i64_ty, ptrs.at({0, 0})));
-    pitch = targetInfo.shuffleIdx(rewriter, loc, pitch, 0);
-    return b.umax(b.trunc(i32_ty, pitch), baseWidth);
+    assert(stride == -1 && "invalid stride < 0");
+    return nullptr;
   }
 };
 
@@ -692,8 +681,7 @@ struct PrefetchOpConversion
 
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
-    Value rowStrideInBytes =
-        getPitch(rewriter, op.getPtr(), baseAddrs, baseWidth, elemSizeInBits);
+    Value rowStrideInBytes = getPitch(rewriter, op.getPtr(), elemSizeInBits);
     if (!rowStrideInBytes)
       return failure();
 
@@ -1947,7 +1935,7 @@ struct LoadOpToBlockIOConversion
 
     Value baseWidth =
         b.i32_val(std::max(64u, vBlocks * tileWidth * (elemSizeInBits / 8)));
-    Value pitch = getPitch(rewriter, ptr, ptrs, baseWidth, elemSizeInBits);
+    Value pitch = getPitch(rewriter, ptr, elemSizeInBits);
     if (!pitch)
       return failure();
 
