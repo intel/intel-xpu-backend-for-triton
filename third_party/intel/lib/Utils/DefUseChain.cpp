@@ -82,8 +82,6 @@ void DefUseChainManager::pruneOverlappingChains(bool includeStart) {
   }
 }
 
-// Find all def-use paths originating at \p op and terminating at \p end to \p
-// allPaths. Maintain the current path being constructed in \p path.
 void DefUseChainManager::findAllPaths(Operation *op, Operation *end,
                                       Operations &path,
                                       SmallVectorImpl<Operations> &allPaths) {
@@ -139,7 +137,7 @@ void DefUseChainManager::addUsers(Operation *op, Operations path,
             for (Value condOpArg : condOp.getArgs()) {
               if (condOpArg == arg)
                 break;
-              argNo++;
+              ++argNo;
             }
 
             BlockArgument afterRgnArg = whileOp.getAfterArguments()[argNo];

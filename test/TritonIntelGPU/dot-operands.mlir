@@ -155,8 +155,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [16, 0], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // COM: tt.load -> tt.trans -> tt.dot chain, in 2 loops.
-  // COM: Where the block ptr used by the loads in the 2 loops is created by the same make_tensor_ptr operation.
+  // COM: tt.load -> tt.trans -> tt.dot chain, in 3 loops.
+  // COM: Where the block ptr used by the loads in 1st and last loop cannot be fused due to overlapping def-use chains (on an operation that is not the chains root), and the load+trans in the 2nd loop can be fused.
   tt.func public @fuseLoadWithTrans5(%arg0: i32, %arg1: !tt.ptr<f16>, %arg2: !tt.ptr<f16>) {
     %c32_i32 = arith.constant 32 : i32
     %c0_i32 = arith.constant 0 : i32
