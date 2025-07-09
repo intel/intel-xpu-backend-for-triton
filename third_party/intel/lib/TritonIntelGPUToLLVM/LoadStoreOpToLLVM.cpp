@@ -292,16 +292,26 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass)
       : LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  // Determine whether the given LoadOp can be lowered to using block IO
+  // Determine whether the given operation can be lowered to using block IO
   // instructions.
-  static bool isLoadCandidate(triton::LoadOp op) {
+  template <typename OpTy,
+            std::enable_if_t<
+                llvm::is_one_of<OpTy, triton::LoadOp, triton::StoreOp>::value,
+                bool> = true>
+  static bool isBlockIOCandidate(OpTy op) {
+    ModuleOp mod = op->template getParentOfType<ModuleOp>();
+    if (!mod->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                          getSupportSG2DBlockAttrName()))
+      return false;
+
     Attribute blockIOAttr =
         op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
     if (!blockIOAttr)
       return false;
 
-    // Only lower loadOp with dpas layout encoding.
-    auto tensorTy = cast<RankedTensorType>(op.getType());
+    // Only lower operation with dpas layout encoding.
+    auto tensorTy =
+        cast<RankedTensorType>(getPointeeType(op.getPtr().getType()));
     return hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
   }
 
@@ -772,9 +782,6 @@ struct LoadOpToBlockIOConversion
     Value ptr = op.getPtr();
     assert(isTensorPointerType(ptr.getType()) &&
            "Expecting tensor pointer type");
-
-    if (!isLoadCandidate(op))
-      return failure();
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1565,7 +1572,7 @@ struct LoadOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    if (!isLoadCandidate(op))
+    if (!isBlockIOCandidate(op))
       return failure();
 
     // 2D block io lowering steps:
@@ -2573,6 +2580,9 @@ struct StoreOpToBlockIOConversion
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
+    if (!isBlockIOCandidate(op))
+      return failure();
+
     if (isTensorPointerType(op.getPtr().getType()))
       return rewriteTensorPointerStore(op, adaptor, rewriter);
     return failure();
