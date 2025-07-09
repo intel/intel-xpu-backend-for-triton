@@ -11,6 +11,7 @@ import hashlib
 import tempfile
 import signal
 import os
+import io
 import shutil
 import subprocess
 from pathlib import Path
@@ -408,10 +409,9 @@ class XPUBackend(BaseBackend):
         metadata["generate_native_code"] = options.generate_native_code
 
         if options.generate_native_code:
-            with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
-                tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
-                fsrc.write(spirv)
-                fsrc.flush()
+            with tempfile.TemporaryDirectory() as temp_dir:
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
+                    fsrc.write(spirv)
                 fbin = fsrc.name + '.o'
 
                 ocloc_cmd = [
@@ -419,34 +419,26 @@ class XPUBackend(BaseBackend):
                     '-options', metadata["build_flags"] + shader_dump_opt
                 ]
 
+                stdout_buffer = io.StringIO()
                 try:
-                    subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog, stderr=subprocess.STDOUT)
-                    if os.path.exists(flog.name):
-                        with open(flog.name) as log_file:
-                            log = log_file.read().strip()
-                            if 'spilled' in log and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
-                                """
-                                The exact message is something like:
-                                    warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
-                                is "spilled" enough for now?
-                                """
-                                metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                                # re-run with new build flags
-                                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                                subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog,
-                                               stderr=subprocess.STDOUT)
-                        if os.name != "nt":
-                            # Skip deleting on Windows to avoid
-                            # PermissionError: [WinError 32] The process cannot access the file because
-                            # it is being used by another process
-                            os.remove(flog.name)
-                    if os.path.exists(fsrc.name) and os.name != "nt":
-                        os.remove(fsrc.name)
+                    subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=stdout_buffer,
+                                   stderr=subprocess.STDOUT)
+                    logs = stdout_buffer.getvalue().strip()
+                    if 'spilled' in logs and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
+                        """
+                        The exact message is something like:
+                            warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
+                        is "spilled" enough for now?
+                        """
+                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                        # re-run with new build flags
+                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                        subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=stdout_buffer,
+                                       stderr=subprocess.STDOUT)
+                    stdout_buffer.close()
                 except subprocess.CalledProcessError as e:
-                    with open(flog.name) as log_file:
-                        log = log_file.read()
-                    if os.path.exists(flog.name) and os.name != "nt":
-                        os.remove(flog.name)
+                    logs = stdout_buffer.getvalue()
+                    stdout_buffer.close()
 
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
@@ -456,13 +448,11 @@ class XPUBackend(BaseBackend):
                         error = f'`ocloc` failed with error code {e.returncode}'
 
                     raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{log}\n'
+                                       f'`ocloc` stderr:\n{logs}\n'
                                        f'Repro command: {ocloc_cmd}\n')
 
                 with open(fbin, 'rb') as f:
                     zebin = f.read()
-                if os.path.exists(fbin) and os.name != "nt":
-                    os.remove(fbin)
             return zebin
         return spirv
 
