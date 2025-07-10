@@ -4461,7 +4461,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     shared_mem_accum = B * (BLOCK_M * K + K * BLOCK_N) * get_src_element_ty_size(in_dtype_str)
     if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
             triton.runtime.driver.active.get_current_device())["max_shared_mem"] < shared_mem_accum:
-        pytest.skip("Skipped due to insufficient shared memory on this GPU.")
+        pytest.xfail("Skipped due to insufficient shared memory on this GPU.")
 
     @triton.jit
     def kernel(
@@ -6210,7 +6210,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
         int32_size = 4
         # skip even if scratch buffer equal to shared mem size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= shared_mem_size:
-            pytest.skip("Scratch buffer is too large")
+            pytest.xfail("Scratch buffer is too large")
 
     layouts = f"""
     #src = {src_layout}
@@ -6397,8 +6397,8 @@ shared_layouts = [
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_split_subview(M, N, M_tile_size, N_tile_size, device='cuda'):
-    if not is_hip():
+def test_split_subview(M, N, M_tile_size, N_tile_size, device):
+    if not is_hip() and not is_xpu():
         pytest.skip("the test is temporary disabled for the Nvidia backend.")
 
     threads_per_warp = 64 if is_hip() else 32
