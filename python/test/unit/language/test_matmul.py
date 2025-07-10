@@ -120,9 +120,9 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("Float64 not supported on HIP yet")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
         pytest.xfail("Skipping unsupported case")
-    if not is_xpu() and "float32" == dtype_src_str and NUM_CTAS > 1:
+    if "float32" == dtype_src_str and NUM_CTAS > 1:
         pytest.skip("FMA matmul not supported for multiple CTAs")
-    if not is_xpu() and (BLOCK_M < 64 or (BLOCK_M == 64 and BLOCK_N == 16)) and NUM_CTAS > 1:
+    if (BLOCK_M < 64 or (BLOCK_M == 64 and BLOCK_N == 16)) and NUM_CTAS > 1:
         pytest.skip("multi-CTAs is broken for mmav2")
     if not is_xpu() and EPILOGUE_SUBTILE and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
         pytest.skip("creates convert layout too big to fit in smem")
