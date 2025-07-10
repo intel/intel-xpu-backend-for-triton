@@ -2504,7 +2504,8 @@ struct StoreOpToBlockIOConversion
     unsigned vBlocks = 1;
 
     // Get the LLVM values for store values
-    auto valElems = unpackLLElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> valElems =
+        unpackLLElements(loc, adaptor.getValue(), rewriter);
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
