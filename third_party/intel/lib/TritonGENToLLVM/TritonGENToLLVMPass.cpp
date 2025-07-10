@@ -148,8 +148,44 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   return true;
 }
 
+static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
+  // FIXME: The following signatures are not valid in SPV interface.
+
+  // intel_sub_group_2d_block_write_8b_8r8x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_16b_1r32x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_16b_8r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_32b_8r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_32b_8r8x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  return true;
+}
+
 static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
+
+  // intel_sub_group_2d_block_prefetch_16b_1r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
 
   // intel_sub_group_2d_block_prefetch_16b_2r8x1c
   if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
@@ -603,6 +639,12 @@ struct TritonMatrix2DBlockStoreLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!isSPVBuiltinAvailable(op)) {
+      // Fallback to GenISA interface.
+      rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
