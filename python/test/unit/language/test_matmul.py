@@ -111,20 +111,20 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if is_hip() and (not is_hip_cdna3()) and dtype_src_str == "tensorfloat32":
         pytest.skip("tensorfloat32 is only supported on HIP CDNA3")
     if dtype_src_str == "float8e5" and BLOCK_K == 16:
-        pytest.skip("Skipping cases small K for float8")
+        pytest.xfail("Skipping cases small K for float8")
     if dtype_src_str == "float8e5" and device == "cuda" and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 requires compute capability >= 9")
     if (dtype_src_str == "float64") != (dtype_dst_str == "float64"):
-        pytest.skip("Skipping unsupported case")
-    if dtype_src_str == "float64" and not is_cuda():
+        pytest.xfail("Skipping unsupported case")
+    if not is_xpu() and dtype_src_str == "float64" and not is_cuda():
         pytest.skip("Float64 not supported on HIP yet")
     if "float32" in dtype_src_str and dtype_dst_str == "float16":
-        pytest.skip("Skipping unsupported case")
+        pytest.xfail("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:
         pytest.skip("FMA matmul not supported for multiple CTAs")
     if (BLOCK_M < 64 or (BLOCK_M == 64 and BLOCK_N == 16)) and NUM_CTAS > 1:
         pytest.skip("multi-CTAs is broken for mmav2")
-    if EPILOGUE_SUBTILE and not is_xpu() and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
+    if not is_xpu() and EPILOGUE_SUBTILE and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
         pytest.skip("creates convert layout too big to fit in smem")
     if LAYOUT_16x256 and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
         pytest.xfail("skip forcing tmem layout on non blackwell targets.")
