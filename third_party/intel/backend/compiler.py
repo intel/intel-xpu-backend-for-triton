@@ -441,7 +441,7 @@ class XPUBackend(BaseBackend):
 
                     raise RuntimeError(f'{error}\n'
                                        f'`ocloc` stderr:\n{output}\n'
-                                       f'Repro command: {ocloc_cmd}\n')
+                                       f'Repro command: {ocloc_cmd}\n') from e
 
                 with open(fbin, 'rb') as f:
                     zebin = f.read()

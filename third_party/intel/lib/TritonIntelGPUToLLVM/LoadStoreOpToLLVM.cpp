@@ -689,8 +689,6 @@ struct PrefetchOpConversion
         masks[offset] = maskElems[i];
     }
 
-    Value baseWidth = b.i32_val(
-        std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
     Value rowStrideInBytes = getPitch(rewriter, op.getPtr(), elemSizeInBits);
     if (!rowStrideInBytes)
       return failure();
@@ -698,6 +696,8 @@ struct PrefetchOpConversion
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(op.getPtr(), 0);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
+    Value baseWidth = b.i32_val(
+        std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
     Value offsetBaseX = b.i32_val(0);
     Value offsetBaseY = b.i32_val(0);
 
@@ -1160,9 +1160,12 @@ struct LoadOpToBlockIOConversion
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
+    constexpr int MAX_WIDTH = 64;
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
+    if (totalBytesPerRowPerDPASOp > MAX_WIDTH)
+      return failure();
     numOperandsPer2DloadN =
-        std::min(numOperandsPer2DloadN, 64 / totalBytesPerRowPerDPASOp);
+        std::min(numOperandsPer2DloadN, MAX_WIDTH / totalBytesPerRowPerDPASOp);
 
     numOperandsOuterDimPerLoad =
         isOperandA ? numOperandsPer2DLoadM : numOperandsPer2DloadN;
@@ -1887,9 +1890,12 @@ struct LoadOpToBlockIOConversion
 
     // PVC 2D load supports 64 bytes per row at most. Load multiple dot operands
     // by enlarging the vBlocks.
+    constexpr int MAX_WIDTH = 64;
     unsigned totalBytesPerRowPerDPASOp = tileWidth * elemSizeInBits / 8;
+    if (totalBytesPerRowPerDPASOp > MAX_WIDTH)
+      return failure();
     numOperandsPer2DLoadN =
-        std::min(numOperandsPer2DLoadN, 64 / totalBytesPerRowPerDPASOp);
+        std::min(numOperandsPer2DLoadN, MAX_WIDTH / totalBytesPerRowPerDPASOp);
 
     tileHeight = instHeight * numOperandsPer2DLoadM;
     tileWidth = instWidth;
@@ -1940,8 +1946,6 @@ struct LoadOpToBlockIOConversion
       break;
     }
 
-    Value baseWidth =
-        b.i32_val(std::max(64u, vBlocks * tileWidth * (elemSizeInBits / 8)));
     Value pitch = getPitch(rewriter, ptr, elemSizeInBits);
     if (!pitch)
       return failure();
@@ -1950,6 +1954,8 @@ struct LoadOpToBlockIOConversion
     int stride = getStride(ptr, 0);
     unsigned baseHeightInt = (stride == 0 ? 1 : tileHeight);
     Value baseHeight = b.i32_val(baseHeightInt);
+    Value baseWidth =
+        b.i32_val(std::max(64u, vBlocks * tileWidth * (elemSizeInBits / 8)));
 
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
