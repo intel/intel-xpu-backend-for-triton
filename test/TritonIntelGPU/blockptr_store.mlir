@@ -98,6 +98,12 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[BASE_PTR:.*]] = llvm.extractvalue %[[BLOCK_PTR]][6] : !llvm.struct<(i32, i32, i64, i64, i64, i64, ptr<1>)>
     %13 = tt.make_tensor_ptr %base, [%width, %height], [%rowStride, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x32xf16, #dpas>>
 
+    // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
+    // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
+    // CHECK:           %[[baseWidth:.*]] = llvm.mul %[[HEIGHT_i32]], %[[CST_2]] : i32
+    // CHECK:           %[[baseHeight:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
+    // CHECK:           %[[basePitch:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[CST_2]] : i32
+
     // COM: The decomposed values of the tensor with DPAS layout.
     // CHECK:           %[[VAL_97:.*]] = llvm.extractvalue %[[VAL_71]][0]
     // CHECK:           %[[VAL_98:.*]] = llvm.extractvalue %[[VAL_71]][1]
@@ -164,11 +170,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[VAL_159:.*]] = llvm.extractvalue %[[VAL_71]][62]
     // CHECK:           %[[VAL_160:.*]] = llvm.extractvalue %[[VAL_71]][63]
 
-    // CHECK:           %[[HEIGHT_i32:.*]] = llvm.trunc %[[HEIGHT_i64]] : i64 to i32
-    // CHECK:           %[[baseHeight:.*]] = llvm.trunc %[[WIDTH_i64]] : i64 to i32
-    // CHECK:           %[[ROW_STRIDE_i32:.*]] = llvm.trunc %[[ROW_STRIDE_i64]] : i64 to i32
-    // CHECK:           %[[baseWidth:.*]] = llvm.mul %[[HEIGHT_i32]], %[[CST_2]] : i32
-    // CHECK:           %[[basePitch:.*]] = llvm.mul %[[ROW_STRIDE_i32]], %[[CST_2]] : i32
     // CHECK:           %[[VAL_166:.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK:           %[[outerDimWarpId:.*]] = llvm.urem %[[SUB_GROUP_ID_M]], %[[VAL_166]]  : i32
     // CHECK:           %[[VAL_168:.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -180,7 +181,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[warpId0Offset:.*]] = llvm.add %[[dimWarpId0]], %[[OFFSET_0]] : i32
     // CHECK:           %[[warpId1Offset:.*]] = llvm.add %[[dimWarpId1]], %[[OFFSET_1]] : i32
     // CHECK:           %[[VAL_176:.*]] = llvm.mlir.constant(0 : i32) : i32
-
 
     // COM: The shape of DPAS layout replica is [4, 2]
     // COM: The replica order are [0, 1]
