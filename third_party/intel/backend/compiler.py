@@ -429,8 +429,7 @@ class XPUBackend(BaseBackend):
                         metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
                         # re-run with new build flags
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                        output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-
+                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                 except subprocess.CalledProcessError as e:
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
@@ -440,7 +439,7 @@ class XPUBackend(BaseBackend):
                         error = f'`ocloc` failed with error code {e.returncode}'
 
                     raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{output}\n'
+                                       f'`ocloc` stderr:\n{e.output}\n'
                                        f'Repro command: {ocloc_cmd}\n') from e
 
                 with open(fbin, 'rb') as f:
