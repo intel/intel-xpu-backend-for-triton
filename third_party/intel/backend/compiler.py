@@ -118,7 +118,7 @@ class XPUBackend(BaseBackend):
             raise TypeError("target.arch is not a dict")
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
-        self.device_arch = mod.parse_device_arch(target.arch.get('architecture', 0))
+        self.device_arch = knobs.intel.device_arch or mod.parse_device_arch(target.arch.get('architecture', 0))
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 

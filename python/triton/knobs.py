@@ -506,6 +506,7 @@ class intel_knobs(base_knobs):
     # `ocloc query CL_DEVICE_EXTENSIONS`. If not set, a compiler calls `ocloc` in runtime to get
     # the actual device extensions.
     device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
+    device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
 
 
 class amd_knobs(base_knobs):
