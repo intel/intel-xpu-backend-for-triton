@@ -2460,11 +2460,6 @@ struct StoreOpToBlockIOConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type resultType = op.getValue().getType();
     auto tensorType = cast<RankedTensorType>(resultType);
-
-    // Only lower StoreOp with dpas layout encoding.
-    if (!hasDpasEncoding(tensorType))
-      return failure();
-
     auto dpasLayout = cast<DpasEncodingAttr>(tensorType.getEncoding());
     LLVMTypeConverter *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
@@ -2475,14 +2470,21 @@ struct StoreOpToBlockIOConversion
     const ArrayRef<int64_t> tensorShape = tensorType.getShape();
     size_t rank = tensorShape.size();
     unsigned numElems = getTotalElemsPerThread(tensorType);
+
     SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
+    // 2D block store supports 8 rows at most.
+    unsigned tileHeight = std::min(8u, elemsPerInstr[0]);
+    // 2D block store supports 64 bytes per row at most.
+    unsigned tileWidth = elemsPerInstr[1];
+    unsigned totalBytesPerRowPerMatrix = tileWidth * elemSizeInBits / 8;
+    if (totalBytesPerRowPerMatrix > 64)
+      return failure();
+
     auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
     SmallVector<int64_t> numReps =
         dpasLayout.getDPASRepetitions(tensorShape, 2);
     SmallVector<unsigned> dpasWarpsOrder =
         getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
-    unsigned threadsPerWarp =
-        product<unsigned>(getThreadsPerWarp(dpasLayout, tensorShape));
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
@@ -2491,25 +2493,34 @@ struct StoreOpToBlockIOConversion
     SmallVector<Value> multiDimWarpId = mlir::LLVM::delinearize(
         rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
 
-    int64_t elemsPerLane = product<unsigned>(elemsPerInstr) / threadsPerWarp;
-    Type store2DGenXType =
-        LLVM::getVectorType(IntegerType::get(ctx, elemSizeInBits),
-                            elemsPerLane); // make it opaque type.
-
     Value blockPtr = adaptor.getPtr();
     auto [base, width, height, rowStride, colStride, offsetBaseX, offsetBaseY] =
         getValuesFromBlockPointerStruct(blockPtr, rewriter);
 
-    auto vals = unpackLLElements(loc, adaptor.getValue(), rewriter);
-    assert(vals.size() == numElems);
-
     width = b.trunc(i32_ty, width);
-    height = b.trunc(i32_ty, height);
     rowStride = b.trunc(i32_ty, rowStride);
     // encoded as bytes.
     Value baseWidth = b.mul(width, elemSizeInBytes);
+    Value baseHeight = b.trunc(i32_ty, height);
     // encoded as bytes.
-    Value basePitch = b.mul(rowStride, elemSizeInBytes);
+    Value pitch = b.mul(rowStride, elemSizeInBytes);
+    // 2D block store only supports vBlocks = 1.
+    unsigned vBlocks = 1;
+
+    // Get the LLVM values for store values
+    SmallVector<Value> valElems =
+        unpackLLElements(loc, adaptor.getValue(), rewriter);
+    assert(valElems.size() == numElems &&
+           "the number of store values does not match the number of elements");
+
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+
+    int64_t elemsPerLane = tileHeight * tileWidth / threadsPerWarp;
+    Type opaqueType = IntegerType::get(ctx, elemSizeInBits);
+    Type store2DGenXType =
+        LLVM::getVectorType(opaqueType,
+                            elemsPerLane); // make it opaque type.
 
     // A warp stride for the replicates.
     SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
@@ -2542,19 +2553,19 @@ struct StoreOpToBlockIOConversion
     for (int m = 0; m < numRepOuter; ++m) {
       for (int n = 0; n < numRepInner; ++n) {
         for (int repM = 0; repM < repCluster[0]; ++repM) {
-          Value offsetY =
-              b.add(warpId0Offset,
-                    b.i32_val(m * replicaStride[0] + repM * elemsPerInstr[0]));
+          Value offsetY = b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
+                                                         repM * tileHeight));
           for (int repN = 0; repN < repCluster[1]; ++repN) {
             Value offsetX =
-                b.add(warpId1Offset, b.i32_val(n * replicaStride[1] +
-                                               repN * elemsPerInstr[1]));
+                b.add(warpId1Offset,
+                      b.i32_val(n * replicaStride[1] + repN * tileWidth));
+
             Value storeVal = rewriter.create<LLVM::UndefOp>(
                 loc, LLVM::getVectorType(typeConverter->convertType(eltTy),
                                          elemsPerLane));
             for (size_t i = 0; i < elemsPerLane; ++i) {
               storeVal =
-                  b.insert_element(storeVal, vals[valOffset], b.i32_val(i));
+                  b.insert_element(storeVal, valElems[valOffset], b.i32_val(i));
               ++valOffset;
             }
 
@@ -2562,14 +2573,14 @@ struct StoreOpToBlockIOConversion
                 loc,
                 /*ptr*/ base,
                 /*base_width*/ baseWidth,
-                /*base_height*/ height,
-                /*base_pitch*/ basePitch,
+                /*base_height*/ baseHeight,
+                /*base_pitch*/ pitch,
                 /*x*/ offsetX,
                 /*y*/ offsetY,
                 /*elem_size_in_bits*/ elemSizeInBits,
-                /*tile_width*/ elemsPerInstr[1],
-                /*tile_height*/ elemsPerInstr[0],
-                /*v_blocks*/ 1,
+                /*tile_width*/ tileWidth,
+                /*tile_height*/ tileHeight,
+                /*v_blocks*/ vBlocks,
                 /*stored_val*/ b.bitcast(storeVal, store2DGenXType));
 
             if (failed(newOp.verify())) {
