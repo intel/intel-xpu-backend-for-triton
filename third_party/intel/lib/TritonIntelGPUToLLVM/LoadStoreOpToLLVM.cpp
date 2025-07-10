@@ -452,9 +452,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     unsigned numNamesPerTile = 0;
     // Increase the tile shape along the row dimension. (Increase the
     // tileHeight.)
-    unsigned baseIter = 0;
-    for (; baseIter < basesOfRegister.size(); baseIter++) {
-      const std::vector<int> &base = basesOfRegister[baseIter];
+    unsigned baseIdx = 0;
+    for (; baseIdx < basesOfRegister.size(); ++baseIdx) {
+      const std::vector<int> &base = basesOfRegister[baseIdx];
       size_t i = 0;
       for (; i < rank; ++i) {
         int elem = base[i];
@@ -477,8 +477,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // Increase the tile shape along the column dimension. (Increase the
     // vBlocks.)
     unsigned vBlocks = 1;
-    for (; baseIter < basesOfRegister.size(); baseIter++) {
-      const std::vector<int> &base = basesOfRegister[baseIter];
+    for (; baseIdx < basesOfRegister.size(); ++baseIdx) {
+      const std::vector<int> &base = basesOfRegister[baseIdx];
       size_t i = 0;
       for (; i < rank; ++i) {
         int elem = base[i];
@@ -1062,7 +1062,7 @@ struct LoadOpToBlockIOConversion
               Value ret =
                   b.bitcast(load2dOp, LLVM::getVectorType(eltTy, elemsPerLane));
 
-              for (size_t i = 0; i < elemsPerLane; i++) {
+              for (size_t i = 0; i < elemsPerLane; ++i) {
                 Value loaded = b.extract_element(eltTy, ret, b.i32_val(i));
                 unpackedLoadedVals.push_back(loaded);
               }
@@ -1201,7 +1201,7 @@ struct LoadOpToBlockIOConversion
         tileShape[widthDim] = origTileWidth / (32 / elemSizeInBits);
       }
 
-      for (int i = 0; i < tileShape.size(); i++) {
+      for (int i = 0; i < tileShape.size(); ++i) {
         int dim = threadOrder[i];
         StringAttr kOffset = S("offset" + std::to_string(dim));
 
@@ -1313,7 +1313,7 @@ struct LoadOpToBlockIOConversion
       llvm::dbgs() << "Block load tile layout after adding iterations: "
                    << tileLayout << "\n";
 
-      for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
+      for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); ++itr) {
         auto printTileLayoutVals = [&](const size_t offset) {
           auto tensorVals =
               tileLayout.apply({{kOffset, offset}, {kIteration, itr}});
@@ -1379,16 +1379,16 @@ struct LoadOpToBlockIOConversion
     assert(outDims[1].first == S("dim1"));
 
     for (size_t i = 0;
-         i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
+         i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); ++i) {
       newLoadBases.push_back({0, static_cast<int>((1 << i) * repKStride *
                                                   numOperandsInnerDimPerLoad)});
       outDims[1].second *= repKStride * numOperandsInnerDimPerLoad;
     }
-    for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
+    for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); ++i) {
       newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
       outDims[0].second *= repStride;
     }
-    for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
+    for (size_t i = 0; i < llvm::Log2_32(numRepOuter); ++i) {
       newLoadBases.push_back({static_cast<int>((1 << i) * repOuterStride), 0});
       outDims[0].second *= repOuterStride;
     }
@@ -1403,7 +1403,7 @@ struct LoadOpToBlockIOConversion
 
     LLVM_DEBUG({
       llvm::dbgs() << "New tile layout dimensions after adding load bases:\n";
-      for (size_t i = 0; i < outDims.size(); i++) {
+      for (size_t i = 0; i < outDims.size(); ++i) {
         llvm::dbgs() << outDims[i].first << " = " << outDims[i].second << "\n";
       }
     });
@@ -1427,8 +1427,8 @@ struct LoadOpToBlockIOConversion
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
                    << tileLayout << "\n";
-      for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
-        for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
+      for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); ++load) {
+        for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); ++itr) {
           auto printTileLayoutVals = [&](const size_t offset) {
             auto tensorVals = tileLayout.apply(
                 {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
@@ -2242,7 +2242,7 @@ struct LoadOpToBlockIOConversion
                       Value falseVal = others[{M, N}];
                       Value sVal = createIndexAttrConstant(
                           rewriter, loc, typeConverter->getIndexType(),
-                          nWords++);
+                          ++nWords);
                       v = b.insert_element(vecTy, v, falseVal, sVal);
                     }
                   }
@@ -2576,6 +2576,9 @@ struct StoreOpToBlockIOConversion
     if (!isBlockIOCandidate(op))
       return failure();
 
+    if (!isTensorPointerType(op.getPtr().getType()))
+      return failure();
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type resultType = op.getValue().getType();
@@ -2655,13 +2658,13 @@ struct StoreOpToBlockIOConversion
 
     // Right now only support to stack the values into a vector in sequential
     // order.
-    for (size_t valIter = 0; valIter < numElems; valIter += elemsPerLane) {
+    for (size_t valIdx = 0; valIdx < numElems; valIdx += elemsPerLane) {
       // Need to apply the linear layout to get the offsets to the base of the
       // block pointer.
       // TODO: add annotation uniform to the offsets. Make sure the IGC detect
       // the offsets as uniform.
       auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                       {{kRegister, b.i32_val(valIter)},
+                                       {{kRegister, b.i32_val(valIdx)},
                                         {kLane, b.i32_val(0)},
                                         {kWarp, warpId},
                                         {kBlock, b.i32_val(0)}});
@@ -2677,7 +2680,7 @@ struct StoreOpToBlockIOConversion
           LLVM::getVectorType(typeConverter->convertType(eltTy), elemsPerLane));
       for (size_t i = 0; i < elemsPerLane; ++i)
         storeVal =
-            b.insert_element(storeVal, valElems[valIter + i], b.i32_val(i));
+            b.insert_element(storeVal, valElems[valIdx + i], b.i32_val(i));
 
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc,
