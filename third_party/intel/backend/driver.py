@@ -343,12 +343,28 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "float",
-        "bf16": "float",
-        "fp32": "float",
-        "f32": "float",
+        "fp16": "double",
+        "bf16": "double",
+        "fp32": "double",
+        "f32": "double",
         "fp64": "double",
     }[ty]
+
+
+FLOAT_STORAGE_TYPE = {
+    "fp16": "uint16_t",
+    "bf16": "uint16_t",
+    "fp32": "uint32_t",
+    "f32": "uint32_t",
+    "fp64": "uint64_t",
+}
+FLOAT_PACK_FUNCTION = {
+    "fp16": "pack_fp16",
+    "bf16": "pack_bf16",
+    "fp32": "pack_fp32",
+    "f32": "pack_fp32",
+    "fp64": "pack_fp64",
+}
 
 
 def make_launcher(constants, signature):
@@ -379,7 +395,6 @@ def make_launcher(constants, signature):
         if ty == "void*":
             return "O"
         return {
-            "float": "f",
             "double": "d",
             "long": "l",
             "int8_t": "b",
@@ -401,11 +416,21 @@ def make_launcher(constants, signature):
 
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
+    arg_decl_list = []
+    for i, ty in signature.items():
+        if ty == "constexpr":
+            continue
+        if ty in FLOAT_STORAGE_TYPE:
+            arg_decl_list.append(f"{FLOAT_STORAGE_TYPE[ty]} arg{i}")
+        else:
+            arg_decl_list.append(f"{ty_to_cpp(ty)} arg{i}")
+    arg_decls = ', '.join(arg_decl_list)
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty in FLOAT_STORAGE_TYPE:
+            internal_args_list.append(f"_arg{i}_storage")
         elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
 
@@ -416,6 +441,11 @@ def make_launcher(constants, signature):
         for i, ty in signature.items()
         if ty[0] == "*"
     ]
+    float_storage_decls = [
+        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = {FLOAT_PACK_FUNCTION[ty]}(_arg{i});"
+        for i, ty in signature.items()
+        if ty in FLOAT_STORAGE_TYPE
+    ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
     num_params = len(params)
@@ -424,6 +454,7 @@ def make_launcher(constants, signature):
         params_decl = f"void *params[] = {{ {', '.join(params)} }};"
     src = f"""
 #include <cstddef>
+#include <Python.h>
 #include <string>
 #include <iostream>
 #include <iomanip>
@@ -564,6 +595,32 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ, i
 }}
 // end sycl
 
+static uint16_t pack_fp16(double f) {{
+    uint16_t result;
+    // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
+    _PyFloat_Pack2(f, (unsigned char *)&result, 1);
+#else
+    PyFloat_Pack2(f, (void*)&result, 1);
+#endif
+    return result;
+}}
+
+static uint16_t pack_bf16(double f) {{
+    float f32 = (float)f;
+    uint32_t u32 = *(uint32_t*)&f32;
+    return (uint16_t)(u32 >> 16);
+}}
+
+static uint32_t pack_fp32(double f) {{
+    float f32 = (float)f;
+    return *(uint32_t*)&f32;
+}}
+
+static uint64_t pack_fp64(double f) {{
+    return *(uint64_t*)&f;
+}}
+
 extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   int gridX, gridY, gridZ;
   void* global_scratch = nullptr;
@@ -625,6 +682,7 @@ extern "C" EXPORT_FUNC PyObject* launch(PyObject* args) {{
   sycl::kernel kernel = *kernel_ptr;
 
   {newline.join(ptr_decls)}
+  {newline.join(float_storage_decls)}
   sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp, shared_memory, stream, kernel, global_scratch{',' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   if (PyErr_Occurred()) {{
     return NULL;
