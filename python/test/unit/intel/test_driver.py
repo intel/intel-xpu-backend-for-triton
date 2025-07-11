@@ -33,10 +33,9 @@ def test_auto_grf(device):
 
 test_auto_grf("xpu")
     """
-
-    with (tempfile.NamedTemporaryFile(mode='w', suffix='.py') as f):
-        f.write(test_code)
-        f.flush()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', dir=temp_dir, delete=False) as f:
+            f.write(test_code)
         env = os.environ.copy()
         env["TRITON_DEBUG"] = "1"
         proc = subprocess.run(

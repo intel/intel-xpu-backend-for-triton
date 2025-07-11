@@ -685,15 +685,11 @@ LogicalResult MemDescSubviewOp::verify() {
   //  - We split along at most one dim, but just with constant values
   //  - The values where the split happens must not be within the swizzling
   //  pattern
-  // Check which dimension we are splitting along
-  int dim = -1;
+  // Check which dimensions we are splitting along
+  SetVector<int> splitDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {
     if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
-      if (dim != -1) {
-        return emitError(
-            "We don't allow subviews that split along multiple dimensions");
-      }
-      dim = i;
+      splitDims.insert(i);
     }
   }
   SmallVector<int64_t> offsets;
@@ -704,12 +700,12 @@ LogicalResult MemDescSubviewOp::verify() {
     offsets.push_back(value.getSExtValue());
   }
   // Identity subview
-  if (dim == -1) {
+  if (splitDims.empty()) {
     return success();
   }
 
-  for (auto [i, offset] : llvm::enumerate(offsets)) {
-    if (i != dim) {
+  for (auto [dim, offset] : llvm::enumerate(offsets)) {
+    if (!splitDims.contains(dim)) {
       if (offset != 0) {
         return emitError("A non zero offset found in a dimension that is "
                          "not being split");
@@ -720,22 +716,31 @@ LogicalResult MemDescSubviewOp::verify() {
       }
     }
   }
+
   auto ctx = getContext();
   // The order gives us the honest-to-goodness layout rank
   auto srcAllocShape = srcTy.getAllocShape().take_back(getOrder(srcTy).size());
-  auto llInv =
-      triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding()).invert();
-  auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
-  llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
-  for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
-    namedOffsets.push_back({d, 0});
+  auto ll = triton::gpu::toLinearLayout(srcAllocShape, srcTy.getEncoding());
+  // NYI: We don't support non-trivial block dimension for now.
+  auto kBlock = mlir::StringAttr::get(getContext(), "block");
+  if (ll.getInDimSize(kBlock) != 1) {
+    return emitError("non-trivial block dimension not supported");
   }
-  for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
-       dimSize *= 2) {
-    namedOffsets[dim] = {kDim, dimSize};
-    if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
-      return emitError(
-          "We don't support splitting along the swizzling pattern");
+
+  auto llInv = ll.invert();
+  for (auto dim : splitDims) {
+    auto kDim = mlir::StringAttr::get(ctx, "dim" + llvm::Twine(dim));
+    llvm::SmallVector<std::pair<mlir::StringAttr, int32_t>> namedOffsets;
+    for (auto d : standardOutDimNames(ctx, srcTy.getRank())) {
+      namedOffsets.push_back({d, 0});
+    }
+    for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
+         dimSize *= 2) {
+      namedOffsets[dim] = {kDim, dimSize};
+      if (!llvm::isPowerOf2_32(llInv.apply(namedOffsets)[0].second)) {
+        return emitError(
+            "We don't support splitting along the swizzling pattern");
+      }
     }
   }
   return success();

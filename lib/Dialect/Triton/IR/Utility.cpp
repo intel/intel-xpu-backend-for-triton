@@ -2,13 +2,14 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 
 Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                       Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
+  Type maskType = tt::getI1SameShape(tt::getPointeeType(typeLike));
   Location loc = pred.getLoc();
   Value mask = pred;
   if (isa<RankedTensorType>(maskType)) {

@@ -113,7 +113,8 @@ struct ConvertTritonGPUToLLVM
         typeConverter, patterns, patternBenefitNvidiaTensorCoreSubviewPattern);
     mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
                                                     patterns, benefit);
-    populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
+    populateDotOpToLLVMPatterns(typeConverter, patterns, computeCapability,
+                                benefit);
     populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                         axisInfoAnalysis, computeCapability,
                                         targetInfo, benefit);
@@ -167,6 +168,8 @@ struct ConvertTritonGPUToLLVM
                                                            patterns, benefit);
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
+    mlir::triton::populateInstrumentationToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit);
     TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

@@ -56,6 +56,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
                      mlir::triton::AMD::createOptimizeLDSUsagePass,
                      const std::string &, int32_t);
+  ADD_PASS_WRAPPER_0("add_allocate_shared_memory",
+                     mlir::triton::createAllocateAMDGPUSharedMemory);
   ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
                             mlir::createTritonAMDGPUAccelerateMatmul,
                             const std::string, int, int);
@@ -69,9 +71,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUCanonicalizePointers());
   });
-  ADD_PASS_OPTION_WRAPPER_1("add_convert_to_buffer_ops",
+  ADD_PASS_OPTION_WRAPPER_2("add_convert_to_buffer_ops",
                             mlir::createTritonAMDGPUConvertToBufferOps,
-                            const std::string &);
+                            const std::string &, bool);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructions);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
@@ -258,6 +260,18 @@ void init_triton_amd(py::module &&m) {
         return py::bytes(std::string(result.begin(), result.end()));
       },
       py::return_value_policy::take_ownership);
+
+  m.def("has_architected_sgprs", [](const std::string &arch) {
+    std::string error;
+    llvm::Triple triple(amdTargetTriple);
+    const llvm::Target *target =
+        llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+    if (!target)
+      throw std::runtime_error("target lookup error: " + error);
+    std::unique_ptr<llvm::MCSubtargetInfo> sti(
+        target->createMCSubtargetInfo(amdTargetTriple, arch, ""));
+    return sti->checkFeatures("+architected-sgprs");
+  });
 
   m.def("need_extern_lib", [](llvm::Module *module, const std::string &lib) {
     for (llvm::Function &f : module->functions()) {

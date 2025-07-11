@@ -32,6 +32,18 @@ class Pair:
     def unpack(self):
         return self.get_first(), self.get_second()
 
+    def __getitem__(self, ind: tl.constexpr, _semantic=None):
+        if ind == 0:
+            return self.first
+        assert ind == 1
+        return self.second
+
+    def __setitem__(self, ind: tl.constexpr, value, _semantic=None):
+        if ind == 0:
+            self.first = value
+        assert ind == 1
+        self.second = value
+
 
 @filecheck_test
 @triton.jit
@@ -64,6 +76,47 @@ def test_augassign_attribute():
 
 @filecheck_test
 @triton.jit
+def test_retrieve_item():
+    # CHECK-LABEL: test_retrieve_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c11_i32)
+    anchor(pair[1])
+
+
+@filecheck_test
+@triton.jit
+def test_assign_item():
+    # CHECK-LABEL: test_assign_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK: %c42_i32 = arith.constant 42 : i32
+    pair[1] = 42
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], %c42_i32)
+    anchor(pair)
+
+
+@filecheck_test
+@triton.jit
+def test_augassign_item():
+    # CHECK-LABEL: test_augassign_item
+    # CHECK: %c11_i32 = arith.constant 11 : i32
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    scalar = 11
+    pair = Pair(tl.arange(0, 4), scalar)
+    # CHECK: %c42_i32 = arith.constant 42 : i32
+    # CHECK: [[VALUE:%.*]] = arith.addi %c11_i32, %c42_i32
+    pair[1] += 42
+    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], [[VALUE]])
+    anchor(pair)
+
+
+@filecheck_test
+@triton.jit
 def test_jit_method():
     # CHECK-LABEL: test_jit_method
     # CHECK: %c11_i32 = arith.constant 11 : i32
@@ -76,6 +129,32 @@ def test_jit_method():
     anchor(a)
     # CHECK: call @{{.*}}anchor{{.*}}([[V]]#1)
     anchor(b)
+
+
+@tl.core._aggregate
+class TypeWithJitGetItem:
+    value: tl.tensor
+
+    def __init__(self, value):
+        self.value = value
+
+    @triton.jit
+    def __getitem__(self, ind):
+        return self.value
+
+
+@filecheck_test
+@triton.jit
+def test_jit_getitem():
+    # CHECK-LABEL: test_jit_getitem
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    v = TypeWithJitGetItem(tl.arange(0, 4))
+    # CHECK: [[V:%.*]] = tt.call [[METHOD:@.*__getitem__.*]]([[RANGE]])
+    a = v[0]
+    # CHECK: call @{{.*}}anchor{{.*}}([[V]])
+    anchor(a)
+    # CHECK: tt.func private [[METHOD]]([[ARG0:%.*]]:
+    # CHECK: tt.return [[ARG0]]
 
 
 @tl.core._aggregate
@@ -101,6 +180,44 @@ def test_aggregate_initializers():
     # CHECK: call @{{.*}}anchor{{.*}}([[RANGE]])
     value.modify(tl.arange(4, 8))
     anchor(value)
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_modification_in_for_loop():
+    # CHECK-LABEL: test_aggregate_modification_in_for_loop
+    value = TypeWithBuiltinInitializer()
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    for i in range(0, 2):
+        # CHECK: [[RET:%.*]] = scf.for
+        # CHECK-SAME: iter_args([[ITER:%.*]] = [[RANGE]])
+        value.modify(tl.arange(4, 8))
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+        # CHECK: yield [[RANGE]]
+
+    anchor(value)
+    # CHECK: call @{{.*}}anchor{{.*}}([[RET]])
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_modification_in_while_loop():
+    # CHECK-LABEL: test_aggregate_modification_in_while_loop
+    value = TypeWithBuiltinInitializer()
+    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
+    i = 0
+    # CHECK: [[C0:%.*]] = arith.constant 0 :
+    while i < 1:
+        # CHECK: [[RET:%.*]]:2 = scf.while ([[ITER:%.*]] = [[RANGE]], [[IV:%.*]] = [[C0]])
+        # CHECK: do
+        i = 1
+        # CHECK: [[C1:%.*]] = arith.constant 1 :
+        value.modify(tl.arange(4, 8))
+        # CHECK: [[RANGE:%.*]] = tt.make_range {end = 8 : i32, start = 4 : i32}
+        # CHECK: yield [[RANGE]], [[C1]]
+
+    anchor(value)
+    # CHECK: call @{{.*}}anchor{{.*}}([[RET]]#0)
 
 
 @triton.jit
@@ -336,6 +453,7 @@ def test_constexpr_generator():
     generator(lhs)
 
 
+@tl.constexpr_function
 def Box(T):
 
     @tl.core._aggregate
@@ -363,3 +481,23 @@ def test_late_bound_class_reference():
         anchor(value)
 
     run_filecheck_test(kernel)
+
+
+@filecheck_test
+@triton.jit
+def test_modify_if_livein():
+    # CHECK-LABEL: test_modify_if_livein
+    none_livein = None  # noqa: F841
+
+    # CHECK: [[LOOP_OUT:%.*]] = scf.for {{.*}} iter_args([[BOX:%.*]] = %true)
+    # CHECK:   [[LIVEOUT:%.*]] = scf.if [[BOX]]
+    # CHECK:     yield %false
+    # CHECK:   else
+    # CHECK:     yield [[BOX]]
+    # CHECK:   yield [[LIVEOUT]]
+    # CHECK: call @{{.*}}anchor{{.*}}([[LOOP_OUT]])
+    box = Box(tl.tensor)(tl.core.to_tensor(True))
+    for i in range(10):
+        if box.value:
+            box.value = False
+    anchor(box.value)

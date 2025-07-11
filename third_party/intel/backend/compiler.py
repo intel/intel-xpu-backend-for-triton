@@ -118,7 +118,7 @@ class XPUBackend(BaseBackend):
             raise TypeError("target.arch is not a dict")
         dirname = os.path.dirname(os.path.realpath(__file__))
         mod = compile_module_from_src(Path(os.path.join(dirname, "arch_parser.c")).read_text(), "arch_utils")
-        self.device_arch = mod.parse_device_arch(target.arch.get('architecture', 0))
+        self.device_arch = knobs.intel.device_arch or mod.parse_device_arch(target.arch.get('architecture', 0))
         self.properties = self.parse_target(target.arch)
         self.binary_ext = "spv"
 
@@ -408,10 +408,9 @@ class XPUBackend(BaseBackend):
         metadata["generate_native_code"] = options.generate_native_code
 
         if options.generate_native_code:
-            with tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.spv') as fsrc, \
-                tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
-                fsrc.write(spirv)
-                fsrc.flush()
+            with tempfile.TemporaryDirectory() as temp_dir:
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.spv', dir=temp_dir, delete=False) as fsrc:
+                    fsrc.write(spirv)
                 fbin = fsrc.name + '.o'
 
                 ocloc_cmd = [
@@ -420,30 +419,18 @@ class XPUBackend(BaseBackend):
                 ]
 
                 try:
-                    subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog, stderr=subprocess.STDOUT)
-                    if os.path.exists(flog.name):
-                        with open(flog.name) as log_file:
-                            log = log_file.read().strip()
-                            if 'spilled' in log and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
-                                """
-                                The exact message is something like:
-                                    warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
-                                is "spilled" enough for now?
-                                """
-                                metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                                # re-run with new build flags
-                                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                                subprocess.run(ocloc_cmd, check=True, close_fds=False, stdout=flog,
-                                               stderr=subprocess.STDOUT)
-                        os.remove(flog.name)
-                    if os.path.exists(fsrc.name):
-                        os.remove(fsrc.name)
+                    output = subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                    if 'spilled' in output and metadata["build_flags"].find("-cl-intel-256-GRF-per-thread") == -1:
+                        """
+                        The exact message is something like:
+                            warning: kernel matmul_kernel  compiled SIMD16 allocated 128 regs and spilled around 217
+                        is "spilled" enough for now?
+                        """
+                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+                        # re-run with new build flags
+                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                 except subprocess.CalledProcessError as e:
-                    with open(flog.name) as log_file:
-                        log = log_file.read()
-                    if os.path.exists(flog.name):
-                        os.remove(flog.name)
-
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
                     elif e.returncode == 128 + signal.SIGSEGV:
@@ -452,13 +439,11 @@ class XPUBackend(BaseBackend):
                         error = f'`ocloc` failed with error code {e.returncode}'
 
                     raise RuntimeError(f'{error}\n'
-                                       f'`ocloc` stderr:\n{log}\n'
-                                       f'Repro command: {ocloc_cmd}\n')
+                                       f'`ocloc` stderr:\n{e.output}\n'
+                                       f'Repro command: {ocloc_cmd}\n') from e
 
                 with open(fbin, 'rb') as f:
                     zebin = f.read()
-                if os.path.exists(fbin):
-                    os.remove(fbin)
             return zebin
         return spirv
 
