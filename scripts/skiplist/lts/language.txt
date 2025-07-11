@@ -158,6 +158,8 @@ python/test/unit/language/test_core.py::test_dot3d[4-4-128-128-64-64-64-float16-
 python/test/unit/language/test_core.py::test_dot3d[8-1-32-32-32-8-16-float16-float16]
 python/test/unit/language/test_core.py::test_dot3d[8-2-32-32-32-8-16-float16-float16]
 python/test/unit/language/test_core.py::test_dot3d[8-4-32-32-32-8-16-float16-float16]
+python/test/unit/language/test_core.py::test_dot3d[8-1-32-32-32-32-32-float64-float64]
+python/test/unit/language/test_core.py::test_dot3d[4-1-64-64-64-32-32-float64-float64]
 python/test/unit/language/test_core.py::test_trans_reshape
 python/test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
 python/test/unit/language/test_matmul.py::test_simple_matmul[True-True-4-1-128-128-16-4-float16-float16]
