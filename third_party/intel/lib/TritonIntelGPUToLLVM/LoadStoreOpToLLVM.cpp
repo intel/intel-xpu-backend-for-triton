@@ -2242,7 +2242,7 @@ struct LoadOpToBlockIOConversion
                       Value falseVal = others[{M, N}];
                       Value sVal = createIndexAttrConstant(
                           rewriter, loc, typeConverter->getIndexType(),
-                          ++nWords);
+                          nWords++);
                       v = b.insert_element(vecTy, v, falseVal, sVal);
                     }
                   }
