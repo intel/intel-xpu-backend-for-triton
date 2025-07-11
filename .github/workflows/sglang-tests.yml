@@ -90,9 +90,7 @@ jobs:
       - name: Run SGLANG tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-            pip install pytest pytest-xdist
-            cd sglang
-            pytest -vvv -n 4 test/srt/test_triton_attention_kernels.py
+          ./scripts/test-triton.sh --sglang --skip-pip-install --skip-pytorch-install
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
