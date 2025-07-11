@@ -138,7 +138,7 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
 #mma_1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1]}>
 #mma_2 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [4, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f16>,
                                            %arg1: !tt.ptr<f16>,
@@ -208,7 +208,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
 #mma_1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 8, 1], repCluster = [1, 2, 2]}>
 #mma_32 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_gather_io
   tt.func public @regular_pointer_gather_io(%arg0: tensor<128x64x!tt.ptr<f16>, #mma>,
                                             %arg1: tensor<128x64x!tt.ptr<f16>, #mma_32>,
@@ -232,7 +232,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
 // -----
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f16>) {
 
@@ -304,7 +304,7 @@ module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
 
 // COM: Check codegen when base height is 1 and tile height is > 1.
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
   // CHECK-LABEL: @baseheight1
   tt.func public @baseheight1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %18 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>}>>
@@ -349,7 +349,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [2, 2]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
-module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32} {
+module attributes {ttig.support_sg_2d_block, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @regular_pointer_block_io
   tt.func public @regular_pointer_block_io(%arg0: !tt.ptr<f32>) {
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
