@@ -3092,9 +3092,6 @@ scan_layouts = [
 
 
 def test_no_rematerialization_op(device):
-    if is_xpu():
-        pytest.skip("handle on XPU")
-
     if torch.version.hip:
         pytest.skip("test not supported on AMD")
 
