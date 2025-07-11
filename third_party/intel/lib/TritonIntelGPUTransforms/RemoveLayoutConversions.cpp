@@ -3,12 +3,17 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Passes.h"
+#include "mlir/Transforms/RegionUtils.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -17,7 +22,9 @@
 
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
 
@@ -106,6 +113,8 @@ public:
   // Return the mapped value in the given encoding. This will insert a convert
   // if the encoding is different than the encoding decided at resolve time.
   Value getValueAs(Value value, Attribute encoding);
+  // Return the original value mapped to the new desired encoding.
+  Value getRewrittenValue(Value value);
   // Dump the current stage of layout information.
   void dump();
 
@@ -190,7 +199,7 @@ bool isLayoutAnchor(Operation *op) {
     return ttgi::isExpensiveLoadOrStore(op);
   // TODO: we should estimate the cost of the not propagating layout for
   // AtomicCAS for further performance consideration.
-  if (isa<DotOp, AtomicCASOp>(op))
+  if (isa<DotOp, DotScaledOp, AtomicCASOp>(op))
     return true;
   if (isa<AtomicRMWOp>(op))
     if (auto tensorType =
@@ -304,6 +313,15 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         setEncoding(user->getResults(), info, changed, user);
       continue;
     }
+    if (auto gatherOp = dyn_cast<GatherOp>(user)) {
+      // Propagate the layout through the indices only, and if the layout does
+      // not have an efficient layout set.
+      if (!gatherOp.getEfficientLayout() &&
+          &use == &gatherOp.getIndicesMutable()) {
+        setEncoding(gatherOp.getResult(), info, changed, user);
+        continue;
+      }
+    }
     if (auto storeOp = dyn_cast<StoreOp>(user)) {
       auto checkMMAorMMADerived = [](Attribute encoding) {
         bool isMMAorMMADerived = isa<MmaEncodingTrait>(encoding);
@@ -339,7 +357,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
 
 void LayoutPropagation::propagateLayout() {
   SmallVector<Value> queue;
-  for (const auto &it : layouts) {
+  for (auto it : layouts) {
     queue.push_back(it.first);
   }
   while (!queue.empty()) {
@@ -353,6 +371,7 @@ void LayoutPropagation::propagateLayout() {
              << info.encodings.size() << " candidate encoding(s):\n";
       for (Attribute encoding : info.encodings)
         DBGS() << "  " << encoding << "\n";
+      DBGS() << "changed: " << changed.size() << "\n";
     });
 
     queue.insert(queue.end(), changed.begin(), changed.end());
@@ -469,22 +488,25 @@ void LayoutPropagation::map(Value old, Value newV) {
       newV;
 }
 
+Value LayoutPropagation::getRewrittenValue(Value value) {
+  auto tensorType = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorType)
+    return value;
+  auto layoutIt = layouts.find(value);
+  if (layoutIt == layouts.end()) {
+    return value;
+  }
+  assert(layoutIt->second.encodings.size() == 1 &&
+         "we should have resolved to a single encoding");
+  Attribute encodingPicked = *(layoutIt->second.encodings.begin());
+  if (encodingPicked == tensorType.getEncoding())
+    return value;
+  return rewriteMapping.at({value, encodingPicked});
+}
+
 Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
   if (auto tensorType = dyn_cast<RankedTensorType>(value.getType())) {
-    Value rewrittenValue;
-    auto layoutIt = layouts.find(value);
-    if (layoutIt == layouts.end()) {
-      rewrittenValue = value;
-    } else {
-      assert(layoutIt->second.encodings.size() == 1 &&
-             "we should have resolved to a single encoding");
-      Attribute encodingPicked = *(layoutIt->second.encodings.begin());
-      if (encodingPicked == tensorType.getEncoding())
-        rewrittenValue = value;
-      else
-        rewrittenValue = rewriteMapping[{value, encodingPicked}];
-    }
-    assert(rewrittenValue);
+    Value rewrittenValue = getRewrittenValue(value);
     if (cast<RankedTensorType>(rewrittenValue.getType()).getEncoding() ==
         encoding)
       return rewrittenValue;
@@ -922,7 +944,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
           ConvertLayoutOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
@@ -944,6 +966,9 @@ bool canBeRemat(Operation *op) {
     return !ttgi::isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
+
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
@@ -1211,8 +1236,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation) {
-  LogicalResult result = getConvertBackwardSlice(
-      root, rootEncoding, slice, layout, std::move(stopPropagation));
+  LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
+                                                 layout, stopPropagation);
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1224,22 +1249,6 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     }
   }
   return success();
-}
-
-void LayoutRematerialization::hoistConvertIntoConditionals() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    hoistConvertIntoConditionals(convertOp);
-    if (!opToDelete.contains(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
 }
 
 void LayoutRematerialization::backwardRematerialization() {
@@ -1272,6 +1281,56 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
                     convertOp.getResult());
     }
   }
+}
+
+void LayoutRematerialization::hoistConvertIntoConditionals() {
+  // Go through each ConvertLayoutOp.
+  SmallVector<ConvertLayoutOp> convertOps;
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    hoistConvertIntoConditionals(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for reuse in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
+  }
+}
+
+static bool isExpensiveMathOp(Operation *op) {
+  // These operations are either multiple instructions or have throughput
+  // lower than 16 according to the arithmetic instructions table in:
+  // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
+  return isa<arith::DivFOp, math::ErfcOp, math::SinhOp, math::CoshOp,
+             math::TanhOp, math::AsinhOp, math::AcoshOp, math::AtanhOp,
+             math::CtPopOp, math::CountLeadingZerosOp,
+             math::CountTrailingZerosOp, math::ExpOp, math::Exp2Op,
+             math::ExpM1Op, math::LogOp, math::Log2Op, math::Log10Op,
+             math::Log1pOp, math::SinOp, math::CosOp, math::TanOp, math::AsinOp,
+             math::AcosOp, math::AtanOp, math::Atan2Op, math::PowFOp,
+             math::SqrtOp, math::RsqrtOp, math::ErfOp, math::CbrtOp>(op);
+}
+
+static int64_t getByteCount(Value result, int64_t minElementCount = 0,
+                            int64_t minBitWidth = 0) {
+  int64_t elementCount = 0;
+  int64_t dtypeBitWidth = 0;
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    elementCount = tensorTy.getNumElements();
+    auto elemType = tensorTy.getElementType();
+    if (elemType.isIntOrFloat()) {
+      dtypeBitWidth = elemType.getIntOrFloatBitWidth();
+    }
+  }
+  if (elementCount < minElementCount) {
+    elementCount = minElementCount;
+  }
+  if (dtypeBitWidth < minBitWidth) {
+    dtypeBitWidth = minBitWidth;
+  }
+  return (elementCount * dtypeBitWidth) >> 3;
 }
 
 void LayoutRematerialization::backwardRematerialization(
@@ -1373,30 +1432,32 @@ void LayoutRematerialization::hoistConvertDotOperand(
           { DBGS() << "  Block arguments not supported. Got " << v << "\n"; });
       return;
     }
-    auto loadOp = dyn_cast<LoadOp>(v.getDefiningOp());
-    // We expect the leaves of the slice to be Load or arith::Constant
-    // This could be generalised if necessary
-    if (!loadOp) {
+
+    // We expect the leaves of the slice to be Load, DescriptorLoad or
+    // arith::Constant This could be generalised if necessary
+    if (!isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp())) {
       auto op = v.getDefiningOp();
       if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
         innerSlice.insert(v);
         continue;
       } else {
         LLVM_DEBUG({
-          DBGS() << "  Leaves must be Load or Constant. Got " << v << "\n";
+          DBGS() << "  Leaves must be Load, DescriptorLoad or Constant. Got "
+                 << v << "\n";
         });
         return;
       }
     }
+    Operation *loadOp = v.getDefiningOp();
     builder.setInsertionPointAfter(loadOp);
-    auto type = dyn_cast<RankedTensorType>(loadOp.getType());
+    auto type = dyn_cast<RankedTensorType>(loadOp->getResult(0).getType());
     if (!type)
       continue;
     auto newType = RankedTensorType::get(type.getShape(), type.getElementType(),
-                                         layout[loadOp]);
+                                         layout[loadOp->getResult(0)]);
     auto newConvertOp = builder.create<ConvertLayoutOp>(
-        convertOp.getLoc(), newType, loadOp.getResult());
-    mapping.map(loadOp.getResult(), newConvertOp.getResult());
+        convertOp.getLoc(), newType, loadOp->getResult(0));
+    mapping.map(loadOp->getResult(0), newConvertOp.getResult());
   }
 
   if (innerSlice.empty()) {
@@ -1418,7 +1479,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
   // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
-  if (mlir::isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
@@ -1641,6 +1702,7 @@ void hoistConvert(ModuleOp module) {
     layoutRemat.cleanup();
   });
 }
+} // namespace
 
 class TritonIntelGPURemoveLayoutConversionsPass
     : public triton::gpu::intel::impl::
@@ -1722,5 +1784,3 @@ public:
     });
   }
 };
-
-} // namespace
