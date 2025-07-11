@@ -13,6 +13,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "triton/Tools/LinearLayout.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -318,7 +319,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   template <
       typename OpTy,
       std::enable_if_t<llvm::is_one_of<OpTy, triton::gpu::intel::PrefetchOp,
-                                       triton::LoadOp>::value,
+                                       triton::LoadOp, triton::StoreOp>::value,
                        bool> = true>
   static bool isMemoryRowMajor(OpTy op) {
     Attribute blockIOAttr =
@@ -373,6 +374,126 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     assert(stride == -1 && "invalid stride < 0");
     return nullptr;
+  }
+
+  // Return the tileHeight, tileWidth, vBlocks, row Dim and column Dim.
+  static std::tuple<int, int, int, int, int>
+  getBlockIOTileSize(const LinearLayout &ll) {
+    const size_t rank = ll.getOutDims().size();
+    std::vector<unsigned> tileShape(rank, 1);
+
+    const LinearLayout::BasesT &bases = ll.getBases();
+    auto getBase = [&](const std::string &inDim) {
+      for (const auto &base : bases) {
+        StringAttr attr = base.first;
+        if (attr.getValue().compare(inDim) == 0)
+          return base.second;
+      }
+      llvm_unreachable(("Could not find the input dim:" + inDim +
+                        ", on the ll:" + ll.toString())
+                           .c_str());
+    };
+
+    using BaseType = LinearLayout::BasesT::value_type::second_type;
+    const BaseType &basesOfLane = getBase("lane");
+
+    int fastChangeDim = -1;
+    for (const std::vector<int> &base : basesOfLane) {
+      size_t i = 0;
+      for (; i < rank; ++i) {
+        int elem = base[i];
+        if (elem == 0)
+          continue;
+        if (fastChangeDim < 0)
+          fastChangeDim = i;
+        if (tileShape[i] != elem)
+          break;
+        tileShape[i] <<= 1;
+      }
+      if (i != rank)
+        break;
+    }
+
+    unsigned numLanes = 1 << basesOfLane.size();
+    // The slice of a name is not distributed densely across the lane. It is not
+    // supported by block io.
+    if (product<unsigned>(tileShape) != numLanes)
+      return std::make_tuple(-1, -1, -1, -1, -1);
+
+    unsigned sliceRank = 0;
+    int rowDim = -1;
+    for (size_t i = 0; i < rank; ++i) {
+      if (tileShape[i] > 1) {
+        sliceRank++;
+        if (i != fastChangeDim)
+          rowDim = i;
+      }
+    }
+
+    // The block IO only supports 2D shape.
+    if (sliceRank > 2)
+      return std::make_tuple(-1, -1, -1, -1, -1);
+
+    // Note: we only walk thru the register bases of the incremental order of
+    // the naming. e.g: a0, a1, a2 ... It doesn't support to get the large tile
+    // shape for the DotOp B layout. e.g: Using for name in order a0, a2, a1, a3
+    // to make a large block io tile size.
+    // clang-format off
+    // ┌────┬────┬
+    // │A0  │A1  │
+    // │    │    │
+    // ├────┼────┼
+    // │A2  │A3  │
+    // │    │    │
+    // └────┴────┴
+    // clang-format on
+    // TODO: need to improve this.
+    const BaseType &basesOfRegister = getBase("register");
+    unsigned numNamesPerTile = 0;
+    // Increase the tile shape along the row dimension. (Increase the
+    // tileHeight.)
+    unsigned baseIdx = 0;
+    for (; baseIdx < basesOfRegister.size(); ++baseIdx) {
+      const std::vector<int> &base = basesOfRegister[baseIdx];
+      size_t i = 0;
+      for (; i < rank; ++i) {
+        int elem = base[i];
+        if (elem == 0)
+          continue;
+        if (rowDim < 0 && i != fastChangeDim)
+          rowDim = i;
+        if (i != rowDim || tileShape[i] != elem)
+          break;
+        tileShape[i] <<= 1;
+        numNamesPerTile++;
+      }
+      if (i != rank)
+        break;
+    }
+
+    if (rowDim < 0)
+      rowDim = (fastChangeDim != 0) ? 0 : 1;
+
+    // Increase the tile shape along the column dimension. (Increase the
+    // vBlocks.)
+    unsigned vBlocks = 1;
+    for (; baseIdx < basesOfRegister.size(); ++baseIdx) {
+      const std::vector<int> &base = basesOfRegister[baseIdx];
+      size_t i = 0;
+      for (; i < rank; ++i) {
+        int elem = base[i];
+        if (elem == 0)
+          continue;
+        if (i != fastChangeDim || (tileShape[i] * vBlocks) != elem)
+          break;
+        vBlocks <<= 1;
+      }
+      if (i != rank)
+        break;
+    }
+
+    return std::make_tuple(tileShape[rowDim], tileShape[fastChangeDim], vBlocks,
+                           rowDim, fastChangeDim);
   }
 };
 
@@ -941,7 +1062,7 @@ struct LoadOpToBlockIOConversion
               Value ret =
                   b.bitcast(load2dOp, LLVM::getVectorType(eltTy, elemsPerLane));
 
-              for (size_t i = 0; i < elemsPerLane; i++) {
+              for (size_t i = 0; i < elemsPerLane; ++i) {
                 Value loaded = b.extract_element(eltTy, ret, b.i32_val(i));
                 unpackedLoadedVals.push_back(loaded);
               }
@@ -1080,7 +1201,7 @@ struct LoadOpToBlockIOConversion
         tileShape[widthDim] = origTileWidth / (32 / elemSizeInBits);
       }
 
-      for (int i = 0; i < tileShape.size(); i++) {
+      for (int i = 0; i < tileShape.size(); ++i) {
         int dim = threadOrder[i];
         StringAttr kOffset = S("offset" + std::to_string(dim));
 
@@ -1192,7 +1313,7 @@ struct LoadOpToBlockIOConversion
       llvm::dbgs() << "Block load tile layout after adding iterations: "
                    << tileLayout << "\n";
 
-      for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
+      for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); ++itr) {
         auto printTileLayoutVals = [&](const size_t offset) {
           auto tensorVals =
               tileLayout.apply({{kOffset, offset}, {kIteration, itr}});
@@ -1258,16 +1379,16 @@ struct LoadOpToBlockIOConversion
     assert(outDims[1].first == S("dim1"));
 
     for (size_t i = 0;
-         i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); i++) {
+         i < llvm::Log2_32(numRepInner / numOperandsInnerDimPerLoad); ++i) {
       newLoadBases.push_back({0, static_cast<int>((1 << i) * repKStride *
                                                   numOperandsInnerDimPerLoad)});
       outDims[1].second *= repKStride * numOperandsInnerDimPerLoad;
     }
-    for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); i++) {
+    for (size_t i = 0; i < llvm::Log2_32(numLoadPerOutRepCluster); ++i) {
       newLoadBases.push_back({static_cast<int>((1 << i) * repStride), 0});
       outDims[0].second *= repStride;
     }
-    for (size_t i = 0; i < llvm::Log2_32(numRepOuter); i++) {
+    for (size_t i = 0; i < llvm::Log2_32(numRepOuter); ++i) {
       newLoadBases.push_back({static_cast<int>((1 << i) * repOuterStride), 0});
       outDims[0].second *= repOuterStride;
     }
@@ -1282,7 +1403,7 @@ struct LoadOpToBlockIOConversion
 
     LLVM_DEBUG({
       llvm::dbgs() << "New tile layout dimensions after adding load bases:\n";
-      for (size_t i = 0; i < outDims.size(); i++) {
+      for (size_t i = 0; i < outDims.size(); ++i) {
         llvm::dbgs() << outDims[i].first << " = " << outDims[i].second << "\n";
       }
     });
@@ -1306,8 +1427,8 @@ struct LoadOpToBlockIOConversion
     LLVM_DEBUG({
       llvm::dbgs() << "Block load tile layout after adding loads: "
                    << tileLayout << "\n";
-      for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); load++) {
-        for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); itr++) {
+      for (size_t load = 0; load < tileLayout.getInDimSize(kLoad); ++load) {
+        for (size_t itr = 0; itr < tileLayout.getInDimSize(kIteration); ++itr) {
           auto printTileLayoutVals = [&](const size_t offset) {
             auto tensorVals = tileLayout.apply(
                 {{kOffset, offset}, {kIteration, itr}, {kLoad, load}});
@@ -2450,44 +2571,56 @@ struct StoreOpToBlockIOConversion
         BlockIOConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
-  rewriteTensorPointerStore(triton::StoreOp op, OpAdaptor adaptor,
-                            ConversionPatternRewriter &rewriter) const {
+  matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    if (!isBlockIOCandidate(op))
+      return failure();
+
+    if (!isTensorPointerType(op.getPtr().getType()))
+      return failure();
+
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type resultType = op.getValue().getType();
     auto tensorType = cast<RankedTensorType>(resultType);
-    auto dpasLayout = cast<DpasEncodingAttr>(tensorType.getEncoding());
-    LLVMTypeConverter *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
+
+    // Get the max tile shape supported by the layout.
+    Attribute encoding = tensorType.getEncoding();
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorType.getShape());
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    auto [tileHeight, tileWidth, vBlocks, rowDim, colDim] =
+        getBlockIOTileSize(*llEncoding);
+    // no valid tile shape for 2D block IO.
+    if (colDim < 0)
+      return failure();
 
     Type eltTy = tensorType.getElementType();
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     Value elemSizeInBytes = b.i32_val(elemSizeInBits / 8);
-    const ArrayRef<int64_t> tensorShape = tensorType.getShape();
-    size_t rank = tensorShape.size();
     unsigned numElems = getTotalElemsPerThread(tensorType);
-
-    SmallVector<unsigned> elemsPerInstr = dpasLayout.getDPASInstShapeC();
     // 2D block store supports 8 rows at most.
-    unsigned tileHeight = std::min(8u, elemsPerInstr[0]);
+    tileHeight = std::min(8, tileHeight);
     // 2D block store supports 64 bytes per row at most.
-    unsigned tileWidth = elemsPerInstr[1];
     unsigned totalBytesPerRowPerMatrix = tileWidth * elemSizeInBits / 8;
     if (totalBytesPerRowPerMatrix > 64)
       return failure();
 
-    auto warpsPerCTA = dpasLayout.getWarpsPerCTA();
-    SmallVector<int64_t> numReps =
-        dpasLayout.getDPASRepetitions(tensorShape, 2);
-    SmallVector<unsigned> dpasWarpsOrder =
-        getMatrixOrder(warpsPerCTA.size(), /*rowMajor*/ true);
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    if (contiguousDim != colDim) {
+      // 2D Block store doesn't support transpose.
+      return failure();
+    }
 
     Value warpId = rewriter.create<arith::IndexCastOp>(
         loc, i32_ty,
         rewriter.create<mlir::gpu::SubgroupIdOp>(loc,
                                                  /*upperBound=*/nullptr));
-    SmallVector<Value> multiDimWarpId = mlir::LLVM::delinearize(
-        rewriter, loc, warpId, warpsPerCTA, dpasWarpsOrder);
 
     Value blockPtr = adaptor.getPtr();
     auto [base, width, height, rowStride, colStride, offsetBaseX, offsetBaseY] =
@@ -2501,7 +2634,7 @@ struct StoreOpToBlockIOConversion
     // encoded as bytes.
     Value pitch = b.mul(rowStride, elemSizeInBytes);
     // 2D block store only supports vBlocks = 1.
-    unsigned vBlocks = 1;
+    vBlocks = 1;
 
     // Get the LLVM values for store values
     SmallVector<Value> valElems =
@@ -2518,91 +2651,62 @@ struct StoreOpToBlockIOConversion
         LLVM::getVectorType(opaqueType,
                             elemsPerLane); // make it opaque type.
 
-    // A warp stride for the replicates.
-    SmallVector<unsigned> repClusterShape = dpasLayout.getShapeC();
-    unsigned outerDimWarpNum = std::min<unsigned>(
-        warpsPerCTA[rank - 2],
-        mlir::ceil<unsigned>(tensorShape[rank - 2], repClusterShape[rank - 2]));
-    unsigned innerDimWarpNum = std::min<unsigned>(
-        warpsPerCTA[rank - 1],
-        mlir::ceil<unsigned>(tensorShape[rank - 1], repClusterShape[rank - 1]));
-    Value outerDimWarpId =
-        b.urem(multiDimWarpId[rank - 2], b.i32_val(outerDimWarpNum));
-    Value innerDimWarpId =
-        b.urem(multiDimWarpId[rank - 1], b.i32_val(innerDimWarpNum));
-    int64_t numRepOuter = numReps[1];
-    int64_t numRepInner = numReps[2];
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kBlock = str_attr("block");
 
-    std::array<unsigned, 2> replicaStride = {
-        outerDimWarpNum * repClusterShape[rank - 2],
-        innerDimWarpNum * repClusterShape[rank - 1]};
-    std::array<unsigned, 2> warpStride = {repClusterShape[rank - 2],
-                                          repClusterShape[rank - 1]};
+    // Right now only support to stack the values into a vector in sequential
+    // order.
+    for (size_t valIdx = 0; valIdx < numElems; valIdx += elemsPerLane) {
+      // Need to apply the linear layout to get the offsets to the base of the
+      // block pointer.
+      // TODO: add annotation uniform to the offsets. Make sure the IGC detect
+      // the offsets as uniform.
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(valIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+      // TODO: To support rank > 2 tensor, we need to add the offsets of other
+      // dim to the base.
+      assert(offsets.size() == 2 && "only support 2D tensor for now.");
+      Value offsetX = b.add(offsetBaseX, offsets[colDim].second);
+      Value offsetY = b.add(offsetBaseY, offsets[rowDim].second);
 
-    Value dimWarpId0 = b.mul(outerDimWarpId, b.i32_val(warpStride[0]));
-    Value dimWarpId1 = b.mul(innerDimWarpId, b.i32_val(warpStride[1]));
-    Value warpId0Offset = b.add(dimWarpId0, offsetBaseY);
-    Value warpId1Offset = b.add(dimWarpId1, offsetBaseX);
+      // Compose the matrix by stacking the name into vector.
+      Value storeVal = rewriter.create<LLVM::UndefOp>(
+          loc,
+          LLVM::getVectorType(typeConverter->convertType(eltTy), elemsPerLane));
+      for (size_t i = 0; i < elemsPerLane; ++i)
+        storeVal =
+            b.insert_element(storeVal, valElems[valIdx + i], b.i32_val(i));
 
-    ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
-    unsigned valOffset = 0;
-    for (int m = 0; m < numRepOuter; ++m) {
-      for (int n = 0; n < numRepInner; ++n) {
-        for (int repM = 0; repM < repCluster[0]; ++repM) {
-          Value offsetY = b.add(warpId0Offset, b.i32_val(m * replicaStride[0] +
-                                                         repM * tileHeight));
-          for (int repN = 0; repN < repCluster[1]; ++repN) {
-            Value offsetX =
-                b.add(warpId1Offset,
-                      b.i32_val(n * replicaStride[1] + repN * tileWidth));
+      auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
+          loc,
+          /*ptr*/ base,
+          /*base_width*/ baseWidth,
+          /*base_height*/ baseHeight,
+          /*base_pitch*/ pitch,
+          /*x*/ offsetX,
+          /*y*/ offsetY,
+          /*elem_size_in_bits*/ elemSizeInBits,
+          /*tile_width*/ tileWidth,
+          /*tile_height*/ tileHeight,
+          /*v_blocks*/ vBlocks,
+          /*stored_val*/ b.bitcast(storeVal, store2DGenXType));
 
-            Value storeVal = rewriter.create<LLVM::UndefOp>(
-                loc, LLVM::getVectorType(typeConverter->convertType(eltTy),
-                                         elemsPerLane));
-            for (size_t i = 0; i < elemsPerLane; ++i) {
-              storeVal =
-                  b.insert_element(storeVal, valElems[valOffset], b.i32_val(i));
-              ++valOffset;
-            }
-
-            auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
-                loc,
-                /*ptr*/ base,
-                /*base_width*/ baseWidth,
-                /*base_height*/ baseHeight,
-                /*base_pitch*/ pitch,
-                /*x*/ offsetX,
-                /*y*/ offsetY,
-                /*elem_size_in_bits*/ elemSizeInBits,
-                /*tile_width*/ tileWidth,
-                /*tile_height*/ tileHeight,
-                /*v_blocks*/ vBlocks,
-                /*stored_val*/ b.bitcast(storeVal, store2DGenXType));
-
-            if (failed(newOp.verify())) {
-              // delete the op so that the verifier will not abort the pass
-              // pipeline later, as we can fail this path and try a different
-              // approach.
-              rewriter.eraseOp(newOp);
-              return failure();
-            }
-          }
-        }
+      if (failed(newOp.verify())) {
+        // delete the op so that the verifier will not abort the pass
+        // pipeline later, as we can fail this path and try a different
+        // approach.
+        rewriter.eraseOp(newOp);
+        return failure();
       }
     }
+
     rewriter.eraseOp(op);
     return success();
-  }
-
-  LogicalResult
-  matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    if (!isBlockIOCandidate(op))
-      return failure();
-
-    if (isTensorPointerType(op.getPtr().getType()))
-      return rewriteTensorPointerStore(op, adaptor, rewriter);
-    return failure();
   }
 };
 
