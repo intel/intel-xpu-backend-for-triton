@@ -2632,6 +2632,7 @@ struct StoreOpToBlockIOConversion
 
     width = b.trunc(i32_ty, width);
     rowStride = b.trunc(i32_ty, rowStride);
+    Value addrElem = base;
     // encoded as bytes.
     Value baseWidth = b.mul(width, elemSizeInBytes);
     Value baseHeight = b.trunc(i32_ty, height);
@@ -2678,6 +2679,25 @@ struct StoreOpToBlockIOConversion
       Value offsetX = b.add(offsetBaseX, offsets[colDim].second);
       Value offsetY = b.add(offsetBaseY, offsets[rowDim].second);
 
+      // To prevent triggering hardware boundary protection, expand the base
+      // shape sufficiently when boundary check is absent.
+      SetVector<unsigned> boundaryCheck(op.getBoundaryCheck().begin(),
+                                        op.getBoundaryCheck().end());
+      if (!boundaryCheck.contains(colDim)) {
+        baseWidth = b.i32_val(
+            std::max(64u, vBlocks * tileWidth * (elemSizeInBits / 8)));
+        // Use opaqueType as offsetX is in number of elements.
+        addrElem = b.gep(ptr_ty(ctx, 1), opaqueType, addrElem, offsetX);
+        offsetX = b.i32_val(0);
+      }
+      if (!boundaryCheck.contains(rowDim)) {
+        baseHeight = b.i32_val(tileHeight);
+        // Use i8_ty as pitch is in number of bytes.
+        Value off = b.mul(offsetY, pitch);
+        addrElem = b.gep(ptr_ty(ctx, 1), i8_ty, addrElem, off);
+        offsetY = b.i32_val(0);
+      }
+
       // Compose the matrix by stacking the name into vector.
       Value storeVal = rewriter.create<LLVM::UndefOp>(
           loc,
@@ -2688,7 +2708,7 @@ struct StoreOpToBlockIOConversion
 
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
           loc,
-          /*ptr*/ base,
+          /*ptr*/ addrElem,
           /*base_width*/ baseWidth,
           /*base_height*/ baseHeight,
           /*base_pitch*/ pitch,

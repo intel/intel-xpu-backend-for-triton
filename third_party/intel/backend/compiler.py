@@ -312,18 +312,20 @@ class XPUBackend(BaseBackend):
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
-    @staticmethod
-    def ttgir_opt(src, metadata, options):
+    def gluon_to_ttgir(self, src, metadata, options):
         mod = src
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
         passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_resolve_auto_encodings(pm)
+        passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod)
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     @staticmethod
@@ -452,7 +454,7 @@ class XPUBackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         elif language == Language.GLUON:
-            stages["ttgir"] = lambda src, metadata: self.ttgir_opt(src, metadata, options)
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options, self.device_arch)
 

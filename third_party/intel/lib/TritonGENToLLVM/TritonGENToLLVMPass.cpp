@@ -166,6 +166,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
+  // intel_sub_group_2d_block_write_16b_8r32x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
+    return false;
+
   // intel_sub_group_2d_block_write_32b_8r4x1c
   if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
       op.getTileWidth() == 4 && op.getVBlocks() == 1)
@@ -174,6 +179,12 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
   // intel_sub_group_2d_block_write_32b_8r8x1c
   if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // FIXME: The following signature has correctness issue
+  // intel_sub_group_2d_block_write_8b_1r32x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 1 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
   return true;
