@@ -184,3 +184,18 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=32, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi32>)
   llvm.return
 }
+
+// -----
+
+llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<1xi16>) {
+  // COM: threads-per-warp = 32 case.
+  // CHECK:    [[ELEM_BITS:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK:    [[TILE_WIDTH:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK:    [[TILE_HEIGHT:%.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK:    [[VBLOCKS:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:    [[TRANSPOSE:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:    [[VNNI:%.*]] = llvm.mlir.constant(false) : i1
+  // CHECK:    llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockWrite.v1i16({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, [[ELEM_BITS]], [[TILE_WIDTH]], [[TILE_HEIGHT]], [[VBLOCKS]], [[TRANSPOSE]], [[VNNI]], {{.*}})
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=16, tile_width=16, tile_height=2, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<1xi16>)
+  llvm.return
+}

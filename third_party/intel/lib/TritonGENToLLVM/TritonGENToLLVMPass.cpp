@@ -187,6 +187,11 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
       op.getTileWidth() == 32 && op.getVBlocks() == 1)
     return false;
 
+  // intel_sub_group_2d_block_write_16b_2r16x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 1)
+    return false;
+
   return true;
 }
 
