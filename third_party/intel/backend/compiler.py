@@ -304,6 +304,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
