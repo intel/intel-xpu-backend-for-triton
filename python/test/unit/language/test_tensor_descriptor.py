@@ -260,8 +260,6 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, device):
 def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, device):
     if num_ctas == 2 and (not is_cuda() or torch.cuda.get_device_capability(0)[0] not in (9, 10)):
         pytest.xfail("CTAs is unsupported for these cards")
-    if is_xpu() and dtype_str not in uint_dtypes and ndim == 2 and not INNER_BLOCK == 16:
-        pytest.skip("FIXME: issue #4139")
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
@@ -296,8 +294,7 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
     triton.set_allocator(alloc_fn)
 
     alloc_shape = (1, 1, 3, 7, INNER_BLOCK)[-ndim:]
-    inp = to_triton(numpy_random(alloc_shape, dtype_str), device=device, dst_type=dtype_str)
-    inp.data = inp.data[..., :INNER_BLOCK - 3]
+    inp = to_triton(numpy_random(alloc_shape, dtype_str)[..., :INNER_BLOCK - 3], device=device, dst_type=dtype_str)
 
     if INNER_BLOCK * inp.element_size() < 32:
         return pytest.xfail("Invalid last dim size")
