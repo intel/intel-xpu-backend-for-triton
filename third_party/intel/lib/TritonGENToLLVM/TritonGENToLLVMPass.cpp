@@ -181,10 +181,16 @@ static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
       op.getTileWidth() == 8 && op.getVBlocks() == 1)
     return false;
 
-  // FIXME: The following signature has correctness issue
+  // FIXME: The following signatures have correctness issue with SPV interface.
+
   // intel_sub_group_2d_block_write_8b_1r32x1c
   if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 1 &&
       op.getTileWidth() == 32 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_16b_2r16x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 1)
     return false;
 
   return true;
