@@ -1,6 +1,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/PriorityWorklist.h"
 
 namespace ttg = mlir::triton::gpu;
@@ -16,45 +17,11 @@ namespace gpu::intel {
 
 namespace {
 
-SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
-  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-    auto iterArg = forOp.getRegionIterArg(resultIdx);
-    auto result = forOp.getResult(resultIdx);
-    auto yieldVal = forOp.getBody()->getTerminator()->getOperand(resultIdx);
-    auto initVal = forOp.getInitArgs()[resultIdx];
-    return {iterArg, result, yieldVal, initVal};
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
-    auto iterArg = whileOp.getBeforeArguments()[resultIdx];
-    auto result = whileOp.getResults()[resultIdx];
-    auto yieldVal = whileOp.getConditionOp().getArgs()[resultIdx];
-    auto initVal = whileOp.getOperands()[resultIdx];
-    auto bodyArg = whileOp.getAfterArguments()[resultIdx];
-    return {iterArg, result, yieldVal, initVal, bodyArg};
-  } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    SmallVector<Value> values;
-    for (auto &block : ifOp.getThenRegion().getBlocks()) {
-      auto terminator = block.getTerminator();
-      if (isa<scf::YieldOp>(terminator))
-        values.push_back(terminator->getOperands()[resultIdx]);
-    }
-    for (auto &block : ifOp.getElseRegion().getBlocks()) {
-      auto terminator = block.getTerminator();
-      if (isa<scf::YieldOp>(terminator))
-        values.push_back(terminator->getOperands()[resultIdx]);
-    }
-    values.push_back(ifOp->getResults()[resultIdx]);
-    return values;
-  }
-  return {};
-}
-
 struct EncodingInfo {
   Attribute desiredEncoding;
-  bool requiresConvert = false;
 
   bool operator==(const EncodingInfo &other) const {
-    return desiredEncoding == other.desiredEncoding &&
-           requiresConvert == other.requiresConvert;
+    return desiredEncoding == other.desiredEncoding;
   }
 };
 
@@ -77,10 +44,6 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
 
   auto updateEncoding = [&](ArrayRef<Value> ptrValues, EncodingInfo info) {
     for (auto value : ptrValues) {
-      bool requiresConvert = llvm::any_of(
-          value.getUsers(), [](auto user) { return isa<LoadOp>(user); });
-      info.requiresConvert = requiresConvert;
-
       auto typedVal = cast<TypedValue<PointerType>>(value);
       auto itr = valueToEncodingInfo.find(typedVal);
       if (itr == valueToEncodingInfo.end()) {
@@ -157,24 +120,22 @@ void rewriteTensorLayoutsForOp(Attribute encoding, Operation *op) {
         oldTensorTy.getShape(), oldTensorTy.getElementType(), newEncoding);
 
     val.setType(PointerType::get(newTensorTy, oldType.getAddressSpace()));
-    if (einfo.requiresConvert) {
-      for (auto user : val.getUsers()) {
-        if (auto loadOp = dyn_cast<LoadOp>(user)) {
+    for (auto user : val.getUsers()) {
+      if (auto loadOp = dyn_cast<LoadOp>(user)) {
 
-          OpBuilder builder(loadOp);
-          auto oldLoadType = loadOp.getType();
-          Value result = loadOp.getResult();
+        OpBuilder builder(loadOp);
+        auto oldLoadType = loadOp.getType();
+        Value result = loadOp.getResult();
 
-          builder.setInsertionPointAfter(loadOp);
-          auto cvt = builder.create<ConvertLayoutOp>(loadOp.getLoc(),
-                                                     result.getType(), result);
-          LLVM_DEBUG(DBGS() << "Added convert Op:\n"
-                            << cvt << " after Load Op:\n"
-                            << loadOp << "\n");
-          result.setType(newTensorTy);
+        builder.setInsertionPointAfter(loadOp);
+        auto cvt = builder.create<ConvertLayoutOp>(loadOp.getLoc(),
+                                                   result.getType(), result);
+        LLVM_DEBUG(DBGS() << "Added convert Op:\n"
+                          << cvt << " after Load Op:\n"
+                          << loadOp << "\n");
+        result.setType(newTensorTy);
 
-          result.replaceAllUsesExcept(cvt.getResult(), cvt.getOperation());
-        }
+        result.replaceAllUsesExcept(cvt.getResult(), cvt.getOperation());
       }
     }
   }
