@@ -57,9 +57,8 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     if cc is None:
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
-        cc = gcc if gcc is not None else clang
-        if os.name == "nt":
-            cc = shutil.which("cl")
+        cl = shutil.which("cl")
+        cc = cl or gcc or clang
         if cc is None:
             raise RuntimeError(
                 "Failed to find C compiler. Please specify via CC environment variable or set triton.knobs.build.impl.")
