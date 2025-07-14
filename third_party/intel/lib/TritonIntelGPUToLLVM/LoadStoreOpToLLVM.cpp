@@ -559,6 +559,10 @@ struct PrefetchOpConversion
       // Swap the shape to make it row major and then get the tiling
       // size base on row major shape.
       std::swap(tensorShape[0], tensorShape[1]);
+
+      // Create the new tensor type with swapped row and col.
+      tensorType = RankedTensorType::get(
+          tensorShape, tensorType.getElementType(), tensorType.getEncoding());
     }
 
     unsigned numWarps = triton::gpu::lookupNumWarps(op);
