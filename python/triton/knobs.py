@@ -502,6 +502,11 @@ class intel_knobs(base_knobs):
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
+    # Space separated list of device extensions, similar to the output of
+    # `ocloc query CL_DEVICE_EXTENSIONS`. If not set, a compiler calls `ocloc` in runtime to get
+    # the actual device extensions.
+    device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
+
 
 class amd_knobs(base_knobs):
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
