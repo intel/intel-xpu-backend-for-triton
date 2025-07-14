@@ -298,12 +298,24 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
 
+  Operation *lookupPt = &rewriter.getInsertionBlock()->front();
+  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
+  int numWarps = triton::gpu::lookupNumWarps(lookupPt);
+  int upperBound = numWarps * threadsPerWarp;
+
+  TritonLLVMOpBuilder b(loc, rewriter);
+
   // If this is being created inside a warp specialize op, compute the relative
   // thread ID within the warp group.
   if (std::optional<int> startId =
           getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
-    TritonLLVMOpBuilder b(loc, rewriter);
+    //    TritonLLVMOpBuilder b(loc, rewriter);
     tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
+  }
+
+  if (llvm::isPowerOf2_32(upperBound)) {
+    // help LLVM's known bits analysis:
+    tid = b.and_(tid, b.i32_val(upperBound - 1));
   }
 
   return tid;
