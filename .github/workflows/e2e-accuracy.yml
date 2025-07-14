@@ -130,5 +130,5 @@ jobs:
       models: ${{ inputs.models }}
       check_all_subset_models: ${{ inputs.check_all_subset_models || false }}
       only_one_model: ${{ inputs.only_one_model }}
-      runner_label: ${{ inputs.runner_label }}
+      runner_label: ${{ inputs.runner_label || 'max1100' }}
       TORCH_COMPILE_DEBUG: ${{ inputs.TORCH_COMPILE_DEBUG }}
