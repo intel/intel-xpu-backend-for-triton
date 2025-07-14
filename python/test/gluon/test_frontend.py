@@ -448,6 +448,56 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def tcgen05_mma_mbar_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
+    a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
+    b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    acc = blackwell.allocate_tensor_memory(ttgl.float16, [128, 128], acc_layout)
+    blackwell.tcgen05_mma(a, b, acc, mbarriers=[bar])
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires blackwell tensor core")
+def test_tcgen05_mma_mbar(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
+
+    h = tcgen05_mma_mbar_kernel.warmup(nvmma_layout, acc_layout, grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tcgen05_mma_mbar_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable> loc(#loc)
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    %result = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable> loc(#loc)
+    %true = arith.constant true loc(#loc)
+    %true_0 = arith.constant true loc(#loc)
+    %true_1 = arith.constant true loc(#loc)
+    %3 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0, %2[%true_1] : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@filecheck_test
+@gluon.jit
+def test_tcgen05_commit():
+    # CHECK-LABEL: test_tcgen05_commit
+    barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+    # CHECK: [[BARRIER:%.*]] = ttg.local_alloc
+    # CHECK: ttng.tc_gen5_commit [[BARRIER]]
+    blackwell.tcgen05_commit(barrier)
+
+
+@gluon.jit
 def warpgroup_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr):
     a = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
     b = ttgl.allocate_shared_memory(ttgl.float16, [128, 128], nvmma_layout)
@@ -475,6 +525,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma> loc(#loc)
     %true = arith.constant true loc(#loc)
     %2 = ttng.warp_group_dot %0, %1, %cst_0, %true {inputPrecision = 0 : i32} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable> * !ttg.memdesc<128x128xf16, #shared, #smem, mutable> -> tensor<128x128xf16, #mma> loc(#loc)
+    tt.return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+""")
+
+
+@gluon.jit
+def warpgroup_mma_wait_kernel():
+    layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16])
+    acc = ttgl.full([128, 128], 0, dtype=ttgl.float16, layout=layout)
+    hopper.warpgroup_mma_wait(num_outstanding=1, deps=[acc])
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper WGMMA")
+def test_warpgroup_mma_wait(fresh_knobs):
+    knobs.compilation.disable_line_info = True
+
+    h = warpgroup_mma_wait_kernel.warmup(grid=(1, ))
+    expecttest.assert_expected_inline(
+        anonymize_ir(h.asm["source"]), """\
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @warpgroup_mma_wait_kernel() attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f16 loc(#loc)
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma> loc(#loc)
+    %0 = ttng.warp_group_dot_wait %cst_0 {pendings = 1 : i32} : tensor<128x128xf16, #mma> loc(#loc)
     tt.return loc(#loc)
   } loc(#loc)
 } loc(#loc)
@@ -1017,7 +1094,7 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     xindex = ttgl.arange(0, XBLOCK, block_layout)
     mask = tl.max_constancy(xindex < xnumel, 2)
 
-    async_copy.async_copy_global_to_shared(smem, inp + xindex, mask)
+    async_copy.async_copy_global_to_shared(smem, inp + xindex)
     async_copy.async_copy_global_to_shared(smem, inp + xindex, mask, cache_modifier=".ca", eviction_policy="evict_last",
                                            volatile=True)
 
@@ -1047,7 +1124,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = arith.cmpi slt, %1, %2 {tt.constancy = dense<2> : tensor<1xi32>} : tensor<128xi32, #blocked> loc(#loc)
     %4 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked> loc(#loc)
     %5 = tt.addptr %4, %1 : tensor<128x!tt.ptr<f16>, #blocked>, tensor<128xi32, #blocked> loc(#loc)
-    %6 = ttg.async_copy_global_to_local %5, %0 mask %3 : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable> loc(#loc)
+    %6 = ttg.async_copy_global_to_local %5, %0 : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable> loc(#loc)
     %7 = ttg.async_copy_global_to_local %5, %0 mask %3 cacheModifier = ca evictionPolicy = evict_last {isVolatile = true} : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable> loc(#loc)
     %8 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
     ttng.async_copy_mbarrier_arrive %8 : !ttg.memdesc<1xi64, #shared, #smem, mutable> loc(#loc)
@@ -1094,3 +1171,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 } loc(#loc)
 #loc = loc(unknown)
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_auto_layout():
+    # CHECK: [[X_1D:%.*]] = arith.constant dense<7> : tensor<16xi32, #gluon.auto_encoding>
+    # CHECK: [[Y_1D:%.*]] = arith.constant dense<2> : tensor<8xi32, #gluon.auto_encoding>
+    x = ttgl.full([16], 7, ttgl.int32, layout=ttgl.AutoLayout())[:, None]
+    y = ttgl.full([8], 2, ttgl.int32, layout=ttgl.AutoLayout())[None, :]
+    # CHECK: arith.addi {{.*}} : tensor<16x8xi32, #gluon.auto_encoding>
+    z = x + y
+    # CHECK: (tensor<16x8xi32, #gluon.auto_encoding>) -> tensor<16xi32, #gluon.auto_encoding
+    ttgl.sum(z, axis=1)

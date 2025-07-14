@@ -1,13 +1,13 @@
 diff --git a/torch/_inductor/codegen/xpu/device_op_overrides.py b/torch/_inductor/codegen/xpu/device_op_overrides.py
-index 8678e30d26..93a5e50975 100644
+index 632cfd29f17..b08db340c12 100644
 --- a/torch/_inductor/codegen/xpu/device_op_overrides.py
 +++ b/torch/_inductor/codegen/xpu/device_op_overrides.py
-@@ -55,7 +55,7 @@ class XPUDeviceOpOverrides(DeviceOpOverrides):
-         return "void *"
- 
-     def cpp_global_scratch(self, idx: int) -> Optional[tuple[str, str]]:
+@@ -61,7 +61,7 @@ class XPUDeviceOpOverrides(DeviceOpOverrides):
+     def cpp_global_scratch(
+         self, idx: int, workspace: TritonScratchWorkspace
+     ) -> Optional[tuple[list[str], str]]:
 -        return None
-+        return f"void *global_scratch_{idx} = 0;", f"global_scratch_{idx}"
++        return [f"void *global_scratch_{idx} = 0;"], f"global_scratch_{idx}"
  
  
  register_device_op_overrides("xpu", XPUDeviceOpOverrides())

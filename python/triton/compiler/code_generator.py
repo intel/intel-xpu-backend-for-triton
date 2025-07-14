@@ -719,8 +719,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.visit_compound_statement(node.body)
         then_block = self.builder.get_insertion_block()
         then_defs = self.local_defs.copy()
+        then_vals = self.lscope.copy()
         # else block
         else_defs = {}
+        else_vals = liveins.copy()
         if node.orelse:
             self.builder.set_insertion_point_to_start(else_block)
             self.lscope = liveins.copy()
@@ -728,26 +730,29 @@ class CodeGenerator(ast.NodeVisitor):
             self.visit_compound_statement(node.orelse)
             else_defs = self.local_defs.copy()
             else_block = self.builder.get_insertion_block()
+            else_vals = self.lscope.copy()
 
         # update block arguments
         names = []
         # variables in livein whose value is updated in `if`
-        for name in liveins:
+        for name, value in liveins.items():
+            # livein variable changed value in either then or else
+            if not _is_triton_value(value):
+                continue
+            then_handles = flatten_values_to_ir([then_vals[name]])
+            else_handles = flatten_values_to_ir([else_vals[name]])
+            if then_handles == else_handles:
+                continue
+            names.append(name)
+            then_defs[name] = then_vals[name]
+            else_defs[name] = else_vals[name]
             # check type
             for defs, block_name in [(then_defs, 'then'), (else_defs, 'else')]:
-                if name in defs:
-                    type_equal = type(defs[name]) == type(liveins[name])  # noqa: E721
-                    assert type_equal and defs[name].type == liveins[name].type, \
-                        f'initial value for `{name}` is of type {liveins[name]}, '\
-                        f'but the {block_name} block redefines it as {defs[name]}'
-            if name in then_defs or name in else_defs:
-                names.append(name)
-            # variable defined in then but not in else
-            if name in then_defs and name not in else_defs:
-                else_defs[name] = liveins[name]
-            # variable defined in else but not in then
-            if name in else_defs and name not in then_defs:
-                then_defs[name] = liveins[name]
+                type_equal = type(defs[name]) == type(value)  # noqa: E721
+                assert type_equal and defs[name].type == value.type, \
+                    f'initial value for `{name}` is of type {value}, '\
+                    f'but the {block_name} block redefines it as {defs[name]}'
+
         # variables that are both in then and else but not in liveins
         # TODO: could probably be cleaned up
         for name in sorted(then_defs.keys() & else_defs.keys()):
@@ -1028,16 +1033,15 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(node.ctx, ast.Load)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        if _is_triton_tensor(lhs):
-            return lhs.__getitem__(slices, _semantic=self.semantic)
+        if _is_triton_value(lhs):
+            return self.call_Method(node, lhs.__getitem__, lhs, [slices], {})
         return lhs[slices]
 
     def visit_Subscript_Store(self, node, value):
         assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
-        assert isinstance(lhs, language.tuple)
-        lhs.__setitem__(slices, value)
+        self.call_Method(node, lhs.__setitem__, lhs, [slices, value], {})
 
     def visit_Subscript(self, node):
         return self.visit_Subscript_Load(node)
@@ -1233,23 +1237,7 @@ class CodeGenerator(ast.NodeVisitor):
         handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
         return next(unflatten_ir_values(handles, [callee_ret_type]))
 
-    def visit_Call(self, node):
-        fn = _unwrap_if_constexpr(self.visit(node.func))
-        if not isinstance(fn, BoundJITMethod):
-            static_implementation = self.statically_implemented_functions.get(fn)
-            if static_implementation is not None:
-                return static_implementation(self, node)
-
-        mur = getattr(fn, '_must_use_result', False)
-        if mur and getattr(node, '_is_unused', False):
-            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
-            if isinstance(mur, str):
-                error_message.append(mur)
-            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
-
-        kws = dict(self.visit(keyword) for keyword in node.keywords)
-        args = [self.visit(arg) for arg in node.args]
-        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+    def call_Function(self, node, fn, args, kws):
         if isinstance(fn, BoundJITMethod):
             args.insert(0, fn.__self__)
             fn = fn.__func__
@@ -1257,8 +1245,10 @@ class CodeGenerator(ast.NodeVisitor):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
         if (hasattr(fn, '__self__') and _is_triton_value(fn.__self__)) or language.core.is_builtin(fn):
-            extra_kwargs = {"_semantic": self.semantic}
+            extra_kwargs = dict()
             sig = inspect.signature(fn)
+            if '_semantic' in sig.parameters:
+                extra_kwargs["_semantic"] = self.semantic
             if '_generator' in sig.parameters:
                 extra_kwargs['_generator'] = self
             try:
@@ -1276,12 +1266,37 @@ class CodeGenerator(ast.NodeVisitor):
                 # itself).  But when calling a function, we raise as `from e` to
                 # preserve the traceback of the original error, which may e.g.
                 # be in core.py.
-                raise CompilationError(self.jit_fn.src, node, None) from e
+                raise CompilationError(self.jit_fn.src, node, str(e)) from e
 
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
         return _apply_to_tuple_values(ret, lambda x: x) if _is_namedtuple(type(ret)) else ret
+
+    def call_Method(self, node, fn, fn_self, args, kws):
+        if isinstance(fn, JITFunction):
+            args.insert(0, fn_self)
+        return self.call_Function(node, fn, args, kws)
+
+    def visit_Call(self, node):
+        fn = _unwrap_if_constexpr(self.visit(node.func))
+        if not isinstance(fn, BoundJITMethod):
+            static_implementation = self.statically_implemented_functions.get(fn)
+            if static_implementation is not None:
+                return static_implementation(self, node)
+
+        mur = getattr(fn, '_must_use_result', False)
+        if mur and getattr(node, '_is_unused', False):
+            error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
+            if isinstance(mur, str):
+                error_message.append(mur)
+            raise CompilationError(self.jit_fn.src, node, " ".join(error_message))
+
+        kws = dict(self.visit(keyword) for keyword in node.keywords)
+        args = [self.visit(arg) for arg in node.args]
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
+
+        return self.call_Function(node, fn, args, kws)
 
     def visit_Constant(self, node):
         return constexpr(node.value)

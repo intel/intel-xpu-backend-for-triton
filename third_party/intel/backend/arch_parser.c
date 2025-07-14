@@ -43,9 +43,14 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
     arch = "pvc";
     break;
+#if SYCL_COMPILER_VERSION >= 20250000
   case sycl::ext::oneapi::experimental::architecture::intel_gpu_ptl_h:
     arch = "ptl_h";
     break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_ptl_u:
+    arch = "ptl_u";
+    break;
+#endif
   default:
     std::cerr << "sycl_arch not recognized: " << (uint64_t)sycl_arch
               << std::endl;
