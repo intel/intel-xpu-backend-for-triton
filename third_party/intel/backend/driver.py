@@ -753,6 +753,9 @@ class XPUDriver(DriverBase):
         dev_property = torch.xpu.get_device_capability(device)
 
         check = self.utils.has_opencl_extension
+        # FIXME: eventually even LTS driver will support OpenCL extensions.
+        # Please remove this after upgrading to a new version.
+        # https://github.com/intel/intel-xpu-backend-for-triton/issues/4708
         is_lts = '1.3' in dev_property['driver_version']
         dev_property['has_subgroup_matrix_multiply_accumulate'] = check(
             device, b'cl_intel_subgroup_matrix_multiply_accumulate') if not is_lts else False
