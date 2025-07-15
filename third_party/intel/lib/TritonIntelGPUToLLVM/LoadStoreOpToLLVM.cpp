@@ -14,6 +14,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Tools/LinearLayout.h"
+#include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
 
 using namespace mlir;
@@ -90,16 +91,12 @@ getValuesFromBlockPointerStruct(Value blockPointerStruct,
                                 ConversionPatternRewriter &rewriter) {
   const SmallVector<Value> &elems = unpackLLElements(
       blockPointerStruct.getLoc(), blockPointerStruct, rewriter);
-  assert(elems.size() == 7 &&
+  assert(elems.size() == sizeof(BlockPointerValues) / sizeof(Value) &&
          "unexpected number of values unpacked from a block pointer");
-  BlockPointerValues values{/*base=*/elems[6],
-                            /*baseWidth=*/elems[3],
-                            /*baseHeight=*/elems[2],
-                            /*rowStride=*/elems[4],
-                            /*colStride=*/elems[5],
-                            /*offsetBaseX=*/elems[1],
-                            /*offsetBaseY=*/elems[0]};
-  return values;
+  return {/*base=*/elems[6],       /*baseWidth=*/elems[3],
+          /*baseHeight=*/elems[2], /*rowStride=*/elems[4],
+          /*colStride=*/elems[5],  /*offsetBaseX=*/elems[1],
+          /*offsetBaseY=*/elems[0]};
 }
 
 /// Compute the 2D prefetch shape for each warp given an input 2D tensor.
@@ -378,12 +375,31 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return nullptr;
   }
 
+  struct BlockIOTileSizeInfo {
+    BlockIOTileSizeInfo() = delete;
+    BlockIOTileSizeInfo(int tileHeight, int tileWidth, int numElemPerPackedVal,
+                        int vBlocks, int rowDim, int colDim,
+                        std::optional<SetVector<unsigned>> regPackedBases)
+        : tileHeight(tileHeight), tileWidth(tileWidth),
+          numElemPerPackedVal(numElemPerPackedVal), vBlocks(vBlocks),
+          rowDim(rowDim), colDim(colDim), regPackedBases(regPackedBases) {}
+    static BlockIOTileSizeInfo unknown() {
+      return {-1, -1, -1, -1, -1, -1, std::nullopt};
+    }
+
+    int tileHeight;
+    int tileWidth;
+    int numElemPerPackedVal;
+    const int vBlocks;
+    int rowDim;
+    int colDim;
+    std::optional<SetVector<unsigned>> regPackedBases;
+  };
+
   // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
   // column Dim.
   template <unsigned MAX_TILE_HEIGHT>
-  static std::tuple<int, int, int, int, int, int,
-                    std::optional<SetVector<unsigned>>>
-  getBlockIOTileSize(const LinearLayout &ll) {
+  static BlockIOTileSizeInfo getBlockIOTileSize(const LinearLayout &ll) {
     const size_t rank = ll.getOutDims().size();
     std::vector<unsigned> tileShape(rank, 1);
 
@@ -401,25 +417,20 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     auto validateBase = [](const std::vector<int> &vec) {
       // Check there is only one element that is greater than 0
-      int count =
-          std::count_if(vec.begin(), vec.end(), [](int x) { return x > 0; });
-      return count == 1;
+      return llvm::count_if(vec, [](int x) { return x > 0; }) == 1;
     };
 
     auto getFirstNonZeroDim = [](const std::vector<int> &vec) {
-      auto it =
-          std::find_if(vec.begin(), vec.end(), [](int x) { return x > 0; });
-      if (it != vec.end()) {
-        return (int)std::distance(vec.begin(), it);
-      }
-      return -1; // Not found.
+      auto it = llvm::find_if(vec, [](int x) { return x > 0; });
+      return (it != vec.end()) ? std::distance(vec.begin(), it) : -1;
     };
 
     using BaseType = LinearLayout::BasesT::value_type::second_type;
     const BaseType &basesOfLane = getBase("lane");
 
     if (!validateBase(basesOfLane[0]))
-      return std::make_tuple(-1, -1, -1, -1, -1, -1, std::nullopt);
+      return BlockIOTileSizeInfo::unknown();
+
     // The IGC scalar backend always vectorize the non-uniform value in row
     // major. So the first non-zero dimension of the lane base is used as column
     // dim for block io.
@@ -433,7 +444,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int numElemPerPackedVal = 1;
     SetVector<unsigned> regPackBases;
     for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         regBaseIter++) {
+         ++regBaseIter) {
       const std::vector<int> &base = basesOfRegister[regBaseIter];
       if (!validateBase(base))
         continue; // Skip as the register can not be trivial packed.
@@ -457,11 +468,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       tileShape[dim] <<= 1;
     }
 
-    unsigned numLanes = 1 << basesOfLane.size();
+    const unsigned numLanes = 1 << basesOfLane.size();
     // The slice of a name is not distributed densely across the lane. It is not
     // supported by block io.
     if ((product<unsigned>(tileShape) / numElemPerPackedVal) != numLanes)
-      return std::make_tuple(-1, -1, -1, -1, -1, -1, std::nullopt);
+      return BlockIOTileSizeInfo::unknown();
 
     unsigned sliceRank = 0;
     int rowDim = -1;
@@ -477,7 +488,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
     // The block IO only supports 2D shape.
     if (sliceRank > 2)
-      return std::make_tuple(-1, -1, -1, -1, -1, -1, std::nullopt);
+      return BlockIOTileSizeInfo::unknown();
 
     // Note: we only walk thru register packing order by increasing the
     // tileHeight and vBlocks for simplicity. This may cause low efficiency in
@@ -516,7 +527,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // Increase the tile shape along the row dimension. (Increase the
     // tileHeight.)
     for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         regBaseIter++) {
+         ++regBaseIter) {
       if (regPackBases.contains(1 << regBaseIter))
         continue; // Skip the register already packed.
       const std::vector<int> &base = basesOfRegister[regBaseIter];
@@ -540,7 +551,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // vBlocks.)
     unsigned vBlocks = 1;
     for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         regBaseIter++) {
+         ++regBaseIter) {
       if (regPackBases.contains(1 << regBaseIter))
         continue; // Skip the register already packed.
       const std::vector<int> &base = basesOfRegister[regBaseIter];
@@ -554,17 +565,17 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     }
 
     for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         regBaseIter++) {
+         ++regBaseIter) {
       if (regPackBases.contains(1 << regBaseIter))
         continue; // Skip the register already packed.
       // insert the remaining register base.
       regPackBases.insert(1 << regBaseIter);
     }
 
-    return std::make_tuple(tileShape[rowDim],
-                           tileShape[fastChangeDim] / numElemPerPackedVal,
-                           numElemPerPackedVal, vBlocks, rowDim, fastChangeDim,
-                           std::move(regPackBases));
+    return BlockIOTileSizeInfo(tileShape[rowDim],
+                               tileShape[fastChangeDim] / numElemPerPackedVal,
+                               numElemPerPackedVal, vBlocks, rowDim,
+                               fastChangeDim, std::move(regPackBases));
   }
 };
 
@@ -2734,8 +2745,6 @@ struct StoreOpToBlockIOConversion
     Value baseHeight = b.trunc(i32_ty, height);
     // encoded as bytes.
     Value pitch = b.mul(rowStride, elemSizeInBytes);
-    // 2D block store only supports vBlocks = 1.
-    vBlocks = 1;
 
     // Get the LLVM values for store values
     SmallVector<Value> valElems =
@@ -2801,6 +2810,7 @@ struct StoreOpToBlockIOConversion
                                         op.getBoundaryCheck().end());
       Value addrElem = base;
       if (!boundaryCheck.contains(colDim)) {
+        const int vBlocks = 1; // 2D block store only supports vBlocks = 1.
         baseWidth = b.i32_val(
             std::max(64u, vBlocks * tileWidth * (packedElemSizeInBits / 8)));
         // The offsetX is number of elements instead of packed elements.
@@ -2834,18 +2844,9 @@ struct StoreOpToBlockIOConversion
         storeVal = b.bitcast(storeVal, store2DGenXType);
 
       auto newOp = rewriter.create<TritonGEN::Matrix2DBlockStoreOp>(
-          loc,
-          /*ptr*/ addrElem,
-          /*base_width*/ baseWidth,
-          /*base_height*/ baseHeight,
-          /*base_pitch*/ pitch,
-          /*x*/ offsetX,
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ packedElemSizeInBits,
-          /*tile_width*/ tileWidth,
-          /*tile_height*/ tileHeight,
-          /*v_blocks*/ vBlocks,
-          /*stored_val*/ storeVal);
+          loc, addrElem, baseWidth, baseHeight, pitch, offsetX, offsetY,
+          packedElemSizeInBits, tileWidth, tileHeight,
+          /*v_blocks, only 1 supported*/ 1, storeVal);
 
       if (failed(newOp.verify())) {
         // delete the op so that the verifier will not abort the pass
