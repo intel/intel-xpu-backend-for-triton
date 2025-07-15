@@ -1,8 +1,6 @@
 #include <vector>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -12,12 +10,9 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-
-using mlir::triton::ScaleDotElemType;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -411,6 +406,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
 
   // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
   // register and lane layout for mfma instructions.
@@ -463,21 +459,67 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
            {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {4, 0}, {8, 0}}}},
           {outDimNames[order[0]], outDimNames[order[1]]});
   }
+
+  // Instead of defining the layout on a CTA tile and using the
+  // combineCtaCgaWithShape function to extend it to the whole tensor, we take a
+  // different approach. Suppose tilesPerWarp is 2x2—meaning a warp computes a
+  // 2x2 block of MFMA tiles. If we define the layout only on the CTA tile and
+  // extend it across the tensor, the resulting tile order won’t be N-contiguous
+  // (i.e., row-major). Due to the 2x2 shape, the third tile would fall in the M
+  // dimension. While defining the layout per CTA tile might seem more
+  // intuitive, the current dot op lowering assumes an N-contiguous ordering of
+  // MFMA tiles across the entire tensor. In other words, the lowering logic
+  // isn't layout-aware, it only supports a fixed N-contiguous MFMA tile
+  // ordering. Supporting other orderings would require extending the dot
+  // lowering implementation. For now, we conform to the current lowering
+  // algorithm by defining the MFMA linear layout globally, with N-contiguous
+  // tiles across the tensor and across CTA tile boundaries.
+  auto tilesPerWarp = getTilesPerWarp();
+  auto warpsPerCTA = getWarpsPerCTA();
+
+  const unsigned tilesPerWarpM = tilesPerWarp[mIndex];
+  const unsigned tilesPerWarpN = tilesPerWarp[nIndex];
+  const unsigned warpsPerCTAM = warpsPerCTA[mIndex];
+  const unsigned warpsPerCTAN = warpsPerCTA[nIndex];
+  const auto &dimN = outDimNames[order[0]];
+  const auto &dimM = outDimNames[order[1]];
+
+  // First, extend the layout along the N dimension:
+  // - registers are distributed across tilesPerWarpN
+  // - then across warpsPerCTAN in the N dimension.
+  tileLayout *= LinearLayout::identity1D(tilesPerWarpN, kRegister, dimN);
+  tileLayout *= LinearLayout::identity1D(warpsPerCTAN, kWarp, dimN);
+
+  // At this point, the layout is defined across the N dimension within a CTA
+  // tile. Instead of switching to the M dimension now, we continue extending
+  // the layout along the remaining N dimension, and only then proceed along M,
+  // following the tilesPerWarp configuration.
+  // If the N dimension is not large enough to span multiple CTA tiles (i.e.,
+  // the first argument is 0), an empty layout is created, so this identity
+  // layout will not introduce any new registers.
+  tileLayout *= LinearLayout::identity1D(
+      shape[nIndex] / (getNDim() * warpsPerCTAN * tilesPerWarpN), kRegister,
+      dimN);
+  tileLayout *= LinearLayout::identity1D(tilesPerWarpM, kRegister, dimM);
+
+  // Finally, extend the layout across warps in the M dimension.
+  // After this step, the layout covers a sub-tensor of size ctaTileM × N,
+  // i.e., the full N dimension and a CTA tile's extent in M.
+  // The rest of the layout will be defined by combineCtaCgaWithShape.
+  tileLayout *= LinearLayout::identity1D(warpsPerCTAM, kWarp, dimM);
+
+  // Adjust spatial ordering if batch dimension is present
   if (hasBatchDim) {
     assert(order[2] == 0);
     // Extend the base vector with one value to accommodate for the batch
     // dimension, which appears at the last.
     tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
     tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
+    tileLayout *=
+        LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[order[2]]);
   }
 
-  // And each warp takes the same register and lane sub-layout. So multiply with
-  // an identity layout for the warp.
-  LinearLayout warpLayout =
-      identityStandardND(S("warp"), getWarpsPerCTA(), order);
-  LinearLayout ctaLayout = tileLayout * warpLayout;
-
-  return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+  return combineCtaCgaWithShape(tileLayout, getCTALayout(), shape);
 }
 
 LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
@@ -611,9 +653,8 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   laneBase.insert(laneBase.end(), laneBaseExt.begin(), laneBaseExt.end());
 
   // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
-  // To assign them to actual matrix dimensions `order` array is used.
-  // For operand A: non-k-dim -> dim0, k-dim -> dim1
-  // For operand B: non-k-dim -> dim1, k-dim -> dim0
+  // To assign them to actual matrix dimensions we associate with register
+  // `order` which is also [nonk, k] given we set kContig to false.
   LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
                           {outDimNames[order[0]], outDimNames[order[1]]});
 
@@ -638,31 +679,6 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
                                    ArrayRef<int64_t> shape) {
-
-  // Current linear layout conversion for dot operand is only necessary to
-  // enable LDS bypass for operand B in the MFMA dot path. To achieve
-  // performance gains from bypassing LDS, the following conditions must be met:
-  //
-  // 1) opIdx == 1: Currently, only the B tensor (e.g. weights in moe-like
-  //    kernels) bypasses LDS. This constraint is not strict and support for
-  //    bypassing operand A (e.g. Q tensor in flash attention) will be added in
-  //    the future.
-  //
-  // 2) B tensor must be column major: This is required to support vectorized
-  //    global load instructions, as MFMA instructions expect threads to hold B
-  //    operand elements along the K dimension.
-  //
-  // 3) kWidth == 8: Ensures maximum global load vectorization for fp16
-  //    operations.
-  //    TODO: Generalize conversion to handle maximum kWidth for other types
-  //    (i.e. fp8).
-  //
-  // 4) warpsPerCTA[mDim] == 1: This guarantees that every B tensor element is
-  //    held by exactly one thread, maintaining the same number of global loads
-  //    as in a blocked layout.
-  //
-  // Other use of Linear layout is a support of rare corner cases,
-  // for example one instruction tile is larger than tensor
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
 
   auto rank = shape.size();
@@ -673,6 +689,8 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
   int32_t kSize = shape[kDim];
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+  auto tilesPerWarp = mfmaLayout.getTilesPerWarp();
+  auto tilePerWarpNonK = tilesPerWarp[kDim];
 
   MLIRContext *ctx = dotMfmaLayout.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
@@ -726,10 +744,15 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
     registerBase.emplace_back(std::vector<int32_t>{elem, 0});
 
-  // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
-  // To assign them to actual matrix dimensions `order` array is used.
-  // For operand A: non-k-dim -> dim0, k-dim -> dim1
-  // For operand B: non-k-dim -> dim1, k-dim -> dim0
+  // Base vectors above are defined in a fixed order [k-dim, non-k-dim].
+  // To assign them to actual matrix dimensions we assoicate with register
+  // `order` which is also also [k, nonk].
+
+  // Add repeats of registers along non-K dimension to register base vectors
+  for (int32_t elem = mfmaLayout.getMDim();
+       elem < tilePerWarpNonK * mfmaLayout.getMDim(); elem *= 2)
+    registerBase.emplace_back(std::vector<int32_t>{0, elem});
+
   LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
                           {outDimNames[order[0]], outDimNames[order[1]]});
 
@@ -1450,10 +1473,11 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
   return chooseDotDsReadB64TrLayout(dot, shape, elemBitWidth);
 }
 
-LinearLayout chooseScaledMfmaScaleLayout(
-    MLIRContext *ctx, int dotOperandIdx,
-    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
-    ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim) {
+LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
+                                         ArrayRef<int64_t> dotOperandShape,
+                                         unsigned mfmaMDim,
+                                         ArrayRef<unsigned> tilesPerWarp,
+                                         ArrayRef<unsigned> warpsPerCTA) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   auto order = mlir::triton::gpu::getMatrixOrder(rank, /*rowMajor=*/true);
@@ -1462,9 +1486,12 @@ LinearLayout chooseScaledMfmaScaleLayout(
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
   StringAttr kBlock = StringAttr::get(ctx, "block");
-  // Init register layout. Will be adjusted later
-  auto regs = mlir::triton::identityStandardND(kRegister, {1, 1}, order);
-  LinearLayout lanes = LinearLayout::empty();
+
+  // Fetch the tilesPerWarp value in the M dimension for operand A, or in the N
+  // dimension for operand B.
+  unsigned mnDim = dotOperandIdx == 0 ? rank - 2 : rank - 1;
+  unsigned tilePerWarpMN = tilesPerWarp[mnDim];
+
   // In scaled dot, the shapes of operands(without batch dimension) are,
   // respectively:
   // - A: [M, K]
@@ -1472,21 +1499,6 @@ LinearLayout chooseScaledMfmaScaleLayout(
   // - aScale: [M, K / 32]
   // - bScale: [N, K / 32]
   //
-  // To correctly feed A/B and its scale into instruction, we need to
-  // distribute aScale/bScale among warps in the same way as A/B. But bScale
-  // is not transposed like B. So we need to transpose the warp layout of
-  // bScale.
-  //
-  // The tricky part is, our desired outputs are [dim0, dim1], but
-  // at this position, the layouts are transposed to [dim1, dim0]. So
-  // instead of reverse bScale's layout, we need to reverse aScale's. There
-  // will be a transpose in the end to correct everything.
-  basisT warps = dotOperandWarpBasis;
-  if (dotOperandIdx == 0) {
-    for (auto &basis : warps) {
-      std::reverse(basis.begin(), basis.end());
-    }
-  }
   // In general, for both 32x32 and 16x16 scaled mfma, and no matter what
   // data type the A/B operand is, each lane takes 32 elements from A/B
   // alone K dim, and 1 or 2 elements from scale accordingly. The number of
@@ -1496,17 +1508,25 @@ LinearLayout chooseScaledMfmaScaleLayout(
   // For mxfp4, these 32 elements are consecutive, so only 1 scale element
   // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
   // blocks, so 2 scale elements are required.
+  int32_t kSize = dotOperandShape[1];
+
+  std::vector<std::vector<int32_t>> registerBase;
+  std::vector<std::vector<int32_t>> laneBase;
+
+  auto threadsInKDim = mfmaMDim == 32 ? 2 : 4;
+  for (int32_t elem = threadsInKDim; elem < kSize; elem *= 2)
+    registerBase.emplace_back(std::vector<int32_t>{elem, 0});
+
+  for (int32_t elem = mfmaMDim; elem < tilePerWarpMN * mfmaMDim; elem *= 2)
+    registerBase.emplace_back(std::vector<int32_t>{0, elem});
+
   if (mfmaMDim == 32) {
     // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
     // takes 32 consecutive elements from A alone K dimension. The first
     // 32 lanes collectively handle A[0:32][0:32], and the other 32 lanes
     // collectively handle A[0:32][32:64]. Each lane take 1 scale element
     // accordingly. Similar to B and bScale.
-    lanes = LinearLayout(
-        {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}}},
-         {kWarp, warps},
-         {kBlock, {}}},
-        {standardOutDims[order[0]], standardOutDims[order[1]]});
+    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}};
   } else {
     assert(mfmaMDim == 16);
     // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
@@ -1514,57 +1534,167 @@ LinearLayout chooseScaledMfmaScaleLayout(
     // 16 lanes collectively handle A[0:16][0:32], and another 16 lanes
     // collectively handle A[0:16][32:64] and so on. Each lane take 1 scale
     // element accordingly. Similar to B and bScale.
-    lanes =
-        LinearLayout({{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
-                      {kWarp, warps},
-                      {kBlock, {}}},
-                     {standardOutDims[order[0]], standardOutDims[order[1]]});
+    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}};
   }
-  LinearLayout newLL = regs * lanes;
 
-  // Adjust register-level layout to fill the shape, at this level, both
-  // aScale and bScale should align with A operand.
-  SmallVector<int, 2> repOrder = {1, 0};
-  for (auto d : repOrder) {
-    auto outDim = standardOutDims[d];
-    auto dimSize = newLL.getOutDimSize(outDim);
-    newLL *= LinearLayout::identity1D(dotOperandShape[d] / dimSize, kRegister,
-                                      outDim);
-  }
-  newLL = newLL.transposeOuts(standardOutDims);
-  return newLL;
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+  LinearLayout tileLayout({{kRegister, registerBase}, {kLane, laneBase}},
+                          {outDimNames[order[0]], outDimNames[order[1]]});
+
+  SmallVector<unsigned> warpsPerCTANew =
+      (dotOperandIdx == 1)
+          ? SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]}
+          : SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
+
+  SmallVector<unsigned> warpOrder = (dotOperandIdx == 1)
+                                        ? SmallVector<unsigned>{0, 1}
+                                        : SmallVector<unsigned>{1, 0};
+
+  LinearLayout warpLayout =
+      identityStandardND(kWarp, warpsPerCTANew, warpOrder);
+  LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
+                           warpLayout.transposeOuts(outDimNames);
+
+  auto ctaLay = CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{1, 1},
+                                   /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
+  auto finalLay = combineCtaCgaWithShape(ctaLayout, ctaLay, dotOperandShape);
+  return finalLay;
 }
 
 std::optional<LinearLayout>
 chooseMfmaLikeStoreLayout(RankedTensorType valType) {
+  // TODO: WMMA Support on RDNA
+  if (!isa<AMDMfmaEncodingAttr>(valType.getEncoding()))
+    return {};
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(valType.getEncoding());
 
-  // We currently only support transposed [B]F16 MFMA32x32 on CDNA4.
+  // We currently only support transposed [B]F16 MFMA32x32 and MFMA16x16 on
+  // CDNA4.
   bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
-  Type elemType = valType.getElementType();
-  if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
-        mfmaLayout.getVersionMajor() == 4 && mfmaLayout.getIsTransposed() &&
-        isMfma32))
-    return {};
+  bool isMfma16 = mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16;
 
   auto valShape = valType.getShape();
+  // For mfma16x16, to use in-wavefront swap, we need to make sure the tiles
+  // used are in one wavefront if there are multiple tiles, which means
+  // warpsPerCTA = [numWarps, 1] and at least two tiles along the N dim. For
+  // now, it is only possible for FA-like kernels since during mfma generation,
+  // the WarpsPerCTA of the head dot in the chain will be reshaped to [numWaprs,
+  // 1].
+  // TODO: For gemm-like kernel, the transformation here cannot be applied for
+  // now and will support it.
+  bool validForMfma16 = isMfma16 && valShape.back() >= 16 * 2 &&
+                        mfmaLayout.getWarpsPerCTA().back() == 1;
+
+  Type elemType = valType.getElementType();
+  if (!(valType.getRank() == 2 && (elemType.isF16() || elemType.isBF16()) &&
+        mfmaLayout.getVersion() == 4 && mfmaLayout.getIsTransposed() &&
+        (isMfma32 || validForMfma16)))
+    return {};
+
   LinearLayout mfmaLL = mfmaLayout.toLinearLayout(valShape);
   auto mfmaOutDims = llvm::to_vector(mfmaLL.getOutDimNames());
   StringAttr dimM = mfmaOutDims[0];
   StringAttr dimN = mfmaOutDims[1];
-
   auto swapLL = LinearLayout::empty();
   // The rows are kept as is with an identity linear layout.
   swapLL *= LinearLayout::identity1D(valShape[0], dimM, dimM);
-  // In transposed mfma32 layout, each thread holds 4 consecutive values along N
-  // dim. We want to exchange column 4-7 (owned by thread 32-63) and column 8-11
-  // (owned by thread 0-31) every 16 columns to make each thread holds 8
-  // elements. This would mean exchange the 2nd and 3rd basis vector from an
-  // identity linear layout.
+  /*
+  clang-format off
+  In transposed mfma32 layout, Each thread holds 4 consecutive values along N
+  dim. We want to exchange column 4-7 (owned by thread 32-63, BLK0) and column
+  8-11 (owned by thread 0-31, BLK1) every 16 columns to make each thread holds 8
+  elements. This would mean exchange the 2nd and 3rd basis vector from an
+  identity linear layout on tensor elements.
+
+  Correspondingly, the transposed mfma16 layout, the output of
+  transposed of mfma16x16 is:
+
+              N/register
+  M/Lane          v0       v1       v2       v3       v4       v5       v6       v7
+              -------------------------------------------------------------------------
+  row0:  0-15 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row1: 16-31 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row2: 32-47 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row3: 48-63 | tile-0 | tile-0 | tile-0 | tile-0 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  which means:
+  The columns from v0 to v3 are in the one output of mfma16x16 and
+  the columns from v4 to v7 are in the one output of mfma16x16,
+
+  The following graph is the same as the one above, execept the tile number is replaced with coordinates in the tenor,
+            N/register
+            -----------------------------------------------
+  M/lane    |(0,  0) ...  (0,  3) | (0,  16) ... (0,  19) |
+            |....                 | sub-tensor-0          |
+            |(15, 0) ...  (15, 3) | (15, 16) ... (15, 19) |
+            -----------------------------------------------
+            |(0,  4) ...  (0,  7) | (0,  20) ... (0,  23) |
+            |sub-tensor-1         | ....                  |
+            |(15, 0) ...  (15, 3) | (15, 20) ... (15, 23) |
+            -----------------------------------------------
+            |(0,  8) ...  (0,  11)| (0,  24) ... (0,  27) |
+            |....                 | sub-tensor-2          |
+            |(15, 8) ...  (15, 11)| (15, 24) ... (15, 27) |
+            -----------------------------------------------
+            |(0,  12) ... (0,  15)| (0,  28) ... (0,  31) |
+            |sub-tensor-3         | ....                  |
+            |(15, 12) ... (15, 15)| (15, 28) ... (15, 31) |
+            -----------------------------------------------
+  The basis vector for lane and register are:
+  Register = {{0, 1}, {0, 2}}
+  Lane = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 4}, {0, 8}}
+  With this layout, only 4xfp16 can be packed in the final global store.
+
+  To use 128-bits global store, we need to pack 8 elements, which means the layout looks like:
+              N/register
+  M/Lane          v0       v1       v2       v3       v4       v5       v6       v7
+              -------------------------------------------------------------------------
+  row0:  0-15 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 |
+              -------------------------------------------------------------------------
+  row1: 16-31 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+  row2: 32-47 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 | tile-0 |
+              -------------------------------------------------------------------------
+  row3: 48-63 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 | tile-1 |
+              -------------------------------------------------------------------------
+
+  The following graph is the same as the one above, execept the tile number is replaced with coordinates in the tenor:
+            N/register
+            -----------------------------------------------
+            |(0,  0) ...  (0,  3) | (0,  4) ...  (0,  7)  |
+            |....                 | sub-tensor-1          |
+            |(15, 0) ...  (15, 3) | (15, 16) ... (15, 19) |
+            -----------------------------------------------
+            |(0, 16) ...  (0, 19) | (0,  20) ... (0,  23) |
+            |sub-tensor-0         | ....                  |
+            |(15, 16) ... (15, 19)| (15, 20) ... (15, 23) |
+            -----------------------------------------------
+            |(0,  8) ...  (0,  11)| (0,  12) ... (0,  15) |
+            |....                 | sub-tensor-3          |
+            |(15, 8) ...  (15, 11)| (15, 12) ... (15, 15) |
+            -----------------------------------------------
+            |(0,  24) ... (0,  27)| (0,  28) ... (0,  31) |
+            |sub-tensor-2         | ....                  |
+            |(15, 24) ... (15, 27)| (15, 28) ... (15, 31) |
+            -----------------------------------------------
+  which means we need to exchange sub-tensor-0 with sub-tensor-1 and sub-tensor-2 and sub-tensor-3.
+  And basis vector for lane and register are:
+  Register = {{0, 1}, {0, 2}, {0, 4}}
+  Lane = {{1, 0}, {2, 0, [4, 0}, {8, 0}, {0, 16}, {0, 8}}
+
+  The steps to get this layout are, firstly we check the last dim of WarpsPerCTA is 1, so we can use v_permlane16.
+  Then, we exchange the 2nd and 4th elements in the basis vector of an identity linear and then it will be composed with
+  the original mfma16 LL.
+            clang-format on
+  */
+  auto destIdxInBases = isMfma32 ? 3 : 4;
   std::vector<std::vector<int32_t>> dimNBases(mfmaLL.getOutDimSizeLog2(dimN));
   std::generate(dimNBases.begin(), dimNBases.end(),
                 [i = 0]() mutable { return std::vector<int32_t>{1 << i++}; });
-  std::swap(dimNBases[2], dimNBases[3]);
+  std::swap(dimNBases[2], dimNBases[destIdxInBases]);
   swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
 
   return mfmaLL.compose(swapLL);

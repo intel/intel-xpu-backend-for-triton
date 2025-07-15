@@ -114,7 +114,7 @@ module attributes {"ttig.support_sg_2d_block", "ttig.support_dpas", "ttg.num-war
 
 module attributes {"ttig.support_sg_2d_block", "ttig.support_dpas", "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @matmul_kernel_with_block_pointers_tf32(
-  // CHECK-SAME:                                                                  [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
+  // CHECK-SAME:                                                                  [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @matmul_kernel_with_block_pointers_tf32(%arg0: !tt.ptr<f32>) {
     %c0_i64 = arith.constant 0 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -134,7 +134,7 @@ module attributes {"ttig.support_sg_2d_block", "ttig.support_dpas", "ttg.num-war
 
 module attributes {"ttig.support_sg_2d_block", "ttig.support_dpas", "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @matmul_kernel_with_block_pointers_f16accu(
-  // CHECK-SAME:                                                                     [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 512, 1, 1>} {
+  // CHECK-SAME:                                                                     [[VAL_0:%.*]]: !llvm.ptr<1>) attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 512, 1, 1>} {
   tt.func public @matmul_kernel_with_block_pointers_f16accu(%arg0: !tt.ptr<f16>) {
     %c0_i64 = arith.constant 0 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -154,7 +154,7 @@ module attributes {"ttig.support_sg_2d_block", "ttig.support_dpas", "ttg.num-war
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
 
   // CHECK-LABEL: llvm.func spir_kernelcc @reduce_sum(
-  // CHECK-SAME:                                      [[VAL_0:%.*]]: vector<8xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>}
+  // CHECK-SAME:                                      [[VAL_0:%.*]]: vector<8xf32>, [[PTR_1:%.*]]: !llvm.ptr<1>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>}
   tt.func public @reduce_sum(%arg0: tensor<8x16xf32>) -> f32 {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_2:%.*]] = llvm.extractelement [[VAL_0]][[[VAL_1]] : i32] : vector<8xf32>
@@ -169,7 +169,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   }
 
   // CHECK-LABEL:   llvm.func spir_kernelcc @reduce_max(
-  // CHECK-SAME:                                        [[VAL_0:%.*]]: vector<8xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>}
+  // CHECK-SAME:                                        [[VAL_0:%.*]]: vector<8xf32>, [[PTR_1:%.*]]: !llvm.ptr<1>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>}
   tt.func public @reduce_max(%arg0: tensor<8x16xf32>) -> f32 {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_2:%.*]] = llvm.extractelement [[VAL_0]][[[VAL_1]] : i32] : vector<8xf32>
@@ -195,7 +195,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   // CHECK: llvm.func spir_funccc @_Z22get_sub_group_local_id() -> i32
 
   // CHECK-LABEL: llvm.func spir_kernelcc @broadcast(
-  // CHECK-SAME:                                     [[VAL_0:%.*]]: f32) -> vector<16xf32>
+  // CHECK-SAME:                                     [[VAL_0:%.*]]: f32, [[PTR_1:%.*]]: !llvm.ptr<1>) -> vector<16xf32>
   tt.func public @broadcast(%arg0: f32) -> tensor<16x16xf32> {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.poison : vector<1xf32>
     // CHECK: [[VAL_2:%.*]] = llvm.mlir.constant(0 : i32) : i32
@@ -207,7 +207,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %2 : tensor<16x16xf32>
   }
 
-  // CHECK-LABEL: llvm.func spir_kernelcc @broadcast_range() -> vector<16xi32>
+  // CHECK-LABEL: llvm.func spir_kernelcc @broadcast_range(
+  // CHECK-SAME:  [[PTR_1:%.*]]: !llvm.ptr<1>) -> vector<16xi32>
   tt.func public @broadcast_range() -> tensor<16x16xi32> {
     // CHECK: [[LAST_CONST:%.*]] = llvm.mlir.constant(15 : i32) : i32
     // CHECK: [[RANGE:%.*]] = llvm.insertelement [[LAST_CONST]], {{%.*}}[[[LAST_CONST]] : i32] : vector<16xi32>
@@ -226,7 +227,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: llvm.func spir_kernelcc @addptr(
-  // CHECK-SAME:                                  [[VAL_0:%.*]]: !llvm.ptr<1>) -> !llvm.ptr<1> attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 128, 1, 1>}
+  // CHECK-SAME:                                  [[VAL_0:%.*]]: !llvm.ptr<1>, [[PTR_1:%.*]]: !llvm.ptr<1>) -> !llvm.ptr<1> attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>}
   tt.func public @addptr(%arg0: !tt.ptr<f16>) -> !tt.ptr<f16> {
     // CHECK: [[VAL_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VAL_2:%.*]] = llvm.call spir_funccc @_Z12get_group_idj([[VAL_1]]) {{.*}} : (i32) -> i64
@@ -334,7 +335,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @test(
 // CHECK-SAME:                                  %[[VAL_0:.*]]: !llvm.ptr<3>,
-// CHECK-SAME:                                  %[[VAL_1:.*]]: vector<16xf32>) -> vector<16xf32>
+// CHECK-SAME:                                  %[[VAL_1:.*]]: vector<16xf32>,
+// CHECK-SAME:                                  %[[PTR_1:.*]]: !llvm.ptr<1>) -> vector<16xf32>
 // CHECK:           %[[VAL_2:.*]] = llvm.call spir_funccc @_Z16get_sub_group_id() {{{.*}}} : () -> i32
 // CHECK:           %[[VAL_3:.*]] = llvm.zext %[[VAL_2]] : i32 to i64
 // CHECK:           %[[VAL_4:.*]] = llvm.call spir_funccc @_Z22get_sub_group_local_id() {{{.*}}} : () -> i32
@@ -365,7 +367,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 #warp = #ttig.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 
 // CHECK-LABEL:   llvm.func spir_kernelcc @test(
-// CHECK-SAME:                                  %[[VAL_0:.*]]: f32) -> vector<16xf32> attributes {intel_reqd_sub_group_size = 16 : i32, reqd_work_group_size = array<i32: 64, 1, 1>} {
+// CHECK-SAME:                                  %[[VAL_0:.*]]: f32, %[[PTR_1:.*]]: !llvm.ptr<1>) -> vector<16xf32> attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 64, 1, 1>} {
 // CHECK:           %[[VAL_2:.*]] = llvm.mlir.poison : vector<16xf32>
 // CHECK:           %[[VAL_3:.*]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK:           %[[VAL_4:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflefj(%[[VAL_0]], %[[VAL_3]])

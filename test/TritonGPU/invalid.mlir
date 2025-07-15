@@ -1,5 +1,16 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [2, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @non_trivial_block(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+    %zero = arith.constant 0 : i32
+    // expected-error @+1 {{non-trivial block}}
+    %a = ttg.memdesc_subview %arg0[%zero, %zero] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+    tt.return
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 tt.func public @miss_encoding(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
@@ -412,4 +423,14 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
   %token = ttg.async_copy_global_to_local %input, %view mask %mask other %invalid_other : tensor<64x64x!tt.ptr<f16>, #blocked> -> <64x64xf16, #shared, #smem, mutable>
   tt.return
 }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+
+tt.func @memdesc_reinterpret(%arg0: !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>) {
+  // expected-error @below {{source and destination memory space must match}}
+  %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory> -> !ttg.memdesc<1xi32, #shared, #ttng.tensor_memory>
+  tt.return
 }

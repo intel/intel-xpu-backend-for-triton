@@ -48,7 +48,7 @@ private:
     });
 
     const auto &contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
-    SmallVector<unsigned> order = argSort(contiguity);
+    SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
     LLVM_DEBUG(llvm::dbgs().indent(2)
                    << "order=[" << tt::join(order, ", ") << "]\n";);
 
@@ -67,8 +67,8 @@ private:
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
-        auto currOrder =
-            argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+        auto currOrder = getOrderFromContiguity(
+            axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
           LLVM_DEBUG(llvm::dbgs().indent(2)
                      << "multi-root-slice: insert to memAccessesSameOrder "

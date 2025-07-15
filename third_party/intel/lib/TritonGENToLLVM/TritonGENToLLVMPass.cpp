@@ -114,28 +114,110 @@ loadCacheControlToCacheControls(Builder &builder,
 
 static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockLoadOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
+
   // intel_sub_group_2d_block_read_8b_32r16x1c
-  // intel_sub_group_2d_block_read_8b_32r16x2c
-  // intel_sub_group_2d_block_read_8b_16r16x2c
-  // intel_sub_group_2d_block_read_8b_8r16x1c
-  // intel_sub_group_2d_block_read_8b_8r16x2c
-  if ((op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-       op.getTileWidth() == 16 && op.getVBlocks() == 1 &&
-       !op.getVnniTransform()) ||
-      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
-       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
-       !op.getVnniTransform()) ||
-      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
-       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
-       !op.getVnniTransform()) ||
-      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-       op.getTileWidth() == 16 && op.getVBlocks() == 1 &&
-       !op.getVnniTransform()) ||
-      (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
-       op.getTileWidth() == 16 && op.getVBlocks() == 2 &&
-       !op.getVnniTransform())) {
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
     return false;
-  }
+
+  // intel_sub_group_2d_block_read_8b_32r16x2c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 32 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_8b_16r16x2c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 16 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_8b_8r16x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 1 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_8b_8r16x2c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 2 && !op.getVnniTransform())
+    return false;
+
+  // intel_sub_group_2d_block_read_16b_16r8x4c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 4 && !op.getVnniTransform())
+    return false;
+
+  return true;
+}
+
+static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockStoreOp op) {
+  // FIXME: The following signatures are not valid in SPV interface.
+
+  // intel_sub_group_2d_block_write_8b_8r8x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_16b_1r32x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_16b_8r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_16b_8r32x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_32b_8r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_32b_8r8x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 8 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // FIXME: The following signatures have correctness issue with SPV interface.
+
+  // intel_sub_group_2d_block_write_8b_1r32x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileHeight() == 1 &&
+      op.getTileWidth() == 32 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_write_16b_2r16x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
+      op.getTileWidth() == 16 && op.getVBlocks() == 1)
+    return false;
+
+  return true;
+}
+
+static bool isSPVBuiltinAvailable(TritonGEN::Matrix2DBlockPrefetchOp op) {
+  // FIXME: The following signatures are not valid in SPV interface.
+
+  // intel_sub_group_2d_block_prefetch_16b_1r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 1 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_prefetch_16b_2r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 2 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_prefetch_16b_4r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 4 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_prefetch_16b_16r8x1c
+  if (op.getElemSizeInBits() == 16 && op.getTileHeight() == 16 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
 
   return true;
 }
@@ -163,12 +245,7 @@ computeAlignedBasePtrWidthAndOffset(OpTy op,
   Value offsetInBytes =
       b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
   // Adjust the base width to account for the byte offset.
-  // If base width is zero, then we want to keep it as zero.
-  Value adjustedBaseWidth = op.getBaseWidth();
-  llvm::APInt baseWidthVal;
-  if (!matchPattern(op.getBaseWidth(), m_ConstantInt(&baseWidthVal)) ||
-      !baseWidthVal.isZero())
-    adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
+  Value adjustedBaseWidth = b.add(op.getBaseWidth(), offsetInBytes);
   // Adjust the x-coordinate offset based on the number of scalar elements.
   Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
   Value adjustedXOffset =
@@ -584,6 +661,12 @@ struct TritonMatrix2DBlockStoreLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!isSPVBuiltinAvailable(op)) {
+      // Fallback to GenISA interface.
+      rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -652,6 +735,12 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!isSPVBuiltinAvailable(op)) {
+      // Fallback to GenISA interface.
+      rewriter.replaceOp(op, createGenISA2DBlockPrefetch(op, rewriter));
+      return success();
+    }
+
     MLIRContext *ctx = rewriter.getContext();
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);

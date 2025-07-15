@@ -85,11 +85,18 @@ jobs:
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
       suite: >-
+        inductor/test_kernel_benchmark.py
         inductor/test_codegen_triton.py
         inductor/test_triton_extension_backend.py
         inductor/test_triton_heuristics.py
         inductor/test_triton_wrapper.py
         inductor/test_triton_kernels.py
+        inductor/test_gpu_cpp_wrapper.py
+        inductor/test_aot_inductor.py
+        inductor/test_select_algorithm.py
+        inductor/test_max_autotune.py
+        # FIXME: enable them later
+        # inductor/test_compile_subprocess.py
       runner_label: ${{ inputs.runner_label }}
       python_version: "3.9"
 

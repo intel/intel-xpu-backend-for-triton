@@ -3,7 +3,7 @@
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
   // CHECK-LABEL: tt.func public @materialize_block_pointer(
   tt.func public @materialize_block_pointer(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 15 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %pitch_odd: i64 {tt.divisibility = 15 : i32}) {
     %c0_i32 = arith.constant 0 : i32
@@ -18,6 +18,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg
     %4 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%pitch, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot_b>>
     %5 = tt.load %3 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %6 = tt.load %4 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>, ttig.block_io = "row_major"}
+    tt.store %3, %5 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>, ttig.block_io = "row_major"}
+    tt.store %4, %6 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x64xf16, #dot_b>>
 
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32}
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 0>, padding = 1 : i32, ttig.block_io = "column_major"}
@@ -25,6 +29,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg
     %8 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%c1_i64, %pitch], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x64xf16, #dot_b>>
     %9 = tt.load %7 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %10 = tt.load %8 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %7, %9 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>, ttig.block_io = "column_major"}
+    tt.store %8, %10 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x64xf16, #dot_b>>
 
     // COM: Non-constant stride on fast changing dim.
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32}
@@ -33,6 +41,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg
     %12 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%pitch, %pitch], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x64xf16, #dot_b>>
     %13 = tt.load %11 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %14 = tt.load %12 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %11, %13 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %12, %14 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x64xf16, #dot_b>>
 
     // COM: Non-64 divisible pitch.
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32}
@@ -41,6 +53,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg
     %16 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%c1_i64, %pitch_odd], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<32x64xf16, #dot_b>>
     %17 = tt.load %15 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %18 = tt.load %16 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %15, %17 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %16, %18 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x64xf16, #dot_b>>
 
     // COM: Non 4 bytes aligned base.
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32}
@@ -49,6 +65,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg
     %20 = tt.make_tensor_ptr %arg1, [%c0_i64, %c0_i64], [%pitch, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot_b>>
     %21 = tt.load %19 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %22 = tt.load %20 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %19, %21 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %20, %22 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x64xf16, #dot_b>>
 
     // COM: Non 4 bytes aligned baseWidth.
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32}
@@ -57,6 +77,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg
     %24 = tt.make_tensor_ptr %arg0, [%c0_i64, %c15_i64], [%pitch, %c1_i64], [%c0_i32, %c0_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot_b>>
     %25 = tt.load %23 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %26 = tt.load %24 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %23, %25 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %24, %26 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x64xf16, #dot_b>>
 
     // COM: Non 4 bytes aligned offsetX.
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 1>, padding = 1 : i32}
@@ -65,6 +89,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", ttig.support_sg
     %28 = tt.make_tensor_ptr %arg0, [%c0_i64, %c0_i64], [%pitch, %c1_i64], [%c0_i32, %c15_i32] {order = array<i32: 1, 0>} : <tensor<32x64xf16, #dot_b>>
     %29 = tt.load %27 {boundaryCheck = array<i32: 1>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<64x32xf16, #dot_a>>
     %30 = tt.load %28 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %27, %29 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<64x32xf16, #dot_a>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>}
+    tt.store %28, %30 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<32x64xf16, #dot_b>>
+
     tt.return
   }
 }
@@ -103,6 +132,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
     // COM: 4 bytes aligned base (value got from addptr, addi, muli), baseWidth and offsetX (value got from muli).
     // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 0>, padding = 1 : i32, ttig.block_io = "row_major"}
     %11 = tt.load %10 {boundaryCheck = array<i32: 0>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, padding = 1 : i32} : !tt.ptr<tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
+    // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>, ttig.block_io = "row_major"}
+    tt.store %10, %11 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>>
     tt.return
   }
 }
@@ -130,8 +161,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %14 = tt.advance %12, [%1, %arg3] : <tensor<8x128xf32, #blocked>>
       // CHECK: tt.load {{.*}} {boundaryCheck = array<i32: 0, 1>, ttig.block_io = "row_major"}
       %15 = tt.load %14 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<8x128xf32, #blocked>>
+      // CHECK: tt.store {{.*}} {boundaryCheck = array<i32: 1>, ttig.block_io = "row_major"}
+      tt.store %14, %15 {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<8x128xf32, #blocked>>
       scf.yield %12 : !tt.ptr<tensor<8x128xf32, #blocked>>
     }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Ensure pointer with stride [0, 1] is considered as row major.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_sg_2d_block} {
+  tt.func public @tensor_of_ptr(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %18 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %19 = tt.expand_dims %18 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    %20 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked>
+    %21 = tt.addptr %20, %19 : tensor<1x32x!tt.ptr<bf16>, #blocked>, tensor<1x32xi32, #blocked>
+    %22 = tt.broadcast %21 : tensor<1x32x!tt.ptr<bf16>, #blocked> -> tensor<256x32x!tt.ptr<bf16>, #blocked>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    %50 = tt.load %22 : tensor<256x32x!tt.ptr<bf16>, #blocked>
     tt.return
   }
 }

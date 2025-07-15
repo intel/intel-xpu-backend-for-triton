@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
 from triton.runtime.errors import PTXASError
@@ -22,10 +22,11 @@ def min_dot_size(target: GPUTarget):
         lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
         rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
         assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
+        # For small M/N the input we can still use tensorcores with padding.
         if lhs_bitwidth == 8:
-            return (16, 16, 32)
+            return (1, 1, 32)
         else:
-            return (16, 16, 16)
+            return (1, 1, 16)
 
     return check_dot_compatibility
 
@@ -59,6 +60,11 @@ def ptx_get_version(cuda_version) -> int:
         return 70 + minor
     if major == 10:
         return 63 + minor
+
+    if major >= 13:
+        base_ptx = 90
+        return base_ptx + (major - 13) * 10 + minor
+
     raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
@@ -101,17 +107,19 @@ class CUDAOptions:
     num_warps: int = 4
     num_ctas: int = 1
     num_stages: int = 3
+    warp_size: int = 32
     # maxnreg corresponds to the ptx parameter .maxnreg, which controls the
     # maximum number of 32-bit registers used by one thread.
     maxnreg: Optional[int] = None
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
+    ptx_options: str = None
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
-    deprecated_fp8_dtypes: Tuple[str] = ()
+    deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: bool = None
@@ -151,6 +159,10 @@ class CUDABackend(BaseBackend):
             raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern}")
         return int(match.group(1))
 
+    def get_target_name(self, options) -> str:
+        capability = self._parse_arch(options.arch)
+        return f"cuda:{capability}"
+
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
         self.binary_ext = "cubin"
@@ -166,9 +178,9 @@ class CUDABackend(BaseBackend):
                 supported_fp8_dtypes.add("fp8e4nv")
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
-        if "deprecated_fp8_dtypes" not in args:
+        if "deprecated_fp8_dot_operand_dtypes" not in args:
             if capability >= 90:
-                args["deprecated_fp8_dtypes"] = ("fp8e4b15", )
+                args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
 
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
@@ -254,6 +266,9 @@ class CUDABackend(BaseBackend):
             passes.ttir.add_triton_licm(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+            nvidia.passes.hopper.add_hopper_warpspec(pm, opt.num_stages, dump_enabled)
+            passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
+            passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
         elif capability // 10 >= 10:
             passes.ttgpuir.add_fuse_nested_loops(pm)
@@ -262,6 +277,8 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_hoist_tmem_alloc(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
+            passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
+            passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -282,12 +299,30 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if capability // 10 >= 9:
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
-            nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
+        nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
+        nvidia.passes.ttnvgpuir.add_lower_mma(pm)
+        passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
         metadata["tensordesc_meta"] = tensordesc_meta
+        return mod
+
+    def gluon_to_ttgir(self, src, metadata, options, capability):
+        mod = src
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        passes.ttgpuir.add_inliner(pm)
+        passes.gluon.add_resolve_auto_encodings(pm)
+        passes.common.add_sccp(pm)
+        passes.ttir.add_loop_aware_cse(pm)
+        passes.ttgpuir.add_canonicalizer(pm)
+        passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+
+        pm.run(mod)
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     def make_llir(self, src, metadata, options, capability):
@@ -298,13 +333,16 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
+        if knobs.compilation.enable_experimental_consan:
+            # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
+            passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -383,8 +421,17 @@ class CUDABackend(BaseBackend):
             line_info = ["-lineinfo", "-suppress-debug-info"] if knobs.compilation.disable_line_info else ["-lineinfo"]
             fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
             arch = sm_arch_from_capability(capability)
-            opt_level = ['--opt-level', '0'] if knobs.nvidia.disable_ptxas_opt else []
-            ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
+
+            # Disable ptxas optimizations if requested
+            disable_opt = ['--opt-level', '0'] if knobs.nvidia.disable_ptxas_opt else []
+
+            # Accept more ptxas options if provided
+            ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
+
+            ptxas_cmd = [
+                ptxas, *line_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name, '-o',
+                fbin
+            ]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
                 # Skip deleting on Windows to avoid
@@ -416,10 +463,13 @@ class CUDABackend(BaseBackend):
                 os.remove(fbin)
         return cubin
 
-    def add_stages(self, stages, options):
+    def add_stages(self, stages, options, language):
         capability = self._parse_arch(options.arch)
-        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
+        if language == Language.TRITON:
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
+            stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
+        elif language == Language.GLUON:
+            stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)

@@ -27,6 +27,19 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUOptimizeDotOperands
+    : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
+  let summary = "Intel optimize dot operands";
+
+  let description = [{
+    Re-arranged layouts of tensors used as matrix multiplication operands to
+    promote the use of hardware-accelerated operations.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonIntelGPUCoalesce
     : Pass<"tritonintelgpu-coalesce", "mlir::ModuleOp"> {
   let summary = "Intel Coalesce";
@@ -381,5 +394,19 @@ def TritonIntelGPURewriteStackPtr
     "mlir::triton::gpu::intel::TritonIntelGPUDialect", "mlir::scf::SCFDialect",
     "mlir::arith::ArithDialect"
   ];
+}
+
+def TritonIntelGPUReduceVariableLiveness
+    : Pass<"tritonintelgpu-reduce-variable-liveness", "mlir::ModuleOp"> {
+  let summary = "Attempt to reduce the variable liveness";
+
+  let description = [{
+    This pass attempts to reduce the variable liveness
+    by reducing the distance between loads and usage.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
 }
 #endif // TRITON_INTEL_GPU_PASSES

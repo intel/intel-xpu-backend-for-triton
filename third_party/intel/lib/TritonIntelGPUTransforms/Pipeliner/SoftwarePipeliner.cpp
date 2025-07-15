@@ -38,9 +38,9 @@ static bool preCondition(scf::ForOp forOp) {
   return true;
 }
 
-static void
-pipelineLoop(scf::ForOp forOp, int numStages,
-             std::optional<spirv::Scope> barrierScope = std::nullopt) {
+static void pipelineLoop(
+    scf::ForOp forOp, int numStages,
+    std::optional<triton::TritonGEN::MemScope> barrierScope = std::nullopt) {
   mlir::scf::PipeliningOption options;
   if (!preCondition(forOp))
     return;
@@ -60,18 +60,18 @@ pipelineLoop(scf::ForOp forOp, int numStages,
 
   scf::ForOp loop = (*newForOp);
   if (barrierScope) {
-    assert((*barrierScope == spirv::Scope::Subgroup) ||
-           (*barrierScope == spirv::Scope::Workgroup) &&
+    assert((*barrierScope == triton::TritonGEN::MemScope::SUB_GROUP) ||
+           (*barrierScope == triton::TritonGEN::MemScope::WORK_GROUP) &&
                "The barrier scope must be SubGroup or Workgroup");
     OpBuilder b(loop);
     Location loc = loop.getLoc();
     b.setInsertionPointToStart(loop.getBody());
-    b.create<spirv::INTELControlBarrierArriveOp>(
-        loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
+    b.create<triton::TritonGEN::SplitBarrierArriveOp>(loc, *barrierScope,
+                                                      *barrierScope);
     auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
     b.setInsertionPoint(yield);
-    b.create<spirv::INTELControlBarrierWaitOp>(
-        loc, *barrierScope, *barrierScope, spirv::MemorySemantics::None);
+    b.create<triton::TritonGEN::SplitBarrierWaitOp>(loc, *barrierScope,
+                                                    *barrierScope);
   }
 }
 
@@ -92,15 +92,15 @@ struct IntelGPUPipelinePass
     if (numStages <= 1)
       return;
 
-    std::optional<spirv::Scope> barrierScope = std::nullopt;
+    std::optional<triton::TritonGEN::MemScope> barrierScope = std::nullopt;
     switch (splitBarrierScope) {
     case ttgi::SplitBarrierScope::None:
       break;
     case ttgi::SplitBarrierScope::Workgroup:
-      barrierScope = spirv::Scope::Workgroup;
+      barrierScope = triton::TritonGEN::MemScope::WORK_GROUP;
       break;
     case ttgi::SplitBarrierScope::Subgroup:
-      barrierScope = spirv::Scope::Subgroup;
+      barrierScope = triton::TritonGEN::MemScope::SUB_GROUP;
       break;
     }
 

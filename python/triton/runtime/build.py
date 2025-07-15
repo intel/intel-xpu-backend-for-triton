@@ -22,7 +22,7 @@ def is_xpu():
 
 
 def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
-    if "cl.EXE" in cc or "clang-cl" in cc:
+    if "cl.EXE" in cc or "clang-cl" in cc or "icx-cl" in cc:
         cc_cmd = [cc, "/Zc:__cplusplus", "/std:c++17", src, "/nologo", "/O2", "/LD", "/wd4996", "/MD", "/EHsc"]
         cc_cmd += [f"/I{dir}" for dir in include_dirs]
         cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
@@ -57,9 +57,10 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     if cc is None:
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
-        cc = gcc if gcc is not None else clang
+        cl = None
         if os.name == "nt":
-            cc = shutil.which("cl")
+            cl = shutil.which("cl")
+        cc = cl or gcc or clang
         if cc is None:
             raise RuntimeError(
                 "Failed to find C compiler. Please specify via CC environment variable or set triton.knobs.build.impl.")
@@ -96,6 +97,8 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         else:
             if os.name != "nt":
                 extra_compile_args += ["--std=c++17"]
+            if os.environ.get("TRITON_SUPPRESS_GCC_HOST_CODE_DEPRECATION_WARNINGS", "1") == "1":
+                extra_compile_args += ["-Wno-deprecated-declarations"]
         if os.name == "nt":
             library_dirs = library_dirs + [
                 os.path.abspath(os.path.join(sysconfig.get_paths(scheme=scheme)["stdlib"], "..", "libs"))

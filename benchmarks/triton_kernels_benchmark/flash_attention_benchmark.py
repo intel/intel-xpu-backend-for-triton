@@ -9,6 +9,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import cutlass_kernel
 import numpy as np
 
 
@@ -154,7 +155,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
 
 
 configs = [
@@ -546,7 +547,7 @@ def get_benchmark(
     fa_kernel_mode='fwd',
     attn_fwd=_attn_fwd_with_block_pointers,
     xetla_assert_result=False,
-    xetla_warn_mismatch=True,
+    xetla_warn_mismatch=False,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -556,6 +557,7 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
         'xetla': 'XeTLA',
+        'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -708,6 +710,35 @@ def get_benchmark(
                 quantiles=quantiles,
             )
 
+        elif provider == 'cutlass':
+            cutlass_fn = None
+
+            if MODE == 'fwd':
+                name = 'attention'
+                func = getattr(cutlass_kernel, name)
+                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+
+                def cutlass_fwd_fn():
+                    func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
+                    return out
+
+                benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
+                cutlass_fn = cutlass_fwd_fn
+
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    cutlass_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
+
+            else:
+                cutlass_fn = None
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
+
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
@@ -727,6 +758,6 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
         xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '0') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)

@@ -1,1 +1,2 @@
 python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout
+python/test/unit/intel/test_block_store.py::test_block_store

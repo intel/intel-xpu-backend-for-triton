@@ -1,5 +1,7 @@
 import glob
 import os
+import pytest
+import re
 import subprocess
 import sys
 import tempfile
@@ -8,10 +10,8 @@ import sysconfig
 
 import numpy as np
 
-import pytest
-
 import triton
-from triton._internal_testing import is_cuda, is_xpu
+from triton._internal_testing import is_cuda, is_xpu, is_hip
 from triton.backends.compiler import GPUTarget
 from triton.backends.nvidia.driver import include_dirs, library_dirs
 from triton.backends.intel.driver import COMPILATION_HELPER
@@ -220,7 +220,6 @@ int main(int argc, char **argv) {{
   cuMemcpyHtoD(B, hB, K*N*2);
 
   // launch kernel
-  cuStreamSynchronize(stream);
   CUresult ret;
   int algo_id = {algo_id};
   if (algo_id == 0) {{
@@ -230,8 +229,6 @@ int main(int argc, char **argv) {{
   }}
   if (ret != 0) fprintf(stderr, "kernel launch failed\\n");
   assert(ret == 0);
-
-  cuStreamSynchronize(stream);
 
   // read data
   int32_t hC[M*N];
@@ -417,22 +414,21 @@ def compile_aot_kernel_no_specialization(dir, kernel_path, dtype, BM, BN, BK, ge
 
 def compile_aot_kernels(dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints):
     # compile all desired configs
-    for ha in ha_hb_hints:
-        for hb in ha_hb_hints:
-            sig = f"*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}"
-            name = f"matmul_{dtype}"
-            grid = f"M/{BM}, N/{BN}, 1"
-            _compile_kernel(
-                dir=dir,
-                signature=sig,
-                kernel_name="kernel",
-                out_name=name,
-                out_path=name,
-                num_warps=1,
-                grid=grid,
-                generate_native_code=generate_native_code,
-                kernel_path=kernel_path,
-            )
+    for ha, hb in ha_hb_hints:
+        sig = f"*fp32:16, *{dtype}:16, *{dtype}:16, i32, i32, i32, i32{ha}, i32:1, i32{hb}, i32:1, i32:16, i32:1, {BM}, {BN}, {BK}"
+        name = f"matmul_{dtype}"
+        grid = f"M/{BM}, N/{BN}, 1"
+        _compile_kernel(
+            dir=dir,
+            signature=sig,
+            kernel_name="kernel",
+            out_name=name,
+            out_path=name,
+            num_warps=1,
+            grid=grid,
+            generate_native_code=generate_native_code,
+            kernel_path=kernel_path,
+        )
 
 
 def link_aot_kernels(dir):
@@ -454,6 +450,20 @@ def generate_matmul_test_data(dir, M, N, K):
     return a, b, a_path, b_path, c_path
 
 
+def check_hasco_binary_str(tmp_dir: str, dtype: str):
+    # Linking is not yet enabled on HIP backend so just check compilation for now.
+    h_files = glob.glob(f"matmul_{dtype}.*.h", root_dir=tmp_dir)
+    cpp_files = glob.glob(f"matmul_{dtype}.*.cpp", root_dir=tmp_dir)
+    assert len(h_files) == 1, "Expected one .h file"
+    assert len(cpp_files) == 1, "Expected one .cpp file"
+    pattern = re.compile(r'HSACO_NAME\[(\d+)\]')
+    with open(os.path.join(tmp_dir, cpp_files[0]), "r") as cpp_file:
+        content = cpp_file.read()
+        matches = pattern.findall(content)
+        assert len(matches) == 1, "Expected one HSACO_NAME definition"
+        assert int(matches[0]) > 16, "Expected valid HSACO object binary string"
+
+
 # Test edge case where the provided kernel signature has no specializations
 @pytest.mark.parametrize("generate_native_code", [True, False])
 def test_compile_link_matmul_no_specialization(generate_native_code):
@@ -466,6 +476,10 @@ def test_compile_link_matmul_no_specialization(generate_native_code):
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code)
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
+
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -496,7 +510,10 @@ def test_compile_link_matmul(generate_native_code):
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=["", ":16"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":16", ":16")])
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -528,7 +545,11 @@ def test_launcher_has_no_available_kernel(generate_native_code):
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[":1"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=[(":1", ":1")])
+        if is_hip():
+            check_hasco_binary_str(tmp_dir, dtype)
+            return
+
         link_aot_kernels(tmp_dir)
 
         # compile test case
@@ -556,6 +577,7 @@ def test_launcher_has_no_available_kernel(generate_native_code):
         assert "kernel launch failed" in result.stderr
 
 
+@pytest.mark.skipif(not is_cuda() and not is_xpu(), reason="Requires CUDA or XPU")
 def test_compile_link_autotune_matmul():
     # this test is pretty slow, so we only run with the native binary
     generate_native_code = True
@@ -569,14 +591,13 @@ def test_compile_link_autotune_matmul():
 
         tile_sizes = [
             [16, 16, 16],
-            [32, 32, 16],
-            [32, 32, 32],
             [64, 64, 32],
         ]
 
         for ts in tile_sizes:
             BM, BN, BK = ts[0], ts[1], ts[2]
-            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code, ha_hb_hints=["", ":16"])
+            compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, generate_native_code,
+                                ha_hb_hints=[(":16", ":16"), (":16", ""), ("", ":16")])
 
         link_aot_kernels(tmp_dir)
 
@@ -608,22 +629,28 @@ def test_compile_link_autotune_matmul():
             np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=1e-4)
 
 
-def test_ttgir_to_ptx():
+def test_ttgir_to_asm():
     src = """
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
-  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
+module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_size} : i32, "ttg.num-ctas" = 1 : i32}} {{
+  tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {{
     tt.return
-  }
-}
+  }}
+}}
 """
+    target = GPUTarget("hip", "gfx942", 64) if is_hip() else GPUTarget("cuda", 80, 32)
     with tempfile.TemporaryDirectory() as tmp_dir:
         kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
         with open(kernel_path, "w") as fp:
-            fp.write(src)
-        k = triton.compile(kernel_path, target=GPUTarget("cuda", 80, 32))
-        ptx = k.asm["ptx"]
-        assert ".target sm_80" in ptx
-        assert ".address_size 64" in ptx
+            fp.write(src.format(warp_size=target.warp_size))
+        k = triton.compile(kernel_path, target=target)
+        if is_cuda():
+            ptx = k.asm["ptx"]
+            assert ".target sm_80" in ptx
+            assert ".address_size 64" in ptx
+        elif is_hip():
+            amdgcn = k.asm["amdgcn"]
+            assert '.amdgcn_target "amdgcn-amd-amdhsa--gfx942"' in amdgcn
+            assert '.wavefront_size: 64' in amdgcn
 
 
 def test_ttgir_to_spv():
@@ -642,6 +669,5 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
             fp.write(src)
         k = triton.compile(kernel_path, target=triton.runtime.driver.active.get_current_target())
         spv = k.asm['spvdis']
-        assert "OpCapability Kernel" in spv
-        assert "LocalSize 128 1 1" in spv
+        assert "OpCapability KernelAttributesINTEL" in spv
         assert "SubgroupSize 32" in spv

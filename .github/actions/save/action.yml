@@ -20,8 +20,18 @@ runs:
       if: ${{ inputs.enabled == 'true' }}
       shell: bash
       run: |
+        if [[ ! -d ${{ inputs.root }} ]]; then
+          echo "${{ inputs.root }} does not exist, cache disabled"
+          exit 0
+        fi
+
         TEMP_ITEM=$(mktemp -d -p ${{ inputs.root }})
-        cp -rT ${{ inputs.path }} $TEMP_ITEM
+        if [[ $OSTYPE == msys ]]; then
+          # dereference symlinks on Windows
+          cp -rLT ${{ inputs.path }} $TEMP_ITEM
+        else
+          cp -rT ${{ inputs.path }} $TEMP_ITEM
+        fi
         # ignore error if other job created a cache with the same key already
         if mv -T $TEMP_ITEM ${{ inputs.dest }}; then
           touch ${{ inputs.dest }}.hit

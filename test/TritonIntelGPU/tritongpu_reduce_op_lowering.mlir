@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
+// RUN: triton-opt %s --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --implicit-check-not=llvm.inline_asm
 
 // COM: Tests reduction when threads_per_warp < num_warps.
 

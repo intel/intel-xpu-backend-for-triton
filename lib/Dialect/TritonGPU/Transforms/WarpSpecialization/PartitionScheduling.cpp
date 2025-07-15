@@ -14,8 +14,6 @@ using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
-using Partition = WarpSchedule::Partition;
-
 //===----------------------------------------------------------------------===//
 // assignPartitions
 //===----------------------------------------------------------------------===//
@@ -206,15 +204,19 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     }
     while (!operandViews.empty()) {
       Operation *op = operandViews.pop_back_val();
-      if (!op->hasOneUse() || !op->hasTrait<OpTrait::MemDescViewTrait>())
+      if (!op->hasTrait<OpTrait::MemDescViewTrait>())
         continue;
 
-      // Duplicate the op if necessary to ensure the MMA op is the only user.
-      if (!llvm::all_of(op->getUsers(),
-                        [&](Operation *user) { return user == mmaOp; })) {
-        Operation *viewOp = OpBuilder(op).clone(*op);
-        mmaOp->replaceUsesOfWith(op->getResult(0), viewOp->getResult(0));
-        op = viewOp;
+      // Duplicate the op if necessary to ensure that the MMA partition is the
+      // only user.
+      if (!llvm::all_of(op->getUsers(), [&](Operation *user) {
+            return schedule.getPartition(user) == mmaPartition;
+          })) {
+        Operation *newOp = OpBuilder(op).clone(*op);
+        op->replaceUsesWithIf(newOp->getResults(), [&](OpOperand &use) {
+          return schedule.getPartition(use.getOwner()) == mmaPartition;
+        });
+        op = newOp;
       }
 
       schedule.trySchedule(mmaPartition, op);
@@ -228,11 +230,17 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     return std::nullopt;
 
   // Propagate defs of exp.
-  for (auto expOp : loop.getOps<math::Exp2Op>()) {
-    auto tensorTy = dyn_cast<RankedTensorType>(expOp.getType());
-    if (tensorTy && tensorTy.getNumElements() > 256) {
-      schedule.trySchedule(defaultPartition, expOp);
-      scheduleDependencies(loop, schedule, defaultPartition, expOp);
+  for (Operation &op : loop.getOps()) {
+    if (!isa<math::Exp2Op, ElementwiseInlineAsmOp>(op))
+      continue;
+    int elementCount = 0;
+    for (Type type : op.getResultTypes()) {
+      if (auto tensorTy = dyn_cast<RankedTensorType>(type))
+        elementCount += tensorTy.getNumElements();
+    }
+    if (elementCount > 256) {
+      schedule.trySchedule(defaultPartition, &op);
+      scheduleDependencies(loop, schedule, defaultPartition, &op);
     }
   }
 
@@ -244,14 +252,11 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
   while (userPartitions.size() < mmas.size()) {
     userPartitions.push_back(schedule.addPartition(userPartitions.size()));
   }
-  for (auto [mmaOp, userPartition] : llvm::zip(mmas, userPartitions)) {
+  for (auto [mmaOp, userPartition] :
+       llvm::reverse(llvm::zip(mmas, userPartitions))) {
     scheduleUsers(loop, schedule, userPartition, mmaOp);
   }
-  for (ttng::MMAv5OpInterface mmaOp : mmas) {
-    scheduleDependencies(loop, schedule, defaultPartition, mmaOp);
-  }
 
-  schedule.updatePartitions();
   return schedule;
 }
 
@@ -447,10 +452,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       });
     }
 
-    // If all ops are on the critical path, assign them to the sink partition.
+    // If all ops are on the critical path, assign them to the def partition.
     if (critPath.size() == cluster.ops.size()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(sinkPartition, op);
+        schedule.insert(defPartition, op);
       continue;
     }
 
@@ -472,8 +477,6 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     for (Operation *op : cluster.ops)
       schedule.insert(defPartition, op);
   }
-
-  schedule.updatePartitions();
 }
 
 //===----------------------------------------------------------------------===//

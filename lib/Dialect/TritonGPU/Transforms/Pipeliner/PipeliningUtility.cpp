@@ -1,5 +1,4 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -7,14 +6,21 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/Debug.h"
 #include <queue>
+
+#define DEBUG_TYPE "triton-loop-pipeline"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -107,7 +113,7 @@ Value triton::sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
     // `in` is live into the loop body. `out` becomes the live-out if the
     // loop executes at least once.
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      (void)addIterArgsToLoop(rewriter, forOp, in);
+      forOp = addIterArgsToLoop(rewriter, forOp, in);
       appendToForOpYield(forOp, out);
       out = forOp.getResults().back();
       continue;
@@ -161,7 +167,9 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
-  if (isa<LLVM::AssumeOp>(op))
+  if (isConstantIntValue(pred, 1))
+    return op;
+  if (isa<LLVM::AssumeOp, ttng::FenceAsyncSharedOp>(op))
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
@@ -264,7 +272,7 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   }
 
-  op->emitError("pipeliner doesn't know how to predicate this op.");
+  op->emitOpError("pipeliner doesn't know how to predicate this op.");
   llvm::report_fatal_error("Fatal pipeliner error");
   return op;
 }
@@ -309,6 +317,30 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
+}
+
+bool mlir::triton::canBeConvertedToAsyncLoad(
+    tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  assert(!isLoadFromTensorPtr(loadOp) &&
+         "Block ptr should have been lowered before this pass.");
+  auto ptr = loadOp.getPtr();
+  unsigned vec = axisInfoAnalysis.getContiguity(ptr);
+  if (auto mask = loadOp.getMask())
+    vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
+
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy)
+    return false;
+  auto ty = cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
+  unsigned width = vec * ty.getIntOrFloatBitWidth();
+
+  // We do not pipeline all loads for the following reasons:
+  // 1. On nvidia GPUs, cp.async's cp-size can only be 4, 8, or 16.
+  // 2. It's likely that pipling small loads won't offer much performance
+  //    improvement and may even hurt performance by increasing register
+  //    pressure.
+  LDBG("Load " << *loadOp << " has width " << width);
+  return width >= 32;
 }
 
 void mlir::triton::serializeLatencies(ModuleOp module,
@@ -538,4 +570,176 @@ int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,
   if (auto attr = helper.getAttr(forOp))
     return attr.getInt();
   return defaultNumStages;
+}
+
+TypedValue<ttg::MemDescType>
+triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
+  assert(isa<ttg::MemDescType>(alloc.getType()) && "Expected MemDescType");
+  auto allocDescType = cast<ttg::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape;
+  if (allocDescType.getShape().size() > 1) {
+    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+                 allocDescType.getShape().end());
+  } else {
+    shape.push_back(1);
+  }
+  auto viewDescType = ttg::MemDescType::get(
+      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
+      /*allocShape=*/allocDescType.getAllocShape());
+  SmallVector<Value> idxs = {idx};
+  if (allocDescType.getShape().size() > 1) {
+    Value zero = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
+    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
+      idxs.push_back(zero);
+    }
+  }
+  return builder.create<ttg::MemDescSubviewOp>(alloc.getLoc(), viewDescType,
+                                               alloc, idxs);
+}
+
+TypedValue<ttg::MemDescType>
+triton::createSingleBufferView(OpBuilder &builder, Value alloc, int idx) {
+  Value idxVal = builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32);
+  return createSingleBufferView(builder, alloc, idxVal);
+}
+
+Value triton::createIncrementModulo(OpBuilder &builder, Location loc,
+                                    Value counter, Value modulus, Value zero,
+                                    Value one, Value *outWrapCond) {
+  Value addOne = builder.create<arith::AddIOp>(loc, counter, one);
+  Value outOfRangeCond = builder.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::sge, addOne, modulus);
+  if (outWrapCond)
+    *outWrapCond = outOfRangeCond;
+  return builder.create<arith::SelectOp>(loc, outOfRangeCond, zero, addOne);
+}
+
+/////////////////////////////
+// LOWER TMA DESCRIPTORS
+/////////////////////////////
+
+static void
+allocTMABuffers(scf::ForOp forOp,
+                llvm::MapVector<Operation *, Value> &tmaBufferMapping,
+                int maxStage) {
+  IRRewriter rewriter(forOp);
+
+  // Create a multi-buffered allocation for each MakeTensorDescOp call in the
+  // loop
+  forOp.walk([&](tt::MakeTensorDescOp op) {
+    // TODO peter: walk to loop yield to find the init value if this is a
+    // loop-carried value. That would save us from allocating another buffer
+    // just for the init value
+    auto loc = op.getLoc();
+    Value alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
+        loc, triton::getPointerType(rewriter.getI8Type()),
+        maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
+    tmaBufferMapping[op.getOperation()] = alloc;
+  });
+}
+
+static Value subviewTMADescriptor(OpBuilder &builder, Location loc, Value alloc,
+                                  Value counter) {
+  Value tmaSizeVal =
+      builder.create<arith::ConstantIntOp>(loc, ttng::TMA_SIZE_BYTES, 32);
+  Value offset = builder.create<arith::MulIOp>(loc, tmaSizeVal, counter);
+  return builder.create<triton::AddPtrOp>(loc, alloc.getType(), alloc, offset);
+}
+
+static LogicalResult rewriteTMABufferUpdates(
+    scf::ForOp forOp,
+    const llvm::MapVector<Operation *, Value> &tmaBufferMapping,
+    ArrayRef<BlockArgument> tmaCounters, int numBuffers, Value one, Value zero,
+    triton::CoarseSchedule &schedule) {
+  assert(tmaBufferMapping.size() == tmaCounters.size());
+
+  Value numBuffersVal = mlir::OpBuilder(forOp).create<arith::ConstantIntOp>(
+      forOp.getLoc(), numBuffers, 32);
+
+  for (auto [iOp, pair] : llvm::enumerate(tmaBufferMapping)) {
+    auto &[op, alloc] = pair;
+
+    // Rewriter MakeTensorDescOp as writing a TMA descriptor
+    auto makeDescOp = cast<tt::MakeTensorDescOp>(op);
+
+    triton::OpBuilderForStage builder(makeDescOp.getLoc(), makeDescOp,
+                                      schedule);
+
+    BlockArgument counter = tmaCounters[iOp];
+    Value nextBuf =
+        subviewTMADescriptor(builder, builder.getLoc(), alloc, counter);
+    if (failed(ttng::createTMADesc(nextBuf, makeDescOp, builder))) {
+      return failure();
+    }
+    builder.create<ttng::TensormapFenceproxyAcquireOp>(nextBuf);
+    Value nextDesc = builder.create<ttng::ReinterpretTensorDescOp>(
+        makeDescOp.getType(), nextBuf);
+
+    makeDescOp.getResult().replaceAllUsesWith(nextDesc);
+
+    // Increment the buffer index counter
+    Value nextCounter = createIncrementModulo(
+        builder, builder.getLoc(), counter, numBuffersVal, zero, one);
+
+    // If we are in a (potentially nested) if region, propagate the counter
+    // up to the main for op body scope
+    IRRewriter rewriter(forOp);
+    nextCounter = triton::sinkValueRedefinition(rewriter, counter, nextCounter,
+                                                op->getBlock());
+
+    // Finally, rewrite the loop level yield
+    auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    forYield.setOperand(counter.getArgNumber() - 1, nextCounter);
+  }
+  return success();
+}
+
+scf::ForOp triton::lowerTMADescriptors(scf::ForOp forOp,
+                                       CoarseSchedule &schedule) {
+  llvm::MapVector<Operation *, Value> tmaBufferMapping;
+  int maxStage = schedule.getNumStages() - 1;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (auto wgMmaOp = dyn_cast<ttng::WarpGroupDotOp>(&op)) {
+      // Hopper only: Add one more buffer slice if there is a WarpGroupDotOp,
+      // as if it will be pipelined, we will effectively make the pipeline
+      // one stage longer.
+      maxStage += 1;
+      break;
+    }
+  }
+  allocTMABuffers(forOp, tmaBufferMapping, maxStage);
+  if (tmaBufferMapping.empty())
+    return forOp;
+
+  IRRewriter builder(forOp);
+  Location loc = forOp.getLoc();
+  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+  SmallVector<Value> newOperands;
+  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
+  // Create one counter per TMA buffer. This allows the descriptors to be
+  // updated independently without needing to write duplicate of existing tma
+  // descriptors.
+  unsigned tmaCounterArgsStartIdx = newOperandIndex + newOperands.size();
+  for (int i = 0; i < tmaBufferMapping.size(); ++i) {
+    newOperands.push_back(zero);
+  }
+
+  forOp = addIterArgsToLoop(builder, forOp, newOperands);
+
+  auto tmaCounters = ArrayRef<BlockArgument>(forOp.getBody()->getArguments())
+                         .slice(tmaCounterArgsStartIdx);
+
+  // Update yield op with temporary yield values
+  auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  for (unsigned i = 0; i < newOperands.size(); ++i) {
+    forYield.getResultsMutable().append(newOperands[i]);
+  }
+
+  if (failed(rewriteTMABufferUpdates(forOp, tmaBufferMapping, tmaCounters,
+                                     maxStage, one, zero, schedule))) {
+    llvm_unreachable("Failed to rewrite TMA ops");
+  }
+  return forOp;
 }
