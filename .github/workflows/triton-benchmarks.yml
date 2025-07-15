@@ -68,6 +68,13 @@ env:
   VERIFY: ${{ (github.event_name == 'pull_request' || github.event_name == 'schedule' || inputs.verify) && '1' || '0' }}
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   N_RUNS: ${{ inputs.n_runs || '1' }}
+  TRITON_INTEL_ENABLE_BLOCK_IO_STORE_ON_REGULAR_PTR: '1'
+  IGC_VectorizerAllowEXP2: '1'
+  IGC_VectorizerAllowMAXNUM: '1'
+  IGC_VectorizerAllowWAVEALL: '1'
+  IGC_VectorizerAllowCMP: '1'
+  IGC_VectorizerAllowSelect: '1'
+  IGC_DisableCodeScheduling: '0'
 
 jobs:
   build:
