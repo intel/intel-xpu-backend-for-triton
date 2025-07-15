@@ -126,7 +126,7 @@ warps_per_sm = WARPS_PER_EU * EU_PER_SM
 max_num_resident_warps = NUM_SM * warps_per_sm
 kernels = {}
 # Possible SLM allocation sizes in kB
-tg_slm_sizes = [i * 2**i for i in [0, 1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128]]  # TODO: Get from properties
+tg_slm_sizes = [i * 2**10 for i in [0, 1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128]]  # TODO: Get from properties
 
 
 def softmax(x):
@@ -228,6 +228,7 @@ def benchmark(M, N, provider):
     if provider == 'triton':
         ms = triton.testing.do_bench(lambda: softmax(x))
     gbps = lambda ms: 2 * x.numel() * x.element_size() * 1e-9 / (ms * 1e-3)
+    torch.xpu.empty_cache()
     return gbps(ms)
 
 

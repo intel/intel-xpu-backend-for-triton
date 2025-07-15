@@ -38,7 +38,8 @@ namespace mlir {
 FailureOr<LLVM::LLVMFuncOp>
 convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
                           ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
+                          const LLVMTypeConverter &converter,
+                          SymbolTableCollection *symbolTables = nullptr);
 }
 
 namespace mlir::triton::intel {
@@ -67,7 +68,17 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       result.push_back(attr);
     }
   }
-
+  /// Calling convention for the scratch buffer on shared and global:
+  ///
+  /// - Shared memory:
+  ///   * Kernel functions:
+  ///       Use the address of `global_smem` as the scratch stack.
+  ///   * Non-kernel functions:
+  ///       Uses the second last param as the shared scratch stack.
+  ///
+  /// - Global memory:
+  ///   * Both kernel and non-kernel functions:
+  ///       Use the last param as the global scratch stack.
   triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
                              ConversionPatternRewriter &rewriter,
                              const TargetInfoBase &targetInfo) const {
@@ -120,9 +131,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Prevent LLVM's inliner to inline this function
-    auto amendedFuncOp = funcOp;
-    if (!LLVM::isKernel(funcOp))
-      amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
+    auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
 
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
         mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
@@ -152,11 +161,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
       newFuncOp.setLinkage(LLVM::Linkage::Internal);
-      rewriter.eraseOp(amendedFuncOp);
     }
 
     // required by AxisInfoAnalysis
     rewriter.eraseOp(funcOp);
+    rewriter.eraseOp(amendedFuncOp);
     return success();
   }
 
@@ -254,10 +263,8 @@ public:
     // to help convert scalar expression to LLVM.
     arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     populateMathToLLVMConversionPatterns(typeConverter, patterns);
-    triton::populateTritonGENToLLVMConversionPatterns(typeConverter, patterns);
     triton::populateGPUToTritonGENConversionPatterns(typeConverter, patterns);
     cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
-    populateTritonGENToSPIRVConversionPatterns(patterns);
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
     populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
                                           spirv::ClientAPI::OpenCL);

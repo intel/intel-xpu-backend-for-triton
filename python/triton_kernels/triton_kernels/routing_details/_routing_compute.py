@@ -1,6 +1,8 @@
 import triton
 import triton.language as tl
 
+from ._expt_data import _expt_data_compute, _expt_data_memset
+
 
 @triton.jit
 def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histogram
@@ -18,21 +20,16 @@ def _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size,  # histog
 
 
 @triton.jit
-def _routing_compute_indx_offs(TokensStart, PartialHist, PartialOffs, shape_pm, stride_pm, BLOCK_M: tl.constexpr):
-    expt_id = tl.program_id(0)
+def _routing_compute_indx_offs(PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_M: tl.constexpr, expt_id):
     offs_m = tl.arange(0, BLOCK_M)
-    # initialize first row of the output
-    start = tl.load(TokensStart + expt_id)
-    tl.store(PartialOffs + expt_id, start)
     # iterate over input data
-    curr_sum = start
+    curr_sum = 0
     for _ in range(0, shape_pm, BLOCK_M):
-        offs = offs_m * stride_pm + expt_id
+        offs = offs_m * stride_pm + expt_id * stride_pn
         curr = tl.load(PartialHist + offs, mask=offs_m < shape_pm)
         out = tl.cumsum(curr, 0) + curr_sum
         curr_sum += tl.sum(curr, 0)
-        offs = (1 + offs_m) * stride_pm + expt_id
-        tl.store(PartialOffs + offs, out, mask=offs_m < shape_pm - 1)
+        tl.store(PartialHist + offs, out - curr, mask=offs_m < shape_pm)
         offs_m += BLOCK_M
 
 
@@ -49,10 +46,14 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, n_gates,
-                          BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+def _routing_compute_indx(pid_m, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm,
+                          stride_pn, TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr,
+                          N_EXPTS_ACT: tl.constexpr):
 
-    pid_m = tl.program_id(0)
+    n_tokens = n_tokens_pad
+    if NTokensRaw is not None:
+        n_tokens = tl.load(NTokensRaw)
+    n_gates = n_tokens * N_EXPTS_ACT
 
     tl.static_assert(N_EXPTS_ACT * BLOCK_M <= 32768)
 
@@ -73,7 +74,8 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
     expts_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
     exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
 
-    gates = tl.load(PartialOffs + pid_m * stride_pm + expert, mask=(expert != 0xffff))
+    gates = tl.load(PartialOffs + pid_m * stride_pm + expert * stride_pn, mask=mask)
+    gates += tl.load(TokensStart + expert, mask=mask)
     gates += exclusive_run_lengths
 
     tl.store(ScatterIndx + offs, gates, mask=mask)
@@ -82,27 +84,67 @@ def _routing_compute_indx(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx,
 
 
 @triton.jit
-def _routing_clear_bitmatrix(Bitmatrix, stride_bm, shape_bn, cutoff, BLOCK_N: tl.constexpr):
+def _combined_routing_compute(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm, stride_pn,
+                              TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+                              Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem,
+                              first_tile_dim_log2, SIZES: tl.constexpr, BLOCK: tl.constexpr, blocks2a):
+
+    pid = tl.program_id(0)
+    if pid < blocks2a:
+        _expt_data_compute(Hist, MDTileStarts, tile_starts_stridem, MDTileInfo, tile_info_stridem, first_tile_dim_log2,
+                           SIZES, BLOCK)
+    else:
+        pid -= blocks2a
+        _routing_compute_indx(pid, GatherIndx, ScatterIndx, GateScal, ExptScal, ExptIndx, PartialOffs, stride_pm,
+                              stride_pn, TokensStart, n_tokens_pad, NTokensRaw, BLOCK_M, N_EXPTS_ACT)
+
+
+@triton.jit
+def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, BLOCK_N: tl.constexpr):
     pid_m = tl.program_id(0)
     cutoff_word = cutoff // 32
     cutoff_bit = cutoff % 32
     cutoff_mask = (1 << (cutoff_bit)) - 1
     for start_n in range(0, shape_bn, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
-        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n, mask=offs_n < shape_bn)
+        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, mask=offs_n < shape_bn)
         values = tl.where(offs_n == cutoff_word, values & cutoff_mask, values)
         values = tl.where(offs_n > cutoff_word, 0, values)
-        tl.store(Bitmatrix + pid_m * stride_bm + offs_n, values, mask=offs_n < shape_bn)
+        tl.store(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, values, mask=offs_n < shape_bn)
 
 
 @triton.jit
-def _routing_memset_indx(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
-                         BLOCK_N: tl.constexpr):
+def _combined_routing_memset(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
+                             n_expts_tot, PartialHist, shape_pm, stride_pm, stride_pn, MDStarts, tile_starts_stridem,
+                             blocks1a, MDTileInfo, first_tile_dim_log2, SIZES: tl.constexpr, BLOCK_A: tl.constexpr,
+                             BLOCK_N: tl.constexpr, BLOCK_M: tl.constexpr):
+    """
+    This kernel essentially combines 6 different pieces of functionality,
+    statically branching on the value of tl.program_id(0) to decide which
+    codepath to take.
+
+        pid == 0:                                  create the token cumsum
+        1 <= pid <= SIZES:                         create a tile cumsum
+        SIZES < pid < blocks1a:                    initialise MDTileInfo to 0xffffffff
+        blocks1a <= pid < blocks1a + n_expts_tot:  compute_indx_offs
+        pid == blocks1a + n_expts_tot:             compute_expt_offs
+        pid > blocks1a + n_expts_tot:              initialise Indx to sentinel
+
+    As each of these is a relatively trivial workload, launching them from
+    this single trampoline is beneficial as they can execute on different
+    streaming multiprocesses in parallel.
+    """
+
     pid = tl.program_id(0)
 
-    if pid == 0:
+    if pid < blocks1a:
+        _expt_data_memset(ExpertHist, n_expts_tot, MDStarts, tile_starts_stridem, MDTileInfo, first_tile_dim_log2,
+                          SIZES, BLOCK_A)
+    elif pid == n_expts_tot + blocks1a:
         _routing_compute_expt_offs(ExpertHist, FinalExpertOffs, hist_size, BLOCK_N)
+    elif pid < n_expts_tot + blocks1a:
+        _routing_compute_indx_offs(PartialHist, shape_pm, stride_pm, stride_pn, BLOCK_M, pid - blocks1a)
     else:
-        offs = (pid - 1) * BLOCK + tl.arange(0, BLOCK)
+        offs = (pid - n_expts_tot - blocks1a - 1) * BLOCK + tl.arange(0, BLOCK)
         mask = offs < size
         tl.store(Indx + offs, sentinel, mask=mask)

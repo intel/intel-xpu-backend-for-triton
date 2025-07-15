@@ -1,12 +1,5 @@
-import functools
 from abc import ABCMeta, abstractmethod
 from typing import Callable, List, Protocol, Sequence
-
-
-@functools.lru_cache()
-def platform_key():
-    from platform import machine, system, architecture
-    return ",".join([machine(), system(), *architecture()])
 
 
 class Benchmarker(Protocol):
@@ -20,6 +13,19 @@ class DriverBase(metaclass=ABCMeta):
     @classmethod
     @abstractmethod
     def is_active(self):
+        pass
+
+    @abstractmethod
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        """
+        Converts a Triton type string to its corresponding C++ type string for this backend.
+
+        Args:
+            ty (str): The Triton type string. e.g., 'i32', '*fp16', 'fp32'.
+
+        Returns:
+            str: The C++ type string.
+        """
         pass
 
     @abstractmethod

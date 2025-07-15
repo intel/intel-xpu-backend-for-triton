@@ -18,7 +18,7 @@ on:
       python_version:
         description: Python version
         type: string
-        default: "3.9"
+        default: "3.10"
       pytorch_repo:
         description: PyTorch repo (e.g. user/repo)
         type: string

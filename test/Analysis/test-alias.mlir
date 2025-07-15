@@ -116,9 +116,10 @@ tt.func @for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B :
   %a_shared, %b_shared, %c_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init, %c_shared = %c_shared_init) ->
   (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
     scf.if %i1 {
+      %zero = arith.constant 0 : i32
       %index = arith.constant 8 : i32
       // expected-remark @below {{%4 -> %0,%1}}
-      %cst0 = ttg.memdesc_subview %a_shared[%index, %index] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+      %cst0 = ttg.memdesc_subview %a_shared[%index, %zero] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<32xf16, #A_SHARED, #ttg.shared_memory, mutable>
       scf.yield
     }
     scf.yield %b_shared, %a_shared, %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -187,6 +188,20 @@ tt.func @cf_for(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %
   gpu.barrier
   // expected-remark @below {{%10 -> %0}}
   %9 = ttg.memdesc_subview %0[%idx, %idx] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+tt.func @poison_memdesc(%arg0: i1) {
+  // expected-remark @below {{%0 -> %0}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  cf.cond_br %arg0, ^bb1, ^bb2(%0 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>)
+^bb1:
+  %1 = ub.poison : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  cf.br ^bb2(%1 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>)
+^bb2(%2: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>):
+  %c0_i32 = arith.constant 0 : i32
+  // expected-remark @below {{%3 -> %0}}
+  %3 = ttg.memdesc_subview %2[%c0_i32, %c0_i32] : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
 }
 

@@ -50,6 +50,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 from python.build_helpers import get_base_dir, get_cmake_dir
 
 
+def is_git_repo():
+    """Return True if this file resides in a git repository"""
+    return (Path(__file__).parent / ".git").is_dir()
+
+
 @dataclass
 class Backend:
     name: str
@@ -71,13 +76,14 @@ class BackendInstaller:
             assert backend_name in os.listdir(
                 root_dir), f"{backend_name} is requested for install but not present in {root_dir}"
 
-            try:
-                subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
-                               stdout=subprocess.DEVNULL, cwd=root_dir)
-            except subprocess.CalledProcessError:
-                pass
-            except FileNotFoundError:
-                pass
+            if is_git_repo():
+                try:
+                    subprocess.run(["git", "submodule", "update", "--init", f"{backend_name}"], check=True,
+                                   stdout=subprocess.DEVNULL, cwd=root_dir)
+                except subprocess.CalledProcessError:
+                    pass
+                except FileNotFoundError:
+                    pass
 
             backend_src_dir = os.path.join(root_dir, backend_name)
 
@@ -198,7 +204,9 @@ def get_llvm_package_info():
         arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
     except KeyError:
         arch = platform.machine()
-    if system == "Darwin":
+    if (env_system_suffix := os.environ.get("TRITON_LLVM_SYSTEM_SUFFIX", None)):
+        system_suffix = env_system_suffix
+    elif system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
         if arch == 'arm64' and is_linux_os('almalinux'):
@@ -317,6 +325,8 @@ def get_thirdparty_packages(packages: list):
             thirdparty_cmake_args.append(f"-D{p.include_flag}={package_dir}/include")
         if p.lib_flag:
             thirdparty_cmake_args.append(f"-D{p.lib_flag}={package_dir}/lib")
+        if p.syspath_var_name:
+            thirdparty_cmake_args.append(f"-D{p.syspath_var_name}={package_dir}")
         if p.sym_name is not None:
             sym_link_path = os.path.join(package_root_dir, p.sym_name)
             update_symlink(sym_link_path, package_dir)
@@ -453,6 +463,8 @@ class CMakeBuild(build_ext):
         thirdparty_cmake_args = get_thirdparty_packages([get_llvm_package_info()])
         thirdparty_cmake_args += self.get_pybind11_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
+        wheeldir = os.path.dirname(extdir)
+
         # create build directories
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
@@ -466,7 +478,8 @@ class CMakeBuild(build_ext):
             "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + extdir, "-DTRITON_BUILD_PYTHON_MODULE=ON",
             "-DPython3_EXECUTABLE:FILEPATH=" + sys.executable, "-DPython3_INCLUDE_DIR=" + python_include_dir,
             "-DTRITON_CODEGEN_BACKENDS=" + ';'.join([b.name for b in backends if not b.is_external]),
-            "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external])
+            "-DTRITON_PLUGIN_DIRS=" + ';'.join([b.src_dir for b in backends if b.is_external]),
+            "-DTRITON_WHEEL_DIR=" + wheeldir
         ]
         if lit_dir is not None:
             cmake_args.append("-DLLVM_EXTERNAL_LIT=" + lit_dir)
@@ -530,6 +543,7 @@ class CMakeBuild(build_ext):
         env = os.environ.copy()
         cmake_dir = get_cmake_dir()
         subprocess.check_call(["cmake", self.base_dir] + cmake_args, cwd=cmake_dir, env=env)
+        update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
 
@@ -770,6 +784,8 @@ def get_git_branch():
 
 
 def get_git_version_suffix():
+    if not is_git_repo():
+        return ""  # Not a git checkout
     branch = get_git_branch()
     if branch.startswith("release"):
         return ""
@@ -778,7 +794,7 @@ def get_git_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.3.1" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+TRITON_VERSION = "3.4.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 9)
@@ -804,7 +820,7 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     install_requires=[
-        "setuptools>=78.1.0",
+        "setuptools>=70.2.0",
         "importlib-metadata; python_version < '3.10'",
     ],
     packages=list(get_packages()),

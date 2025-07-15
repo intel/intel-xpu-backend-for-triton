@@ -7,6 +7,20 @@ llvm.func @triton_gen.barrier() {
   llvm.return
 }
 
+llvm.func @triton_gen.split_barrier_arrive() {
+  // CHECK-LABEL: triton_gen.split_barrier_arrive
+  // CHECK: triton_gen.split_barrier_arrive {execution_scope = WorkGroup, memory_scope = WorkGroup}
+  triton_gen.split_barrier_arrive {execution_scope=WorkGroup, memory_scope=WorkGroup}
+  llvm.return
+}
+
+llvm.func @triton_gen.split_barrier_wait() {
+  // CHECK-LABEL: triton_gen.split_barrier_wait
+  // CHECK: triton_gen.split_barrier_wait {execution_scope = WorkGroup, memory_scope = WorkGroup}
+  triton_gen.split_barrier_wait {execution_scope=WorkGroup, memory_scope=WorkGroup}
+  llvm.return
+}
+
 llvm.func @triton_gen.dpas(%c : vector<8xi32>, %a : vector<8xi16>, %b : vector<8xi32>) {
   // CHECK:      llvm.func @triton_gen.dpas(%arg0: vector<8xi32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
   // CHECK-NEXT:   %0 = triton_gen.dpas %arg0, %arg1, %arg2 {pa = i8, pb = i8, rc = 8} : (vector<8xi32>, vector<8xi16>, vector<8xi32>) -> vector<8xi32>

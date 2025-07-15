@@ -2,24 +2,10 @@
 
 // CHECK-LABEL: @nvvm_syncs
 llvm.func @nvvm_syncs() {
-  // CHECK: wgmma.fence.sync.aligned;
-  nvgpu.wgmma_fence
-
-  // CHECK: wgmma.commit_group.sync.aligned;
-  nvgpu.wgmma_commit_group
-
-  // CHECK: barrier.cluster.wait.aligned;
-  nvgpu.cluster_wait
-
   // CHECK: fence.proxy.async.shared::cta;
   nvgpu.fence_async_shared {bCluster = false}
   // CHECK: fence.proxy.async.shared::cluster;
   nvgpu.fence_async_shared {bCluster = true}
-
-  // CHECK: barrier.cluster.arrive.aligned;
-  nvgpu.cluster_arrive {relaxed = false}
-  // CHECK: barrier.cluster.arrive.relaxed.aligned;
-  nvgpu.cluster_arrive {relaxed = true}
 
   llvm.return
 }
@@ -208,6 +194,43 @@ llvm.func @warpid_warp_specialize() {
     ttg.warp_return
   } : () -> ()
   llvm.return
+}
+
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: @one_warp
+tt.func @one_warp() -> i32 {
+  // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  %0 = nvgpu.warp_id
+  // CHECK-NEXT: return [[C0]]
+  tt.return %0 : i32
+}
+
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: @one_contextual_warp
+tt.func @one_contextual_warp() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0
+  partition0() num_warps(1) {
+    // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+    %0 = nvgpu.warp_id
+    // CHECK-NEXT: "use"([[C0]])
+    "use"(%0) : (i32) -> ()
+    ttg.warp_return
+  } : () -> ()
+  tt.return
 }
 
 }

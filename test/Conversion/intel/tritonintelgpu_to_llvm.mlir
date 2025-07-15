@@ -1,16 +1,16 @@
-// RUN: triton-opt %s --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
 module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32 } {
   // As the assert message is shared, a single instance is emitted.
 
   // CHECK-DAG:         llvm.mlir.global internal constant @assertFunc_("unknown\00") {addr_space = 1 : i32}
-  // CHECK-DAG:         llvm.mlir.global internal constant @assertFile_("{{.*}}tritonintelgpu_to_llvm.mlir\00") {addr_space = 1 : i32}
+  // CHECK-DAG:         llvm.mlir.global internal constant @assertFile_("{{.*}}tritonintelgpu_to_llvm.mlir{{.*}}\00") {addr_space = 1 : i32}
   // CHECK-DAG:         llvm.mlir.global internal constant @assertMessage_("assert text\00") {addr_space = 1 : i32}
   // CHECK-DAG:         llvm.mlir.global internal constant @assertMessage_3("different assert text\00") {addr_space = 1 : i32}
   // CHECK-DAG:         llvm.func spir_funccc @__assert_fail(!llvm.ptr<4>, !llvm.ptr<4>, i32, !llvm.ptr<4>)
 
-  // CHECK:   llvm.func spir_kernelcc @assert(%[[VAL_0:.*]]: !llvm.struct<(i1)>, %[[VAL_1:.*]]: !llvm.struct<(i1)>, %[[VAL_2:.*]]: !llvm.struct<(i1)>)
+  // CHECK:   llvm.func spir_kernelcc @assert(%[[VAL_0:.*]]: !llvm.struct<(i1)>, %[[VAL_1:.*]]: !llvm.struct<(i1)>, %[[VAL_2:.*]]: !llvm.struct<(i1)>, %[[PTR_1:.*]]: !llvm.ptr<1>)
   tt.func public @assert(%arg0: tensor<1xi1, #blocked>, %arg1: tensor<1xi1, #blocked>, %arg2: tensor<1xi1, #blocked>) {
     // CHECK:           %[[VAL_3:.*]] = llvm.extractvalue %[[VAL_0]][0] : !llvm.struct<(i1)>
     // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(false) : i1
@@ -84,3 +84,8 @@ module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32
     tt.return
   }
 }
+
+// -----
+
+// Sanity check for the conversion pass to correctly process even empty modules
+module attributes { "ttg.threads-per-warp" = 16 : i32, "ttg.num-warps" = 4 : i32 } {}

@@ -1,24 +1,9 @@
 #include <torch/extension.h>
 
-#include "cutlass/gemm/collective/collective_builder.hpp"
-#include "cutlass/gemm/device/gemm_universal.h"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
-#include "cutlass/gemm/gemm.h"
-
-#include "cutlass/epilogue/collective/collective_builder.hpp"
-#include "cutlass/epilogue/fusion/callbacks.hpp"
-#include "cutlass/epilogue/thread/activation.h"
 
 #include "cutlass/util/device_memory.h"
 #include "cutlass/util/packed_stride.hpp"
-
-#define CUTLASS_CREATE_GEMM_BENCHMARK(x)
-#define CUTLASS_BENCHMARK(x)
-#include "gemm/benchmarks_sycl.hpp"
-#include "gemm/gemm_configuration_sycl.hpp"
-
-#include <exception>
-#include <iostream>
 
 #define CUTLASS_CHECK(status)                                                  \
   {                                                                            \
@@ -31,245 +16,260 @@
     }                                                                          \
   }
 
-using ElementAccumulator = float;
-using ElementComputeEpilogue = float;
-using ElementInputA = cutlass::bfloat16_t;
-using ElementInputB = cutlass::bfloat16_t;
-using ElementOutput = float;
+#include "attention/attention.hpp"
+#include "gemm/gemm.hpp"
 
-using LayoutA = typename cutlass::layout::RowMajor;
-using LayoutB = typename cutlass::layout::RowMajor;
-using LayoutC = typename cutlass::layout::RowMajor;
-using LayoutD = typename cutlass::layout::RowMajor;
+// #define CUTLASS_CREATE_GEMM_BENCHMARK(x)
+// #define CUTLASS_BENCHMARK(x)
+// #include "gemm/benchmarks_sycl.hpp"
+// #include "gemm/gemm_configuration_sycl.hpp"
 
-constexpr int AlignmentA = sizeof(ElementInputA);
-constexpr int AlignmentB = sizeof(ElementInputB);
-constexpr int AlignmentC = sizeof(ElementAccumulator);
-constexpr int AlignmentD = sizeof(ElementOutput);
+// #include <exception>
+// #include <iostream>
 
-////////////////////////////////////////////////////////////////////////////////
-// PRIVATE FUNCTION
-////////////////////////////////////////////////////////////////////////////////
+// using ElementAccumulator = float;
+// using ElementComputeEpilogue = float;
+// using ElementInputA = cutlass::bfloat16_t;
+// using ElementInputB = cutlass::bfloat16_t;
+// using ElementOutput = float;
 
-template <typename TileShape>
-static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
-                     const int M, const int N, const int K, const int L)
-    -> int {
-  RECORD_FUNCTION("cutlass gemm", {});
+// using LayoutA = typename cutlass::layout::RowMajor;
+// using LayoutB = typename cutlass::layout::RowMajor;
+// using LayoutC = typename cutlass::layout::RowMajor;
+// using LayoutD = typename cutlass::layout::RowMajor;
 
-  /// MAIN LOOP ///
+// constexpr int AlignmentA = sizeof(ElementInputA);
+// constexpr int AlignmentB = sizeof(ElementInputB);
+// constexpr int AlignmentC = sizeof(ElementAccumulator);
+// constexpr int AlignmentD = sizeof(ElementOutput);
 
-  using CollectiveMainloop =
-      typename cutlass::gemm::collective::CollectiveBuilder<
-          cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp, ElementInputA,
-          LayoutA, AlignmentA, ElementInputB, LayoutB, AlignmentB,
-          ElementAccumulator, TileShape,
-          cute::Shape<cute::_1, cute::_1, cute::_1>,
-          cutlass::gemm::collective::StageCountAuto,
-          cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
+// ////////////////////////////////////////////////////////////////////////////////
+// // PRIVATE FUNCTION
+// ////////////////////////////////////////////////////////////////////////////////
 
-  /// EPILOGUE LOOP ///
+// template <typename TileShape>
+// static auto gemm_run(const at::Tensor &A, const at::Tensor &B, at::Tensor &C,
+//                      const int M, const int N, const int K, const int L)
+//     -> int {
+//   RECORD_FUNCTION("cutlass gemm", {});
 
-  using EpilogueOp = typename cutlass::epilogue::fusion::LinCombEltAct<
-      cutlass::epilogue::thread::ReLu, ElementOutput, ElementComputeEpilogue,
-      ElementAccumulator, ElementAccumulator,
-      cutlass::FloatRoundStyle::round_to_nearest>;
-  using CollectiveEpilogue =
-      typename cutlass::epilogue::collective::CollectiveBuilder<
-          cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp, TileShape,
-          cute::Shape<cute::_1, cute::_1, cute::_1>,
-          cutlass::epilogue::collective::EpilogueTileAuto,
-          ElementComputeEpilogue, ElementAccumulator, ElementAccumulator,
-          LayoutC, AlignmentC, ElementOutput, LayoutD, AlignmentD,
-          cutlass::epilogue::collective::EpilogueScheduleAuto,
-          EpilogueOp>::CollectiveOp;
+//   /// MAIN LOOP ///
 
-  /// GEMM ///
+//   using CollectiveMainloop =
+//       typename cutlass::gemm::collective::CollectiveBuilder<
+//           cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp, ElementInputA,
+//           LayoutA, AlignmentA, ElementInputB, LayoutB, AlignmentB,
+//           ElementAccumulator, TileShape,
+//           cute::Shape<cute::_1, cute::_1, cute::_1>,
+//           cutlass::gemm::collective::StageCountAuto,
+//           cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
 
-  using GemmKernel = typename cutlass::gemm::kernel::GemmUniversal<
-      cute::Shape<int, int, int, int>, CollectiveMainloop, CollectiveEpilogue>;
+//   /// EPILOGUE LOOP ///
 
-  /// GEMM INVOCATION ///
+//   using EpilogueOp = typename cutlass::epilogue::fusion::LinCombEltAct<
+//       cutlass::epilogue::thread::ReLu, ElementOutput, ElementComputeEpilogue,
+//       ElementAccumulator, ElementAccumulator,
+//       cutlass::FloatRoundStyle::round_to_nearest>;
+//   using CollectiveEpilogue =
+//       typename cutlass::epilogue::collective::CollectiveBuilder<
+//           cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp, TileShape,
+//           cute::Shape<cute::_1, cute::_1, cute::_1>,
+//           cutlass::epilogue::collective::EpilogueTileAuto,
+//           ElementComputeEpilogue, ElementAccumulator, ElementAccumulator,
+//           LayoutC, AlignmentC, ElementOutput, LayoutD, AlignmentD,
+//           cutlass::epilogue::collective::EpilogueScheduleAuto,
+//           EpilogueOp>::CollectiveOp;
 
-  try {
-    using Gemm =
-        typename cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-    typename Gemm::Arguments arguments;
+//   /// GEMM ///
 
-    /// Buffer Initialization
-    const cutlass::bfloat16_t *_A =
-        static_cast<const cutlass::bfloat16_t *>(A.data_ptr());
-    const cutlass::bfloat16_t *_B =
-        static_cast<const cutlass::bfloat16_t *>(B.data_ptr());
-    float *_C = static_cast<float *>(C.data_ptr());
+//   using GemmKernel = typename cutlass::gemm::kernel::GemmUniversal<
+//       cute::Shape<int, int, int, int>, CollectiveMainloop, CollectiveEpilogue>;
 
-    /// Problem size
-    using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
-    ProblemShapeType problem_size = ProblemShapeType{M, N, K, L};
+//   /// GEMM INVOCATION ///
 
-    /// Stride
-    using StrideA = typename Gemm::GemmKernel::StrideA;
-    using StrideB = typename Gemm::GemmKernel::StrideB;
-    using StrideC = typename Gemm::GemmKernel::StrideC;
-    using StrideD = typename Gemm::GemmKernel::StrideD;
-    StrideA stride_A =
-        cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
-    StrideB stride_B =
-        cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
-    StrideC stride_C =
-        cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
-    StrideD stride_D =
-        cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
+//   try {
+//     using Gemm =
+//         typename cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
+//     typename Gemm::Arguments arguments;
 
-    static cutlass::KernelHardwareInfo hw_info;
-    if (hw_info.sm_count == 0) {
-      hw_info.sm_count =
-          cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
-      CUTLASS_TRACE_HOST(
-          "Query result for SM count per device: " << hw_info.sm_count);
-    }
+//     /// Buffer Initialization
+//     const cutlass::bfloat16_t *_A =
+//         static_cast<const cutlass::bfloat16_t *>(A.data_ptr());
+//     const cutlass::bfloat16_t *_B =
+//         static_cast<const cutlass::bfloat16_t *>(B.data_ptr());
+//     float *_C = static_cast<float *>(C.data_ptr());
 
-    arguments = {cutlass::gemm::GemmUniversalMode::kGemm,
-                 problem_size,
-                 {_A, stride_A, _B, stride_B},
-                 {{ElementComputeEpilogue(1), ElementComputeEpilogue(0)},
-                  nullptr,
-                  stride_C,
-                  _C,
-                  stride_D},
-                 hw_info};
+//     /// Problem size
+//     using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
+//     ProblemShapeType problem_size = ProblemShapeType{M, N, K, L};
 
-    Gemm gemm_op;
+//     /// Stride
+//     using StrideA = typename Gemm::GemmKernel::StrideA;
+//     using StrideB = typename Gemm::GemmKernel::StrideB;
+//     using StrideC = typename Gemm::GemmKernel::StrideC;
+//     using StrideD = typename Gemm::GemmKernel::StrideD;
+//     StrideA stride_A =
+//         cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
+//     StrideB stride_B =
+//         cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
+//     StrideC stride_C =
+//         cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
+//     StrideD stride_D =
+//         cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
 
-    size_t workspace_size = Gemm::get_workspace_size(arguments);
-    cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
+//     static cutlass::KernelHardwareInfo hw_info;
+//     if (hw_info.sm_count == 0) {
+//       hw_info.sm_count =
+//           cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+//       CUTLASS_TRACE_HOST(
+//           "Query result for SM count per device: " << hw_info.sm_count);
+//     }
 
-    CUTLASS_CHECK(gemm_op.can_implement(arguments));
-    CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
-    CUTLASS_CHECK(gemm_op.run());
+//     arguments = {cutlass::gemm::GemmUniversalMode::kGemm,
+//                  problem_size,
+//                  {_A, stride_A, _B, stride_B},
+//                  {{ElementComputeEpilogue(1), ElementComputeEpilogue(0)},
+//                   nullptr,
+//                   stride_C,
+//                   _C,
+//                   stride_D},
+//                  hw_info};
 
-    syclcompat::wait();
+//     Gemm gemm_op;
 
-  } catch (std::exception &e) {
-    std::cerr << "Runtime error: " << e.what() << std::endl;
-    return -1;
-  } catch (...) {
-    std::cerr << "Unexpected error" << std::endl;
-    return -1;
-  }
+//     size_t workspace_size = Gemm::get_workspace_size(arguments);
+//     cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
-  return 0;
-}
+//     CUTLASS_CHECK(gemm_op.can_implement(arguments));
+//     CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
+//     CUTLASS_CHECK(gemm_op.run());
 
-template <typename GemmConfig>
-static auto gemm_run_specialized(const at::Tensor &A, const at::Tensor &B,
-                                 at::Tensor &C, const int M, const int N,
-                                 const int K, const int L) -> int {
-  RECORD_FUNCTION("cutlass gemm", {});
+//     syclcompat::wait();
 
-  /// GEMM INVOCATION ///
+//   } catch (std::exception &e) {
+//     std::cerr << "Runtime error: " << e.what() << std::endl;
+//     return -1;
+//   } catch (...) {
+//     std::cerr << "Unexpected error" << std::endl;
+//     return -1;
+//   }
 
-  try {
-    using Gemm = GemmConfig::Gemm;
-    typename Gemm::Arguments arguments;
+//   return 0;
+// }
 
-    /// Buffer Initialization
-    const cutlass::bfloat16_t *_A =
-        static_cast<const cutlass::bfloat16_t *>(A.data_ptr());
-    const cutlass::bfloat16_t *_B =
-        static_cast<const cutlass::bfloat16_t *>(B.data_ptr());
-    float *_C = static_cast<float *>(C.data_ptr());
+// template <typename GemmConfig>
+// static auto gemm_run_specialized(const at::Tensor &A, const at::Tensor &B,
+//                                  at::Tensor &C, const int M, const int N,
+//                                  const int K, const int L) -> int {
+//   RECORD_FUNCTION("cutlass gemm", {});
 
-    /// Problem size
-    using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
-    ProblemShapeType problem_size = ProblemShapeType{M, N, K, L};
+//   /// GEMM INVOCATION ///
 
-    /// Stride
-    using StrideA = typename Gemm::GemmKernel::StrideA;
-    using StrideB = typename Gemm::GemmKernel::StrideB;
-    using StrideC = typename Gemm::GemmKernel::StrideC;
-    using StrideD = typename Gemm::GemmKernel::StrideD;
-    StrideA stride_A =
-        cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
-    StrideB stride_B =
-        cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
-    StrideC stride_C =
-        cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
-    StrideD stride_D =
-        cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
+//   try {
+//     using Gemm = GemmConfig::Gemm;
+//     typename Gemm::Arguments arguments;
 
-    static cutlass::KernelHardwareInfo hw_info;
-    if (hw_info.sm_count == 0) {
-      hw_info.sm_count =
-          cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
-      CUTLASS_TRACE_HOST(
-          "Query result for SM count per device: " << hw_info.sm_count);
-    }
+//     /// Buffer Initialization
+//     const cutlass::bfloat16_t *_A =
+//         static_cast<const cutlass::bfloat16_t *>(A.data_ptr());
+//     const cutlass::bfloat16_t *_B =
+//         static_cast<const cutlass::bfloat16_t *>(B.data_ptr());
+//     float *_C = static_cast<float *>(C.data_ptr());
 
-    arguments = GemmConfig::defaultArguments();
-    arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
-    arguments.problem_shape = problem_size;
-    arguments.mainloop = {_A, stride_A, _B, stride_B};
-    arguments.epilogue = {
-        {ElementComputeEpilogue(1), ElementComputeEpilogue(0)},
-        nullptr,
-        stride_C,
-        _C,
-        stride_D};
-    arguments.hw_info = hw_info;
+//     /// Problem size
+//     using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
+//     ProblemShapeType problem_size = ProblemShapeType{M, N, K, L};
 
-    Gemm gemm_op;
+//     /// Stride
+//     using StrideA = typename Gemm::GemmKernel::StrideA;
+//     using StrideB = typename Gemm::GemmKernel::StrideB;
+//     using StrideC = typename Gemm::GemmKernel::StrideC;
+//     using StrideD = typename Gemm::GemmKernel::StrideD;
+//     StrideA stride_A =
+//         cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
+//     StrideB stride_B =
+//         cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
+//     StrideC stride_C =
+//         cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
+//     StrideD stride_D =
+//         cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
 
-    size_t workspace_size = Gemm::get_workspace_size(arguments);
-    cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
+//     static cutlass::KernelHardwareInfo hw_info;
+//     if (hw_info.sm_count == 0) {
+//       hw_info.sm_count =
+//           cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+//       CUTLASS_TRACE_HOST(
+//           "Query result for SM count per device: " << hw_info.sm_count);
+//     }
 
-    CUTLASS_CHECK(gemm_op.can_implement(arguments));
-    CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
-    CUTLASS_CHECK(gemm_op.run());
+//     arguments = GemmConfig::defaultArguments();
+//     arguments.mode = cutlass::gemm::GemmUniversalMode::kGemm;
+//     arguments.problem_shape = problem_size;
+//     arguments.mainloop = {_A, stride_A, _B, stride_B};
+//     arguments.epilogue = {
+//         {ElementComputeEpilogue(1), ElementComputeEpilogue(0)},
+//         nullptr,
+//         stride_C,
+//         _C,
+//         stride_D};
+//     arguments.hw_info = hw_info;
 
-    syclcompat::wait();
+//     Gemm gemm_op;
 
-  } catch (std::exception &e) {
-    std::cerr << "Runtime error: " << e.what() << std::endl;
-    return -1;
-  } catch (...) {
-    std::cerr << "Unexpected error" << std::endl;
-    return -1;
-  }
+//     size_t workspace_size = Gemm::get_workspace_size(arguments);
+//     cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
-  return 0;
-}
-////////////////////////////////////////////////////////////////////////////////
-// PUBLIC FUNCTION
-////////////////////////////////////////////////////////////////////////////////
+//     CUTLASS_CHECK(gemm_op.can_implement(arguments));
+//     CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
+//     CUTLASS_CHECK(gemm_op.run());
 
-using Dim = std::tuple<int, int, int, int>;
-using GemmRunPtr = int (*)(const at::Tensor &A, const at::Tensor &B,
-                           at::Tensor &C, const int M, const int N, const int K,
-                           const int L);
-// Includes the table mapping problem shape to best config from the header
-// generated by the configuration tool from the CUTLASS config file.
-#include GEMM_CONFIG_HEADER
+//     syclcompat::wait();
 
-/// Each entry associates a specific problem dimension to their corresponding
-/// tile shape. For more details, see:
-/// https://github.com/codeplaysoftware/cutlass-sycl/tree/sycl-develop/benchmarks
-auto gemm_select(const at::Tensor &A, const at::Tensor &B, at::Tensor &C, const int M,
-         const int N, const int K, const int L) -> int {
-  const Dim test_case{L, M, N, K};
+//   } catch (std::exception &e) {
+//     std::cerr << "Runtime error: " << e.what() << std::endl;
+//     return -1;
+//   } catch (...) {
+//     std::cerr << "Unexpected error" << std::endl;
+//     return -1;
+//   }
 
-  for (auto const &kv : gemm_config) {
-    if (test_case == kv.first) {
-      return kv.second(A, B, C, M, N, K, L);
-    }
-  }
+//   return 0;
+// }
+// ////////////////////////////////////////////////////////////////////////////////
+// // PUBLIC FUNCTION
+// ////////////////////////////////////////////////////////////////////////////////
 
-  return gemm_run<cute::Shape<cute::_256, cute::_256, cute::_32>>(A, B, C, M, N,
-                                                                  K, L);
-}
+// using Dim = std::tuple<int, int, int, int>;
+// using GemmRunPtr = int (*)(const at::Tensor &A, const at::Tensor &B,
+//                            at::Tensor &C, const int M, const int N, const int K,
+//                            const int L);
+// // Includes the table mapping problem shape to best config from the header
+// // generated by the configuration tool from the CUTLASS config file.
+// #include GEMM_CONFIG_HEADER
+
+// /// Each entry associates a specific problem dimension to their corresponding
+// /// tile shape. For more details, see:
+// /// https://github.com/codeplaysoftware/cutlass-sycl/tree/sycl-develop/benchmarks
+// auto gemm_select(const at::Tensor &A, const at::Tensor &B, at::Tensor &C, const int M,
+//          const int N, const int K, const int L) -> int {
+//   const Dim test_case{L, M, N, K};
+
+//   for (auto const &kv : gemm_config) {
+//     if (test_case == kv.first) {
+//       return kv.second(A, B, C, M, N, K, L);
+//     }
+//   }
+
+//   return gemm_run<cute::Shape<cute::_256, cute::_256, cute::_32>>(A, B, C, M, N,
+//                                                                   K, L);
+// }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // PYBIND MODULE
 ////////////////////////////////////////////////////////////////////////////////
 
-PYBIND11_MODULE(cutlass_kernel, m) { m.def("gemm", &gemm_select, "gemm (CUTLASS)"); }
+PYBIND11_MODULE(cutlass_kernel, m) {
+  m.def("gemm", &gemm, "gemm (CUTLASS)");
+  m.def("attention", &attention, "attention (CUTLASS)");
+}

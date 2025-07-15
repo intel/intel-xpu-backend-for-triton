@@ -235,7 +235,7 @@ struct ElementwiseInlineAsmOpConversion
       Type elemTy = getElementType(op.getOperand(i));
       unsigned bitWidth =
           elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
-      unsigned numElementPerReg = bitWidth < 32 ? 32 / bitWidth : 1;
+      unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
       numElementPerReg = std::min(numElementPerReg, numPackedElements);
       for (int j = 0; j < numPackedElements; j += numElementPerReg) {
         if (numElementPerReg == 1) {
@@ -278,7 +278,7 @@ struct ElementwiseInlineAsmOpConversion
       // Pack return elements into 32-bits.
       unsigned bitWidth = ty.isIntOrFloat() ? ty.getIntOrFloatBitWidth() : 64;
       unsigned numElemsPerReg =
-          std::min(bitWidth < 32 ? 32 / bitWidth : 1, op.getPackedElement());
+          std::min(std::max(32 / bitWidth, 1u), op.getPackedElement());
       assert(op.getPackedElement() % numElemsPerReg == 0);
       if (numElemsPerReg > 1) {
         ty = vec_ty(ty, numElemsPerReg);
@@ -298,7 +298,7 @@ struct ElementwiseInlineAsmOpConversion
                 /*asm_string=*/op.getAsmString(),
                 /*constraints=*/op.getConstraints(),
                 /*has_side_effects=*/!op.getPure(),
-                /*is_align_stack=*/false,
+                /*is_align_stack=*/false, LLVM::TailCallKind::None,
                 /*asm_dialect=*/
                 LLVM::AsmDialectAttr::get(rewriter.getContext(),
                                           LLVM::AsmDialect::AD_ATT),

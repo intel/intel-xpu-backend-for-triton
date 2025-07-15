@@ -24,10 +24,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
-#include "llvm/ADT/TypeSwitch.h"
-
+#include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 // clang-format off
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -59,80 +59,190 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 namespace mlir::triton::amdgpu {
 
-LogicalResult ExtractSliceOp::verify() {
-  auto srcTy = getSource().getType();
-  auto srcLayout = srcTy.getEncoding();
-  auto srcElementType = getElementTypeOrSelf(srcTy);
-  auto resultTy = getResult().getType();
-  auto resultLayout = resultTy.getEncoding();
-  auto resultElementType = getElementTypeOrSelf(resultTy);
-
-  if (srcElementType != resultElementType) {
-    return emitError("result element type must match source element type");
-  }
-  if (srcLayout != resultLayout) {
-    return emitError("result layout must match source layout");
-  }
-  if (srcTy.getRank() != resultTy.getRank()) {
-    return emitError("result rank must be equal to source rank");
-  }
-  if (srcTy.getRank() != 2) {
-    return emitError("currently only 2D tensors are supported");
-  }
-
+// Check that the source and destination tensor layouts match on a CTA tile.
+// This means that lane and warp bases of linear layout must match, and the
+// register basis must be the same up to a number of registers contained within
+// a CTA tile.
+bool hasMatchingCTATileLayoutForSliceConcat(
+    RankedTensorType srcTy, RankedTensorType dstTy,
+    std::function<void(const Twine &)> emitError) {
   auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
+  auto srcLL = triton::gpu::toLinearLayout(srcShape, srcTy.getEncoding());
+  auto dstLL = triton::gpu::toLinearLayout(dstShape, dstTy.getEncoding());
 
-  // ExtractSlice only supports slicing where offsets and sizes are multiples of
-  // shapePerCTATile. This condition ensures that slice has the same layout as
-  // the original tensor.
+  MLIRContext *ctx = srcTy.getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  srcLL = srcLL.removeZeroBasesAlongDim(kReg);
+  dstLL = dstLL.removeZeroBasesAlongDim(kReg);
 
+  auto getBases = [&](StringRef name) {
+    auto key = StringAttr::get(ctx, name);
+    return std::pair{srcLL.getBases().lookup(key),
+                     dstLL.getBases().lookup(key)};
+  };
+
+  auto [regSrc, regDst] = getBases("register");
+  auto [laneSrc, laneDst] = getBases("lane");
+  auto [warpSrc, warpDst] = getBases("warp");
+
+  auto shapeCTASrc = mlir::triton::gpu::getShapePerCTATile(srcTy);
+  auto shapeCTADst = mlir::triton::gpu::getShapePerCTATile(dstTy);
+  if (shapeCTASrc != shapeCTADst) {
+    emitError(
+        "CTA tile shapes must match between source and destination tensors.");
+    return false;
+  }
+
+  // Compute number of basis vectors that desribe registers from one CTA tile.
+  unsigned numCTAs = 1;
+  for (size_t d = 0, rank = srcShape.size(); d < rank; ++d) {
+    assert(srcShape[d] % shapeCTASrc[d] == 0 &&
+           "Source shape must be multiple of CTA tile shape");
+    numCTAs *= srcShape[d] / shapeCTASrc[d];
+  }
+
+  assert(llvm::isPowerOf2_32(numCTAs) &&
+         "expect number of CTAs to be power of 2");
+
+  unsigned totalElemsPerThreadNoBroadcastLog = regSrc.size();
+  unsigned elemsPerThreadPerCTALog =
+      totalElemsPerThreadNoBroadcastLog - llvm::Log2_32(numCTAs);
+  unsigned regCompareLen = elemsPerThreadPerCTALog;
+
+  auto compareBasis = [&](auto &srcBasis, auto &dstBasis, StringRef message,
+                          int limit = -1) {
+    int n = (limit < 0 ? srcBasis.size()
+                       : std::min<unsigned>(srcBasis.size(), limit));
+    if (dstBasis.size() < n) {
+      emitError(message);
+      return false;
+    }
+    for (size_t i = 0; i < n; ++i) {
+      if (srcBasis[i] != dstBasis[i]) {
+        emitError(message);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (!compareBasis(regSrc, regDst,
+                    "Register basis must match on a CTA tile between source "
+                    "and destination.",
+                    regCompareLen))
+    return false;
+
+  if (laneSrc != laneDst || warpSrc != warpDst) {
+    emitError("Lane and warp dim basis must match between source and "
+              "destination layout.");
+    return false;
+  }
+  return true;
+}
+
+LogicalResult ExtractSliceOp::verify() {
+  // Basic type/rank checks.
+  auto srcTypeVal = getSource().getType();
+  auto dstTypeVal = getResult().getType();
+  auto srcTy = mlir::cast<RankedTensorType>(srcTypeVal);
+  auto dstTy = mlir::cast<RankedTensorType>(dstTypeVal);
+
+  auto srcElm = getElementTypeOrSelf(srcTy);
+  auto resElm = getElementTypeOrSelf(dstTy);
+  if (srcElm != resElm)
+    return emitError("result element type must match source element type");
+  if (srcTy.getRank() != dstTy.getRank())
+    return emitError("result rank must be equal to source rank");
+
+  // Per-dimension shape/offset checks
+  auto srcShape = srcTy.getShape();
+  auto dstShape = dstTy.getShape();
   auto offsets = getStaticOffsets();
-  if (offsets.size() != 2) {
-    return emitError("invalid offset shape ") << offsets;
-  }
-
-  SmallVector<int64_t, 2> sizes;
-  for (auto i = 0; i < 2; ++i) {
-    auto resultDimSize = resultTy.getDimSize(i);
-    auto srcDimSize = srcTy.getDimSize(i);
-    if (resultDimSize == 0) {
-      return emitError("result tensor dimension size zero at dimension ") << i;
-    }
-    if (srcDimSize == 0) {
-      return emitError("source tensor dimension size zero at dimension ") << i;
-    }
-    if (resultDimSize > srcDimSize) {
-      return emitError(
-                 "result shape cannot be larger than input shape at dimension ")
-             << i;
-    }
-    if (offsets[i] + resultDimSize > srcDimSize) {
-      return emitError("invalid offset ")
-             << offsets[i] << " at dimension " << i;
-    }
-    sizes.push_back(resultDimSize);
-  }
-
   auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcTy);
-  shapePerCTATile[0] =
-      std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
-  shapePerCTATile[1] =
-      std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
-  if (sizes[0] % shapePerCTATile[0] != 0 ||
-      sizes[1] % shapePerCTATile[1] != 0) {
-    return emitError() << "sizes [" << sizes
-                       << "] must be a multiple of shapePerCTATile ["
-                       << shapePerCTATile << "]";
+  size_t rank = srcShape.size();
+
+  auto failDim = [&](StringRef msg, int i) -> LogicalResult {
+    return emitError(msg) << " at dimension " << i;
+  };
+
+  for (size_t i = 0; i < rank; ++i) {
+    if (dstShape[i] > srcShape[i])
+      return failDim("result shape cannot exceed source shape", i);
+    if (offsets[i] + dstShape[i] > srcShape[i])
+      return failDim("invalid offset", i);
+    if (dstShape[i] % shapePerCTATile[i] != 0)
+      return emitError("result shape must be multiple of shapePerCTATile");
+    if (offsets[i] % shapePerCTATile[i] != 0)
+      return emitError("offset must be multiple of shapePerCTATile");
   }
 
-  if (offsets[0] % shapePerCTATile[0] != 0 ||
-      offsets[1] % shapePerCTATile[1] != 0) {
-    return emitError() << "offset [" << offsets
-                       << "] must be a multiple of shapePerCTATile ["
-                       << shapePerCTATile << "]";
-  }
+  // Verify that source and destination layout match on a CTA tile.
+  if (!hasMatchingCTATileLayoutForSliceConcat(
+          srcTy, dstTy, [&](const Twine &msg) { emitError() << msg; }))
+    return failure();
 
   return success();
+}
+
+// This pattern optimizes the combination of extract_slice and concat
+// operations. When extract_slice is used to extract a portion that exactly
+// matches one of the original tensors concatenated by a concat operation, we
+// can eliminate extract_slice op and use the original tensor directly.
+struct CononicalizeExtractSliceAndConcat
+    : public mlir::OpRewritePattern<amdgpu::ExtractSliceOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(amdgpu::ExtractSliceOp op,
+                  PatternRewriter &rewriter) const override {
+    // Try to match preceding Concat op
+    auto concatOp = op.getSource().getDefiningOp<amdgpu::ConcatOp>();
+    if (!concatOp)
+      return failure();
+
+    auto offset = op.getStaticOffsets();
+    auto sliceResult = op.getResult();
+    auto sliceResultType = sliceResult.getType();
+    RankedTensorType dstType =
+        cast<RankedTensorType>(concatOp.getResult().getType());
+    auto dstShape = dstType.getShape();
+
+    auto concatItem = concatOp.getSources().front();
+    auto concatItemType = dyn_cast<RankedTensorType>(concatItem.getType());
+    if (!concatItemType)
+      return failure();
+
+    if (sliceResultType != concatItemType)
+      return failure();
+
+    // Calculate which concat operand contains our slice
+    auto srcShape = concatItemType.getShape();
+    auto rank = srcShape.size();
+    std::vector<unsigned> defaultOrder(rank);
+    std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
+
+    // Convert multidimensional offset to concat operand index
+    auto multiDimSrcIdx = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
+        offset, srcShape, std::divides<unsigned>());
+    auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
+        dstShape, srcShape, std::divides<unsigned>());
+    auto linearSrcIdx =
+        mlir::LLVM::linearize(multiDimSrcIdx, srcToDstShape, defaultOrder);
+
+    // Replace extract_slice with the concat operand
+    assert(linearSrcIdx < concatOp->getNumOperands() &&
+           "concat index must be in bounds");
+    Value concreteConcatItem = concatOp->getOperand(linearSrcIdx);
+    rewriter.replaceOp(op, concreteConcatItem);
+
+    return success();
+  }
+};
+
+void ExtractSliceOp::getCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::MLIRContext *context) {
+  patterns.add<CononicalizeExtractSliceAndConcat>(context);
 }
 
 LogicalResult UpcastMXFPOp::verify() {
@@ -302,4 +412,69 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   return transposedLL;
 }
 
+LogicalResult ConcatOp::verify() {
+  auto sources = getSources();
+  auto result = getResult();
+
+  auto srcType = cast<RankedTensorType>(sources.front().getType());
+  auto dstType = cast<RankedTensorType>(result.getType());
+
+  auto srcShape = srcType.getShape();
+  auto dstShape = dstType.getShape();
+  unsigned rank = srcShape.size();
+
+  // 1) Shape related checks.
+  if (rank != dstShape.size())
+    return emitError()
+           << "Source and destination tensors must have the same rank.";
+
+  unsigned numTiles = 1;
+  for (int i = 0; i < rank; ++i) {
+    if (dstShape[i] % srcShape[i] != 0)
+      return emitError() << "Source and destination tensor shapes don't match.";
+    numTiles *= dstShape[i] / srcShape[i];
+  }
+
+  if (numTiles != sources.size())
+    return emitError() << "Number of source tiles (" << sources.size()
+                       << ") doesn't match required count (" << numTiles
+                       << ").";
+
+  // 2) Check that all sources have same type and element type match.
+  for (auto src : sources) {
+    auto curr = dyn_cast<RankedTensorType>(src.getType());
+    if (curr != srcType)
+      return emitError() << "All sources must have identical tensor types.";
+  }
+
+  if (dstType.getElementType() != srcType.getElementType())
+    return emitError()
+           << "Element types of sources and destination must match.";
+
+  // 3) Check that all source and destination layouts match on a CTA tile.
+  if (!hasMatchingCTATileLayoutForSliceConcat(
+          srcType, dstType, [&](const Twine &msg) { emitError() << msg; }))
+    return failure();
+
+  return success();
+}
+
+// This pattern removes a concatOp if it has a single input operand.
+// This scenario can potentially happen as a result of ops refinement.
+mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
+                                                 PatternRewriter &rewriter) {
+  auto sources = op.getSources();
+  if (sources.size() == 1) {
+    auto source = sources.front();
+    auto result = op.getResult();
+    result.replaceAllUsesWith(source);
+    return success();
+  }
+  return failure();
+}
+
+void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
+                                           mlir::MLIRContext *context) {
+  patterns.add(foldConcatOpFromSingleSource);
+}
 } // namespace mlir::triton::amdgpu

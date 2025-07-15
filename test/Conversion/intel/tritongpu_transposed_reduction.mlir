@@ -3,7 +3,7 @@
 
 // COM: Checks the correct lowering of transpose reductions.
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, triton_intel_gpu.min_sg_size = 16 : i32, triton_intel_gpu.support_dpas, triton_intel_gpu.support_sg_2d_block} {
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_dpas, ttig.support_sg_2d_block} {
 
 // CHECK:         llvm.func spir_funccc @[[MAXNUM:.*]](
 // CHECK-SAME:                                   %[[VAL_0:.*]]: f32, %[[VAL_1:.*]]: f32) -> f32 attributes {always_inline} {
@@ -18,7 +18,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // CHECK:         }
 
 // CHECK:         llvm.func spir_kernelcc @reduce_sum(
-// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>} {
+// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>, %[[PTR_1:.*]]: !llvm.ptr<1>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>} {
 // CHECK:           %[[VAL_2:.*]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK:           %[[VAL_3:.*]] = llvm.extractelement %[[VAL_0]]{{\[}}%[[VAL_2]] : i32] : vector<16xf32>
 // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(1 : i32) : i32
@@ -78,7 +78,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   }
 
 // CHECK:         llvm.func spir_kernelcc @reduce_max(
-// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>} {
+// CHECK-SAME:                                        %[[VAL_0:.*]]: vector<16xf32>, %[[PTR_1:.*]]: !llvm.ptr<1>) -> f32 attributes {intel_reqd_sub_group_size = 16 : i32, triton_gen.max_work_group_size = array<i32: 128, 1, 1>} {
 // CHECK:           %[[VAL_2:.*]] = llvm.mlir.constant(0 : i32) : i32
 // CHECK:           %[[VAL_3:.*]] = llvm.extractelement %[[VAL_0]]{{\[}}%[[VAL_2]] : i32] : vector<16xf32>
 // CHECK:           %[[VAL_4:.*]] = llvm.mlir.constant(1 : i32) : i32

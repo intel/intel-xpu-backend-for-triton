@@ -1,32 +1,28 @@
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
+#include "NVGPUToLLVM/Passes.h"
 
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
-using namespace mlir;
-using namespace mlir::triton;
-
-#define GEN_PASS_CLASSES
-#include "NVGPUToLLVM/Passes.h.inc"
-
 namespace ttn = mlir::triton::nvgpu;
 using ttn::Constraints;
 using ttn::OperandsAndConstraints;
 
+namespace mlir {
+namespace triton {
+
+#define GEN_PASS_DEF_CONVERTNVGPUTOLLVM
+#include "NVGPUToLLVM/Passes.h.inc"
+
 namespace {
 
-const std::string kWgmmaFenceOp = "wgmma.fence.sync.aligned;";
-const std::string kWgmmaCommitGroupOp = "wgmma.commit_group.sync.aligned;";
-const std::string kClusterWaitOp = "barrier.cluster.wait.aligned;";
-const std::string kFenceMbarrierInitOp = "fence.mbarrier_init.release.cluster;";
 const std::string kClusterCtaIdOp = "{\n"
                                     ".reg .u32 a<5>;              \n"
                                     "mov.u32 a0, %cluster_ctaid.x;\n"  // x
@@ -232,6 +228,12 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    if (triton::gpu::lookupNumWarps(op) == 1) {
+      // If there is only one warp, the warp ID is always 0.
+      rewriter.replaceOp(op, b.i32_val(0));
+      return success();
+    }
+
     // If this is inside a warp specialize op, compute the relative thread ID
     // within the warp group.
     Value tid = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
@@ -246,19 +248,6 @@ public:
     warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
     rewriter.replaceOp(op, warpId);
     return success();
-  }
-};
-
-class ClusterArriveOpPattern : public OpRewritePattern<ttn::ClusterArriveOp> {
-public:
-  using OpRewritePattern<ttn::ClusterArriveOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::ClusterArriveOp op,
-                                PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getRelaxed()
-                             ? "barrier.cluster.arrive.relaxed.aligned;"
-                             : "barrier.cluster.arrive.aligned;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
   }
 };
 
@@ -374,8 +363,11 @@ public:
 
 protected:
   unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
-    auto resultType = cast<LLVM::LLVMStructType>(op.getType());
-    return resultType.getBody().size();
+    auto resultType = op.getType();
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
+      return structTy.getBody().size();
+    }
+    return 1;
   }
 
   std::string getOperands(ttn::LoadMatrixOp op,
@@ -756,7 +748,7 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
   if (baseOps.empty())
     return;
   // TODO: Handle cases of matmul used in noinline functions.
-  assert(LLVM::isKernel(kernel));
+  assert(triton::isKernel(kernel));
   Value newBase = initTensorMemory(kernel);
   if (!newBase)
     return;
@@ -766,31 +758,25 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
   }
 }
 
-class ConvertNVGPUToLLVM : public ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
+} // anonymous namespace
 
+class ConvertNVGPUToLLVM
+    : public impl::ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
 public:
-  explicit ConvertNVGPUToLLVM() {}
+  using impl::ConvertNVGPUToLLVMBase<
+      ConvertNVGPUToLLVM>::ConvertNVGPUToLLVMBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-#define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
-  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
-                                              Constraints());
-    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, kWgmmaFenceOp)
-    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, kWgmmaCommitGroupOp)
-    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, kClusterWaitOp)
-#undef POPULATE_NVGPU_OP
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns
-        .add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-             StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
-             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
-            context);
+    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
+                 StoreMatrixOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
+                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
@@ -799,11 +785,6 @@ public:
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };
-
-} // anonymous namespace
-
-namespace mlir {
-namespace triton {
 
 LogicalResult
 nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
@@ -834,10 +815,6 @@ nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
   }
 
   return success();
-}
-
-std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUToLLVMPass() {
-  return std::make_unique<::ConvertNVGPUToLLVM>();
 }
 
 } // namespace triton

@@ -1,8 +1,11 @@
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <optional>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -31,6 +34,74 @@ Value findOrCreateIntConstant(Location loc, int val, unsigned bitWidth,
   return (it != insertPoint)
              ? cast<arith::ConstantIntOp>(*it)
              : builder.createOrFold<arith::ConstantIntOp>(loc, val, bitWidth);
+}
+
+std::optional<tt::MakeTensorPtrOp> findDefiningMakeTensorPtrOp(Value val) {
+  if (auto arg = dyn_cast<BlockArgument>(val)) {
+    Operation *parentOp = arg.getParentBlock()->getParentOp();
+
+    Value loopArg;
+    if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
+      loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
+    else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
+      loopArg = whileOp.getInits()[arg.getArgNumber()];
+    else
+      llvm_unreachable("Unexpected parent operator");
+
+    return findDefiningMakeTensorPtrOp(loopArg);
+  }
+
+  if (auto poisonOp = val.getDefiningOp<ub::PoisonOp>())
+    return std::nullopt;
+  if (auto callOp = val.getDefiningOp<tt::CallOp>())
+    return std::nullopt;
+  if (auto advanceOp = val.getDefiningOp<tt::AdvanceOp>())
+    return findDefiningMakeTensorPtrOp(advanceOp.getPtr());
+  if (auto makePtrOp = val.getDefiningOp<tt::MakeTensorPtrOp>())
+    return makePtrOp;
+  if (auto opRes = dyn_cast<OpResult>(val)) {
+    Operation *defOp = opRes.getOwner();
+    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp))
+      return findDefiningMakeTensorPtrOp(
+          loopOp.getYieldedValues()[opRes.getResultNumber()]);
+    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      // Give up if the 2 possible definitions aren't the same.
+      Region &thenRgn = ifOp.getThenRegion();
+      Region &elseRgn = ifOp.getElseRegion();
+      assert(thenRgn.hasOneBlock() && elseRgn.hasOneBlock() &&
+             "Expecting single blocks on both the 'then' and 'else' regions");
+      auto thenYieldOp =
+               cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator()),
+           elseYieldOp =
+               cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
+      Value thenVal = thenYieldOp->getOperand(opRes.getResultNumber()),
+            elseVal = elseYieldOp->getOperand(opRes.getResultNumber());
+      std::optional<tt::MakeTensorPtrOp> thenDef = findDefiningMakeTensorPtrOp(
+                                             thenVal),
+                                         elseDef = findDefiningMakeTensorPtrOp(
+                                             elseVal);
+      if (!thenDef || !elseDef || *thenDef != *elseDef)
+        return std::nullopt;
+      return thenDef;
+    }
+    if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+      // Give up if the 2 possible definitions aren't the same.
+      Value trueVal = selectOp.getTrueValue(),
+            falseVal = selectOp.getFalseValue();
+      std::optional<tt::MakeTensorPtrOp> trueDef = findDefiningMakeTensorPtrOp(
+                                             trueVal),
+                                         falseDef = findDefiningMakeTensorPtrOp(
+                                             falseVal);
+      if (!trueDef || !falseDef || *trueDef != *falseDef)
+        return std::nullopt;
+      return trueDef;
+    }
+
+    llvm::errs() << "defOp: " << *defOp << "\n";
+    assert(false && "unhandled operation");
+  }
+
+  return std::nullopt;
 }
 
 std::optional<int64_t> getFoldedConstantValue(Operation *op) {
@@ -70,10 +141,13 @@ Value getFinalValue(Value value) {
   assert(value && "Expecting a valid value");
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
-    // look init values outside the loop
-    BlockArgument blockArg = cast<BlockArgument>(value);
+    // Look up init values outside the loop.
+    auto blockArg = cast<BlockArgument>(value);
     Operation *parentOp = blockArg.getOwner()->getParentOp();
     if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      if (blockArg == forOp.getInductionVar())
+        return value;
+
       int numIVs = forOp.getNumInductionVars();
       int initArgIdx = blockArg.getArgNumber() - numIVs;
       auto initArgs = forOp.getInitArgs();
@@ -118,6 +192,30 @@ Value getFinalValue(Value value) {
   }
 
   return value;
+}
+
+void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
+  bool erasedOperation;
+  do {
+    erasedOperation = false;
+    SmallPtrSet<Operation *, 8> erased;
+    for (Operation *op : operations) {
+      if (!op->getUsers().empty() || !op->getRegions().empty())
+        continue;
+
+      erased.insert(op);
+      op->erase();
+      erasedOperation = true;
+    }
+    operations.remove_if([&](Operation *op) { return erased.contains(op); });
+  } while (erasedOperation);
+
+  // Remove operations that contain a region.
+  for (Operation *op : operations) {
+    if (!op->getUsers().empty())
+      continue;
+    op->erase();
+  }
 }
 
 } // namespace mlir::triton::intel

@@ -32,7 +32,7 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
     and StoreLikeOps operations.
   }];
 
-  let constructor = "mlir::createTritonNvidiaGPUPlanCTAPass()";
+  let constructor = "mlir::triton::nvidia_gpu::createTritonNvidiaGPUPlanCTAPass()";
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
@@ -41,14 +41,34 @@ def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> 
 }
 
 def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert fences across generic and async proxy.";
+
+  let description = [{
+    This pass is to insert memory fences to ensure that memory operations are
+    properly ordered across generic and async operations.
+    This pass inserts fences at optimized location.
+    There is a pass later to handle all the functional requirements
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
+def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion", "mlir::ModuleOp"> {
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
     This pass is to insert memory fences to ensure that memory operations are
     properly ordered across generic and async operations.
   }];
-
-  let constructor = "mlir::createTritonNvidiaGPUFenceInsertionPass()";
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
@@ -66,24 +86,20 @@ def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::M
   let summary = "lower to TMA load/store operations";
 
   let description = [{
-    Lower Triton experimental descriptor load to TMA load/store operations in TritonNvidiaGPUDialect.
+    Lower Triton descriptor load to TMA load/store operations in TritonNvidiaGPUDialect.
   }];
-
-  let constructor = "mlir::createTritonNvidiaGPUTMALoweringPass()";
 
   let dependentDialects = [
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
 }
 
-def TritionTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", "mlir::ModuleOp"> {
+def TritonTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", "mlir::ModuleOp"> {
   let summary = "Assign tensor memory allocation";
 
   let description = [{
     Decide on tensor memory allocation and assign attributes to each allocation.
   }];
-
-  let constructor = "mlir::createTensorMemoryAllocationPass()";
 
   let dependentDialects = [
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
@@ -97,8 +113,6 @@ def TritonNvidiaGPUMMALoweringPass : Pass<"triton-nvidia-mma-lowering", "mlir::M
     Lower MMA ops to prepare for conversion to LLVM.
   }];
 
-  let constructor = "mlir::createTritonNvidiaGPUMMALoweringPass()";
-
   let dependentDialects = [
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
@@ -110,8 +124,6 @@ def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", 
   let description = [{
     Promote LHS operand of MMAv5 op to Tensor Memory.
   }];
-
-  let constructor = "mlir::createTritonNvidiaGPUPromoteLHSToTMemPass()";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",

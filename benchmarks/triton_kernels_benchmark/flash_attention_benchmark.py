@@ -9,6 +9,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import cutlass_kernel
 import numpy as np
 
 
@@ -154,7 +155,7 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), boundary_check=(0, 1))
 
 
 configs = [
@@ -423,7 +424,7 @@ class _attention(torch.autograd.Function):
     attn_fwd: Callable = None
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale):
+    def forward(ctx, q, k, v, causal, sm_scale, dq, dk, dv, delta):
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
         assert Lq == Lk and Lk == Lv
@@ -473,7 +474,7 @@ class _attention(torch.autograd.Function):
                 advanced_path=True,  #
             )
 
-        ctx.save_for_backward(q, k, v, o, M)
+        ctx.save_for_backward(q, k, v, o, M, dq, dk, dv, delta)
         ctx.grid = grid
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = Lk
@@ -488,12 +489,9 @@ class _attention(torch.autograd.Function):
         with record_function(
                 '__profile_kernel_of_func_bwd_fa'
         ) if benchmark_suite.BENCHMARKING_METHOD == 'UPSTREAM_PYTORCH_PROFILER' else contextlib.nullcontext():
-            q, k, v, o, M = ctx.saved_tensors
+            q, k, v, o, M, dq, dk, dv, delta = ctx.saved_tensors
             assert do.is_contiguous()
             assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
-            dq = torch.empty_like(q)
-            dk = torch.empty_like(k)
-            dv = torch.empty_like(v)
             BATCH, N_HEAD, N_CTX = q.shape[:3]
             PRE_BLOCK = 128
             NUM_WARPS, NUM_STAGES = 4, 5
@@ -505,7 +503,6 @@ class _attention(torch.autograd.Function):
             PRE_BLOCK = 128
             assert N_CTX % PRE_BLOCK == 0
             pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
-            delta = torch.empty_like(M)
             _attn_bwd_preprocess[pre_grid](
                 o, do,  #
                 delta,  #
@@ -526,7 +523,7 @@ class _attention(torch.autograd.Function):
                 num_stages=NUM_STAGES  #
             )
 
-        return dq, dk, dv, None, None
+        return dq, dk, dv, None, None, None, None, None, None
 
 
 attention = _attention.apply
@@ -550,7 +547,7 @@ def get_benchmark(
     fa_kernel_mode='fwd',
     attn_fwd=_attn_fwd_with_block_pointers,
     xetla_assert_result=False,
-    xetla_warn_mismatch=True,
+    xetla_warn_mismatch=False,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -560,6 +557,7 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
         'xetla': 'XeTLA',
+        'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -600,8 +598,13 @@ def get_benchmark(
         k = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         v = torch.randn((Z, H, N_CTX, D_HEAD), device='xpu', dtype=dtype, requires_grad=True)
         sm_scale = 0.125
+        dq, dk, dv, delta = None, None, None, None
         if MODE == 'bwd':
             sm_scale = 1.3
+            dq = torch.empty_like(q)
+            dk = torch.empty_like(k)
+            dv = torch.empty_like(v)
+            delta = torch.empty_like(q)
         quantiles = [0.5, 0.0, 1.0]
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
@@ -621,7 +624,7 @@ def get_benchmark(
             )
 
         elif provider == 'triton':
-            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
+            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale, dq, dk, dv, delta)
             if MODE == 'bwd':
                 triton_o = triton_fn()
                 triton_do = torch.randn_like(triton_o)
@@ -707,6 +710,35 @@ def get_benchmark(
                 quantiles=quantiles,
             )
 
+        elif provider == 'cutlass':
+            cutlass_fn = None
+
+            if MODE == 'fwd':
+                name = 'attention'
+                func = getattr(cutlass_kernel, name)
+                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+
+                def cutlass_fwd_fn():
+                    func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
+                    return out
+
+                benchmark_suite.assert_close(cutlass_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='cutlass to torch')
+                cutlass_fn = cutlass_fwd_fn
+
+                _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(
+                    cutlass_fn,
+                    n_warmup=10,
+                    n_repeat=10,
+                    quantiles=quantiles,
+                )
+
+            else:
+                cutlass_fn = None
+                min_ms = float('nan')
+                max_ms = float('nan')
+                mean = float('nan')
+                cv = float('nan')
+
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
@@ -726,6 +758,6 @@ if __name__ == '__main__':
     _benchmark = get_benchmark(
         fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'),
         xetla_assert_result=(os.getenv('XETLA_ASSERT_RESULT', '0') == '1'),
-        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '1') == '1'),
+        xetla_warn_mismatch=(os.getenv('XETLA_WARN_MISMATCH', '0') == '1'),
     )
     _benchmark.run(show_plots=False, print_data=True)

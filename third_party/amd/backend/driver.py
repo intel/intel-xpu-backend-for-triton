@@ -1,18 +1,16 @@
 import functools
 import os
-import hashlib
 import subprocess
-import sysconfig
-import tempfile
+import re
 from pathlib import Path
-from triton.runtime.build import _build
 from triton import knobs
-from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
-from triton.backends.driver import GPUDriver, platform_key
+from triton.backends.driver import GPUDriver
+from triton.runtime.build import compile_module_from_src
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dir = [os.path.join(dirname, "include")]
+include_dirs = [os.path.join(dirname, "include")]
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
@@ -131,26 +129,6 @@ def _get_path_to_hip_runtime_dylib():
     raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
 
 
-def compile_module_from_src(src, name):
-    key = hashlib.sha256((src + platform_key()).encode("utf-8")).hexdigest()
-    cache = get_cache_manager(key)
-    suffix = sysconfig.get_config_var("EXT_SUFFIX")
-    cache_path = cache.get_file(f"{name}{suffix}")
-    if cache_path is None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_path = os.path.join(tmpdir, "main.c")
-            with open(src_path, "w") as f:
-                f.write(src)
-            so = _build(name, src_path, tmpdir, [], include_dir, [])
-            with open(so, "rb") as f:
-                cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(name, cache_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 class HIPUtils(object):
 
     def __new__(cls):
@@ -165,7 +143,7 @@ class HIPUtils(object):
         # This way we don't need to escape-quote C code curly brackets and we can replace
         # exactly once.
         src = src.replace('/*py_libhip_search_path*/', libhip_path, 1)
-        mod = compile_module_from_src(src, "hip_utils")
+        mod = compile_module_from_src(src=src, name="hip_utils", include_dirs=include_dirs)
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
 
@@ -185,15 +163,59 @@ def ty_to_cpp(ty):
         "u16": "uint16_t",
         "u32": "uint32_t",
         "u64": "uint64_t",
-        "fp16": "float",
-        "bf16": "float",
-        "fp32": "float",
-        "f32": "float",
+        "fp16": "double",
+        "bf16": "double",
+        "fp32": "double",
+        "f32": "double",
         "fp64": "double",
     }[ty]
 
 
+FLOAT_STORAGE_TYPE = {
+    "fp16": "uint16_t",
+    "bf16": "uint16_t",
+    "fp32": "uint32_t",
+    "f32": "uint32_t",
+    "fp64": "uint64_t",
+}
+FLOAT_PACK_FUNCTION = {
+    "fp16": "pack_fp16",
+    "bf16": "pack_bf16",
+    "fp32": "pack_fp32",
+    "f32": "pack_fp32",
+    "fp64": "pack_fp64",
+}
+
+_BASE_ARGS_FORMAT = "piiiKKOOOO"
+
+
 def make_launcher(constants, signature, warp_size):
+
+    def _expand_signature(signature):
+        output = []
+        # Expand tensor descriptor arguments into base pointer, shape, and
+        # strides
+        for sig in signature:
+            if isinstance(sig, str) and sig.startswith("tensordesc"):
+                ndim = sig.count(",") + 1
+                dtype = re.match("tensordesc<([^[>]*)", sig).group()
+
+                output.append("*" + dtype)
+                for _ in range(2 * ndim):
+                    output.append("i64")
+                # Currently the host side tensor descriptors get passed in as a
+                # tensor desc, shape, and strides. We have no way to use these
+                # shape and strides when processing tensor descriptors which is
+                # why we provide our own decomposition above. Sadly this means
+                # we have to pass the shape and strides twice.
+                for _ in range(ndim):
+                    output.append("i32")
+                for _ in range(ndim):
+                    output.append("i64")
+            else:
+                output.append(sig)
+
+        return output
 
     def _serialize_signature(sig):
         if isinstance(sig, tuple):
@@ -206,7 +228,7 @@ def make_launcher(constants, signature, warp_size):
             return f"[{val}]"
         if ty[0] == '*':
             return "PyObject*"
-        if ty in ("constexpr"):
+        if ty == "constexpr":
             return "PyObject*"
         return ty_to_cpp(ty)
 
@@ -216,10 +238,9 @@ def make_launcher(constants, signature, warp_size):
             return f"({val})"
         if ty[0] == '*':
             return "O"
-        if ty in ("constexpr"):
+        if ty == "constexpr":
             return "O"
         return {
-            "float": "f",
             "double": "d",
             "long": "l",
             "int8_t": "b",
@@ -232,21 +253,40 @@ def make_launcher(constants, signature, warp_size):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
+    signature = {idx: s for idx, s in enumerate(_expand_signature(signature.values()))}
+
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "piiiKKOOOO" + args_format
+    format = _BASE_ARGS_FORMAT + args_format
     signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
+    arg_decl_list = []
+    for i, ty in signature.items():
+        if ty == "constexpr":
+            continue
+        if ty in FLOAT_STORAGE_TYPE:
+            arg_decl_list.append(f"{FLOAT_STORAGE_TYPE[ty]} arg{i}")
+        else:
+            arg_decl_list.append(f"{ty_to_cpp(ty)} arg{i}")
+    arg_decls = ', '.join(arg_decl_list)
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
+        elif ty in FLOAT_STORAGE_TYPE:
+            internal_args_list.append(f"_arg{i}_storage")
         elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
+
+    float_storage_decls = [
+        f"{FLOAT_STORAGE_TYPE[ty]} _arg{i}_storage = {FLOAT_PACK_FUNCTION[ty]}(_arg{i});"
+        for i, ty in signature.items()
+        if ty in FLOAT_STORAGE_TYPE
+    ]
+
     libhip_path = _get_path_to_hip_runtime_dylib()
 
     # generate glue code
@@ -256,6 +296,7 @@ def make_launcher(constants, signature, warp_size):
     src = f"""
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #include <Python.h>
 #include <dlfcn.h>
 #include <stdbool.h>
@@ -299,9 +340,6 @@ static struct HIPSymbolTable hipSymbolTable;
 bool initSymbolTable() {{
   // Use the HIP runtime library loaded into the existing process if it exits.
   void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  if (lib) {{
-    // printf("[triton] chosen loaded libamdhip64.so in the process\\n");
-  }}
 
   // Otherwise, go through the list of search paths to dlopen the first HIP
   // driver library.
@@ -311,7 +349,6 @@ bool initSymbolTable() {{
       void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
       if (handle) {{
         lib = handle;
-        // printf("[triton] chosen %s\\n", hipLibSearchPaths[i]);
       }}
     }}
   }}
@@ -320,17 +357,36 @@ bool initSymbolTable() {{
     return false;
   }}
 
-  // Resolve all symbols we are interested in.
+  typedef hipError_t (*hipGetProcAddress_fn)(
+      const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
+      hipDriverProcAddressQueryResult *symbolStatus);
+  hipGetProcAddress_fn hipGetProcAddress;
   dlerror(); // Clear existing errors
   const char *error = NULL;
-#define QUERY_EACH_FN(hipSymbolName, ...)                                     \\
-  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);       \\
-  error = dlerror();                                                          \\
-  if (error) {{                                                               \\
-    PyErr_SetString(PyExc_RuntimeError,                                       \\
-                    "cannot query " #hipSymbolName " from libamdhip64.so");   \\
-    dlclose(lib);                                                             \\
-    return false;                                                             \\
+  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
+  error = dlerror();
+  if (error) {{
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipGetProcAddress' from libamdhip64.so");
+    dlclose(lib);
+    return false;
+  }}
+
+  // Resolve all symbols we are interested in.
+  int hipVersion = HIP_VERSION;
+  uint64_t hipFlags = 0;
+  hipDriverProcAddressQueryResult symbolStatus;
+  hipError_t status = hipSuccess;
+#define QUERY_EACH_FN(hipSymbolName, ...)                                      \
+  status = hipGetProcAddress(#hipSymbolName,                                   \
+                             (void **)&hipSymbolTable.hipSymbolName,           \
+                             hipVersion, hipFlags, &symbolStatus);             \
+  if (status != hipSuccess) {{                                                 \
+    PyErr_SetString(PyExc_RuntimeError,                                        \
+                    "cannot get address for '" #hipSymbolName                  \
+                    "' from libamdhip64.so");                                  \
+    dlclose(lib);                                                              \
+    return false;                                                              \
   }}
 
   HIP_SYMBOL_LIST(QUERY_EACH_FN, QUERY_EACH_FN)
@@ -353,7 +409,6 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  // printf("_launch hip kernel\\n");
   hipDeviceptr_t global_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0 && launch_cooperative_grid) {{
@@ -411,8 +466,33 @@ static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   return ptr_info;
 }}
 
+static uint16_t pack_fp16(double f) {{
+    uint16_t result;
+    // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
+    _PyFloat_Pack2(f, (void*)&result, 1);
+#else
+    PyFloat_Pack2(f, (void*)&result, 1);
+#endif
+    return result;
+}}
+
+static uint16_t pack_bf16(double f) {{
+    float f32 = (float)f;
+    uint32_t u32 = *(uint32_t*)&f32;
+    return (uint16_t)(u32 >> 16);
+}}
+
+static uint32_t pack_fp32(double f) {{
+    float f32 = (float)f;
+    return *(uint32_t*)&f32;
+}}
+
+static uint64_t pack_fp64(double f) {{
+    return *(uint64_t*)&f;
+}}
+
 static PyObject* launch(PyObject* self, PyObject* args) {{
-   // printf("launch\\n");
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
@@ -428,6 +508,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
     return NULL;
   }}
+
+  {' '.join(float_storage_decls)}
 
   // extract kernel metadata
   int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
@@ -494,6 +576,31 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
     return src
 
 
+def wrap_handle_tensor_descriptor(launcher):
+    """
+    Replace all tensor descriptors with the base ptr, shape, and strides
+    """
+
+    def inner(*args):
+        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
+        final_args = []
+        for arg in raw_kernel_args:
+            if isinstance(arg, TensorDescriptor):
+                # Currently the host side tensor descriptors get decomposed in
+                # the frontend to tensor desc, shape, and strides. We have no
+                # way to use these shape and strides when processing tensor
+                # descriptors which is why we provide our own decomposition
+                # above. Sadly this means we have to pass the shape and strides
+                # twice.
+                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+            else:
+                final_args.append(arg)
+        return launcher(*meta_args, *final_args)
+
+    return inner
+
+
 class HIPLauncher(object):
 
     def __init__(self, src, metadata):
@@ -502,8 +609,10 @@ class HIPLauncher(object):
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature, metadata.warp_size)
-        mod = compile_module_from_src(src, "__triton_launcher")
-        self.launch = mod.launch
+        mod = compile_module_from_src(src=src, name="__triton_launcher", include_dirs=include_dirs)
+        has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+
+        self.launch = wrap_handle_tensor_descriptor(mod.launch) if has_tensor_desc_arg else mod.launch
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
 
     def __call__(self, *args):
@@ -528,6 +637,9 @@ class HIPDriver(GPUDriver):
             return torch.cuda.is_available() and (torch.version.hip is not None)
         except ImportError:
             return False
+
+    def map_python_to_cpp_type(self, ty: str) -> str:
+        return ty_to_cpp(ty)
 
     def get_current_target(self):
         device = self.get_current_device()

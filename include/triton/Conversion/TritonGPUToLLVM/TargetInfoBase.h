@@ -94,13 +94,10 @@ public:
 
   virtual bool supportVectorizedAtomics() const = 0;
 
-  virtual bool supportLdStMatrix() const = 0;
+  virtual bool supportLdMatrix() const { return false; }
+  virtual bool supportStMatrix() const { return false; }
+  virtual bool isCuda() const { return false; }
 
-  // Annotate target specific information to local store operations during
-  // lowering to LLVM.
-  virtual void localStoreOpAnnotation(triton::gpu::LocalStoreOp op,
-                                      size_t localStoreOpCount,
-                                      Type type) const {}
   // Annotate target specific information to local load operations during
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

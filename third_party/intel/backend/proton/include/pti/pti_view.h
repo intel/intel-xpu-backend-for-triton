@@ -6,12 +6,13 @@
 #ifndef INCLUDE_PTI_VIEW_H_
 #define INCLUDE_PTI_VIEW_H_
 
-#include <level_zero/layers/zel_tracing_api.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "pti/pti.h"
 #include "pti/pti_export.h"
+#include "pti/pti_driver_levelzero_api_ids.h"
+#include "pti/pti_runtime_sycl_api_ids.h"
 
 /* clang-format off */
 #if defined(__cplusplus)
@@ -21,7 +22,6 @@ extern "C" {
 /**
  * @brief const defines.
  */
-#define PTI_MAX_DEVICE_UUID_SIZE 16                         //!< Size of uuid array.
 #define PTI_MAX_PCI_ADDRESS_SIZE 16                         //!< Size of pci address array.
 #define PTI_INVALID_QUEUE_ID 0xFFFFFFFFFFFFFFFF-1           //!< For oneAPI versions earlier than 2024.1.1 -- UINT64_MAX-1
 
@@ -30,18 +30,34 @@ extern "C" {
  * passed to ptiViewEnable/ptiViewDisable
  */
 typedef enum _pti_view_kind {
-  PTI_VIEW_INVALID = 0,                   //!< Invalid
-  PTI_VIEW_DEVICE_GPU_KERNEL = 1,         //!< Device kernels
-  PTI_VIEW_DEVICE_CPU_KERNEL = 2,         //!< Host (CPU) kernels
-  PTI_VIEW_LEVEL_ZERO_CALLS = 3,          //!< Level-Zero APIs tracing
-  PTI_VIEW_OPENCL_CALLS = 4,              //!< OpenCL APIs tracing
-  PTI_VIEW_COLLECTION_OVERHEAD = 5,       //!< Collection overhead
-  PTI_VIEW_SYCL_RUNTIME_CALLS = 6,        //!< SYCL runtime API tracing
-  PTI_VIEW_EXTERNAL_CORRELATION = 7,      //!< Correlation of external operations
-  PTI_VIEW_DEVICE_GPU_MEM_COPY = 8,       //!< Memory copies between Host and Device
-  PTI_VIEW_DEVICE_GPU_MEM_FILL = 9,       //!< Device memory fills
-  PTI_VIEW_DEVICE_GPU_MEM_COPY_P2P = 10,  //!< Peer to Peer Memory copies between Devices.
+  PTI_VIEW_INVALID = 0,                      //!< Invalid
+  PTI_VIEW_DEVICE_GPU_KERNEL = 1,            //!< Device kernels
+  PTI_VIEW_DEVICE_CPU_KERNEL = 2,            //!< Host (CPU) kernels
+  PTI_VIEW_DRIVER_API = 3,                   //!< Driver (aka back-end) API tracing
+  PTI_VIEW_RESERVED = 4,                     //!< For future use
+  PTI_VIEW_COLLECTION_OVERHEAD = 5,          //!< Collection overhead
+  PTI_VIEW_RUNTIME_API = 6,                  //!< Runtime(Sycl, other) API tracing
+  PTI_VIEW_EXTERNAL_CORRELATION = 7,         //!< Correlation of external operations
+  PTI_VIEW_DEVICE_GPU_MEM_COPY = 8,          //!< Memory copies between Host and Device
+  PTI_VIEW_DEVICE_GPU_MEM_FILL = 9,          //!< Device memory fills
+  PTI_VIEW_DEVICE_GPU_MEM_COPY_P2P = 10,     //!< Peer to Peer Memory copies between Devices.
+  PTI_VIEW_DEVICE_SYNCHRONIZATION = 11,      //!< synchronization operations on host and GPU.
 } pti_view_kind;
+
+/**
+ * @brief Synchronization types:  
+ *                             Type marked as *_GPU_* note the synchronization start/complete on device (e.g Barriers).
+ *                             Type marked as *_HOST_* note the synchronization start/end on host (e.g. Fence).
+ */
+typedef enum _pti_view_synchronization_type {
+  PTI_VIEW_SYNCHRONIZATION_TYPE_UNKNOWN = 0,                  //!< Unknown synchronization type
+  PTI_VIEW_SYNCHRONIZATION_TYPE_GPU_BARRIER_EXECUTION = 1,    //!< Barrier execution and global memory synchronization type
+  PTI_VIEW_SYNCHRONIZATION_TYPE_GPU_BARRIER_MEMORY = 2,       //!< Barrier memory range coherency synchronization type
+  PTI_VIEW_SYNCHRONIZATION_TYPE_HOST_FENCE= 3,                //!< Fence coarse grain execution synchronization type
+  PTI_VIEW_SYNCHRONIZATION_TYPE_HOST_EVENT = 4,               //!< Event host synchronization type
+  PTI_VIEW_SYNCHRONIZATION_TYPE_HOST_COMMAND_LIST = 5,        //!< Commandlist host synchronization type
+  PTI_VIEW_SYNCHRONIZATION_TYPE_HOST_COMMAND_QUEUE = 6,       //!< CommandQueue host synchronization type
+} pti_view_synchronization_type;
 
 /**
  * @brief Memory types
@@ -94,14 +110,50 @@ typedef enum _pti_view_external_kind {
 /**
  *  @brief Collection Overhead kinds
  */
-typedef enum _pti_view_overhead_kind { 
+typedef enum _pti_view_overhead_kind {
   PTI_VIEW_OVERHEAD_KIND_INVALID = 0,        //!< Invalid overhead kind
   PTI_VIEW_OVERHEAD_KIND_UNKNOWN = 1,        //!< Unknown overhead kind
-  PTI_VIEW_OVERHEAD_KIND_RESOURCE = 2,       //!< Overhead due to a resource 
+  PTI_VIEW_OVERHEAD_KIND_RESOURCE = 2,       //!< Overhead due to a resource
   PTI_VIEW_OVERHEAD_KIND_BUFFER_FLUSH = 3,   //!< Overhead due to a buffer flush
   PTI_VIEW_OVERHEAD_KIND_DRIVER = 4,         //!< Overhead due to driver
   PTI_VIEW_OVERHEAD_KIND_TIME = 5,           //!< Overhead due to L0 api processing time
 } pti_view_overhead_kind;
+
+/**
+ * @brief api_group types
+ */
+typedef enum _pti_api_group_id {
+  PTI_API_GROUP_RESERVED              = 0,
+  PTI_API_GROUP_LEVELZERO             = 1,   // Belongs to Driver super-group
+  PTI_API_GROUP_OPENCL                = 2,   // Belongs to Driver super-group
+  PTI_API_GROUP_SYCL                  = 3,   // Belongs to Runtime super-group
+  PTI_API_GROUP_HYBRID_SYCL_LEVELZERO = 4,   // Sycl api_group, L0 api_id, only for output
+  PTI_API_GROUP_HYBRID_SYCL_OPENCL    = 5,   // Sycl api_group, OCL api_id, only for output
+  PTI_API_GROUP_ALL                   = 0x7fffffff // all groups, used as input only
+                                                   // Be careful using GROUP_ALL in api calls 
+                                                   // -- you will get all *groups* now and in the *future*!
+} pti_api_group_id;
+
+/**
+ * @brief API Classes across API groups, used for coarse-grain filtering of traced APIs,
+ *                   serve only as input to PTI functions    
+ */
+ typedef enum _pti_api_class {
+  PTI_API_CLASS_RESERVED = 0,
+  PTI_API_CLASS_GPU_OPERATION_CORE = 1,                    //!< any memory or kernel APIs submitting some work to GPU
+                                                           //!< -- only Sycl Runtime mem/kernel apis covered for now.
+  PTI_API_CLASS_HOST_OPERATION_SYNCHRONIZATION = 2,        //!< Host synchronization APIs (no barriers)
+                                                           //!< -- only LZ synch apis covered for now.
+  PTI_API_CLASS_ALL = 0x7fffffff,                          //!< all APIs, makes all valid values positive numbers 
+                                                           //!< Be careful using CLASS_ALL in api calls 
+                                                           //!< -- you will get all classes *now* and in the *future*!
+ } pti_api_class;
+
+typedef void* pti_backend_queue_t; //!< Backend queue handle
+
+typedef void* pti_backend_ctx_t; //!< Backend context handle
+
+typedef void* pti_backend_evt_t; //!< Backend event handle
 
 /**
  * @brief Base View record type
@@ -115,8 +167,8 @@ typedef struct pti_view_record_base {
  */
 typedef struct pti_view_record_kernel {
   pti_view_record_base _view_kind;                  //!< Base record
-  ze_command_queue_handle_t _queue_handle;          //!< Device back-end queue handle
-  ze_context_handle_t _context_handle;              //!< Context handle
+  pti_backend_queue_t _queue_handle;                //!< Device back-end queue handle
+  pti_backend_ctx_t _context_handle;                //!< Context handle
   const char* _name;                                //!< Kernel name
   const char* _source_file_name;                    //!< Kernel source file,
                                                     //!< null if no information
@@ -144,17 +196,25 @@ typedef struct pti_view_record_kernel {
 } pti_view_record_kernel;
 
 /**
- * @brief SYCL runtime API View record type
+ * @brief Synchronization View record type
  */
-typedef struct pti_view_record_sycl_runtime{
-  pti_view_record_base _view_kind;  //!< Base record
-  const char* _name;                //!< SYCL runtime function name
-  uint64_t _start_timestamp;        //!< Function enter timestamp, ns
-  uint64_t _end_timestamp;          //!< Function exit timestamp, ns
-  uint32_t _process_id;             //!< Process ID of function call
-  uint32_t _thread_id;              //!< Thread ID of function call
-  uint32_t _correlation_id;         //!< ID that correlates this record with records of other Views
-} pti_view_record_sycl_runtime;
+typedef struct pti_view_record_synchronization{
+  pti_view_record_base _view_kind;                  //!< Base record
+  pti_view_synchronization_type _synch_type;        //!< Synchronization type
+  pti_backend_ctx_t _context_handle;                //!< Context handle
+  pti_backend_ctx_t _queue_handle;                  //!< Queue handle
+  pti_backend_evt_t _event_handle;                  //!< Event handle synchronization api is called with.
+  uint64_t _start_timestamp;                        //!< For host synchronization types: function enter timestamp
+                                                    //!< For gpu synchronization types: synch start timestamp on device
+  uint64_t _end_timestamp;                          //!< For host synchronization types: function exit timestamp
+                                                    //!< For gpu synchronization types: synch complete timestamp on device
+  uint32_t _thread_id;                              //!< Thread ID of function call
+  uint32_t _correlation_id;                         //!< ID that correlates this record with records of other Views
+  uint32_t _number_wait_events;                     //!< For relevent event synch types (eg. Barriers)
+  uint32_t _return_code;                            //!< L0/OCL synch api onexit return type - cast to specific driver code type
+  uint32_t _api_id;                                 //!< Id of this synch api call
+  pti_api_group_id _api_group;                      //!< Defines api api_group this record was collected in (L0,Sycl,OCL, etc).
+} pti_view_record_synchronization;
 
 /**
  * @brief Memory Copy Operation View record type
@@ -164,10 +224,12 @@ typedef struct pti_view_record_memory_copy {
   pti_view_memcpy_type _memcpy_type;                //!< Memory copy type
   pti_view_memory_type _mem_src;                    //!< Memory type
   pti_view_memory_type _mem_dst;                    //!< Memory type
-  ze_command_queue_handle_t _queue_handle;          //!< Device back-end queue handle
-  ze_context_handle_t _context_handle;              //!< Context handle
+  pti_backend_queue_t _queue_handle;                //!< Device back-end queue handle
+  pti_backend_ctx_t _context_handle;                //!< Context handle
   const char* _name;                                //!< Back-end API name making a memory copy
   char _pci_address[PTI_MAX_PCI_ADDRESS_SIZE];      //!< Source or Destination Device pci_address
+                                                    //!< Only a single device is represented by
+                                                    //!< this record
   uint8_t _device_uuid[PTI_MAX_DEVICE_UUID_SIZE];   //!< Source or Destination Device uuid
   uint64_t _mem_op_id;                              //!< Memory operation ID, unique among
                                                     //!< all memory operations instances
@@ -192,8 +254,8 @@ typedef struct pti_view_record_memory_copy_p2p {
   pti_view_memcpy_type _memcpy_type;                //!< Memory copy type
   pti_view_memory_type _mem_src;                    //!< Memory type
   pti_view_memory_type _mem_dst;                    //!< Memory type
-  ze_command_queue_handle_t _queue_handle;          //!< Device back-end queue handle
-  ze_context_handle_t _context_handle;              //!< Context handle
+  pti_backend_queue_t _queue_handle;                //!< Device back-end queue handle
+  pti_backend_ctx_t _context_handle;                //!< Context handle
   const char* _name;                                //!< Back-end API name making a memory copy
   char _src_pci_address[PTI_MAX_PCI_ADDRESS_SIZE];  //!< Source Device pci_address
   char _dst_pci_address[PTI_MAX_PCI_ADDRESS_SIZE];  //!< Destination Device pci_address
@@ -220,8 +282,8 @@ typedef struct pti_view_record_memory_copy_p2p {
 typedef struct pti_view_record_memory_fill {
   pti_view_record_base _view_kind;                  //!< Base record
   pti_view_memory_type _mem_type;                   //!< Type of memory filled
-  ze_command_queue_handle_t _queue_handle;          //!< Device back-end queue handle
-  ze_context_handle_t _context_handle;              //!< Context handle
+  pti_backend_queue_t _queue_handle;                //!< Device back-end queue handle
+  pti_backend_ctx_t _context_handle;                //!< Context handle
   const char* _name;                                //!< Back-end API name making a memory fill
   char _pci_address[PTI_MAX_PCI_ADDRESS_SIZE];      //!< Device pci_address
   uint8_t _device_uuid[PTI_MAX_DEVICE_UUID_SIZE];   //!< Device uuid
@@ -261,7 +323,8 @@ typedef struct pti_view_record_overhead {
   pti_view_record_base _view_kind;          //!< Base record
   uint64_t _overhead_start_timestamp_ns;    //!< Overhead observation start timestamp, ns
   uint64_t _overhead_end_timestamp_ns;      //!< Overhead observation end timestamp, ns
-  uint64_t _overhead_thread_id;             //!< Thread ID of where the overhead observed
+  uint32_t _overhead_thread_id;             //!< Thread ID of where the overhead observed
+  uint32_t _api_id;                         //!< API id of the overhead
   uint64_t _overhead_count;                 //!< number of views in the overhead region
   uint64_t _overhead_duration_ns;           //!< Cumulative duration of the overhead over
                                             //!< the observation region, could be less than
@@ -269,6 +332,21 @@ typedef struct pti_view_record_overhead {
                                             //!< start and the end
   pti_view_overhead_kind  _overhead_kind;   //!< Type of overhead
 } pti_view_record_overhead;
+
+/**
+ * @brief apicalls View record type
+ */
+typedef struct pti_view_record_api {
+  pti_view_record_base _view_kind; //!< Base record
+  uint64_t _start_timestamp;       //!< function call start timestamp, ns
+  uint64_t _end_timestamp;         //!< function call end timestamp, ns
+  pti_api_group_id _api_group;     //!< Defines api api_group this record was collected in (L0,Sycl,OCL, etc).
+  uint32_t _api_id;                //!< Id of this api call
+  uint32_t _process_id;            //!< Process ID of where the api call observed
+  uint32_t _thread_id;             //!< Thread ID of where the api call observed
+  uint32_t _correlation_id;        //!< Id correlating this call with other views, eg: memfill, memcpy and kernel gpu activity
+  uint32_t _return_code;           //!< Applicable only for PTI_VIEW_DRIVER_CALL, type cast to specific driver code type
+} pti_view_record_api;
 
 
 /**
@@ -279,9 +357,11 @@ typedef struct pti_view_record_overhead {
  * @param used_bytes
  * @return void
  */
+
 typedef void (*pti_fptr_buffer_completed)(unsigned char* buffer,
                                              size_t buffer_size_in_bytes,
                                              size_t used_bytes);
+
 
 /**
  * @brief Function pointer for buffer requested
@@ -394,7 +474,7 @@ PTI_EXPORT const char*
 ptiViewMemcpyTypeToString( pti_view_memcpy_type type );
 
 /**
- * @brief Returns current pti host timestamp in nanoseconds. The timestamp is in the same domain as view records timestamps.
+ * @brief Returns current Intel(R) PTI host timestamp in nanoseconds. The timestamp is in the same api_group as view records timestamps.
  *
  * @return uint64_t
  */
@@ -410,14 +490,58 @@ ptiViewGetTimestamp();
 typedef uint64_t (*pti_fptr_get_timestamp)( void );
 
 /**
- * @brief Sets callback to user provided timestamping function.  This will replace the default pti host timestamper.
+ * @brief Sets callback to user provided timestamping function.  This will replace the default Intel(R) PTI host timestamper.
  *        Multiple callbacks that set differing timestamp function, through the session; will result in differing
- *        timestamp domains in the view record buffer.
+ *        timestamp api_groups in the view record buffer.
  *
  * @return pti_result
  */
 pti_result PTI_EXPORT
 ptiViewSetTimestampCallback(pti_fptr_get_timestamp fptr_timestampRequested);
+
+/**
+ * @brief Gets api name for api id to user -- the api is embedded in the pti_view_record_api.
+ * Sample usage -  const char* pName = nullptr;
+ *              -  pti_result status = ptiViewGetApiIdName(pti_cb_api_function_type::PTI_CB_DRIVER, rec._api_id, &pName);
+ *
+ * @return pti_result
+ */
+pti_result PTI_EXPORT
+ptiViewGetApiIdName(pti_api_group_id type, uint32_t unique_id, const char** name);
+
+/**
+ * @brief Enable/Disable driver specific API specified by api_id within the api_group_id.
+ *
+ * @return pti_result
+ */
+pti_result PTI_EXPORT
+ptiViewEnableDriverApi(uint32_t enable, pti_api_group_id api_group_id, uint32_t api_id);
+
+/**
+ * @brief Enable/Disable runtime specific API specified by api_id within the api_group_id.
+ *
+ * @return pti_result
+ */
+pti_result PTI_EXPORT
+ptiViewEnableRuntimeApi(uint32_t enable, pti_api_group_id api_group_id, uint32_t api_id);
+
+/**
+ * @brief Enable/Disable driver APIs tracing specified by api_class across specified api group(s).
+ *        Use for the coarse-grain control of the Driver APIs tracing.
+ *
+ * @return pti_result
+ */
+pti_result  PTI_EXPORT 
+ptiViewEnableDriverApiClass(uint32_t enable, pti_api_class api_class, pti_api_group_id group);
+
+/**
+ * @brief Enable/Disable runtime APIs tracing specified by api_class across specified api group(s).
+ *        Use for the coarse-grain control of the Runtime APIs tracing.
+ *
+ * @return pti_result
+ */
+pti_result  PTI_EXPORT 
+ptiViewEnableRuntimeApiClass(uint32_t enable, pti_api_class api_class, pti_api_group_id group);
 
 #if defined(__cplusplus)
 }

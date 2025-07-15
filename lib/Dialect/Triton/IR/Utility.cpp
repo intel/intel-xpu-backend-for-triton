@@ -1,13 +1,15 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 
 Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                       Value pred) {
-  Type maskType = tt::getI1SameShape(typeLike);
+  Type maskType = tt::getI1SameShape(tt::getPointeeType(typeLike));
   Location loc = pred.getLoc();
   Value mask = pred;
   if (isa<RankedTensorType>(maskType)) {
@@ -88,5 +90,34 @@ tt::MakeTensorPtrOp tt::getMakeTensorPtrOp(Value v) {
                : condBr.getFalseDestOperands()[argNum]);
     return tt::getMakeTensorPtrOp(argOwner->getOperand(argNum));
   }
+  if (auto whileOp = dyn_cast<scf::WhileOp>(argOwner)) {
+    return tt::getMakeTensorPtrOp(whileOp.getOperand(argNum));
+  }
   llvm_unreachable("Unable to getMakeTensorPtr()");
+}
+
+Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
+  Location loc = loop.getLoc();
+  // (ub - lb -1) // step * step + lb
+  Value diff =
+      b.create<arith::SubIOp>(loc, loop.getUpperBound(), loop.getLowerBound());
+  diff = b.create<arith::SubIOp>(
+      loc, diff, b.create<arith::ConstantOp>(loc, b.getI32IntegerAttr(1)));
+  Value ceilStep = b.create<arith::MulIOp>(
+      loc, b.create<arith::DivSIOp>(loc, diff, loop.getStep()), loop.getStep());
+  return b.create<arith::AddIOp>(loc, ceilStep, loop.getLowerBound());
+}
+
+bool tt::isKernel(FunctionOpInterface funcOp) {
+  return funcOp.getVisibility() == SymbolTable::Visibility::Public;
+}
+
+bool tt::isHostSideDescriptor(Value v) {
+  auto arg = dyn_cast<BlockArgument>(v);
+  if (!arg)
+    return false;
+  auto funcOp = dyn_cast<FunctionOpInterface>(arg.getOwner()->getParentOp());
+  if (!funcOp)
+    return false;
+  return tt::isKernel(funcOp);
 }

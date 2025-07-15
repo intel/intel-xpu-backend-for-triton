@@ -92,8 +92,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     // ReduceOp and ConvertLayoutOp, which prevents a segmentation fault.
     // However, this is a temporary solution. Once the OutDimSize computation
     // issue in LinearLayout is resolved, this workaround should be removed.
-    int32_t subGroupSize = std::min((int32_t)op.getType().getNumElements(),
-                                    conversion.getOutDimSize(kLane));
+    int32_t numElems = std::min((int32_t)op.getType().getNumElements(),
+                                conversion.getOutDimSize(kLane));
+    int32_t subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
     if (!op->hasAttr("allocation.offset")) {
       op->setAttr("allocation.offset",
                   rewriter.getIntegerAttr(rewriter.getI32Type(), 0));
@@ -130,7 +132,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         });
 
     SmallVector<Value> outVals = performSubGroupShuffle(
-        loc, inVals, subGroupSize, rewriter,
+        loc, inVals, numElems, subGroupSize, rewriter,
         getNumContiguousRowsForShuffle(srcLayout, dstLayout));
 
     // TODO: Drop 'BFloat16Type' and 'IntegerType' cases when supported at MLIR
@@ -163,6 +165,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   SmallVector<Value> performSubGroupShuffle(Location loc,
                                             ArrayRef<Value> inVals,
+                                            int32_t numElems,
                                             int32_t subGroupSize,
                                             ConversionPatternRewriter &rewriter,
                                             int numContiguousRows) const {
@@ -176,7 +179,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // matrix: Output element `i` will take the `i / 16`th value from the `i %
       // 16`th thread.
       for (Value val : inVals) {
-        for (int32_t i = 0; i < subGroupSize; ++i) {
+        for (int32_t i = 0; i < numElems; ++i) {
           res.push_back(
               rewriter
                   .create<mlir::gpu::ShuffleOp>(loc, val, b.i32_val(i), width,
@@ -188,7 +191,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // 2. Elements held by a work-item are contiguous rows in the abstract
       // slice matrix: Output element `i` will take the `i % 16`th value from
       // the `i / 16`th thread.
-      for (int32_t i = 0; i < subGroupSize; ++i) {
+      for (int32_t i = 0; i < numElems; ++i) {
         for (Value val : inVals) {
           res.push_back(
               rewriter
@@ -399,6 +402,22 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 };
 
+struct ConvertLayoutOpGuard : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
+  using ConvertOpToLLVMPattern<ConvertLayoutOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+    assert(!intel::cvtIsSubGroupShuffle(srcTy, dstTy) &&
+           "Failed to lower layout conversion through sub-group shuffles");
+    assert(!intel::cvtIsSubGroupTranspose(srcTy, dstTy) &&
+           "Failed to lower layout conversion through sub-group transpose");
+    return failure();
+  }
+};
+
 } // namespace
 
 } // namespace mlir::triton::gpu
@@ -410,6 +429,12 @@ void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
   // higher benefit.
   patterns.add<gpu::ConvertLayoutOpUsingLinearLayoutsConversion>(
       typeConverter, targetInfo, benefit.getBenefit() + 2);
+  // This guards is to make sure we don't fall back to the generic patterns
+  // for some specific cases. We check that we've lowered all those cases
+  // for which the default allocation analysis for scratch buffer size was
+  // not used. Otherwise, SLM corruption might occur.
+  patterns.add<gpu::ConvertLayoutOpGuard>(typeConverter,
+                                          benefit.getBenefit() + 1);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                       patterns, benefit);
 }

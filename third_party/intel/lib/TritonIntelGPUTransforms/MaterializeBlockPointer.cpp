@@ -7,6 +7,7 @@
 #include "mlir/IR/Visitors.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -35,6 +36,18 @@ public:
       TritonIntelGPUMaterializeBlockPointerPass>::
       TritonIntelGPUMaterializeBlockPointerBase;
 
+  static Value getPointerFromOp(Operation *op) {
+    return TypeSwitch<Operation *, Value>(op)
+        .Case<tt::LoadOp, tt::StoreOp>([](auto op) { return op.getPtr(); })
+        .Default([&](auto) {
+          llvm_unreachable(
+              +("Invalid operation: " + op->getName().getStringRef())
+                   .str()
+                   .c_str());
+          return Value{};
+        });
+  }
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     if (!mod->hasAttr(
@@ -44,22 +57,25 @@ public:
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     MLIRContext *context = &getContext();
-    mod.walk([&](tt::LoadOp loadOp) {
-      LDBG("Considering op: " << loadOp);
-
-      Value ptr = loadOp.getPtr();
-      if (!tt::isTensorPointerType(ptr.getType()))
-        return MaterializeTensorOfPointers(loadOp, axisInfoAnalysis);
-
-      assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
-             "Expected 'loadOp' to load a tensor value.");
-
-      // Find the make tensor ptr operation that created the base ptr.
-      tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-      if (!makeTensorPtrOp) {
-        LDBG("Could not find make tensor ptr op for: " << loadOp);
+    mod.walk([&](Operation *op) {
+      if (!isa<tt::LoadOp, tt::StoreOp>(op)) {
         return;
       }
+      LDBG("Considering op: " << *op);
+
+      Value ptr = getPointerFromOp(op);
+      if (!tt::isTensorPointerType(ptr.getType()))
+        return MaterializeTensorOfPointers(op, axisInfoAnalysis);
+
+      // Find the make tensor ptr operation that created the base ptr.
+      std::optional<tt::MakeTensorPtrOp> defOp =
+          tt::intel::findDefiningMakeTensorPtrOp(ptr);
+      if (!defOp) {
+        LDBG("Could not find make tensor ptr op for: " << *op);
+        return;
+      }
+
+      tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
       LDBG("Make tensor ptr op: " << makeTensorPtrOp);
 
       Operation::operand_range shape = makeTensorPtrOp.getShape();
@@ -68,8 +84,8 @@ public:
       if (rank == 1)
         return;
 
-      if (!satisfies2DBlockReadAlignment(loadOp, axisInfoAnalysis)) {
-        LDBG("Alignment checks failed for: " << loadOp);
+      if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
+        LDBG("Alignment checks failed for: " << *op);
         return;
       }
 
@@ -104,8 +120,7 @@ public:
           return;
 
         const bool isRowMajor = (strideOneDimVal == rank - 1);
-        std::optional<ttg::DotOperandEncodingAttr> dotLayout =
-            getDotLayout(loadOp);
+        std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
         if (dotLayout) {
           // Check if the load is being used by a tt.dot operation, and if so is
           // this the first operand and is it a transposed row major matrix. If
@@ -124,31 +139,33 @@ public:
           }
         }
 
-        loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                        StringAttr::get(context, isRowMajor ? "row_major"
-                                                            : "column_major"));
+        op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                    StringAttr::get(context,
+                                    isRowMajor ? "row_major" : "column_major"));
       }
     });
   }
 
 private:
   void MaterializeTensorOfPointers(
-      tt::LoadOp loadOp,
+      Operation *op,
       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    MLIRContext *context = loadOp.getContext();
-    Value ptr = loadOp.getPtr();
+    MLIRContext *context = op->getContext();
+    Value ptr = getPointerFromOp(op);
     assert(!tt::isTensorPointerType(ptr.getType()) &&
-           "Expected 'loadOp' to load a tensor value.");
+           "Expected pointer refer to a tensor.");
 
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return;
 
-    LDBG("Considering tensor of pointer load op: " << loadOp);
+    LDBG("Considering tensor of pointer of memory accessing op: " << *op);
 
-    if (loadOp.getMask()) {
-      LDBG("Load op has mask, skip block IO attribute");
-      return;
+    if (auto loadOp = dyn_cast<tt::LoadOp>(*op)) {
+      if (loadOp.getMask()) {
+        LDBG("Load op has mask, skip block IO attribute");
+        return;
+      }
     }
 
     // The axis info gives the information about the value of the indices
@@ -183,9 +200,8 @@ private:
       }
 
       // Value -1 is used to represent the unknown stride.
-      if (axisInfo->getStride(otherDim) <= 0) {
-        LDBG("Found unknown or non positive stride: "
-             << axisInfo->getStride(otherDim));
+      if (axisInfo->getStride(otherDim) < 0) {
+        LDBG("Found unknown stride: " << axisInfo->getStride(otherDim));
         return false;
       }
 
@@ -213,8 +229,8 @@ private:
     // Check if loadOp is row major, i.e., fast changing dimension is one.
     if (isMajor(1 /*fastChangeDim*/)) {
       LDBG("Setting row_major attribute\n");
-      loadOp->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                      StringAttr::get(context, "row_major"));
+      op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                  StringAttr::get(context, "row_major"));
     }
 
     // TODO: set column_major attribute
@@ -223,9 +239,8 @@ private:
   // Return the load layout if it is a dot layout. If it is not, check if the
   // load result is converted to a dot layout. If so, return the dot layout,
   // otherwise return nullopt.
-  std::optional<ttg::DotOperandEncodingAttr>
-  getDotLayout(tt::LoadOp loadOp) const {
-    Value ptr = loadOp.getPtr();
+  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(Operation *op) const {
+    Value ptr = getPointerFromOp(op);
     if (!tt::isTensorPointerType(ptr.getType()))
       return std::nullopt;
 
@@ -252,7 +267,7 @@ private:
       });
     };
 
-    Operation::user_range users = loadOp->getUsers();
+    Operation::user_range users = op->getUsers();
     if (!users.empty() && allUsersAreConvertOps(users) &&
         allUserHaveIdenticalLayout(users)) {
       Attribute firstUserLayout =
@@ -280,19 +295,18 @@ private:
   }
 
   bool satisfies2DBlockReadAlignment(
-      tt::LoadOp loadOp,
+      Operation *op,
       tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
-    Value ptr = loadOp.getPtr();
+    Value ptr = getPointerFromOp(op);
     assert(tt::isTensorPointerType(ptr.getType()) &&
            "Expected a ptr to a tensor of ptrs.");
-    assert(isa<RankedTensorType>(loadOp.getResult().getType()) &&
-           "Expected 'loadOp' to load a ranked tensor value.");
 
     // Find the make tensor ptr operation that created the base ptr for the load
     // operation.
-    tt::MakeTensorPtrOp makeTensorPtrOp = tt::getMakeTensorPtrOp(ptr);
-    assert(makeTensorPtrOp && "Expected a make tensor ptr op.");
-
+    std::optional<tt::MakeTensorPtrOp> defOp =
+        tt::intel::findDefiningMakeTensorPtrOp(ptr);
+    assert(defOp && "Expected a make tensor ptr op.");
+    tt::MakeTensorPtrOp makeTensorPtrOp = *defOp;
     Operation::operand_range shape = makeTensorPtrOp.getShape();
     if (shape.size() == 1)
       return false;
@@ -347,7 +361,7 @@ private:
     }
     LDBG("offset: " << offset);
 
-    Region *loadRgn = loadOp->getParentRegion();
+    Region *loadRgn = op->getParentRegion();
     Region *makeTensorPtrRgn = makeTensorPtrOp->getParentRegion();
     bool inSameRegion = (loadRgn == makeTensorPtrRgn);
     if (inSameRegion)
