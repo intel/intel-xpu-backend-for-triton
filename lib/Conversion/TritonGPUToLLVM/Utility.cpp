@@ -309,7 +309,6 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
   // thread ID within the warp group.
   if (std::optional<int> startId =
           getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
-    //    TritonLLVMOpBuilder b(loc, rewriter);
     tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
   }
 
