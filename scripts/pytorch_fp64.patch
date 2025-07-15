@@ -1,5 +1,5 @@
 diff --git a/benchmarks/dynamo/common.py b/benchmarks/dynamo/common.py
-index 1088634ce911e8..fbd8b2277b1cf2 100644
+index 1088634ce911e8..4e70bf5bfce434 100644
 --- a/benchmarks/dynamo/common.py
 +++ b/benchmarks/dynamo/common.py
 @@ -1598,6 +1598,12 @@ def cast_to_fp32(model, inputs):
@@ -15,7 +15,7 @@ index 1088634ce911e8..fbd8b2277b1cf2 100644
  class DummyGradScaler:
      def scale(self, loss):
          return loss
-@@ -2097,13 +2103,27 @@ def record_status(accuracy_status, dynamo_start_stats):
+@@ -2097,10 +2103,24 @@ def record_status(accuracy_status, dynamo_start_stats):
              model_fp64 = None
              inputs_fp64 = None
              try:
@@ -23,9 +23,6 @@ index 1088634ce911e8..fbd8b2277b1cf2 100644
 -                    self.deepcopy_and_maybe_parallelize(model),
 -                    clone_inputs(example_inputs),
 -                )
--                self.init_optimizer(name, current_device, model_fp64.parameters())
--                fp64_outputs = self.run_n_iterations(
--                    model_fp64, inputs_fp64, self.model_iter_fn
 +                # Currently, XPU GEMM FP64 support is WIP. Therefore, we explicitly fallback to
 +                # CPU to execute FP64 and take the result as the gold reference.
 +                if current_device == "xpu":
@@ -44,12 +41,9 @@ index 1088634ce911e8..fbd8b2277b1cf2 100644
 +
 +                # current_device of init_optimizer only impacts which optimizer will be applied. It does
 +                # not change any tensor internally. Hence, we leave as it is rather than passing cpu.
-+                self.init_optimizer(name, current_device, model_ref.parameters())
-+                ref_outputs = self.run_n_iterations(
-+                    model_ref, inputs_ref, self.model_iter_fn
-                 )
-                 fp64_outputs = tree_map(
-                     lambda x: x.to(torch.float64)
+                 self.init_optimizer(name, current_device, model_fp64.parameters())
+                 fp64_outputs = self.run_n_iterations(
+                     model_fp64, inputs_fp64, self.model_iter_fn
 @@ -2111,11 +2131,19 @@ def record_status(accuracy_status, dynamo_start_stats):
                      else x,
                      fp64_outputs,
