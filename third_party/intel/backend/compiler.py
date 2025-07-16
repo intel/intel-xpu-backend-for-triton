@@ -67,9 +67,7 @@ def min_dot_size(device_props: dict):
     # M: repeatCount. 1,2,4,8
     # N: executionSize. 16 for PVC, 8 for ATS
     # K: systolicDepth x opsPerChan. systolicDepth must be 8
-
-    # default 8 because 1,2,4 is not supported by our backend now.
-    repeat_count = 8
+    repeat_count = 1
     sdepth = 8
     exec_size = min(device_props["sub_group_sizes"])
 
