@@ -3930,7 +3930,7 @@ def get_test_dot_vdot2_cases():
 
 
 def get_test_small_dots_cases():
-    if not is_cuda():
+    if not (is_cuda() or is_xpu()):
         return []
     return [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
             (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None)]
@@ -6214,6 +6214,8 @@ layouts = [
         dim=1, parent=DotOperandLayout(parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8]),
                                        op_idx=1, k_width=2)),
     DpasLayout(repeatCount=8, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
+               warps_per_cta=[4, 1], rep_cluster=[1, 1]),
+    DpasLayout(repeatCount=2, systolic_depth=8, execution_size=8, ops_per_chan=1, threads_per_warp=32,
                warps_per_cta=[4, 1], rep_cluster=[1, 1])
 ]
 

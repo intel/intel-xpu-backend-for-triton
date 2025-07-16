@@ -333,3 +333,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// CHECK: #[[$DPAS0:.+]] = #ttig.dpas<{repeatCount = 1, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [1, 16], B = [16, 16], C = [1, 16]}>
+// CHECK: #[[$DPAS1:.+]] = #ttig.dpas<{repeatCount = 2, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [2, 16], B = [16, 16], C = [2, 16]}>
+// CHECK: #[[$DPAS2:.+]] = #ttig.dpas<{repeatCount = 4, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [4, 16], B = [16, 16], C = [4, 16]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_dpas"} {
+  tt.func @M_smaller_than_8(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: M_smaller_than_8
+    %b = arith.constant dense<0.000000e+00> : tensor<128x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+
+    // CHECK: tt.dot {{.*}} -> tensor<1x16xf32, #[[$DPAS0]]>
+    %a0 = arith.constant dense<0.000000e+00> : tensor<1x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %zero0 = arith.constant dense<0.000000e+00> : tensor<1x16xf32, #blocked>
+    %result0 = tt.dot %a0, %b, %zero0 : tensor<1x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<1x16xf32, #blocked>
+    %result_ptr0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x16x!tt.ptr<f32>, #blocked>
+    tt.store %result_ptr0, %result0 : tensor<1x16x!tt.ptr<f32>, #blocked>
+
+    // CHECK: tt.dot {{.*}} -> tensor<2x16xf32, #[[$DPAS1]]>
+    %a1 = arith.constant dense<0.000000e+00> : tensor<2x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %zero1 = arith.constant dense<0.000000e+00> : tensor<2x16xf32, #blocked>
+    %result1 = tt.dot %a1, %b, %zero1 : tensor<2x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<2x16xf32, #blocked>
+    %result_ptr1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x16x!tt.ptr<f32>, #blocked>
+    tt.store %result_ptr1, %result1 : tensor<2x16x!tt.ptr<f32>, #blocked>
+
+    // CHECK: tt.dot {{.*}} -> tensor<4x16xf32, #[[$DPAS2]]>
+    %a2 = arith.constant dense<0.000000e+00> : tensor<4x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %zero2 = arith.constant dense<0.000000e+00> : tensor<4x16xf32, #blocked>
+    %result2 = tt.dot %a2, %b, %zero2 : tensor<4x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<4x16xf32, #blocked>
+    %result_ptr2 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x16x!tt.ptr<f32>, #blocked>
+    tt.store %result_ptr2, %result2 : tensor<4x16x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
