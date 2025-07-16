@@ -73,10 +73,7 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
 
         # Multi-query attention. H_kv equals 1.
         # Append shapes of Deepseek-v3 (Nope)
-        [
-            # RuntimeError: No valid triton configs. OutOfResources: out of resource: shared memory, Required: 133120, Hardware limit: 131072.
-            # [z, 128, 1, 512, 1024 + 128 + 512, 64, 512, 'fwd'] for z in batch_sizes
-        ] +
+        [[z, 128, 1, 512, 1024 + 128 + 512, 64, 512, 'fwd'] for z in batch_sizes] +
         # Append shapes of Deepseek-v3 (Rope)
         [] +
 
@@ -106,7 +103,9 @@ batch_sizes = [16, 32, 64] if throughput_test else [1]
         ] +
         # Decode shapes of Deepseek-v3 (Nope)
         [
-            # RuntimeError: No valid triton configs. OutOfResources: out of resource: shared memory, Required: 264192, Hardware limit: 131072.
+            # There is an known issue in IGC for kernel with extreme register pressure.
+            # Enable this case later with new IGC.
+            # RuntimeError: ZE_RESULT_ERROR_INVALID_KERNEL_NAME
             # [z, 128, 1, 1, 1024, 64, 512, 'fwd'] for z in batch_sizes
         ] +
         # Decode shapes of Deepseek-v3 (Rope)
