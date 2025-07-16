@@ -1176,7 +1176,8 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
   // CHECK-LABEL: atomic_add_f32_scalar_no_store
   tt.func @atomic_add_f32_scalar_no_store(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK:      [[ZERO0:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:      [[MASKLANE:%.*]] = llvm.and
+    // CHECK:      [[CST_NEG_ONE:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+    // CHECK-NEXT: [[MASKLANE:%.*]] = llvm.and
     // CHECK-NEXT: [[CMPLANE:%.*]] = llvm.icmp "eq" [[MASKLANE]], [[ZERO0]]
     // CHECK:      [[MASKWARP:%.*]] = llvm.and
     // CHECK-NEXT: [[CMPWARP:%.*]] = llvm.icmp "eq" [[MASKWARP]], [[ZERO0]]
@@ -1212,7 +1213,8 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
   // CHECK-LABEL: atomic_add_f32_scalar
   tt.func @atomic_add_f32_scalar(%arg0 : !tt.ptr<f32>, %arg1 : i1, %arg2 : f32) {
     // CHECK:      [[ZERO0:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK:      [[MASKLANE:%.*]] = llvm.and
+    // CHECK:      [[CST_NEG_ONE:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+    // CHECK-NEXT: [[MASKLANE:%.*]] = llvm.and
     // CHECK-NEXT: [[CMPLANE:%.*]] = llvm.icmp "eq" [[MASKLANE]], [[ZERO0]]
     // CHECK:      [[MASKWARP:%.*]] = llvm.and
     // CHECK-NEXT: [[CMPWARP:%.*]] = llvm.icmp "eq" [[MASKWARP]], [[ZERO0]]

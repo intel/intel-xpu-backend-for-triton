@@ -323,8 +323,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[THREADID_i64:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[C0]])
     // CHECK: [[THREADID:%.*]] = llvm.trunc [[THREADID_i64]] : i64 to i32
+    // CHECK: [[C127:%.*]] = llvm.mlir.constant(127 : i32) : i32
+    // CHECK: [[RTID:%.*]] = llvm.and [[THREADID]], [[C127]] : i32
     // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: [[REM:%.*]] = llvm.urem [[THREADID]], [[C8]] : i32
+    // CHECK: [[REM:%.*]] = llvm.urem [[RTID]], [[C8]] : i32
+
     // CHECK: [[NEWVAL:%.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij([[OLDVAL]], [[REM]])
     // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[VEC1:%.*]] = llvm.insertelement [[NEWVAL]], [[VEC]][[[C0]] : i32] : vector<2xi32>
@@ -334,8 +337,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: [[THREADID_i64:%.*]] = llvm.call spir_funccc @_Z12get_local_idj([[C0]])
     // CHECK: [[THREADID:%.*]] = llvm.trunc [[THREADID_i64]] : i64 to i32
+    // CHECK: [[C127:%.*]] = llvm.mlir.constant(127 : i32) : i32
+    // CHECK: [[RTID:%.*]] = llvm.and [[THREADID]], [[C127]] : i32
     // CHECK: [[C8:%.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: [[REM:%.*]] = llvm.urem [[THREADID]], [[C8]] : i32
+    // CHECK: [[REM:%.*]] = llvm.urem [[RTID]], [[C8]] : i32
     // CHECK: [[NEWVAL:%.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij([[OLDVAL]], [[REM]])
     // CHECK: [[C1:%.*]] = llvm.mlir.constant(1 : i32) : i32
     // CHECK: [[VEC2:%.*]] = llvm.insertelement [[NEWVAL]], [[VEC1]][[[C1]] : i32] : vector<2xi32>

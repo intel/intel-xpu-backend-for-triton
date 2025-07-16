@@ -244,10 +244,12 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
       %0 = tt.make_tensor_ptr %arg0, [%c64_i64, %c64_i64], [%c1_i64, %col_stride], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<64x16xf16, #blocked>>
       // CHECK: llvm.call spir_funccc @_Z12get_local_idj
       // CHECK-NOT: llvm.icmp "slt"
-      // CHECK: %[[threadID:.*]] = llvm.call spir_funccc @_Z12get_local_idj
-      // CHECK: %[[VAL_583:.*]] = llvm.trunc %[[threadID]] : i64 to i32
-      // CHECK: %[[VAL_584:.*]] = llvm.mlir.constant(16 : i32) : i32
-      // CHECK: %[[VAL_586:.*]] = llvm.udiv %[[VAL_583]], %[[VAL_584]] : i32
+      // CHECK: %[[THREAD_ID:.*]] = llvm.call spir_funccc @_Z12get_local_idj
+      // CHECK: %[[THREAD_ID_32:.*]] = llvm.trunc %[[THREAD_ID]] : i64 to i32
+      // CHECK-DAG: %[[CST_127:.*]] = llvm.mlir.constant(127 : i32) : i32
+      // CHECK-DAG: %[[RTID:.*]] = llvm.and %[[THREAD_ID_32:.*]], %[[CST_127]] : i32
+      // CHECK-DAG: %[[VAL_584:.*]] = llvm.mlir.constant(16 : i32) : i32
+      // CHECK: %[[VAL_586:.*]] = llvm.udiv %[[RTID]], %[[VAL_584]] : i32
       // CHECK: %[[VAL_587:.*]] = llvm.mlir.constant(3 : i32) : i32
       // CHECK: %[[VAL_588:.*]] = llvm.and %[[VAL_586]], %[[VAL_587]] : i32
       // CHECK: %[[threadPred:.*]] = llvm.icmp "eq" %[[VAL_588]], {{.*}} : i32
