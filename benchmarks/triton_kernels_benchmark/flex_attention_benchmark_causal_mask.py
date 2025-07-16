@@ -13,7 +13,7 @@ import torch._inductor
 import torch._inductor.lowering
 import torch._inductor.kernel
 import torch._inductor.kernel.flex_attention as flex_attn
-from torch._inductor.template_heuristics import FlexConfig
+from torch._inductor.template_heuristics import FlexConfig, FlexDecodeConfig
 
 import triton_kernels_benchmark as benchmark_suit
 
@@ -32,10 +32,25 @@ def get_flex_attn_fwd_configs(*args, **kwargs):  # pylint: disable=unused-argume
     return configs
 
 
+def get_flex_decode_configs(*args, **kwargs):  # pylint: disable=unused-argument
+    configs = [
+        FlexDecodeConfig(32, 1, 2),
+        FlexDecodeConfig(32, 1, 1),
+        FlexDecodeConfig(32, 2, 2),
+        FlexDecodeConfig(32, 2, 1),
+        FlexDecodeConfig(64, 1, 2),
+        FlexDecodeConfig(64, 1, 1),
+        FlexDecodeConfig(64, 2, 2),
+        FlexDecodeConfig(64, 2, 1),
+    ]
+    return configs
+
+
 # There is a auto-tuning requirement to get the best configuration for the flex attention.
 # The pytorch flex attention doesn't support auto-tuning by user by default.
 # Overriding the get_flex_attention_fwd_configs method to provide custom configurations for auto-tuning on XPU.
 flex_attn.V.choices.get_flex_attention_fwd_configs = get_flex_attn_fwd_configs
+flex_attn.V.choices.get_flex_decode_configs = get_flex_decode_configs
 
 torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
