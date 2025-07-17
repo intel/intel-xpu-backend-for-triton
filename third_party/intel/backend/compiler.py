@@ -11,7 +11,6 @@ import hashlib
 import tempfile
 import signal
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -148,30 +147,6 @@ class XPUBackend(BaseBackend):
             dev_prop.update(self.device_props[self.device_arch])
             return dev_prop
 
-        supported_extensions = set()
-
-        if knobs.intel.device_extensions:
-            supported_extensions.update(knobs.intel.device_extensions.split(' '))
-        elif shutil.which('ocloc'):
-            try:
-                cmd = ['ocloc', 'query', 'CL_DEVICE_EXTENSIONS', '-device', self.device_arch]
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    output = subprocess.check_output(cmd, text=True, cwd=temp_dir)
-                supported_extensions.update(output.split(' '))
-            except subprocess.CalledProcessError:
-                # Note: LTS driver does not support ocloc query CL_DEVICE_EXTENSIONS.
-                pass
-
-        ocloc_dev_prop = {}
-        ocloc_dev_prop[
-            'has_subgroup_matrix_multiply_accumulate'] = 'cl_intel_subgroup_matrix_multiply_accumulate' in supported_extensions
-        ocloc_dev_prop[
-            'has_subgroup_matrix_multiply_accumulate_tensor_float32'] = 'cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32' in supported_extensions
-        ocloc_dev_prop['has_subgroup_2d_block_io'] = 'cl_intel_subgroup_2d_block_io' in supported_extensions
-        ocloc_dev_prop['has_bfloat16_conversions'] = 'cl_intel_bfloat16_conversions' in supported_extensions
-        self.device_props[self.device_arch] = ocloc_dev_prop
-        dev_prop.update(ocloc_dev_prop)
-
         return dev_prop
 
     def parse_options(self, opts) -> Any:
@@ -304,6 +279,7 @@ class XPUBackend(BaseBackend):
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)

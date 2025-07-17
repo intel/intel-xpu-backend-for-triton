@@ -187,15 +187,17 @@ class SpirvUtils:
 
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue")
+        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "has_opencl_extension")
         for method in methods:
             getattr(self.shared_library, method).restype = ctypes.py_object
             getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
+        self.shared_library.has_opencl_extension.restype = ctypes.py_object
+        self.shared_library.has_opencl_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
 
     def __getattribute__(self, name):
-        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue"):
+        if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "has_opencl_extension"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
 
@@ -311,6 +313,7 @@ class XPUUtils(object):
         self.get_device_properties = self.mod.get_device_properties
         self.device_count = self.mod.init_devices(self.get_sycl_queue())
         self.wait_on_sycl_queue = self.mod.wait_on_sycl_queue
+        self.has_opencl_extension = self.mod.has_opencl_extension
 
     def get_current_device(self):
         import torch
@@ -601,7 +604,7 @@ static uint16_t pack_fp16(double f) {{
 #if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 && !defined(PYPY_VERSION)
     _PyFloat_Pack2(f, (unsigned char *)&result, 1);
 #else
-    PyFloat_Pack2(f, (void*)&result, 1);
+    PyFloat_Pack2(f, (char*)&result, 1);
 #endif
     return result;
 }}
@@ -802,12 +805,39 @@ class XPUDriver(DriverBase):
         import torch
         return torch.xpu.current_stream().sycl_queue
 
+    def update_advanced_features(self, device, dev_property):
+        if knobs.intel.device_extensions:
+            # May be useful when using the `TRITON INTEL_DEVICE_ARCH` environment variable
+            # to be able to flexibly turn on/off the advanced feature.
+            supported_extensions = set()
+            supported_extensions.update(knobs.intel.device_extensions.split(" "))
+            dev_property[
+                "has_subgroup_matrix_multiply_accumulate"] = "cl_intel_subgroup_matrix_multiply_accumulate" in supported_extensions
+            dev_property[
+                "has_subgroup_matrix_multiply_accumulate_tensor_float32"] = "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32" in supported_extensions
+            dev_property["has_subgroup_2d_block_io"] = "cl_intel_subgroup_2d_block_io" in supported_extensions
+            dev_property["has_bfloat16_conversions"] = "cl_intel_bfloat16_conversions" in supported_extensions
+        else:
+            check = self.utils.has_opencl_extension
+            # FIXME: eventually even LTS driver will support OpenCL extensions.
+            # Please remove this after upgrading to a new version.
+            # https://github.com/intel/intel-xpu-backend-for-triton/issues/4708
+            is_lts = "1.3" in dev_property["driver_version"]
+            dev_property["has_subgroup_matrix_multiply_accumulate"] = check(
+                device, b"cl_intel_subgroup_matrix_multiply_accumulate") if not is_lts else False
+            dev_property["has_subgroup_matrix_multiply_accumulate_tensor_float32"] = check(
+                device, b"cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32") if not is_lts else False
+            dev_property["has_subgroup_2d_block_io"] = check(device,
+                                                             b"cl_intel_subgroup_2d_block_io") if not is_lts else False
+            dev_property["has_bfloat16_conversions"] = check(device,
+                                                             b"cl_intel_bfloat16_conversions") if not is_lts else False
+
     def get_current_target(self):
         import torch
         device = self.get_current_device()
         dev_property = torch.xpu.get_device_capability(device)
-        warp_size = 32
-        return GPUTarget("xpu", dev_property, warp_size)
+        self.update_advanced_features(device, dev_property)
+        return GPUTarget("xpu", dev_property, warp_size=32)
 
     def build_proton_help_lib(self):
         from triton.backends.intel.driver import compile_module_from_src
