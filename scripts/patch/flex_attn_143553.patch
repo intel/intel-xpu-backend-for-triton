@@ -1,5 +1,5 @@
 diff --git a/.ci/docker/common/install_xpu.sh b/.ci/docker/common/install_xpu.sh
-index 51e9df623d5d1a..647e77f6d17bdc 100644
+index ecbbb8ccccf897..6349a7c6829c77 100644
 --- a/.ci/docker/common/install_xpu.sh
 +++ b/.ci/docker/common/install_xpu.sh
 @@ -35,12 +35,12 @@ function install_ubuntu() {
@@ -33,7 +33,7 @@ index a0e7dce3df4d55..9cd30e0178bf92 100644
  RUN bash ./install_xpu.sh && rm install_xpu.sh
  
 diff --git a/test/inductor/test_flex_attention.py b/test/inductor/test_flex_attention.py
-index 4d14555800c8c4..ab40d19d2ff5ee 100644
+index fa6400dd9c2724..b72d8e9021fc58 100644
 --- a/test/inductor/test_flex_attention.py
 +++ b/test/inductor/test_flex_attention.py
 @@ -41,20 +41,26 @@
@@ -450,7 +450,7 @@ index 4d14555800c8c4..ab40d19d2ff5ee 100644
              dtype=torch.bfloat16,
          )
          query, key, value = make_tensor(), make_tensor(), make_tensor()
-@@ -4730,6 +4803,7 @@ def flex_attention_fn():
+@@ -4722,6 +4795,7 @@ def flex_attention_fn():
          )
  
      @supported_platform
@@ -458,8 +458,8 @@ index 4d14555800c8c4..ab40d19d2ff5ee 100644
      def test_create_is_cuda_graphable(self, device):
          def mask_mod(b, h, q, kv):
              return q >= kv
-@@ -4771,7 +4845,7 @@ def create_inputs(S):
-             flex_attention_call(*create_inputs(1024), block_mask=block_mask)
+@@ -4903,7 +4977,7 @@ def test_block_mask_operations_with_none_q_indices(self, device):
+             self.assertIsNone(cpu_mask.q_indices)
  
  
 -@large_tensor_test_class("2GB", device="cuda")
@@ -467,7 +467,7 @@ index 4d14555800c8c4..ab40d19d2ff5ee 100644
  class TestPagedAttention(InductorTestCase):
      def setUp(self):
          super().setUp()
-@@ -5086,6 +5160,7 @@ def test_update(self, device):
+@@ -5218,6 +5292,7 @@ def test_update(self, device):
      @supported_platform
      @dtypes(*device_configs["cpu"].dtypes)
      @dtypesIfCUDA(*device_configs["cuda"].dtypes)
@@ -475,7 +475,7 @@ index 4d14555800c8c4..ab40d19d2ff5ee 100644
      @common_utils.parametrize("score_mod", test_score_mods)
      def test_paged_builtin_score_mods(
          self, device, dtype: torch.dtype, score_mod: Callable
-@@ -5214,14 +5289,17 @@ def get_params(dtypes: list[torch.dtype]) -> list[Params]:
+@@ -5346,14 +5421,17 @@ def get_params(dtypes: list[torch.dtype]) -> list[Params]:
  
  
  supports_learnable_bias = unittest.skipUnless(
@@ -497,7 +497,7 @@ index 4d14555800c8c4..ab40d19d2ff5ee 100644
  class TestLearnableBiases(InductorTestCase):
      def setUp(self):
          super().setUp()
-@@ -6112,10 +6190,22 @@ def _test_learnable_bias_inner(
+@@ -6244,10 +6322,22 @@ def _test_learnable_bias_inner(
              )
  
  
@@ -691,7 +691,7 @@ index 3b4905fc356168..3a165e5fff2eda 100644
  if __name__ == "__main__":
      from torch._inductor.test_case import run_tests
 diff --git a/torch/_inductor/kernel/flex_attention.py b/torch/_inductor/kernel/flex_attention.py
-index 99e869dc8fdb71..1426f000d191d2 100644
+index 9a7507631cc490..1a761bf3833e56 100644
 --- a/torch/_inductor/kernel/flex_attention.py
 +++ b/torch/_inductor/kernel/flex_attention.py
 @@ -1441,7 +1441,9 @@ def flex_attention(
@@ -705,7 +705,7 @@ index 99e869dc8fdb71..1426f000d191d2 100644
  
      # Mark SPARSE_KV_BLOCK_SIZE & SPARSE_Q_BLOCK_SIZE as static shapes and add guards.
      SPARSE_KV_BLOCK_SIZE = V.graph.sizevars.guard_int(SPARSE_KV_BLOCK_SIZE)
-@@ -2557,7 +2559,9 @@ def flex_attention_backward(*args, **kwargs):
+@@ -2560,7 +2562,9 @@ def flex_attention_backward(*args, **kwargs):
  
      dtype = query.get_dtype()
      head_dim = V.graph.sizevars.guard_int(query.get_size()[-1])
@@ -717,7 +717,7 @@ index 99e869dc8fdb71..1426f000d191d2 100644
      # Default config for warp specialization
      num_consumer_groups, num_buffers_warp_spec = 0, 0
 diff --git a/torch/_inductor/kernel/flex_decoding.py b/torch/_inductor/kernel/flex_decoding.py
-index 7e0aef98185603..343086e5b2d16a 100644
+index 7e0aef98185603..6c8bd4b593ae38 100644
 --- a/torch/_inductor/kernel/flex_decoding.py
 +++ b/torch/_inductor/kernel/flex_decoding.py
 @@ -310,7 +310,10 @@ def flex_decoding_grid(batch_size, kv_heads, gqa_group_size, n_keys, d_model, me
@@ -743,11 +743,71 @@ index 7e0aef98185603..343086e5b2d16a 100644
  
      # TODO: fix autotuning.
  
+@@ -448,24 +453,41 @@ def create_flex_decoding_kernel(*args, **kwargs):
+ 
+     set_head_dim_values(kernel_options, qk_head_dim, v_head_dim, V.graph.sizevars)
+ 
+-    kernel_options.setdefault(
+-        "BLOCK_M",
+-        (
+-            # m
+-            # if V.graph.sizevars.evaluate_expr(sympy.Lt(query.get_size()[-2], 0))
+-            # else  # Always use a BLOCK_M > 16 before Triton fix https://github.com/triton-lang/triton/pull/4061 is in pin
+-            max(
+-                next_power_of_2(
+-                    V.graph.sizevars.size_hint(
+-                        seq_len_q,
+-                        fallback=torch._inductor.config.unbacked_symint_fallback,  # type: ignore[arg-type]
+-                    )
+-                    * gqa_shared_heads
+-                ),
+-                16,
+-            )
+-        ),
+-    )
++    if torch.xpu.is_available():
++        kernel_options.setdefault(
++            "BLOCK_M",
++            (
++                max(
++                    next_power_of_2(
++                        V.graph.sizevars.size_hint(
++                            seq_len_q,
++                            fallback=torch._inductor.config.unbacked_symint_fallback,  # type: ignore[arg-type]
++                        )
++                        * gqa_shared_heads
++                    ),
++                    8,
++                )
++            ),
++        )
++    else:
++        kernel_options.setdefault(
++            "BLOCK_M",
++            (
++                # m
++                # if V.graph.sizevars.evaluate_expr(sympy.Lt(query.get_size()[-2], 0))
++                # else  # Always use a BLOCK_M > 16 before Triton fix https://github.com/triton-lang/triton/pull/4061 is in pin
++                max(
++                    next_power_of_2(
++                        V.graph.sizevars.size_hint(
++                            seq_len_q,
++                            fallback=torch._inductor.config.unbacked_symint_fallback,  # type: ignore[arg-type]
++                        )
++                        * gqa_shared_heads
++                    ),
++                    16,
++                )
++            ),
++        )
+ 
+     query = ir.ExternKernel.realize_input(query)
+     stride_b, stride_hq, stride_seq_len_q, stride_qk_head_dim = query.get_stride()
 diff --git a/torch/_inductor/template_heuristics.py b/torch/_inductor/template_heuristics.py
-index dfd37523a37027..b830ec6369a9d7 100644
+index 40a9645186792f..eaa6fbeaf0d4ea 100644
 --- a/torch/_inductor/template_heuristics.py
 +++ b/torch/_inductor/template_heuristics.py
-@@ -1178,3 +1178,87 @@ class XPUConfigHeuristic(BaseConfigHeuristic):
+@@ -1185,3 +1185,87 @@ class XPUConfigHeuristic(BaseConfigHeuristic):
      """
      Placeholder child class for XPU specific overrides.
      """
@@ -836,7 +896,7 @@ index dfd37523a37027..b830ec6369a9d7 100644
 +
 +        return flex_decode_configs
 diff --git a/torch/_ops.py b/torch/_ops.py
-index 337b9a11e6a180..5e3423285e02b5 100644
+index 600f6d9e1ada1c..1121ced7eaa5ff 100644
 --- a/torch/_ops.py
 +++ b/torch/_ops.py
 @@ -267,6 +267,7 @@ def resolve_key(op: OperatorBase, k: DispatchKey):  # type: ignore[valid-type]
@@ -848,10 +908,10 @@ index 337b9a11e6a180..5e3423285e02b5 100644
  
  
 diff --git a/torch/nn/attention/flex_attention.py b/torch/nn/attention/flex_attention.py
-index 15a00e1a9d342b..3c9b3a20173997 100644
+index ce592c1ed342f8..bcc180184d9aa4 100644
 --- a/torch/nn/attention/flex_attention.py
 +++ b/torch/nn/attention/flex_attention.py
-@@ -1142,11 +1142,8 @@ def _validate_device(query: Tensor, key: Tensor, value: Tensor):
+@@ -1146,11 +1146,8 @@ def _validate_device(query: Tensor, key: Tensor, value: Tensor):
      """TODO: Remove once non cuda/cpu devices support is added
      We only need to check query since we have already that q,k,v are on the same device
      """

@@ -1,3 +1,4 @@
+import os
 import itertools
 
 import numpy as np
@@ -7,6 +8,8 @@ import pathlib
 
 import triton
 from triton._internal_testing import is_xpu
+
+os.environ["TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"] = "1"
 
 
 class DpasLayout:
@@ -184,3 +187,6 @@ def test_block_store(M, N, dtype_str, layout, block_ptr, device, tmp_path: pathl
 
     kernel[(1, 1, 1)](a, x)
     assert torch.equal(a, x)
+
+    if support_block_io and block_ptr:
+        assert 'spirv_Subgroup2DBlockStoreINTEL' in kernel.asm['llir'] or 'GenISA.LSC2DBlockWrite' in kernel.asm['llir']

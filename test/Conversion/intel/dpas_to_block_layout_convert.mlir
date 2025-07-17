@@ -10,24 +10,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
   tt.func public @convert_dpas(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
-    // CHECK-DAG:           %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-DAG:           %[[CST_16384:.*]] = llvm.mlir.constant(16384 : i32) : i32
-    // CHECK-DAG:           %[[CST_8192:.*]] = llvm.mlir.constant(8192 : i32) : i32
-    // CHECK-DAG:           %[[CST_128:.*]] = llvm.mlir.constant(128 : i32) : i32
-    // CHECK-DAG:           %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
-    // CHECK-DAG:           %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
-    // CHECK-DAG:           %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK-DAG:           %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
-    // CHECK-DAG:           %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
-    // CHECK-DAG:           %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-DAG:           %[[SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK-DAG:           %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
-    // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG:       %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK-DAG:       %[[CST_16384:.*]] = llvm.mlir.constant(16384 : i32) : i32
+    // CHECK-DAG:       %[[CST_8192:.*]] = llvm.mlir.constant(8192 : i32) : i32
+    // CHECK-DAG:       %[[CST_128:.*]] = llvm.mlir.constant(128 : i32) : i32
+    // CHECK-DAG:       %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK-DAG:       %[[CST_32:.*]] = llvm.mlir.constant(32 : i32) : i32
+    // CHECK-DAG:       %[[CST_8:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK-DAG:       %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK-DAG:       %[[CST_2:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK-DAG:       %[[CST_1:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-DAG:       %[[SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK-DAG:       %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK-DAG:       %[[CST_511:.*]] = llvm.mlir.constant(511 : i32) : i32
+    // CHECK-DAG:       %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout.  The conversion replica size is 128*256. So there is 1 round of load/store with synchronization.
     // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
-    // CHECK:           %[[laneId:.*]] = llvm.urem %[[threadId]], %[[CST_16]]  : i32
-    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[threadId]], %[[CST_16]]  : i32
+    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId:.*]], %[[CST_511]] : i32
+    // CHECK:           %[[laneId:.*]] = llvm.urem %[[rtid]], %[[CST_16]]  : i32
+    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
     // CHECK:           %[[VAL_25:.*]] = llvm.and %[[laneId]], %[[CST_1]] : i32
     // CHECK:           %[[VAL_26:.*]] = llvm.icmp "eq" %[[VAL_25]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_27:.*]] = llvm.select %[[VAL_26]], %[[CST_0]], %[[CST_1]] : i1, i32
@@ -115,12 +117,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK-DAG:           %[[SMEM:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
     // CHECK-DAG:           %[[CST_16:.*]] = llvm.mlir.constant(16 : i32) : i32
     // CHECK-DAG:           %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG:           %[[CST_511:.*]] = llvm.mlir.constant(511 : i32) : i32
 
     // COM: The following operations is generated for the conversion of DPAS layout to blocked layout. The conversion replica size is 64*256. So there are 2 round of load/store with synchronization.
     // CHECK:           %[[threadId_64:.*]] = llvm.call spir_funccc @_Z12get_local_idj(%[[CST_0]]) {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none>, no_unwind, will_return} : (i32) -> i64
     // CHECK:           %[[threadId:.*]] = llvm.trunc %[[threadId_64]] : i64 to i32
-    // CHECK:           %[[laneId:.*]] = llvm.urem %[[threadId]], %[[CST_16]]  : i32
-    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[threadId]], %[[CST_16]]  : i32
+    // CHECK:           %[[rtid:.*]] = llvm.and %[[threadId]], %[[CST_511]] : i32
+    // CHECK:           %[[laneId:.*]] = llvm.urem %[[rtid]], %[[CST_16]]  : i32
+    // CHECK:           %[[warpId:.*]] = llvm.udiv %[[rtid]], %[[CST_16]]  : i32
     // CHECK:           %[[VAL_25:.*]] = llvm.and %[[laneId]], %[[CST_1]] : i32
     // CHECK:           %[[VAL_26:.*]] = llvm.icmp "eq" %[[VAL_25]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_27:.*]] = llvm.select %[[VAL_26]], %[[CST_0]], %[[CST_1]] : i1, i32
