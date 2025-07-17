@@ -160,10 +160,10 @@ def _attn_fwd_with_block_pointers(Q, K, V, sm_scale, M, Out,  #
 
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN, 'grf_mode': 'large', 'one_matrix_per_load_for_bt': True}, num_stages=s, num_warps=w) \
-    for BM in [128, 256] \
-    for BN in [32, 64] \
-    for s in [2, 3, 4] \
-    for w in [8, 16, 32] \
+    for BM in [256] \
+    for BN in [32] \
+    for s in [2] \
+    for w in [16] \
     ]
 
 tuner = triton.autotune(configs, key=['N_CTX', 'BLOCK_DMODEL', 'STAGE'])
@@ -570,9 +570,9 @@ def get_benchmark(
             # argument names to use as an x-axis for the plot
             x_names=['Z', 'H', 'N_CTX', 'D_HEAD', 'CAUSAL', 'MODE'],
             x_vals=[[z, h, 16384 // z, dhead, causal, mode]
-                    for z in [1, 2, 4, 8, 16, 32]
-                    for (h, dhead) in [(16, 128), (32, 64)]
-                    for causal in [False, True]
+                    for z in [1]
+                    for (h, dhead) in [(16, 128)]
+                    for causal in [False]
                     for mode in [fa_kernel_mode]]  #
             + [[4, 48, 1024, 64, causal, mode] for causal in [False, True] for mode in [fa_kernel_mode]],
             line_arg='provider',
