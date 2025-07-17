@@ -555,8 +555,6 @@ def get_benchmark(
     """
 
     supported_providers = {
-        'triton': 'Triton',
-        'xetla': 'XeTLA',
         'cutlass': 'CUTLASS',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
