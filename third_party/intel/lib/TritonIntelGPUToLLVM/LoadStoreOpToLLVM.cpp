@@ -2599,6 +2599,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
         uint32_t alignment = nWords * width / 8;
         Value ret = b.load(retTy, addrElem, alignment);
+        if (auto intTy = dyn_cast<IntegerType>(retTy))
+          assert(intTy.getIntOrFloatBitWidth() != 1);
         return {ret};
       };
 
