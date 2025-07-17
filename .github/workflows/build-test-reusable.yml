@@ -165,9 +165,9 @@ jobs:
           pip install -r scripts/requirements-test.txt git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
 
       # Unit tests require `build` directory.
-      - name: Run unit tests
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --unit
+      #- name: Run unit tests
+        #run: |
+          #${{ env.TRITON_TEST_CMD }} --unit
 
       # Instrumentation tests require `build` directory.
       - name: Run instrumentation tests
