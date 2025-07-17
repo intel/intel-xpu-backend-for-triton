@@ -590,6 +590,7 @@ def get_benchmark(
         ))
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
+        print(f'Running benchmark for Z={Z}, H={H}, N_CTX={N_CTX}, D_HEAD={D_HEAD}, CAUSAL={CAUSAL}, MODE={MODE}, provider={provider}')
         modes = ['fwd', 'bwd']
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
