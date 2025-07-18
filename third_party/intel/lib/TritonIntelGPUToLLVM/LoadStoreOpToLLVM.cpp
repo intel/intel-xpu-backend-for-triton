@@ -3322,10 +3322,9 @@ struct AtomicRMWOpConversion
       bool support16BitAtomics = moduleOp->hasAttr(
           TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
       if (valueElemNBits == 16 && !support16BitAtomics) {
-        op.emitWarning(
-            "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
-            "HW, software emulation is an experimental feature (use at own "
-            "risk)");
+        op.emitWarning("'tt.atomic_rmw' op fp16/bf16 datatype is not supported "
+                       "in the target HW, software emulation is an "
+                       "experimental feature (use at own risk)");
         Block *endBlock = emulate16BitsAtomicRmw(
             rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
