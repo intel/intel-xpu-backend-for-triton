@@ -3326,7 +3326,7 @@ struct AtomicRMWOpConversion
             "'tt.atomic_rmw' op fp16 datatype is not supported in the target "
             "HW, software emulation is an experimental feature (use at own "
             "risk)");
-        Block *endBlock = emulate16BitAtomicRmw(
+        Block *endBlock = emulate16BitsAtomicRmw(
             rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
