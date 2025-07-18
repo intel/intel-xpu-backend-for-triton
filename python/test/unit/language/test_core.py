@@ -1580,6 +1580,7 @@ def test_noinline(mode, device):
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",
     itertools.chain.from_iterable([[
+        ('add', 'bfloat16', mode, sem),
         ('add', 'float16', mode, sem),
         ('add', 'uint32', mode, sem),
         ('add', 'int32', mode, sem),
@@ -1609,6 +1610,8 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
             pytest.xfail("Only test atomic bfloat16/float16 ops on GPU")
     if "uint" in dtype_x_str and mode in ["min_neg", "all_neg"]:
         pytest.xfail("uint cannot be negative")
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     n_programs = 5
 
@@ -1623,12 +1626,14 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     sem_arg = sem if sem is None else f'"{sem}"'
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x, sem={sem_arg})'})
     numpy_op = {'add': np.sum, 'max': np.max, 'min': np.min}[op]
-    max_neutral = float('-inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).min
-    min_neutral = float('inf') if dtype_x_str in float_dtypes else np.iinfo(getattr(np, dtype_x_str)).max
+    max_neutral = float('-inf') if dtype_x_str in float_dtypes_with_bfloat16 else np.iinfo(getattr(np, dtype_x_str)).min
+    min_neutral = float('inf') if dtype_x_str in float_dtypes_with_bfloat16 else np.iinfo(getattr(np, dtype_x_str)).max
     neutral = {'add': 0, 'max': max_neutral, 'min': min_neutral}[op]
 
     # triton result
     rs = RandomState(17)
+    dst_type = 'bfloat16' if (dtype_x_str == 'bfloat16') else None
+    dtype_x_str = 'float32' if (dtype_x_str == 'bfloat16') else dtype_x_str
     x = np.array([2**i for i in range(n_programs)], dtype=getattr(np, dtype_x_str))
     if mode == 'all_neg':
         x = -np.abs(x)
@@ -1640,12 +1645,17 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     if mode == 'max_pos':
         idx = rs.randint(n_programs, size=(1, )).item()
         x[idx] = np.max(np.abs(x)) + 1
-    x_tri = to_triton(x, device=device)
+    x_tri = to_triton(x, device=device, dst_type=dst_type)
 
-    z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device)
+    z_tri = to_triton(np.array([neutral], dtype=getattr(np, dtype_x_str)), device=device, dst_type=dst_type)
     h = kernel[(n_programs, )](x_tri, z_tri)
     # torch result
-    z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
+    if dst_type == 'bfloat16':
+        z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
+        # trunc mantissa for a fair comparison of accuracy
+        z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+    else:
+        z_ref = numpy_op(x).astype(getattr(np, dtype_x_str))
     # compare
     exact = op not in ['add']
     if exact:
@@ -1654,6 +1664,12 @@ def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
     sem_str = "acq_rel" if sem is None else sem
     if not is_cuda():
+        return
+
+    # atom.add.bf16 is unsupported prior to Hopper so instead we generate an
+    # atom.cas add loop on Ampere and prior
+    if dst_type == 'bfloat16' and torch.cuda.get_device_capability()[0] < 9:
+        assert f"atom.{sem_str}.global.cas" in h.asm["ptx"]
         return
 
     assert f"atom.global.gpu.{sem_str}" in h.asm["ptx"]
@@ -1680,10 +1696,12 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
                           for axis in [0, 1]
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']
+                          for dtype_x_str in ['bfloat16', 'float16', 'float32', 'uint64', 'int64', 'float64']
                           for check_return_val in ([True, False] if is_hip() else [True])])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
     shape0, shape1 = shape
     # triton kernel
 
@@ -1694,14 +1712,14 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
         off1 = tl.arange(0, SHAPE1)
         x = tl.load(X + off0[:, None] * SHAPE1 + off1[None, :])
 
-        if DTYPE == tl.float16:
+        if DTYPE == tl.float16 or DTYPE == tl.bfloat16:
             # sum can have bad numerics when accumulating in float16.
             # if we're dealing with float16, do the sum in float32.
             x = x.to(tl.float32)
 
         z = tl.sum(x, axis=AXIS)
 
-        if DTYPE == tl.float16:
+        if DTYPE == tl.float16 or DTYPE == tl.bfloat16:
             z = z.to(DTYPE)
 
         if AXIS == 1:
@@ -1717,7 +1735,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
     x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)
     z_shape = (shape0, ) if axis == 1 else (shape1, )
     z = numpy_random(z_shape, dtype_str=dtype_x_str, rs=rs)
-    old = np.zeros(z_shape, dtype=getattr(np, dtype_x_str))
+    old = np.zeros(z_shape, dtype=z.dtype)
     # reference results
     if x.dtype == np.float16:
         # do the sum in float32 to reduce numerical variation
@@ -1726,17 +1744,31 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
         z_ref = z + np.sum(x, axis=axis, keepdims=False)
     old_ref = np.copy(z)
     # triton result
-    x_tri = to_triton(x, device=device)
-    z_tri = to_triton(z, device=device)
-    old_tri = to_triton(old, device=device)
+    x_tri = to_triton(x, device=device, dst_type=dtype_x_str)
+    z_tri = to_triton(z, device=device, dst_type=dtype_x_str)
+    old_tri = to_triton(old, device=device, dst_type=dtype_x_str)
 
     def torch_to_triton_dtype(t):
+        if t == torch.bfloat16:
+            return tl.bfloat16
         if t == torch.float16:
             return tl.float16
         return None
 
     kernel[(1, )](z_tri, x_tri, old_tri, axis, shape0, shape1, torch_to_triton_dtype(x_tri.dtype), check_return_val,
                   num_ctas=num_ctas)
+
+    if dtype_x_str == 'bfloat16':
+        # trunc mantissa for a fair comparison of accuracy
+        z_ref = (z_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+        old_ref = (old_ref.view('uint32') & np.uint32(0xffff0000)).view('float32')
+        # mantissa trunc is not enough, bump up the relative tolerance as well
+        np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.5)
+        # check return vals, but use assert_allclose for bf16
+        if check_return_val:
+            np.testing.assert_allclose(old_ref, to_numpy(old_tri), rtol=0.5)
+        return
+
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
     if check_return_val:
         np.testing.assert_equal(old_ref, to_numpy(old_tri))
@@ -1746,8 +1778,11 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
 @pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
                                                          for size in [2, 4, 8, 32, 64, 128]
                                                          for num_ctas in num_ctas_list
-                                                         for dtype_x_str in ['float16', 'float32']])
+                                                         for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1757,8 +1792,9 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
         tl.atomic_add(X + offset // 2, val)
 
     shape = (size // 2, size)
-    x = torch.zeros(shape, dtype=getattr(torch, dtype_x_str), device=device)
-    val = torch.randn((size**2), dtype=getattr(torch, dtype_x_str), device=device)
+    dtype = getattr(torch, dtype_x_str)
+    x = torch.zeros(shape, dtype=dtype, device=device)
+    val = torch.randn((size**2), dtype=dtype, device=device)
     kernel[(1, )](x, val, size, num_warps=1, num_ctas=num_ctas)
     ref = val[0::2] + val[1::2]
     torch.testing.assert_close(ref, x.reshape(math.prod(shape)))
@@ -1768,9 +1804,11 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
 @pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
                                                          for size in [2, 4, 8, 32, 64, 128]
                                                          for num_ctas in num_ctas_list
-                                                         for dtype_x_str in ['float16', 'float32']])
+                                                         for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(X, val, NUM: tl.constexpr):
@@ -1801,11 +1839,14 @@ def test_tensor_atomic_add_shift_1(size, num_ctas, dtype_x_str, device):
                           for idx_order in ['increase', 'decrease', 'random_no_duplication', 'random']
                           for mask_step in range(1, 5)
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float16', 'float32']])
+                          for dtype_x_str in ['bfloat16', 'float16', 'float32']])
 def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
         pytest.xfail("not supported in the interpreter")
+
+    if is_xpu() and dtype_x_str == 'bfloat16':
+        pytest.skip("bfloat16 not yet supported for xpu")
 
     @triton.jit
     def kernel(in_ptr, idx_ptr, out_ptr, shape0, shape1, mask_step, XBLOCK: tl.constexpr):
@@ -1829,8 +1870,9 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
     if idx_order == 'random':
         idx = torch.randint(0, shape1, size=(shape0, shape1), device=device)
 
-    val = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
-    dst = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
+    dtype = getattr(torch, dtype_x_str)
+    val = torch.randn((shape0, shape1), dtype=dtype, device=device)
+    dst = torch.randn((shape0, shape1), dtype=dtype, device=device)
 
     dst_ref = dst.clone()
 
@@ -1842,6 +1884,11 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
             cnt += 1
 
     kernel[(1, )](val, idx, dst, shape0, shape1, mask_step, 64, num_ctas=num_ctas)
+
+    if dtype_x_str == 'bfloat16':
+        torch.testing.assert_close(dst_ref, dst, rtol=0.1, atol=0.1)
+        return
+
     np.testing.assert_allclose(to_numpy(dst_ref), to_numpy(dst), atol=1e-2)
 
 
@@ -3248,6 +3295,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.xfail("Skipping sum reduction on float16 due to accuracy issues")
+    if isinstance(src_layout, LinearLayout) and THREADS_PER_WARP != (1 << len(src_layout.lane)):
+        pytest.xfail(f"Skipping. This LinearLayout assumes {1 << len(src_layout.lane)} threads per warp")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout.instr_shape[2] = 16 if dtype_str == "float16" else 8
@@ -7646,11 +7695,11 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
         pat += str(axis)
         pat += r" : i32, efficient_layout} : \(tensor\<"
         pat += src_spec
-        pat += r", (#[a-z]+[0-9]*)\>, tensor\<"
+        pat += r", (#[a-z]+[0-9]+)\>, tensor\<"
         pat += indices_spec
-        pat += r", (#[a-z]+[0-9]*)\>\) -> tensor\<"
+        pat += r", (#[a-z]+[0-9]+)\>\) -> tensor\<"
         pat += output_spec
-        pat += r", (#[a-z]+[0-9]*)\>"
+        pat += r", (#[a-z]+[0-9]+)\>"
 
         repl = r"""
     %src = ttg.convert_layout \2 : tensor<""" + src_spec + r""", \4> -> tensor<""" + src_spec + r""", #src_layout>
